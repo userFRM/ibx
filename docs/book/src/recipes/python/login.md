@@ -1,18 +1,42 @@
 # Login
 
-The smallest possible IBX program: connect, wait for `next_valid_id`, disconnect.
+The smallest program that opens a session: connect, read the order id, disconnect.
 
-Two flavors are shown below — **paper** for everyday testing and **live** for read-only
-validation against your real account.
-
-> Per the project rules, never send orders from a live account. Use live only for
-> read-only checks (login, contract details).
+Two flavours are shown. **Paper** for everyday testing, **live** for read-only
+checks against the real account.
 
 ## What this shows
 
 - Reading credentials from environment variables.
-- Calling `EClient.connect(...)` with `paper=True` (paper) or `paper=False` (live).
-- Receiving `next_valid_id` — the signal that the session is fully established and ready for requests.
+- `EClient.connect(username=, password=, host=, paper=)`.
+- Starting `EClient.run` on a daemon thread.
+- Reading the order id off the `next_valid_id` callback.
+
+## What comes back
+
+`connect()` blocks until the session is up, and fires three callbacks on your
+wrapper before it returns, on the calling thread: `connect_ack`,
+`managed_accounts`, then `next_valid_id`.
+
+`next_valid_id` is fired last on purpose. The venue names what the account has
+already used just after the connection is made, and an id announced before that
+lands is one a fill spent long ago. A program that trusted it would have its
+first order refused as a duplicate.
+
+So when `connect()` returns, the session is established and the id has already
+been delivered. The `wait()` in the example is belt and braces, not a gate.
+
+The daemon `run()` thread is what carries every callback after connect: quotes,
+order status, bars, errors. Start it, or nothing further arrives.
+
+## Limits
+
+A live login may push a second factor. Approve it on your authenticator;
+`connect()` blocks until the gate clears, so give it a longer wall clock than a
+paper login needs.
+
+The live example is read-only: it logs in, prints, and disconnects. Send orders
+from the paper account.
 
 ## Paper
 
@@ -29,9 +53,6 @@ IB_USERNAME=... IB_PASSWORD=... python examples/hello_login.py
 ```
 
 ## Live
-
-The live login may trigger a second-factor push. Approve it on your mobile
-authenticator when prompted — `connect()` blocks until the gate clears.
 
 ### Run it
 

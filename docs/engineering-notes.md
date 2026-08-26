@@ -62,10 +62,10 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Measure | Count |
 | --- | --- |
 | Canonical calls | 77 |
-| Served, Rust | 73 |
-| Served, Python | 73 |
-| Accepted and not served, Rust | 4 |
-| Accepted and not served, Python | 4 |
+| Served, Rust | 75 |
+| Served, Python | 75 |
+| Accepted and not served, Rust | 2 |
+| Accepted and not served, Python | 2 |
 | Canonical callbacks | 81 |
 | Calls where the two surfaces differ | 0 |
 | Callbacks where the two surfaces differ | 0 |
@@ -86,8 +86,6 @@ coverage matrix, which CI checks against the source.
 | --- | :---: | :---: |
 | `request_fa` | STUB | STUB |
 | `replace_fa` | STUB | STUB |
-| `req_wsh_meta_data` | STUB | STUB |
-| `req_wsh_event_data` | STUB | STUB |
 
 ## Asset classes
 

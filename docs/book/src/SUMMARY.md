@@ -36,6 +36,7 @@
 
 # Reference
 
+- [Limits](./reference/limits.md)
 - [What the API Does Not Forward](./reference/beyond-the-api.md)
 - [Endpoint Coverage](./reference/coverage.md)
 - [Wire Coverage](./reference/wire-coverage.md)
