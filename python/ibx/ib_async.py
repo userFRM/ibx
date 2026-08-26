@@ -125,9 +125,20 @@ class IbxClient:
         # counter itself when it sees one on the wire. `placeOrder` takes its
         # id from that counter, so an id announced and not seeded is an order
         # numbered from one on an account that has already traded.
+        # Announced, not seeded. Their client numbers its orders and its
+        # requests out of one counter because the client it stands in for
+        # carries both as the same signed 32-bit number. This protocol does
+        # not: an order id goes as wide as it likes and a request id is four
+        # billion wide, and an account that has once been given a wide order
+        # id leaves that counter unable to carry a request. The two are
+        # counted apart here — requests from where they were, orders from what
+        # the account has used, filled in by `placeOrder` below.
         next_valid = self._client.next_order_id()
-        self.updateReqId(next_valid)
         self.wrapper.nextValidId(next_valid)
+        # Their counter serves requests and the orders they number themselves,
+        # so it is seeded with a number that answers for both: past every id
+        # an order has spent that a request could also carry.
+        self.updateReqId(self._client.next_shared_id())
 
         self._start_pump()
         self.apiStart.emit()
@@ -696,4 +707,17 @@ def attach(ib, username="", password="", paper=True, session_file=None,
     ib.client = IbxClient(ib.wrapper, username, password, paper, session_file,
                           client_id)
     ib.wrapper.client = ib.client
+
+    # An order they leave unnumbered is numbered from what the account has
+    # used, rather than from the counter their requests come out of. The venue
+    # refuses an order id a fill has spent, and their counter knows nothing
+    # about which those are.
+    placing = ib.placeOrder
+
+    def place_order(contract, order):
+        if not getattr(order, "orderId", 0):
+            order.orderId = ib.client.next_order_id()
+        return placing(contract, order)
+
+    ib.placeOrder = place_order
     return ib

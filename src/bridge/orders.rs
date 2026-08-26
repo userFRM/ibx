@@ -32,6 +32,15 @@ pub struct OrderState {
     /// session. An id is spent only while its order is live, so this is the
     /// floor a new id has to clear.
     working_id_watermark: AtomicU64,
+    /// The same mark, kept to what a request can carry.
+    ///
+    /// An order id goes as wide as the venue lets it and a request id is four
+    /// billion wide. A caller that numbers both out of one counter — which is
+    /// how the client this one stands in for is written — needs a number that
+    /// clears every id an order has spent and still fits a request. This is
+    /// that number: the highest the venue has named which a request could
+    /// carry.
+    narrow_id_watermark: AtomicU64,
     /// Reason for a genuinely-Inactive (39=I) transition: (order_id, ibapi
     /// error code, message). ibapi has no callback dedicated to "order
     /// parked with reason", so this is drained into `Wrapper::error` the
@@ -52,6 +61,7 @@ impl OrderState {
             completed: Mutex::new(HashMap::new()),
             replay_done: AtomicBool::new(false),
             working_id_watermark: AtomicU64::new(0),
+            narrow_id_watermark: AtomicU64::new(0),
             order_inactive: Mutex::new(Vec::with_capacity(8)),
         }
     }
@@ -208,6 +218,13 @@ impl OrderState {
         self.working_id_watermark.load(Ordering::Acquire)
     }
 
+    /// The highest id the venue has named that a request can also carry.
+    ///
+    /// See `narrow_id_watermark`.
+    pub fn narrow_id_watermark(&self) -> u64 {
+        self.narrow_id_watermark.load(Ordering::Acquire)
+    }
+
     /// A new connection has not yet named what it has working.
     ///
     /// Set once and never cleared, this state outlived the connection that
@@ -282,6 +299,9 @@ impl OrderState {
         // the working set alone handed out an id a fill had spent and the
         // venue refused it.
         self.working_id_watermark.fetch_max(order_id, Ordering::AcqRel);
+        if order_id <= u32::MAX as u64 {
+            self.narrow_id_watermark.fetch_max(order_id, Ordering::AcqRel);
+        }
         if crate::types::order_status::is_open_status(&info.order_state.status) {
             if self.recently_completed(order_id) {
                 return;
