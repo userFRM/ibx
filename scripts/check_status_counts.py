@@ -86,7 +86,10 @@ def counted() -> dict[str, int]:
     # each integration target — so it is the whole of what the row describes.
     # The python feature adds the binding's tests to the same library, which
     # makes it the superset.
-    rust = _cargo_count(["--tests", "--features", "python"])
+    # With the injection methods too: the tests that drive a client through
+    # them run wherever the lib tests run, and counted without the feature
+    # they are three tests this repo says it does not have.
+    rust = _cargo_count(["--tests", "--features", "python,test-helpers"])
 
     python = _python()
     py = _run([python, "-m", "pytest", "tests/python", "--collect-only", "-q", "--color=no"])
