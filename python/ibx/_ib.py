@@ -35,23 +35,6 @@ def _refuse_options(named: str, given) -> None:
         )
 
 
-def _refuse_regulatory_snapshot(asked: bool) -> None:
-    """A regulatory snapshot is a different request, and a chargeable one.
-
-    It was accepted and dropped, so the caller was billed nothing and given an
-    ordinary subscription instead of the single NBBO snapshot they asked for.
-    Refused by name: a request this cannot make is worth more said out loud
-    than answered with something else.
-    """
-    if asked:
-        raise NotImplementedError(
-            "regulatorySnapshot is not carried here: it is a separate, "
-            "chargeable one-shot request, and answering it with an ordinary "
-            "subscription would be a different request than the one asked for. "
-            "Use snapshot=True for the free snapshot this does carry"
-        )
-
-
 class Client:
     """One session, asked questions directly."""
 
@@ -268,7 +251,6 @@ class Client:
         caller can tell "no bid yet" from "a bid of zero".
         """
         _refuse_options("mktDataOptions", mktDataOptions)
-        _refuse_regulatory_snapshot(regulatorySnapshot)
         # One stream per contract object, and the same one back. The registry
         # holds a single request against the object, so opening a second left
         # the first running with nothing holding its id: the cancel names the
@@ -278,19 +260,26 @@ class Client:
         # on its own, so the entry would name a request that is already over —
         # and it would take a running stream's place, as `reqTickers` is
         # careful not to.
-        if not snapshot:
+        # A regulatory snapshot is one too, and the request builder treats it
+        # as one, so it takes the same path.
+        if not (snapshot or regulatorySnapshot):
             already = self._by_contract.get(("quote", id(contract)))
             if already is not None:
                 return self.wrapper.ticker_for(already)
-        req_id, ticker = self._start_quote(contract, genericTickList, snapshot)
+        req_id, ticker = self._start_quote(
+            contract, genericTickList, snapshot, regulatorySnapshot
+        )
         # Under its own name, so it neither takes the stream's place nor
         # answers a later ask for one — and a snapshot on a contract that
         # never quotes can still be withdrawn by naming the contract, which
         # is the only handle a caller who did not keep the id has.
-        self._by_contract[("snapshot" if snapshot else "quote", id(contract))] = req_id
+        one_shot = snapshot or regulatorySnapshot
+        self._by_contract[("snapshot" if one_shot else "quote", id(contract))] = req_id
         return ticker
 
-    def _start_quote(self, contract, genericTickList="", snapshot=False):
+    def _start_quote(
+        self, contract, genericTickList="", snapshot=False, regulatory=False
+    ):
         """Subscribe and hand back the request id along with the quote.
 
         The id is what a cancel names. A caller who owns it can withdraw its
@@ -301,7 +290,9 @@ class Client:
         req_id = self._next_req_id()
         self._subscribed[req_id] = contract
         ticker = self.wrapper.bind_ticker(req_id, contract)
-        self.client.req_mkt_data(req_id, contract, genericTickList, snapshot, False, [])
+        self.client.req_mkt_data(
+            req_id, contract, genericTickList, snapshot, regulatory, []
+        )
         return req_id, ticker
 
     def cancelMktData(self, contract):
@@ -431,12 +422,14 @@ class Client:
         returned with its fields unset rather than dropped, so the result lines
         up with what was asked for.
         """
-        _refuse_regulatory_snapshot(regulatorySnapshot)
         # Its own ids, kept here rather than in the per-contract registry. A
         # snapshot on a contract already streaming would otherwise overwrite
         # the stream's id there, and cancelling the snapshot would drop the
         # entry and leave the stream running with nothing to name it by.
-        started = [self._start_quote(c, snapshot=True) for c in contracts]
+        started = [
+            self._start_quote(c, snapshot=True, regulatory=regulatorySnapshot)
+            for c in contracts
+        ]
         tickers = [t for _, t in started]
         deadline = time.monotonic() + timeout
         # A snapshot is asked for the quote, so that is what this waits for.

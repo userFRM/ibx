@@ -221,15 +221,40 @@ def test_a_what_if_leaves_no_order_behind():
     assert ib.wrapper.trade_for(12) is None
 
 
-def test_a_regulatory_snapshot_is_refused_rather_than_turned_into_a_stream():
-    """It is a separate, chargeable one-shot request. Accepted and dropped, the
-    caller was handed an ordinary subscription instead of what they asked for
-    and had no way to tell."""
+def test_a_regulatory_snapshot_reaches_the_wire_as_one():
+    """It is a separate, chargeable one-shot request, and the request builder
+    carries it. Dropping it here handed the caller an ordinary subscription
+    instead of what they asked for, with no way to tell."""
     ib = connected_ib()
-    with pytest.raises(NotImplementedError, match="regulatorySnapshot"):
-        ib.reqMktData(spy(), regulatorySnapshot=True)
-    with pytest.raises(NotImplementedError, match="regulatorySnapshot"):
-        ib.reqTickers(spy(), regulatorySnapshot=True)
+    asked = []
+
+    class Recording:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def req_mkt_data(self, req_id, contract, ticks, snapshot, regulatory, opts):
+            asked.append(regulatory)
+            return self._inner.req_mkt_data(
+                req_id, contract, ticks, snapshot, regulatory, opts
+            )
+
+    ib.client = Recording(ib.client)
+    ib.reqMktData(spy(), regulatorySnapshot=True)
+    ib.reqTickers(spy(), regulatorySnapshot=True, timeout=0)
+    assert asked == [True, True]
+
+
+def test_a_regulatory_snapshot_is_not_registered_as_a_stream():
+    """The request builder treats it as a snapshot, and a snapshot ends on its
+    own. Registered as a stream, the entry would name a request that is already
+    over, and take a running stream's place."""
+    ib = connected_ib()
+    contract = spy()
+    ib.reqMktData(contract, regulatorySnapshot=True)
+    assert ("quote", id(contract)) not in ib._by_contract
 
 
 def test_a_snapshot_does_not_take_a_running_stream_s_place():
