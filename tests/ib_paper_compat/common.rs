@@ -275,6 +275,11 @@ pub(super) fn next_order_id() -> OrderId {
     // a parent and its child, allocated back to back, otherwise come out the
     // same and the second order clobbers the first. Nothing here divides the
     // range into places for each: the seed is where counting starts.
+    //
+    // Ask again for a second id; never offset one. `id + 1` is the number the
+    // next ask returns, so the order after it is sent under an id the venue has
+    // already seen and is refused as a duplicate — which reads as a defect in
+    // the order this client built rather than in the test that numbered it.
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
