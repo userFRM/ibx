@@ -174,7 +174,15 @@ class Client:
         return self.wrapper.snapshot_portfolio()
 
     def accountValues(self):
-        return self.wrapper.snapshot_account_values()
+        """Every figure the venue states about the account.
+
+        The same figures :meth:`accountSummary` hands back, and waited for the
+        same way. The subscription is made as the session opens and the answer
+        lands a moment later, so a program that connects and reads in the same
+        breath — which is how one is written — was handed an empty list and
+        nothing to say whether the account held nothing or had not yet spoken.
+        """
+        return self._account_figures()
 
     def trades(self):
         return self.wrapper.snapshot_trades()
@@ -285,10 +293,16 @@ class Client:
         that has not spoken.
         """
         del account
-        # Waits for the venue to say it has stated every figure, not for the
-        # first of them. Stopping at the first handed back one field of an
-        # account and read the same as a whole one, so a caller sizing a
-        # position off net liquidation sized it off whatever had landed.
+        return self._account_figures(timeout)
+
+    def _account_figures(self, timeout=5):
+        """The account's figures, once the venue has stated all of them.
+
+        Waits for the venue to say it has stated every figure, not for the
+        first of them. Stopping at the first handed back one field of an
+        account and read the same as a whole one, so a caller sizing a
+        position off net liquidation sized it off whatever had landed.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and not self.wrapper.account_download_finished():
             time.sleep(0.05)
