@@ -56,6 +56,17 @@ whatever was built last, so rebuild before running one.
 ibx = { git = "https://github.com/userFRM/ibx", features = ["async"] }
 ```
 
+`AsyncClient` names the calls a session is usually asked. Everything else the
+client can do is reached through `off_reactor`, which runs the call on a thread
+that may wait:
+
+```rust,ignore
+client.off_reactor(|c| c.req_scanner_parameters()).await??;
+```
+
+Reads — positions, fills, orders — are a lock and a copy, so they are taken
+inline and need none of this.
+
 The features not in that table exist for this repository's own test suites.
 They are off by default and should stay off in anything you install.
 
