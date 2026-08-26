@@ -56,6 +56,7 @@ jobs:
         run: |
           cargo test --lib
           cargo test --lib --features python
+          cargo test --lib --features python,test-helpers
           cargo test --lib --features async
           cargo test --doc --features async
 

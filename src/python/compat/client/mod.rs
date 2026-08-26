@@ -1206,6 +1206,9 @@ w = W()",
     /// One pass can carry two reports for the same order: an acknowledgement
     /// and then a fill. Keeping one report per order dropped the earlier one,
     /// and the caller was never told the order had been acknowledged.
+    // Drives the client through the methods that push state into it, which
+    // a wheel does not carry: see the `test-helpers` feature.
+    #[cfg(feature = "test-helpers")]
     #[test]
     fn an_acknowledgement_survives_a_fill_in_the_same_pass() {
         Python::initialize();
@@ -1240,6 +1243,9 @@ w = W()",
     /// after the call is reported as it moves. Answering only the set held
     /// when the call was made left a caller tracking its positions from a
     /// snapshot that went stale on the next fill.
+    // Drives the client through the methods that push state into it, which
+    // a wheel does not carry: see the `test-helpers` feature.
+    #[cfg(feature = "test-helpers")]
     #[test]
     fn a_holding_that_moves_after_the_request_is_reported() {
         Python::initialize();
@@ -1389,6 +1395,9 @@ w = W()",
     /// The chain callback takes seven arguments in an order nothing on this
     /// side of the boundary checks, and a caller reads the strikes it is
     /// handed by position.
+    // Drives the client through the methods that push state into it, which
+    // a wheel does not carry: see the `test-helpers` feature.
+    #[cfg(feature = "test-helpers")]
     #[test]
     fn an_option_chain_crosses_the_boundary_in_the_order_a_caller_reads_it() {
         Python::initialize();

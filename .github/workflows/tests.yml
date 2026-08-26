@@ -69,7 +69,11 @@ jobs:
       # everything else is, because a binding that stopped agreeing with the
       # engine is the failure this catches, and it costs one step to catch it.
       - name: Test the Python bindings
-        run: cargo test --lib --features python
+        run: |
+          cargo test --lib --features python
+          # And again with the injection methods compiled in, or the tests
+          # that drive the client through them run nowhere.
+          cargo test --lib --features python,test-helpers
 
   python:
     name: pytest
