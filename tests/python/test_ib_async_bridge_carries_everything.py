@@ -117,6 +117,11 @@ def test_every_account_the_login_holds_crosses_over():
         def next_order_id(self):
             return 1
 
+        def next_shared_id(self):
+            # What a caller numbering its orders and its requests out of one
+            # counter starts from. The real client answers both.
+            return 1
+
     c._client = Several()
     c._start_pump = lambda: None
 
