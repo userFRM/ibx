@@ -61,12 +61,20 @@ class Collector(EWrapper):
             return list(self.status_by_oid.get(oid, []))
 
 
-def spy():
+def around_the_clock():
+    """A contract with a market open whenever this suite is likely to run.
+
+    What these phases are about is how a good-till-date order is acknowledged
+    and when it comes off — the venue's behaviour, not the contract's. Asked on
+    a US listing they could only run inside its own hours: a date seventy-five
+    seconds out falls before the next open for eighteen hours of the day, and
+    the venue refuses it saying so. A currency pair trades from Sunday evening
+    to Friday evening, so the same question can be asked at almost any hour.
+    """
     c = Contract()
-    c.con_id = 756733
-    c.symbol = "SPY"
-    c.sec_type = "STK"
-    c.exchange = "SMART"
+    c.symbol = "EUR"
+    c.sec_type = "CASH"
+    c.exchange = "IDEALPRO"
     c.currency = "USD"
     return c
 
@@ -74,9 +82,9 @@ def spy():
 def resting_gtd_order(good_till_date):
     o = Order()
     o.action = "BUY"
-    o.total_quantity = 1
+    o.total_quantity = 20000  # one lot, in the pair's own units
     o.order_type = "LMT"
-    o.lmt_price = 1.00  # far below market -> never fills, just rests
+    o.lmt_price = 0.50  # far below market -> never fills, just rests
     o.tif = "GTD"
     o.outside_rth = True  # allow resting outside regular hours
     o.good_till_date = good_till_date
@@ -130,7 +138,7 @@ class TestGtdLifecycle:
 
         oid = self.wrapper.next_id
         self._placed.append(oid)
-        self.client.place_order(oid, spy(), resting_gtd_order(gtd))
+        self.client.place_order(oid, around_the_clock(), resting_gtd_order(gtd))
 
         s = self._wait_accept(oid)
         print(f"  accepted: oid={oid} statuses={s} expiry={gtd}")
@@ -150,7 +158,7 @@ class TestGtdLifecycle:
 
         oid = self.wrapper.next_id + 1  # distinct from any prior order this session
         self._placed.append(oid)
-        self.client.place_order(oid, spy(), resting_gtd_order(gtd))
+        self.client.place_order(oid, around_the_clock(), resting_gtd_order(gtd))
 
         s = self._wait_accept(oid)
         print(f"  accepted date-only: oid={oid} statuses={s} expiry={gtd}")
