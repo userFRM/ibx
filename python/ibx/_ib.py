@@ -138,6 +138,15 @@ class Client:
         # positions — which reads as a flat account, not as one that has not
         # been asked, and `portfolio()` beside it said five all along.
         self.client.req_positions()
+        # And what it already has working. The wrapper this follows asks for
+        # these as it connects too, and only where the session may act on them:
+        # a read-only one is not going to modify an order. Unasked,
+        # `openOrders()` answered with an empty list on an account with an
+        # order resting — ten seconds after connecting, not merely before the
+        # answer landed — while `reqAllOpenOrders()` beside it named it.
+        if not readonly:
+            self.client.req_all_open_orders()
+            self.client.req_completed_orders(False)
         return self
 
     def _start_pump(self) -> None:
