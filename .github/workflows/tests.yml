@@ -98,7 +98,14 @@ jobs:
           # this engine, and without it they are not collected and the
           # claim is tested nowhere.
           uv pip install maturin pytest ib_async
-          .venv/bin/maturin develop
+          # The suites reach for the injection methods by name, so the build
+          # under test asks for them. A wheel does not: see the feature.
+          # Every feature, not just the added one: this replaces what
+          # pyproject configures rather than adding to it, and without
+          # `python` maturin finds no pyo3 bindings, decides the crate is
+          # cffi and fails on a missing module — after reporting the build
+          # it did not do.
+          .venv/bin/maturin develop --features python,extension-module,test-helpers
 
       - name: Test
         run: .venv/bin/pytest tests/python -q
@@ -181,6 +188,13 @@ jobs:
       # else — and compiles, because every trait method has an empty default.
       - name: Every callback reaches both sinks
         run: python scripts/check_wrapper_tee.py
+
+      # These fabricate a connected session, fills and account values. A Rust
+      # document attribute does not reach the interpreter and a leading
+      # underscore hides nothing from `getattr`, so compiled in they are part
+      # of what a caller who installed this can reach.
+      - name: Nothing that fabricates a session is compiled into a wheel
+        run: python scripts/check_injection_stays_out_of_the_wheel.py
 
       - name: A function did not take a doc comment written for something else
         run: |
