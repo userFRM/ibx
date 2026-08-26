@@ -686,3 +686,59 @@ fn news_reaches_every_reader_and_is_kept() {
     assert_eq!(b_rx.try_recv().unwrap().provider, "BRFG");
     assert_eq!(kept.news().len(), 1);
 }
+
+/// Asking through [`AsyncClient::off_reactor`] does not hold the runtime
+/// thread that asked.
+///
+/// The methods `AsyncClient` names cover what a session is usually asked; every
+/// other call is reached through this one. Run inline it would block the
+/// reactor for the length of a round trip, which on a single-threaded runtime
+/// stops everything else the program is doing — and stops it silently, under
+/// load, rather than in review. So this runs on a runtime with exactly one
+/// worker and asks whether the rest of that runtime kept moving.
+#[cfg(feature = "async")]
+#[test]
+fn asking_off_the_reactor_leaves_the_runtime_free() {
+    use crate::AsyncClient;
+    use std::sync::atomic::AtomicU64;
+
+    let shared = Arc::new(crate::bridge::SharedState::new());
+    let (session, _rx) = a_session(&shared);
+    let client = AsyncClient::from_session(session);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("a runtime to ask from");
+
+    let ticks = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&ticks);
+
+    runtime.block_on(async move {
+        tokio::spawn(async move {
+            loop {
+                counted.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        });
+        // Yield once so the ticker is actually running before the ask starts,
+        // or this measures the spawn rather than the ask.
+        tokio::task::yield_now().await;
+
+        let answered = client
+            .off_reactor(|_| {
+                thread::sleep(Duration::from_millis(150));
+                "answered"
+            })
+            .await
+            .expect("the ask to come back");
+
+        assert_eq!(answered, "answered");
+    });
+
+    // The ticker wakes every millisecond, so 150ms of asking leaves room for
+    // well over a hundred. Held reactor, it gets none: the bar is low enough
+    // that a loaded machine still clears it and an inline ask still fails.
+    let moved = ticks.load(Ordering::Relaxed);
+    assert!(moved > 20, "the runtime advanced {moved} times while asking");
+}

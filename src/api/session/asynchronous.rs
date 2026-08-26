@@ -67,9 +67,50 @@ impl AsyncClient {
         Ok(Self { inner })
     }
 
-    /// The session underneath, for everything this does not name.
+    /// Wrap a session that is already open. For the tests, which build one on
+    /// nothing rather than opening a connection to hold it.
+    #[cfg(test)]
+    pub(super) fn from_session(inner: Client) -> Self {
+        Self { inner }
+    }
+
+    /// The session underneath, for reading what it holds.
+    ///
+    /// Reads are a lock and a copy and are safe to take inline. A *request* is
+    /// a round trip, and taken through here it runs on the calling thread —
+    /// inside a runtime, that is a runtime thread held for as long as the venue
+    /// takes to answer, which stops work that has nothing to do with this
+    /// session. Use [`off_reactor`](AsyncClient::off_reactor) to ask.
     pub fn blocking(&self) -> &Client {
         &self.inner
+    }
+
+    /// Ask the session something this does not name, without holding a runtime
+    /// thread for the answer.
+    ///
+    /// The methods above cover what a session is usually asked. Everything else
+    /// the client can do is reachable through here, on a thread that may wait:
+    ///
+    /// ```no_run
+    /// # use ibx::AsyncClient;
+    /// # async fn f(client: AsyncClient) -> Result<(), Box<dyn std::error::Error>> {
+    /// client.off_reactor(|c| c.req_scanner_parameters()).await??;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The closure is handed the session and runs to completion off the
+    /// reactor. Its answer comes back as it is: a call that reports a refusal
+    /// still reports it here.
+    pub async fn off_reactor<T, F>(&self, ask: F) -> Result<T, Refusal>
+    where
+        F: FnOnce(&Client) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let client = self.inner.clone();
+        tokio::task::spawn_blocking(move || ask(&client))
+            .await
+            .map_err(|e| Refusal::validation(format!("the question was cancelled: {e}")))
     }
 
     // ── what the session holds; none of this waits ──────────────────────────
@@ -347,20 +388,31 @@ mod tests {
             block
                 .lines()
                 .filter_map(|l| l.trim().strip_prefix("pub fn ").or(l.trim().strip_prefix("pub async fn ")))
-                .filter_map(|l| l.split('(').next())
+                // The name, without what follows it: a generic method carries
+                // its parameters between the name and the arguments, and read
+                // whole it matches nothing on the other side — including the
+                // exceptions below, which name methods rather than signatures.
+                .filter_map(|l| l.split(['(', '<']).next())
                 .map(str::to_string)
                 .collect()
         };
         let here = std::fs::read_to_string(root.join("asynchronous.rs")).expect("this file");
         let there = std::fs::read_to_string(root.join("mod.rs")).expect("the blocking one");
+        // Three affordances of this surface rather than questions put to a
+        // session, so there is nothing for them to match on the other side.
+        //
         // `blocking` reaches the session underneath and has nothing to reach on
-        // the session itself; `client` is that reach, under the other name.
-        // `blocking` reaches the session underneath and has nothing to reach
-        // on the session itself. `wait_done` is on the order on the blocking
-        // side, where waiting is a thread doing nothing; here it is on the
-        // session, because a future needs a runtime to poll it and the order
-        // has none.
-        let not_on_both = BTreeSet::from(["blocking".to_string(), "wait_done".to_string()]);
+        // the session itself. `off_reactor` is how a question is put through
+        // that reach without holding a runtime thread, which a surface that
+        // blocks by nature does not need. `wait_done` is on the order on the
+        // blocking side, where waiting is a thread doing nothing; here it is on
+        // the session, because a future needs a runtime to poll it and the
+        // order has none.
+        let not_on_both = BTreeSet::from([
+            "blocking".to_string(),
+            "off_reactor".to_string(),
+            "wait_done".to_string(),
+        ]);
         let mine: BTreeSet<String> = names(&here, "impl AsyncClient {")
             .difference(&not_on_both)
             .cloned().collect();
