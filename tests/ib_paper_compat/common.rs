@@ -270,14 +270,19 @@ fn ccp_answers(ccp: &mut Connection) -> bool {
 /// clobbers the first.
 pub(super) fn next_order_id() -> OrderId {
     use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    // Room for the counter beneath, and for the wrap to stay clear of zero.
-    const SPAN: u64 = (i32::MAX as u64) / 100;
-    let secs = std::time::SystemTime::now()
+    // Seeded from the clock once, then counted. The clock keeps one run clear
+    // of the last, and the counter keeps two ids in the same second apart —
+    // a parent and its child, allocated back to back, otherwise come out the
+    // same and the second order clobbers the first. Nothing here divides the
+    // range into places for each: the seed is where counting starts.
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs();
-    (secs % SPAN) * 100 + (SEQ.fetch_add(1, Ordering::Relaxed) % 100)
+        .as_secs()
+        % (i32::MAX as u64);
+    let _ = NEXT.compare_exchange(0, seed, Ordering::AcqRel, Ordering::Acquire);
+    NEXT.fetch_add(1, Ordering::Relaxed) % (i32::MAX as u64)
 }
 
 /// How many phases have announced themselves.
