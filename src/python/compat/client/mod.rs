@@ -450,6 +450,13 @@ impl EClient {
         // this report failure on a session that is live.
         self.notify(py, "connect_ack", ());
         self.notify(py, "managed_accounts", (self.accounts_csv().as_str(),));
+        // The id is announced once and a program starts numbering from it, so
+        // it is worth the wait: the venue names what the account has used just
+        // after the connection is made, and announced before that lands this
+        // is one a fill spent long ago. A program that trusts the announcement
+        // — which is the ordinary way to write one — then has its first order
+        // refused as a duplicate, and nothing about the refusal points here.
+        self.wait_for_the_replay(py);
         self.notify(py, "next_valid_id", (self.stated_order_id() as i64,));
 
         Ok(())
