@@ -1,4 +1,4 @@
-"""Example #100: Historical Data + Scanner Subscription (MSFT).
+"""Historical bars and a scanner subscription.
 
 Historical bars (one-shot + keepUpToDate), scanner parameters, and scanner
 subscription. Exercises bar aggregation, time-range parsing, and large
@@ -6,8 +6,6 @@ response decompression.
 
 Usage:
     IB_USERNAME=xxx IB_PASSWORD=xxx python examples/historical_scanner.py
-
-Ref: https://github.com/deepentropy/ib-agent/issues/100
 """
 
 import os
@@ -31,7 +29,6 @@ class ScannerSubscription:
 class Wrapper(EWrapper):
     def __init__(self):
         super().__init__()
-        self.connected = threading.Event()
 
         # Historical bars (keyed by req_id)
         self.bars = {}            # req_id -> [bar]
@@ -54,9 +51,6 @@ class Wrapper(EWrapper):
             self.hist_end[req_id] = threading.Event()
             self.live_bars[req_id] = []
             self.got_live_bar[req_id] = threading.Event()
-
-    def next_valid_id(self, order_id):
-        self.connected.set()
 
     def managed_accounts(self, accounts_list):
         pass
@@ -117,7 +111,6 @@ def run_example():
               host=os.environ.get("IB_HOST", "cdc1.ibllc.com"), paper=True)
     t = threading.Thread(target=c.run, daemon=True)
     t.start()
-    assert w.connected.wait(timeout=15), "Connection failed"
     print("Connected.")
 
     msft = make_msft()

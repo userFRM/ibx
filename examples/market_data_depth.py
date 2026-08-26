@@ -1,12 +1,10 @@
-"""Example #97: Real-Time Market Data + L2 Depth Subscribe (AAPL).
+"""Real-time market data and L2 depth on one contract.
 
 Streaming top-of-book ticks and Level 2 depth. Exercises farm routing,
 subscription lifecycle, binary depth encoding, and unsubscribe cleanup.
 
 Usage:
     IB_USERNAME=xxx IB_PASSWORD=xxx python examples/market_data_depth.py
-
-Ref: https://github.com/deepentropy/ib-agent/issues/97
 """
 
 import os
@@ -21,7 +19,6 @@ AAPL_CON_ID = 265598
 class Wrapper(EWrapper):
     def __init__(self):
         super().__init__()
-        self.connected = threading.Event()
 
         # Top-of-book
         self.ticks_price = []    # (req_id, tick_type, price)
@@ -44,9 +41,6 @@ class Wrapper(EWrapper):
         self._depth_cancelled = False
         self.tick_after_cancel = False
         self.depth_after_cancel = False
-
-    def next_valid_id(self, order_id):
-        self.connected.set()
 
     def managed_accounts(self, accounts_list):
         pass
@@ -116,7 +110,6 @@ def run_example():
               host=os.environ.get("IB_HOST", "cdc1.ibllc.com"), paper=True)
     t = threading.Thread(target=c.run, daemon=True)
     t.start()
-    assert w.connected.wait(timeout=15), "Connection failed"
     print("Connected.")
 
     aapl = make_aapl()

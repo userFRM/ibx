@@ -12,12 +12,8 @@ from ibx import EClient, EWrapper, Contract
 
 class BarsWrapper(EWrapper):
     def __init__(self):
-        self.connected = threading.Event()
         self.bars = []
         self.done = threading.Event()
-
-    def next_valid_id(self, order_id):
-        self.connected.set()
 
     def historical_data(self, req_id, bar):
         self.bars.append(bar)
@@ -39,8 +35,6 @@ c.connect(
     paper=True,
 )
 threading.Thread(target=c.run, daemon=True).start()
-if not w.connected.wait(timeout=15):
-    raise RuntimeError("connect failed")
 
 spy = Contract()
 spy.con_id = 756733

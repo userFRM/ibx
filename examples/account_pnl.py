@@ -1,12 +1,10 @@
-"""Example #98: Account Updates + Live P&L Subscription (Portfolio).
+"""Account updates and a live profit-and-loss subscription.
 
 Account summary, portfolio positions, live P&L, and pnlSingle.
 Exercises cache coordination, account streaming, and signed value encoding.
 
 Usage:
     IB_USERNAME=xxx IB_PASSWORD=xxx python examples/account_pnl.py
-
-Ref: https://github.com/deepentropy/ib-agent/issues/98
 """
 
 import os
@@ -21,7 +19,6 @@ EXPECTED_ACCOUNT_KEYS = {"NetLiquidation", "TotalCashValue", "BuyingPower"}
 class Wrapper(EWrapper):
     def __init__(self):
         super().__init__()
-        self.connected = threading.Event()
         self.account_id = ""
 
         # Account values
@@ -45,9 +42,6 @@ class Wrapper(EWrapper):
         # Account summary
         self.summary = {}
         self.got_summary_end = threading.Event()
-
-    def next_valid_id(self, order_id):
-        self.connected.set()
 
     def managed_accounts(self, accounts_list):
         self.account_id = accounts_list
@@ -132,7 +126,6 @@ def run_example():
               host=os.environ.get("IB_HOST", "cdc1.ibllc.com"), paper=True)
     t = threading.Thread(target=c.run, daemon=True)
     t.start()
-    assert w.connected.wait(timeout=15), "Connection failed"
     print("Connected.")
 
     # ── Step 1: Account updates streaming ─────────────────────────────────

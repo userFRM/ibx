@@ -1,22 +1,21 @@
-"""Example #96: Order Lifecycle — Place, Modify, Cancel, Partial Fill (SPY).
+"""Order lifecycle on SPY: place, modify, cancel, fill, executions.
 
-Full order state machine: place → modify → cancel, plus fill handling.
-Exercises permId routing, order status transitions, and execution queries.
+Walks an order through every state it can reach and checks each one, so a
+change to order handling shows up here rather than in a live account.
 
-Issue steps (executed exactly as specified):
-  1. reqIds() — get next valid orderId
-  2. placeOrder() — SPY 100 shares, LMT far from market
-  3. reqOpenOrders() — verify order appears with correct permId
-  4. placeOrder() (same orderId, new price closer to market) — modify
-  5. Observe orderStatus — permId must stay the same across modify
-  6. placeOrder() (same orderId, price at market) — trigger a fill
-  7. reqExecutions() — verify execDetails with correct fill qty/price
-  8. Place another LMT far from market, then cancelOrder() — verify Cancelled
+  1. Take the next order id.
+  2. Place SPY 100 shares, LMT far from market.
+  3. req_open_orders() — the order is there, under a permId.
+  4. Place again under the same id, at a new price — a modify.
+  5. The permId is the same across the modify.
+  6. Place again at market — trigger a fill.
+  7. req_executions() — the fill is reported with its quantity and price.
+  8. Place another LMT far from market, cancel it, see Cancelled.
+
+Ends by flattening whatever step 6 filled.
 
 Usage:
-    IB_USERNAME=xxx IB_PASSWORD=xxx python examples/order_lifecycle.py
-
-Ref: https://github.com/deepentropy/ib-agent/issues/96
+    IB_USERNAME=... IB_PASSWORD=... python examples/order_lifecycle.py
 """
 
 import os
@@ -31,7 +30,6 @@ SPY_CON_ID = 756733
 class Wrapper(EWrapper):
     def __init__(self):
         super().__init__()
-        self.connected = threading.Event()
         self.next_id = 0
 
         self.order_statuses = []   # (order_id, status, filled, remaining, perm_id)
@@ -51,7 +49,6 @@ class Wrapper(EWrapper):
 
     def next_valid_id(self, order_id):
         self.next_id = order_id
-        self.connected.set()
 
     def managed_accounts(self, accounts_list):
         pass
@@ -148,7 +145,6 @@ def run_example():
               host=os.environ.get("IB_HOST", "cdc1.ibllc.com"), paper=True)
     t = threading.Thread(target=c.run, daemon=True)
     t.start()
-    assert w.connected.wait(timeout=15), "Connection failed"
     print(f"Connected. nextValidId={w.next_id}")
 
     spy = make_spy()
@@ -235,7 +231,7 @@ def run_example():
     # Step 6: placeOrder (same orderId, price at market) — trigger fill
     # ══════════════════════════════════════════════════════════════════════
     print("\n=== Step 6: Modify to market price (trigger fill) ===")
-    time.sleep(2)  # let gateway settle after first modify
+    time.sleep(2)  # let the venue settle the first modify
     w.got_status.clear()
     w.got_fill.clear()
     # Re-fetch price in case it moved

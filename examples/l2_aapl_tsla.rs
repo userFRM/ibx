@@ -4,7 +4,7 @@
 //!   IB_USERNAME=user IB_PASSWORD=pass cargo run --example l2_aapl_tsla
 //!
 //! Optional env vars:
-//!   IB_HOST       — gateway host (default: cdc1.ibllc.com)
+//!   IB_HOST       — the venue host to log in to (default: cdc1.ibllc.com)
 //!   DURATION_SECS — how long to collect data (default: 15)
 
 use std::collections::HashMap;

@@ -12,12 +12,8 @@ from ibx import EClient, EWrapper
 
 class PnlWrapper(EWrapper):
     def __init__(self):
-        self.connected = threading.Event()
         self.got_pnl = threading.Event()
         self.pnl_data = None
-
-    def next_valid_id(self, order_id):
-        self.connected.set()
 
     def pnl(self, req_id, daily_pnl, unrealized_pnl, realized_pnl):
         self.pnl_data = (daily_pnl, unrealized_pnl, realized_pnl)
@@ -38,8 +34,6 @@ c.connect(
 )
 threading.Thread(target=c.run, daemon=True).start()
 
-if not w.connected.wait(timeout=15):
-    raise RuntimeError("connect failed")
 
 account = c.get_account_id()
 print(f"account: {account}")
