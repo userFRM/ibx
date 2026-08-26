@@ -46,7 +46,7 @@ pub(super) fn phase_market_order(conns: Conns) -> Conns {
                 if phase == 1 && fill.side == Side::Buy {
                     buy_price = fill.price;
                     buy_rtt_us = buy_sent_at.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
-                    sell_order_id = next_order_id() + 1;
+                    sell_order_id = next_order_id();
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_order_id, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     sell_sent_at = Some(Instant::now());
                     phase = 2;
@@ -338,7 +338,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
                 if phase == 1 && fill.side == Side::Buy {
                     buy_price = fill.price;
                     buy_comm = fill.commission;
-                    let sid = next_order_id() + 1;
+                    let sid = next_order_id();
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sid, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 2;
                 } else if phase == 2 && fill.side == Side::Sell {
@@ -1561,7 +1561,7 @@ pub(super) fn phase_bracket_fill_cascade(conns: Conns) -> Conns {
                         // order itself being withdrawn — sold another share the
                         // account did not have.
                         if cancelled_count >= 2 && flatten_id.is_none() {
-                            let sid = next_order_id() + 10;
+                            let sid = next_order_id();
                             flatten_id = Some(sid);
                             control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sid, instrument: inst_id, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                         }
@@ -1649,7 +1649,7 @@ pub(super) fn phase_pnl_after_round_trip(conns: Conns) -> Conns {
             Ok(Event::Fill(fill)) => {
                 if phase == 1 && fill.side == Side::Buy {
                     buy_filled = true;
-                    let sid = next_order_id() + 1;
+                    let sid = next_order_id();
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sid, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 2;
                 } else if phase == 2 && fill.side == Side::Sell {
@@ -2219,7 +2219,7 @@ pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
                 if got_cancel_reject { break; }
             }
             // Sell to flatten position
-            let sell_oid = next_order_id() + 1;
+            let sell_oid = next_order_id();
             control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_oid, instrument: instrument_id, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
             phase = 3;
             // Wait for sell fill

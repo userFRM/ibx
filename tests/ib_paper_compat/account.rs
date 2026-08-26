@@ -172,7 +172,7 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
             }
             Ok(Event::Fill(fill)) => {
                 if phase == 1 && fill.side == Side::Buy {
-                    let sell_order_id = next_order_id() + 1;
+                    let sell_order_id = next_order_id();
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_order_id, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 2;
                 } else if phase == 2 && fill.side == Side::Sell {
