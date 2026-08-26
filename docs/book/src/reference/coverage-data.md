@@ -22,8 +22,8 @@ that did not run.
 
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
-| **EClient methods** | 77 | 73 impl, 4 stub | 73 impl, 4 stub |
-| **EWrapper callbacks** | 81 | 74 impl, 7 stub | 74 impl, 7 stub |
+| **EClient methods** | 77 | 75 impl, 2 stub | 75 impl, 2 stub |
+| **EWrapper callbacks** | 81 | 76 impl, 5 stub | 76 impl, 5 stub |
 
 ## EClient Methods
 
@@ -37,18 +37,18 @@ that did not run.
 | Market Data | `req_mkt_data` | `reqMktData` | Y | Y | Live session |
 |  | `cancel_mkt_data` | `cancelMktData` | Y | Y | Live session |
 |  | `req_market_data_type` | `reqMarketDataType` | Y | Y | Live session |
-|  | `req_tick_by_tick_data` | `reqTickByTickData` | Y | Y | Offline suites |
-|  | `cancel_tick_by_tick_data` | `cancelTickByTickData` | Y | Y | Offline suites |
+|  | `req_tick_by_tick_data` | `reqTickByTickData` | Y | Y | Live session |
+|  | `cancel_tick_by_tick_data` | `cancelTickByTickData` | Y | Y | Live session |
 |  | `req_mkt_depth` | `reqMktDepth` | Y | Y | Live session |
-|  | `cancel_mkt_depth` | `cancelMktDepth` | Y | Y | Offline suites |
+|  | `cancel_mkt_depth` | `cancelMktDepth` | Y | Y | Live session |
 |  | `req_mkt_depth_exchanges` | `reqMktDepthExchanges` | Y | Y | Live session |
 |  | `req_smart_components` | `reqSmartComponents` | Y | Y | Live session |
 |  | `req_real_time_bars` | `reqRealTimeBars` | Y | Y | Offline suites |
-|  | `cancel_real_time_bars` | `cancelRealTimeBars` | Y | Y | Offline suites |
+|  | `cancel_real_time_bars` | `cancelRealTimeBars` | Y | Y | Live session |
 | Historical Data | `req_historical_data` | `reqHistoricalData` | Y | Y | Live session |
 |  | `cancel_historical_data` | `cancelHistoricalData` | Y | Y | Live session |
 |  | `req_head_time_stamp` | `reqHeadTimeStamp` | Y | Y | Live session |
-|  | `cancel_head_time_stamp` | `cancelHeadTimestamp` | Y | Y | Offline suites |
+|  | `cancel_head_time_stamp` | `cancelHeadTimestamp` | Y | Y | Live session |
 |  | `req_historical_ticks` | `reqHistoricalTicks` | Y | Y | Live session |
 |  | `req_histogram_data` | `reqHistogramData` | Y | Y | Live session |
 |  | `cancel_histogram_data` | `cancelHistogramData` | Y | Y | Live session |
@@ -100,12 +100,12 @@ that did not run.
 |  | `req_user_info` | `reqUserInfo` | Y | Y | Live session |
 | Financial Advisor | `request_fa` | `requestFA` | STUB | STUB | States why it cannot be served |
 |  | `replace_fa` | `replaceFA` | STUB | STUB | States why it cannot be served |
-| Display Groups | `query_display_groups` | `queryDisplayGroups` | Y | Y | Offline suites |
-|  | `subscribe_to_group_events` | `subscribeToGroupEvents` | Y | Y | Offline suites |
-|  | `unsubscribe_from_group_events` | `unsubscribeFromGroupEvents` | Y | Y | Offline suites |
-|  | `update_display_group` | `updateDisplayGroup` | Y | Y | Offline suites |
-| WSH | `req_wsh_meta_data` | `reqWshMetaData` | STUB | STUB | States why it cannot be served |
-|  | `req_wsh_event_data` | `reqWshEventData` | STUB | STUB | States why it cannot be served |
+| Display Groups | `query_display_groups` | `queryDisplayGroups` | Y | Y | Live session |
+|  | `subscribe_to_group_events` | `subscribeToGroupEvents` | Y | Y | Live session |
+|  | `unsubscribe_from_group_events` | `unsubscribeFromGroupEvents` | Y | Y | Live session |
+|  | `update_display_group` | `updateDisplayGroup` | Y | Y | Live session |
+| WSH | `req_wsh_meta_data` | `reqWshMetaData` | Y | Y | Offline suites |
+|  | `req_wsh_event_data` | `reqWshEventData` | Y | Y | Offline suites |
 
 ## EWrapper Callbacks
 
@@ -190,5 +190,5 @@ that did not run.
 | Display Groups | `display_group_list` | Y | Y |
 |  | `display_group_updated` | Y | Y |
 | Other | `delta_neutral_validation` | STUB | STUB |
-| WSH | `wsh_meta_data` | STUB | STUB |
-|  | `wsh_event_data` | STUB | STUB |
+| WSH | `wsh_meta_data` | Y | Y |
+|  | `wsh_event_data` | Y | Y |

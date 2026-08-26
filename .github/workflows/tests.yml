@@ -111,6 +111,12 @@ jobs:
           # it did not do.
           .venv/bin/maturin develop --features python,extension-module,test-helpers
 
+      # A recipe is read and trusted. One naming a method the library no longer
+      # has costs a reader more than a missing page: they assume their own
+      # setup is wrong. Needs the extension built above.
+      - name: Every snippet on the site names something that exists
+        run: .venv/bin/python scripts/check_recipe_snippets.py
+
       - name: Test
         run: .venv/bin/pytest tests/python -q
 
@@ -199,6 +205,11 @@ jobs:
       # of what a caller who installed this can reach.
       - name: Nothing that fabricates a session is compiled into a wheel
         run: python scripts/check_injection_stays_out_of_the_wheel.py
+
+      # Examples publish verbatim on the docs site, so a line naming another
+      # project's tracker ships to readers who cannot open it.
+      - name: Nothing points at another project's issue tracker
+        run: python scripts/check_no_foreign_tracker_links.py
 
       - name: A function did not take a doc comment written for something else
         run: |

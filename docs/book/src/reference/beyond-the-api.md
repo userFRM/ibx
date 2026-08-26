@@ -9,6 +9,9 @@ Everything below is stated by the venue on an ordinary session. The figures are
 from one paper session and will differ with the account; what does not differ is
 that none of it is reachable through `ib_async` or the TWS API.
 
+The examples are Python. Every one of these is on the Rust `EClient` under the
+same name — see the [table at the end](#the-same-calls-in-rust).
+
 ## What the account may do
 
 The venue states its grants at logon — one token per capability.
@@ -80,4 +83,21 @@ Two consequences worth stating plainly:
   read off the session. Nothing here computes what the venue did not say.
 - **It is not portable.** A program using these calls will not run against a
   gateway, because a gateway has no message to carry them. They are the part of
-  this client that is not a drop-in.
+  this client that is not a drop-in, and they are named again under
+  [Limits](./limits.md) for that reason.
+
+## The same calls in Rust
+
+| Python | Rust |
+| --- | --- |
+| `client.enabled_features()` | `client.enabled_features()` |
+| `client.order_permissions()` | `client.order_permissions()` |
+| `client.permitted_order_types(sec_type)` | `client.permitted_order_types(sec_type)` |
+| `client.algorithms()` | `client.algorithms()` |
+| `client.algorithms_for(sec_type)` | `client.algorithms_for(sec_type)` |
+| `client.get_account_id()` | `client.account_id` (a field) |
+| `client.next_order_id()` | `client.next_order_id()` |
+| `client.ccp_session_id()` | `client.ccp_session_id()` |
+| `client.misc_url(key)` | `client.misc_url(key)` |
+| `client.req_ping()` | `client.req_ping()` |
+| `client.last_rtt_ms()` | `client.shared_state().last_ccp_rtt()`, a `Duration` |

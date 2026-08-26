@@ -29,23 +29,26 @@ underneath, and no gateway process.
 
 ## What changes
 
-The connect call, and nothing else:
+One line, and it is not the connect call:
 
 ```diff
++ ib = ibx.ib_async.attach(ib, username="...", password="...")
 - ib.connect("127.0.0.1", 4001, clientId=1)     # requires a running gateway
-+ ib.connect(username="...", password="...")    # no external process
++ ib.connect()                                  # no external process
 ```
 
-`IB.connect` takes a host, a port and a client id because it was written for a
-gateway. They are accepted and ignored. Credentials go to `attach`, or are left
-to `IB_USERNAME` and `IB_PASSWORD`.
+`IB.connect` stays theirs, with their signature. It takes a host, a port and a
+client id because it was written for a gateway: the host and port are recorded
+and never used, and the client id is carried into the login. Credentials never
+go through it. They go to `attach`, or are left to `IB_USERNAME` and
+`IB_PASSWORD`.
 
 ## What is carried
 
-Their `IB` calls 67 methods on the transport layer. All 67 are carried here,
-and a test measures that against their own source rather than against a list
-kept by hand, so a name they add is a failure here rather than a program that
-stops.
+Their `IB` calls 67 methods on the transport layer, counted from their own
+source at 2.1.0. All of them are carried here. A test reads that list out of
+their source on every run rather than checking a list kept by hand, so a name
+they add is a failure here rather than a program that stops.
 
 Their types are theirs. A callback carrying an object hands over one of this
 engine's, and their wrapper reads one of theirs, so every argument is rebuilt
@@ -53,7 +56,7 @@ on the way through — by its own type name, from their dataclass, which is why 
 field they have and this engine does not keeps its default and neither side
 needs editing when the other gains one.
 
-Two details are worth knowing, because both were defects until they were not:
+Two details are worth knowing:
 
 - A bar's date is handed over in the spelling their own parser reads. Their
   `parseIBDatetime` decides the shape from the string — eight digits is a day,
@@ -83,12 +86,14 @@ Both loop scopes are needed: their session-scoped connection fixture and their
 tests must share one event loop, or callbacks land on a loop that is not
 running while the test waits on them.
 
-Two of their three tests pass. The third, `test_request_error_raised`, cannot
-pass against any server: it requires a `RequestError` carrying 321, and 321 is
-in their own `warningCodes`, where a warning never ends the request it belongs
-to.
+At 2.1.0 their suite is three tests. One of them,
+`test_request_error_raised`, cannot pass against any server. Its last line
+asserts a `RequestError` carrying 321, and 321 is in their own `warningCodes`
+frozenset, where a warning never ends the request it belongs to. So the error
+they are waiting for is never raised.
 
 ## What it does not carry
 
-`ib_async` reads a Flex report over the web, which has nothing to do with a
-session and is unaffected. Everything else in their `IB` is routed.
+`FlexReport` reads a report over the web. It is a class of its own, not a method
+on their `IB`, and it never touches a session. Everything on their `IB` is
+routed.

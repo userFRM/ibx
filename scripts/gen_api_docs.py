@@ -1118,7 +1118,6 @@ def _evidence_index() -> tuple[str, str]:
     # Both suites that need a real session: one drives the engine, the other
     # the client surface itself.
     live_files = list(LIVE_SUITE.rglob("*.rs")) + [ROOT / "tests" / "rust_api_gt.rs"]
-    live = _read_all(f for f in live_files if f.exists())
     offline_files = [
         f for f in (ROOT / "tests").rglob("*.rs")
         if "ib_paper_compat" not in f.parts and f.stem != "rust_api_gt"
@@ -1127,6 +1126,15 @@ def _evidence_index() -> tuple[str, str]:
         f for f in (ROOT / "src").rglob("*.rs")
         if f.stem in ("tests", "test_helpers")
     ]
+    # The Python suite is test code too, and reading only the Rust files
+    # credited a call exercised there to nothing at all: the calendar calls
+    # were published as "Not exercised" while four Python tests drove them.
+    # A Python test needs a session when it reads the credentials, which is
+    # the same rule `check_status_counts.py` counts the live suite by.
+    for f in sorted((ROOT / "tests" / "python").glob("*.py")):
+        (live_files if "IB_USERNAME" in f.read_text(errors="ignore")
+         else offline_files).append(f)
+    live = _read_all(f for f in live_files if f.exists())
     return live, _read_all(offline_files)
 
 
@@ -1155,17 +1163,25 @@ def _status_icon(name: str, impl_set: set[str], stub_names: set[str]) -> str:
     return "-"
 
 
-# Methods that log warnings (stubs, not real implementations)
+#: Calls that return as though they acted without reaching the venue.
+#:
+#: Hand-kept, and it went stale: the corporate-events calls were listed here
+#: after they had been wired. `req_wsh_meta_data` and `req_wsh_event_data`
+#: send on the security-definition connection and their answers are dispatched
+#: to the wrapper, so a caller gets the calendar, not a warning. Anything
+#: added here has to be a call that genuinely sends nothing.
 STUB_METHODS = {
     "request_fa", "replace_fa",
-    "req_wsh_meta_data", "req_wsh_event_data",
 }
 
+#: Callbacks nothing fires. Each for its own reason, and none of them a
+#: message this client fails to read: the advisor replies are not parsed,
+#: the venue answers a bond on `contract_details` rather than on its own
+#: callback, and the rest name state the venue does not send here.
 STUB_CALLBACKS = {
     "receive_fa", "replace_fa_end",
     "bond_contract_details", "delta_neutral_validation",
     "order_bound",
-    "wsh_meta_data", "wsh_event_data",
 }
 
 

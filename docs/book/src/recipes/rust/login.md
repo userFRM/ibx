@@ -1,18 +1,38 @@
 # Login
 
-The smallest possible IBX program: connect, wait for `next_valid_id`, disconnect.
+The smallest program that opens a session: connect, read the order id this client
+would place under, disconnect.
 
-Two flavors are shown below — **paper** for everyday testing and **live** for read-only
-validation against your real account.
-
-> Per the project rules, never send orders from a live account. Use live only for
-> read-only checks (login, contract details).
+Two flavours are shown. **Paper** for everyday testing, **live** for read-only
+checks against the real account.
 
 ## What this shows
 
-- Reading credentials from environment variables.
-- Building an `EClientConfig` with `paper: true` (paper) or `paper: false` (live).
-- Receiving `next_valid_id` — the signal that the session is fully established and ready for requests.
+- Reading credentials from environment variables into `EClientConfig`.
+- `paper: true` for the paper account, `paper: false` for the live one.
+- `client.account_id`, which names the account the session opened under.
+- `req_ids`, which reports the next order id.
+
+## What comes back
+
+`EClient::connect` blocks until the session is up. When it returns, the session
+is established and `client.account_id` is populated. There is nothing further to
+wait for.
+
+`req_ids` does not ask the venue anything. It calls `next_valid_id` on your
+wrapper right there, with one past the highest id the account is working an
+order under. The venue names that working set unprompted at every connect, from
+every session, not only this one. Nothing is reserved by the call; the
+reservation happens when you place.
+
+## Limits
+
+A live login may push a second factor. Approve it on your authenticator; the
+`connect` call blocks until the gate clears, so give it a longer wall clock than
+a paper login needs.
+
+The live example is read-only: it logs in, prints, and disconnects. Send orders
+from the paper account.
 
 ## Paper
 
@@ -29,9 +49,6 @@ IB_USERNAME=... IB_PASSWORD=... cargo run --example hello_login
 ```
 
 ## Live
-
-The live login may trigger a second-factor push. Approve it on your mobile
-authenticator when prompted — the `connect` call blocks until the gate clears.
 
 ### Run it
 

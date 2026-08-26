@@ -319,43 +319,6 @@ pre > code.hljs {
     line-height: 1.6;
 }
 
-/* ── Stat strip (benchmarks) ────────────────────────────────────────────── */
-
-.ibx-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 1px;
-    background: var(--ibx-border);
-    border: 1px solid var(--ibx-border);
-    border-radius: 10px;
-    overflow: hidden;
-    margin: 2rem 0;
-}
-
-.ibx-stat {
-    background: var(--bg);
-    padding: 1.4rem 1.2rem;
-    text-align: center;
-}
-
-.ibx-stat .ibx-stat-value {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 1.8rem;
-    font-weight: 700;
-    color: var(--ibx-accent);
-    letter-spacing: -0.02em;
-    line-height: 1.1;
-    margin-bottom: 0.25rem;
-}
-
-.ibx-stat .ibx-stat-label {
-    font-size: 12.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    opacity: 0.65;
-    font-weight: 500;
-}
-
 /* ── Light-theme fallback ───────────────────────────────────────────────── */
 
 .light .ibx-hero .ibx-cta a.primary,
