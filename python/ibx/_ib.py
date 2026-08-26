@@ -132,6 +132,12 @@ class Client:
         # this the account is silent until something asks, and an empty list
         # reads as an account holding nothing.
         self.client.req_account_updates(True, "")
+        # And what the account holds. The wrapper this follows asks for both as
+        # it connects, and a program reads `positions()` straight afterwards.
+        # Unasked, that answered with an empty list on an account holding five
+        # positions — which reads as a flat account, not as one that has not
+        # been asked, and `portfolio()` beside it said five all along.
+        self.client.req_positions()
         return self
 
     def _start_pump(self) -> None:
@@ -168,6 +174,19 @@ class Client:
     # -- what the session currently holds --------------------------------
 
     def positions(self):
+        """What the account holds.
+
+        Asked for as the session opens and waited for here, the same way the
+        account's figures are: an empty list is what a flat account looks like,
+        so handing one back before the venue has answered says the wrong thing
+        with no way to tell.
+        """
+        deadline = time.monotonic() + 5
+        while (
+            time.monotonic() < deadline
+            and not self.wrapper.account_download_finished()
+        ):
+            time.sleep(0.05)
         return self.wrapper.snapshot_positions()
 
     def portfolio(self):
