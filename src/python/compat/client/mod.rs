@@ -7,6 +7,8 @@ mod reference;
 mod ask;
 mod dispatch;
 mod stubs;
+// Not in a wheel. See the `test-helpers` feature.
+#[cfg(feature = "test-helpers")]
 mod test_helpers;
 
 use std::collections::HashMap;

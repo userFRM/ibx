@@ -455,6 +455,16 @@ def next_order_id()
 
 ---
 
+#### `next_shared_id`
+
+The first id past everything the account has used that a request can also carry.  A caller that numbers its orders and its requests out of one counter — which is how the client this one stands in for is written — needs both at once: clear of every id an order has spent, and inside the four billion a request is carried in. An account that has been given a wider order id than that has no such number above it, so this answers with the widest the account has used that a request can carry, and the counting goes on from there.
+
+```python
+def next_shared_id()
+```
+
+---
+
 #### `req_open_orders`
 
 Request all open orders for this client.

@@ -85,6 +85,7 @@ fn ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> AskId {
 /// would otherwise take it — which is the very thing such a test is written to
 /// catch. Asking releases it in the ordinary way.
 #[doc(hidden)]
+#[cfg(feature = "test-helpers")]
 pub(crate) fn peek_ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> i64 {
     let id = NEXT_ASK_ID.load(Ordering::Relaxed);
     shared.reference.note_ours(id);

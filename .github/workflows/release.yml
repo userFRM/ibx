@@ -77,11 +77,19 @@ jobs:
         run: |
           uv venv
           uv pip install maturin pytest ib_async
-          .venv/bin/maturin develop
+          # As in tests.yml: the suites ask for the injection methods, the
+          # published wheel below does not carry them.
+          # Every feature, not just the added one: this replaces what
+          # pyproject configures rather than adding to it, and without
+          # `python` maturin finds no pyo3 bindings, decides the crate is
+          # cffi and fails on a missing module — after reporting the build
+          # it did not do.
+          .venv/bin/maturin develop --features python,extension-module,test-helpers
           .venv/bin/pytest tests/python -q
           python scripts/check_status_counts.py
           python scripts/check_module_graph.py
           python scripts/check_wrapper_tee.py
+          python scripts/check_injection_stays_out_of_the_wheel.py
           python scripts/check_orphaned_docs.py
 
       - name: Documentation builds

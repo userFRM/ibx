@@ -40,6 +40,13 @@ default = []
 # credentials.
 dev-tools = []
 python = ["pyo3"]
+# The methods that push state into a client without a venue behind it. Off by
+# default, and deliberately: `#[pyo3(...)]` publishes whatever it is put on,
+# `#[doc(hidden)]` does not reach the interpreter, and a leading underscore
+# hides nothing from `getattr` — so with these compiled in, a wheel hands
+# every caller a way to fabricate a connected session, fills and account
+# values. The test suites ask for them by name.
+test-helpers = []
 # The asynchronous surface. Off by default: a program that drives this client
 # from a thread of its own needs nothing here, and the runtime is a dependency
 # it should not pay for.
