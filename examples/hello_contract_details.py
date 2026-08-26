@@ -12,12 +12,8 @@ from ibx import EClient, EWrapper, Contract
 
 class DetailsWrapper(EWrapper):
     def __init__(self):
-        self.connected = threading.Event()
         self.rows = []
         self.done = threading.Event()
-
-    def next_valid_id(self, order_id):
-        self.connected.set()
 
     def contract_details(self, req_id, details):
         self.rows.append(details)
@@ -39,8 +35,6 @@ c.connect(
     paper=True,
 )
 threading.Thread(target=c.run, daemon=True).start()
-if not w.connected.wait(timeout=15):
-    raise RuntimeError("connect failed")
 
 aapl = Contract()
 aapl.symbol = "AAPL"

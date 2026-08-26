@@ -1,4 +1,4 @@
-"""Example #99: Bracket Order with Trailing Stop (QQQ).
+"""A bracket order with a trailing stop.
 
 Parent LMT + take-profit LMT + trailing stop — OCA linked orders.
 Exercises parent-child linking via parentId, OCA grouping, TRAIL encoding,
@@ -6,8 +6,6 @@ and child activation on parent fill.
 
 Usage:
     IB_USERNAME=xxx IB_PASSWORD=xxx python examples/bracket_order.py
-
-Ref: https://github.com/deepentropy/ib-agent/issues/99
 """
 
 import os
@@ -22,7 +20,6 @@ QQQ_CON_ID = 320227571
 class Wrapper(EWrapper):
     def __init__(self):
         super().__init__()
-        self.connected = threading.Event()
         self.next_id = 0
 
         self.order_statuses = {}  # order_id -> [(status, filled, remaining, perm_id)]
@@ -39,7 +36,6 @@ class Wrapper(EWrapper):
 
     def next_valid_id(self, order_id):
         self.next_id = order_id
-        self.connected.set()
 
     def managed_accounts(self, accounts_list):
         pass
@@ -209,7 +205,6 @@ def run_example():
               host=os.environ.get("IB_HOST", "cdc1.ibllc.com"), paper=True)
     t = threading.Thread(target=c.run, daemon=True)
     t.start()
-    assert w.connected.wait(timeout=15), "Connection failed"
     print(f"Connected. nextValidId={w.next_id}")
 
     qqq = make_qqq()

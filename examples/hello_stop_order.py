@@ -13,13 +13,11 @@ from ibx import EClient, EWrapper, Contract, Order
 class OrderWrapper(EWrapper):
     def __init__(self):
         self.next_id = None
-        self.connected = threading.Event()
         self.submitted = threading.Event()
         self.cancelled = threading.Event()
 
     def next_valid_id(self, order_id):
         self.next_id = order_id
-        self.connected.set()
 
     def order_status(self, order_id, status, filled, remaining,
                      avg_fill_price, perm_id, parent_id,
@@ -45,8 +43,6 @@ c.connect(
 )
 threading.Thread(target=c.run, daemon=True).start()
 
-if not w.connected.wait(timeout=15):
-    raise RuntimeError("connect failed")
 
 order_id = w.next_id
 

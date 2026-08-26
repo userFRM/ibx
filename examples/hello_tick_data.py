@@ -13,14 +13,10 @@ from ibx import EClient, EWrapper, Contract
 
 class TickWrapper(EWrapper):
     def __init__(self):
-        self.connected = threading.Event()
         self.bid = 0.0
         self.ask = 0.0
         self.last = 0.0
         self.ticks = 0
-
-    def next_valid_id(self, order_id):
-        self.connected.set()
 
     def tick_price(self, req_id, tick_type, price, attrib):
         self.ticks += 1
@@ -48,8 +44,6 @@ c.connect(
     paper=True,
 )
 threading.Thread(target=c.run, daemon=True).start()
-if not w.connected.wait(timeout=15):
-    raise RuntimeError("connect failed")
 
 spy = Contract()
 spy.con_id = 756733

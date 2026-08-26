@@ -21,12 +21,8 @@ class ScannerSubscription:
 
 class ScannerWrapper(EWrapper):
     def __init__(self):
-        self.connected = threading.Event()
         self.rows = []
         self.done = threading.Event()
-
-    def next_valid_id(self, order_id):
-        self.connected.set()
 
     def scanner_data(self, req_id, rank, contract_details,
                      distance, benchmark, projection, legs_str):
@@ -49,8 +45,6 @@ c.connect(
     paper=True,
 )
 threading.Thread(target=c.run, daemon=True).start()
-if not w.connected.wait(timeout=15):
-    raise RuntimeError("connect failed")
 
 req_id = 1
 print("subscribing TOP_PERC_GAIN, STK.US.MAJOR…")
