@@ -225,6 +225,13 @@ class Client:
         return [t.order for t in self.openTrades() if t.order is not None]
 
     def fills(self):
+        """Every fill this session has seen.
+
+        The account's own history is not among them: the venue names
+        executions alongside the orders it replays when a session opens, and
+        one whose order has since completed is not replayed. See
+        :meth:`reqExecutions`.
+        """
         return self.wrapper.snapshot_fills()
 
     def executions(self):
@@ -846,11 +853,20 @@ class Client:
         return self.trades()
 
     def reqExecutions(self, execFilter=None):
-        """The fills the filter names, and only those.
+        """The fills the filter names, out of what this session has seen.
 
         The filter goes to the client, which decides what the request replays.
         Dropped, the answer was every fill the session had seen: another
-        client's, and ones before the cutoff the caller asked from."""
+        client's, and ones before the cutoff the caller asked from.
+
+        What it replays is this session's own record. The wrapper this follows
+        asks the venue and is answered with the account's executions whoever
+        made them; this protocol carries no such question, and the venue names
+        executions only alongside the orders it replays when a session opens.
+        So a fill made before this session opened, on an order since completed,
+        is not among these — an empty answer means this session has seen none,
+        not that the account has none.
+        """
         before = len(self.wrapper.snapshot_fills())
         self.client.req_executions(self._next_req_id(), execFilter)
         return self.wrapper.snapshot_fills()[before:]
