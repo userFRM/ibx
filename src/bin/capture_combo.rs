@@ -53,7 +53,7 @@ fn option(strike: f64) -> Contract {
 }
 
 fn main() {
-    let _ = env_logger::try_init();
+    let _ = ibx::logging::try_init_from_env("error");
     if std::env::var("IB_USERNAME").unwrap_or_default().trim().is_empty() {
         eprintln!("IB_USERNAME/IB_PASSWORD unset. This reads from real servers.");
         std::process::exit(2);

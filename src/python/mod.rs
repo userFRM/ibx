@@ -83,8 +83,7 @@ use pyo3::prelude::*;
 fn ibx(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Forward Rust `log::*` macros to stderr when RUST_LOG is set.
     // `try_init` is no-op if a logger is already installed (e.g. by tests).
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .try_init();
+    let _ = crate::logging::try_init_from_env("warn");
     compat::register(m)?;
     Ok(())
 }

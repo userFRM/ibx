@@ -452,7 +452,7 @@ fn assert_field_i64(name: &str, actual: i64, gt_key: &str, gt: &serde_json::Valu
 
 #[test]
 fn api_gt_suite() {
-    let _ = env_logger::try_init();
+    let _ = ibx::logging::try_init_from_env("error");
     let config = match get_config() {
         Some(c) => c,
         None => { println!("Skipping: IB credentials not set"); return; }
@@ -1483,7 +1483,7 @@ fn api_gt_suite() {
 /// comparison suite needs are present.
 #[test]
 fn reference_and_account_calls_live() {
-    let _ = env_logger::try_init();
+    let _ = ibx::logging::try_init_from_env("error");
     let Some(config) = get_config() else {
         println!("Skipping: IB credentials not set");
         return;
@@ -1595,7 +1595,7 @@ fn reference_and_account_calls_live() {
 /// having arrived unread for as long as this client has existed.
 #[test]
 fn the_venue_sends_nothing_this_client_does_not_read() {
-    let _ = env_logger::try_init();
+    let _ = ibx::logging::try_init_from_env("error");
     let Some(config) = get_config() else {
         println!("Skipping: IB credentials not set");
         return;

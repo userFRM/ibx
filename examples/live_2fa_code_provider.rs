@@ -85,7 +85,7 @@ fn read_code_from_stdin(challenge: IbKeyChallenge) -> io::Result<String> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    let _ = ibx::logging::try_init_from_env("error");
     load_dotenv();
 
     let username = env::var("IB_LIVE_USERNAME")

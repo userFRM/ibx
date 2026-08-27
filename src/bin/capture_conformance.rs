@@ -15,7 +15,7 @@ use ibx::api::client::{EClient, EClientConfig};
 use ibx::api::types::{Contract, Order};
 
 fn main() {
-    let _ = env_logger::try_init();
+    let _ = ibx::logging::try_init_from_env("error");
     let username = std::env::var("IB_USERNAME").unwrap_or_default();
     if username.trim().is_empty() {
         eprintln!("IB_USERNAME/IB_PASSWORD unset. This reads from real servers.");
