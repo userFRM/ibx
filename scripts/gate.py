@@ -22,6 +22,19 @@ import sys
 import pathlib
 
 WORKFLOW = pathlib.Path(__file__).resolve().parents[1] / ".github/workflows/tests.yml"
+VENV = pathlib.Path(__file__).resolve().parents[1] / ".venv/bin/python"
+
+
+def script_python():
+    """The interpreter the workflow runs these scripts with.
+
+    Not the one running this file. The workflow names `.venv/bin/python` because
+    one of these scripts imports the built extension, and started with any other
+    interpreter it fails to import rather than reporting on the tree. Read that
+    way, a local run passed everything the workflow runs except the one step the
+    workflow spells out an interpreter for.
+    """
+    return str(VENV) if VENV.exists() else sys.executable
 
 
 def suites_ci_runs():
@@ -127,11 +140,12 @@ def main():
             print(f"\nFAILED: {printable}")
             return done.returncode
 
+    runner = script_python()
     for line in scripts_ci_runs():
-        print(f"\n=== python {line}", flush=True)
-        done = subprocess.run([sys.executable, *line.split()])
+        print(f"\n=== {runner} {line}", flush=True)
+        done = subprocess.run([runner, *line.split()])
         if done.returncode != 0:
-            print(f"\nFAILED: python {line}")
+            print(f"\nFAILED: {runner} {line}")
             return done.returncode
 
     if code := generated_docs_are_current():
