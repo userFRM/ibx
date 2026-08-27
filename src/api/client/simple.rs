@@ -61,10 +61,7 @@ impl EClient {
     pub fn bars(
         &self, contract: &Contract, duration: &str, bar_size: &str,
     ) -> Result<Vec<BarData>, Refusal> {
-        let quoted_not_traded = ["CASH", "CFD", "CMDTY"]
-            .iter()
-            .any(|kind| contract.sec_type.eq_ignore_ascii_case(kind));
-        let what = if quoted_not_traded { "MIDPOINT" } else { "TRADES" };
+        let what = if contract.is_quoted_not_traded() { "MIDPOINT" } else { "TRADES" };
         self.historical_data(contract, "", duration, bar_size, what, true)
     }
 
