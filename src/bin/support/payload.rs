@@ -4,7 +4,6 @@
 //! captured session, one over payloads composed here — so the composing is
 //! written once and read by both.
 
-#![allow(dead_code)]
 
 use ibx::protocol::tick_decoder::{self, RawTick};
 use ibx::types::Quote;
