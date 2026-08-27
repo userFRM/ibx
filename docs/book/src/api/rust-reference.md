@@ -32,7 +32,7 @@ pub fn connect(config: &EClientConfig) -> Result<Self, Box<dyn std::error::Error
 
 #### `connect_with_events`
 
-Connect to IB and start the engine with an event channel attached. A second, optional delivery path for a program that would rather own a queue than be called back. It is bounded, and an event arriving at a full one is discarded rather than made to wait — a session that stalled on a slow reader would stop carrying market data. Read [`events_lost`](EClient::events_lost) to learn whether that happened. One reader, and it is told what it drains and nothing else. For a program that wants none of it dropped, drive [`process_msgs`](EClient::process_msgs) with a [`Wrapper`](crate::api::wrapper::Wrapper) instead: its callbacks are called with the message rather than sent a copy of it, so there is no queue to fill and nothing to fall out of one. This is a second, optional delivery path that runs alongside `process_msgs` — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use [`connect()`](EClient::connect) when you only need the wrapper callbacks.
+Connect to IB and start the engine with an event channel attached. A second, optional delivery path for a program that would rather own a queue than be called back. It is bounded, and an event arriving at a full one is discarded rather than made to wait — a session that stalled on a slow reader would stop carrying market data. Read `events_lost` to learn whether that happened. One reader, and it is told what it drains and nothing else. For a program that wants none of it dropped, drive `process_msgs` with a `Wrapper` instead: its callbacks are called with the message rather than sent a copy of it, so there is no queue to fill and nothing to fall out of one. This is a second, optional delivery path that runs alongside `process_msgs` — it does not replace it, and nothing is removed from the wrapper callbacks when it is in use. The channel is bounded by `capacity`; the engine never blocks on it, so a consumer that falls behind loses events rather than slowing the hot loop. Drain it from a thread that is not the one calling `process_msgs()`, or keep `capacity` generous. Attaching a channel makes the engine build events it would otherwise skip, which for bar batches and contract definitions means one deep copy each. Use `connect()` when you only need the wrapper callbacks.
 
 ```rust
 pub fn connect_with_events( config: &EClientConfig, capacity: usize, ) -> Result<(Self, Receiver<Event>), Box<dyn std::error::Error>>
@@ -114,7 +114,7 @@ pub fn seed_instrument(&self, con_id: i64, instrument: InstrumentId)
 
 #### `events_lost`
 
-How many events the channel from [`connect_with_events`](EClient::connect_with_events) discarded. The engine never waits on a reader — a session that stalled on one would stop carrying market data — so an event arriving at a full channel is dropped. A program that acted on every fill it saw needs to know the difference between that and every fill there was. Zero for a session with no channel attached, and for one whose reader kept up.
+How many events the channel from `connect_with_events` discarded. The engine never waits on a reader — a session that stalled on one would stop carrying market data — so an event arriving at a full channel is dropped. A program that acted on every fill it saw needs to know the difference between that and every fill there was. Zero for a session with no channel attached, and for one whose reader kept up.
 
 ```rust
 pub fn events_lost(&self) -> u64
@@ -126,7 +126,7 @@ pub fn events_lost(&self) -> u64
 
 #### `is_connected`
 
-False after [`disconnect()`](EClient::disconnect), and after a `process_msgs()` call that observed the engine stopping.
+False after `disconnect()`, and after a `process_msgs()` call that observed the engine stopping.
 
 ```rust
 pub fn is_connected(&self) -> bool
@@ -298,7 +298,7 @@ pub fn cancel_pnl(&self, req_id: i64)
 
 #### `req_pnl_single`
 
-Subscribe to single-position PnL updates. `account` and `model_code` are taken and not applied, as on [`req_pnl`](EClient::req_pnl): the figures are for the account this session opened under.
+Subscribe to single-position PnL updates. `account` and `model_code` are taken and not applied, as on `req_pnl`: the figures are for the account this session opened under.
 
 ```rust
 pub fn req_pnl_single(&self, req_id: i64, _account: &str, _model_code: &str, con_id: i64)
@@ -679,7 +679,7 @@ pub fn next_order_id(&self) -> i64
 
 #### `req_open_orders`
 
-Request open orders for this client. Answers with every order working on the account, as [`req_all_open_orders`](EClient::req_all_open_orders) does. The protocol carries no client number on an order, so this session cannot tell which orders it placed; reporting fewer would omit working orders.
+Request open orders for this client. Answers with every order working on the account, as `req_all_open_orders` does. The protocol carries no client number on an order, so this session cannot tell which orders it placed; reporting fewer would omit working orders.
 
 ```rust
 pub fn req_open_orders(&self, wrapper: &mut impl Wrapper)
@@ -771,7 +771,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 
 #### `req_mkt_data`
 
-Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. That is a subscription this client ends, not a request of its own: the venue's own one-shot snapshot is the chargeable one, asked for with `regulatory_snapshot` on [`req_mkt_data_ex`](EClient::req_mkt_data_ex). `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) are not requested — the venue asks for those under numbers of its own rather than the ones this list uses, and this client does not know the mapping. Naming one is warned about rather than quietly dropped. `tick_generic` does fire, for the halt the venue states on its own tick: tick 49, 0 while a contract is trading and 1 once it has stopped. Delayed and frozen data are requested, contrary to what this said: name the type on [`req_market_data_type`](EClient::req_market_data_type) and every subscription after it carries the mode, or state it per request with [`req_mkt_data_ex`](EClient::req_mkt_data_ex). The table there gives the wire shape of each.
+Subscribe to market data. When `snapshot` is true, delivers the first available quote then calls `tick_snapshot_end` and auto-cancels the subscription. That is a subscription this client ends, not a request of its own: the venue's own one-shot snapshot is the chargeable one, asked for with `regulatory_snapshot` on `req_mkt_data_ex`. `generic_tick_list` is NOT transmitted to the gateway, with one exception: "292" additionally subscribes per-contract news. Other generic tick types (RTVolume and friends) are not requested — the venue asks for those under numbers of its own rather than the ones this list uses, and this client does not know the mapping. Naming one is warned about rather than quietly dropped. `tick_generic` does fire, for the halt the venue states on its own tick: tick 49, 0 while a contract is trading and 1 once it has stopped. Delayed and frozen data are requested, contrary to what this said: name the type on `req_market_data_type` and every subscription after it carries the mode, or state it per request with `req_mkt_data_ex`. The table there gives the wire shape of each.
 
 ```rust
 pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool, ) -> Result<(), Refusal>
@@ -791,7 +791,7 @@ pub fn req_mkt_data( &self, req_id: i64, contract: &Contract, generic_tick_list:
 
 #### `req_mkt_data_ex`
 
-Like [`req_mkt_data`](EClient::req_mkt_data), but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time, so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`. `regulatory_snapshot` asks for the venue's own chargeable one-shot snapshot: a request type of its own rather than a mode on an ordinary quote, asked for under the snapshot action and with no feed named beside it. It is billed per snapshot and needs the entitlement — an account without it is refused by the venue, which names the request type back. It ends the way an ordinary snapshot does, so a caller hears `tick_snapshot_end` either way. Its default is false.
+Like `req_mkt_data`, but encodes the market-data mode per-request via FIX field 9887, allowing parallel realtime + frozen subscriptions for the same contract: | `mode_9887` | mode             | wire shape | |-------------|------------------|---| | `0`         | REALTIME         | `264=442` (BID_ASK) + `264=443` (LAST), no 9887 | | `1`         | DELAYED          | `264=1` (TOP) + `9887=1` | | `2`         | FROZEN           | `264=1` (TOP) + `9887=2` | | `3`         | DELAYED_FROZEN   | `264=1` (TOP) + `9887=3` | The frozen mode keeps thinly-traded names quoting after-hours, when the realtime feed is silent. A contract holds one subscription at a time, so this states the mode for that subscription rather than adding a parallel one — to compare modes on one contract, cancel between them. To set the mode for every subscription instead of naming it per request, call `req_market_data_type`. `regulatory_snapshot` asks for the venue's own chargeable one-shot snapshot: a request type of its own rather than a mode on an ordinary quote, asked for under the snapshot action and with no feed named beside it. It is billed per snapshot and needs the entitlement — an account without it is refused by the venue, which names the request type back. It ends the way an ordinary snapshot does, so a caller hears `tick_snapshot_end` either way. Its default is false.
 
 ```rust
 pub fn req_mkt_data_ex( &self, req_id: i64, contract: &Contract, generic_tick_list: &str, snapshot: bool, regulatory_snapshot: bool, mode_9887: i32, ) -> Result<(), Refusal>
@@ -959,7 +959,7 @@ pub fn last_rtt(&self) -> Option<std::time::Duration>
 
 #### `req_market_data_type`
 
-Which feed the subscriptions after this one ask for: 1 live, 2 frozen, 3 delayed, 4 delayed and frozen. Sent with each subscription, in the field this protocol carries it in, and the `market_data_type` callback reports the type the subscription was made under. To state it for one request rather than for the ones that follow, [`req_mkt_data_ex`](EClient::req_mkt_data_ex) takes it. A number naming no type leaves subscriptions realtime, and says so.
+Which feed the subscriptions after this one ask for: 1 live, 2 frozen, 3 delayed, 4 delayed and frozen. Sent with each subscription, in the field this protocol carries it in, and the `market_data_type` callback reports the type the subscription was made under. To state it for one request rather than for the ones that follow, `req_mkt_data_ex` takes it. A number naming no type leaves subscriptions realtime, and says so.
 
 ```rust
 pub fn req_market_data_type(&self, market_data_type: i32)
@@ -1355,7 +1355,7 @@ pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &st
 
 #### `req_fundamental_data`
 
-Request fundamental data. Three reports, which are the three the venue states: `ReportSnapshot`, `RESC` for what analysts expect, and `CalendarReport` for what the issuer has coming. The contract is named by its venue id and nothing else of it is carried, so pass one that has an id: from [`qualify_contract`](EClient::qualify_contract), or from any contract-details answer. A description is refused rather than sent as a request about contract zero.
+Request fundamental data. Three reports, which are the three the venue states: `ReportSnapshot`, `RESC` for what analysts expect, and `CalendarReport` for what the issuer has coming. The contract is named by its venue id and nothing else of it is carried, so pass one that has an id: from `qualify_contract`, or from any contract-details answer. A description is refused rather than sent as a request about contract zero.
 
 ```rust
 pub fn req_fundamental_data(&self, req_id: i64, contract: &Contract, report_type: &str) -> Result<(), Refusal>
@@ -1389,7 +1389,7 @@ pub fn cancel_fundamental_data(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_histogram_data`
 
-Request price histogram data. Named by its venue id, as [`req_fundamental_data`](EClient::req_fundamental_data) is.
+Request price histogram data. Named by its venue id, as `req_fundamental_data` is.
 
 ```rust
 pub fn req_histogram_data(&self, req_id: i64, contract: &Contract, use_rth: bool, period: &str) -> Result<(), Refusal>
@@ -1528,7 +1528,7 @@ pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal>
 
 #### `replace_fa`
 
-Replace a partition of the advisor's configuration with the one given. As with [`request_fa`](Self::request_fa), the replacement reaches the venue and its answer is not read back, so [`Wrapper::replace_fa_end`] does not fire.
+Replace a partition of the advisor's configuration with the one given. As with `request_fa`, the replacement reaches the venue and its answer is not read back, so [`Wrapper::replace_fa_end`] does not fire.
 
 ```rust
 pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal>
@@ -1593,7 +1593,7 @@ pub fn cancel_calculate_implied_volatility(&self, req_id: i64)
 
 #### `cancel_calculate_option_price`
 
-As for [`cancel_calculate_implied_volatility`](Self::cancel_calculate_implied_volatility).
+As for `cancel_calculate_implied_volatility`.
 
 ```rust
 pub fn cancel_calculate_option_price(&self, req_id: i64)
