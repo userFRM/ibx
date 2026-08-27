@@ -222,9 +222,6 @@ class IbxClient:
 
     # ── requests: the same shape, all the way down ──
 
-    def reqContractDetails(self, reqId, contract):
-        self._client.req_contract_details(reqId, _as_ours(contract))
-
     def reqMktData(self, reqId, contract, genericTickList, snapshot,
                    regulatorySnapshot, mktDataOptions):
         _refuse_options("mktDataOptions", mktDataOptions)
@@ -232,12 +229,6 @@ class IbxClient:
             reqId, _as_ours(contract), genericTickList, snapshot,
             regulatorySnapshot,
         )
-
-    def cancelMktData(self, reqId):
-        self._client.cancel_mkt_data(reqId)
-
-    def reqPositions(self):
-        self._client.req_positions()
 
     def reqHistoricalData(self, reqId, contract, endDateTime, durationStr,
                           barSizeSetting, whatToShow, useRTH, formatDate,
@@ -249,26 +240,14 @@ class IbxClient:
             keepUpToDate, [],
         )
 
+    # These two stay written out. `__getattr__` forwards every argument
+    # through `_as_ours`, which turns None into an empty list — right for an
+    # options list and wrong for a string, which is what these carry.
     def reqAccountUpdates(self, subscribe, acctCode):
         self._client.req_account_updates(subscribe, acctCode)
 
-    def reqOpenOrders(self):
-        self._client.req_open_orders()
-
-    def reqAutoOpenOrders(self, autoBind):
-        self._client.req_auto_open_orders(autoBind)
-
-    def reqCompletedOrders(self, apiOnly):
-        self._client.req_completed_orders(apiOnly)
-
     def reqAccountSummary(self, reqId, groupName, tags):
         self._client.req_account_summary(reqId, groupName, tags)
-
-    def reqMarketDataType(self, marketDataType):
-        self._client.req_market_data_type(marketDataType)
-
-    def reqCurrentTime(self):
-        self._client.req_current_time()
 
     def __getattr__(self, name):
         """Every other request, under the name this engine carries it by.
