@@ -250,7 +250,7 @@ pub(super) fn phase_cancel_historical(mut conns: Conns) -> Conns {
 /// error (code 162) + terminal historical_data sentinel rather than leaking the
 /// pending entry forever.
 pub(super) fn phase_query_error_surfaces(mut conns: Conns) -> Conns {
-    phase!("--- Phase 186: HMDS QueryError surfaces (15 mins / 1 W rejection) ---");
+    phase!("--- Phase 186: HMDS QueryError surfaces (trades on a quoted-only instrument) ---");
 
     ccp_keepalive(&mut conns.ccp);
     let hmds = match open_farm(ibx::gateway::Farm::Historical) {
@@ -268,11 +268,14 @@ pub(super) fn phase_query_error_surfaces(mut conns: Conns) -> Conns {
     );
 
     const REQ_ID: u32 = 18600;
-    // The combo `bar_size=15 mins` + `duration=1 W` is technically within the IB
-    // docs' allowed ranges but is rejected by the live gateway with
-    // <QueryError>Invalid time length</QueryError>. If IB ever lifts this
-    // restriction, the phase will report SKIP rather than fail.
-    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "".to_string(), ..Default::default() }, req_id: REQ_ID, end_date_time: now_ib_timestamp(), duration: "1 W".into(), bar_size: "15 mins".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
+    // A currency pair is asked for trades. It has none: it is quoted and never
+    // printed, so the venue answers 162 and there is nothing for it to send
+    // instead. Measured 2026-08-27, and structural rather than a policy the
+    // venue may revisit — which is what this phase asked for before. It used a
+    // bar size and duration the venue refused as an invalid length, and that
+    // limit was lifted, so the phase reported SKIP twice a run and verified
+    // nothing. If this one is ever answered with bars, the skip below says so.
+    control_tx.send(ControlCommand::FetchHistorical { contract: ibx::types::ContractRef { con_id: 12087792, symbol: "EUR".into(), sec_type: "CASH".into(), exchange: "IDEALPRO".into(), currency: "USD".to_string(), ..Default::default() }, req_id: REQ_ID, end_date_time: now_ib_timestamp(), duration: "1 D".into(), bar_size: "1 hour".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(15);
