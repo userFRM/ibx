@@ -721,7 +721,7 @@ impl FarmState {
         // Every message this connection carries, kept whole when asked. What a
         // subscription answers with is a question the wire answers; a reading
         // of it is not evidence of it.
-        if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+        if *crate::engine::hot_loop::CAPTURE_WIRE {
             let hex: String = msg.iter().map(|b| format!("{b:02x}")).collect();
             shared.market.note_unread_wire("farm-msg", hex);
         }
@@ -1435,7 +1435,6 @@ impl FarmState {
             }
             None => return,
         };
-        self.md_resub_info.retain(|(id, ..)| *id != instrument);
         // Forget the pending acks too. A `35=Q` still in flight when the
         // unsubscribe goes out would otherwise resolve its request id after
         // the slot has been reclaimed and reused, binding this subscription's
@@ -1718,7 +1717,7 @@ impl FarmState {
     /// A reading checked only against frames this client made up says nothing
     /// about the ones that arrive.
     fn note_depth_wire(&self, kind: &'static str, body: &[u8], shared: &SharedState) {
-        if std::env::var("IBX_CAPTURE_WIRE").is_err() {
+        if !*crate::engine::hot_loop::CAPTURE_WIRE {
             return;
         }
         let hex: String = body.iter().map(|b| format!("{b:02x}")).collect();

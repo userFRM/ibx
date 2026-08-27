@@ -474,7 +474,7 @@ impl HmdsState {
         // Every message this connection carries, kept whole when asked. What a
         // subscription actually answers with is a question the answer to which
         // is on the wire, not in anyone's reading of it.
-        if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+        if *crate::engine::hot_loop::CAPTURE_WIRE {
             let hex: String = msg.iter().map(|b| format!("{b:02x}")).collect();
             shared.market.note_unread_wire("hmds-msg", hex);
         }
@@ -944,7 +944,7 @@ impl HmdsState {
             Some(b) => b,
             None => return,
         };
-        if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+        if *crate::engine::hot_loop::CAPTURE_WIRE {
             let hex: String = msg.iter().map(|b| format!("{b:02x}")).collect();
             shared.market.note_unread_wire("tbt-frame", hex);
         }
@@ -1334,7 +1334,7 @@ fn build_tbt_query(
         // The query as it goes out, when asked for. A request the venue does
         // not answer is only distinguishable from one it never received by
         // what was actually sent.
-        if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+        if *crate::engine::hot_loop::CAPTURE_WIRE {
             shared.market.note_unread_wire("historical-query", xml.clone());
             log::info!("historical query as sent: {xml}");
         }

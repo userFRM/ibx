@@ -197,10 +197,6 @@ impl OrderState {
     /// connection's replay as finished, and a caller asking what it has on is
     /// answered from the pre-drop book — every order in it Uncertain — while
     /// the venue's account is still arriving.
-    #[doc(hidden)] pub fn clear_replay_done(&self) {
-        self.replay_done.store(false, Ordering::Release);
-    }
-
     /// Whether the orders already working have been received.
     pub fn replay_done(&self) -> bool {
         self.replay_done.load(Ordering::Acquire)
