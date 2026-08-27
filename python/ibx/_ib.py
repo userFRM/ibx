@@ -35,6 +35,19 @@ def _refuse_options(named: str, given) -> None:
         )
 
 
+def _wait_until(done, timeout: float, every: float = 0.01) -> bool:
+    """Poll until it reports done or the time is up, and say which happened.
+
+    The answer is taken whether or not it finished, so a caller that asks with
+    a short timeout gets what arrived rather than an error. Four requests waited
+    like this with the loop written out each time.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not done():
+        time.sleep(every)
+    return done()
+
+
 class Client:
     """One session, asked questions directly."""
 
@@ -335,9 +348,7 @@ class Client:
         account and read the same as a whole one, so a caller sizing a
         position off net liquidation sized it off whatever had landed.
         """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and not self.wrapper.account_download_finished():
-            time.sleep(0.05)
+        _wait_until(self.wrapper.account_download_finished, timeout, every=0.05)
         return self.wrapper.snapshot_account_values()
 
     def pnl(self, account="", modelCode=""):
@@ -489,9 +500,7 @@ class Client:
         req_id = self.reqScannerSubscription(
             subscription, scannerSubscriptionOptions, scannerSubscriptionFilterOptions,
         )
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and not self.wrapper.scanner_finished(req_id):
-            time.sleep(0.01)
+        _wait_until(lambda: self.wrapper.scanner_finished(req_id), timeout)
         rows = self.wrapper.take_scanner(req_id)
         self.cancelScannerSubscription(req_id)
         self.wrapper.forget_scanner(req_id)
@@ -657,9 +666,7 @@ class Client:
         """
         self.wrapper.forget_completed()
         self.client.req_completed_orders(apiOnly)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and not self.wrapper.completed_orders_finished():
-            time.sleep(0.01)
+        _wait_until(self.wrapper.completed_orders_finished, timeout)
         return self.wrapper.snapshot_completed()
 
     def exerciseOptions(
@@ -724,9 +731,7 @@ class Client:
         req_id = self._next_req_id()
         self.wrapper.forget_account_summary(req_id)
         self.client.req_account_summary(req_id, group, tags)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and not self.wrapper.account_summary_finished(req_id):
-            time.sleep(0.01)
+        _wait_until(lambda: self.wrapper.account_summary_finished(req_id), timeout)
         return self.wrapper.take_account_summary(req_id)
 
     def reqPnL(self, account="", modelCode=""):
