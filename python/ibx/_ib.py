@@ -43,6 +43,12 @@ class Client:
         self.client = EClient(self.wrapper)
         self._pump: threading.Thread | None = None
         self._stop = threading.Event()
+        # Quote subscriptions only. `ticker()` falls back to scanning this
+        # for a matching contract id, so anything else in here answers a
+        # question about a quote with a request that is not one. Depth,
+        # bars and tick-by-tick were written here and never read, and two
+        # of them were never removed, so a cancelled stream went on
+        # matching that scan.
         self._subscribed: dict[int, object] = {}
         # Keyed by the kind of stream as well as the contract. One contract can
         # carry a quote, a book, bars and a tick stream at once, and one slot
@@ -669,7 +675,6 @@ class Client:
     def reqMktDepth(self, contract, numRows=5, isSmartDepth=False, mktDepthOptions=None):
         _refuse_options("mktDepthOptions", mktDepthOptions)
         req_id = self._next_req_id()
-        self._subscribed[req_id] = contract
         self._by_contract[("depth", id(contract))] = req_id
         self.client.req_mkt_depth(req_id, contract, numRows, isSmartDepth, [])
         return req_id
@@ -677,13 +682,11 @@ class Client:
     def cancelMktDepth(self, contract, isSmartDepth=False):
         req_id = self._by_contract.pop(("depth", id(contract)), None)
         if req_id is not None:
-            self._subscribed.pop(req_id, None)
             self.client.cancel_mkt_depth(req_id, isSmartDepth)
 
     def reqRealTimeBars(self, contract, barSize=5, whatToShow="TRADES", useRTH=True, realTimeBarsOptions=None):
         _refuse_options("realTimeBarsOptions", realTimeBarsOptions)
         req_id = self._next_req_id()
-        self._subscribed[req_id] = contract
         self._by_contract[("bars", id(contract))] = req_id
         self.client.req_real_time_bars(req_id, contract, barSize, whatToShow, useRTH, [])
         return req_id
@@ -695,7 +698,6 @@ class Client:
 
     def reqTickByTickData(self, contract, tickType="Last", numberOfTicks=0, ignoreSize=False):
         req_id = self._next_req_id()
-        self._subscribed[req_id] = contract
         self._by_contract[("ticks", id(contract))] = req_id
         self.client.req_tick_by_tick_data(req_id, contract, tickType, numberOfTicks, ignoreSize)
         return req_id
