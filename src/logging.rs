@@ -125,20 +125,16 @@ pub fn try_init_from_env(default_level: &str) -> bool {
 ///
 /// `None` means a logger was already installed and this call did nothing, which
 /// is the answer a module initialiser wants rather than a panic.
-pub fn try_init(config: &LogConfig) -> Option<LogGuard> {
-    install(config)
-}
-
 /// Initialize the logging subsystem. Returns a [`LogGuard`] that **must** be
 /// held until process exit — dropping it flushes buffered records and joins the
 /// background writer thread.
 ///
 /// Existing `log::info!()` etc. calls are bridged automatically via `tracing-log`.
 pub fn init(config: &LogConfig) -> LogGuard {
-    install(config).expect("a logger is already installed")
+    try_init(config).expect("a logger is already installed")
 }
 
-fn install(config: &LogConfig) -> Option<LogGuard> {
+pub fn try_init(config: &LogConfig) -> Option<LogGuard> {
     let filter = match &config.level {
         Some(level) => EnvFilter::try_new(level)
             .unwrap_or_else(|_| EnvFilter::new("info")),

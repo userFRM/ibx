@@ -1327,13 +1327,6 @@ impl HotLoop {
                          withdrawal for one, so the venue goes on reporting it",
                     );
                 }
-                ControlCommand::FetchNewsProviders { .. }
-                | ControlCommand::FetchSmartComponents { .. }
-                | ControlCommand::FetchSoftDollarTiers { .. }
-                | ControlCommand::FetchUserInfo { .. } => {
-                    // Gateway-local data — handled synchronously in Python EClient.
-                    // These variants exist for future CCP round-trip support.
-                }
                 ControlCommand::Logout => {
                     // Orders handed over before the goodbye go out before it.
                     // Stopping sends this and then the stop, both read in one

@@ -212,47 +212,7 @@ fn secdef_response_last_check() {
     assert!(!secdef_response_is_last(&msg4));
 }
 
-#[test]
-fn contract_store_insert_and_lookup() {
-    let mut store = ContractStore::default();
-    let def = ContractDefinition {
-        con_id: 265598,
-        symbol: "AAPL".to_string(),
-        sec_type: SecurityType::Stock,
-        currency: "USD".to_string(),
-        exchange: "NASDAQ".to_string(),
-        ..Default::default()
-    };
-    store.insert(def);
 
-    assert_eq!(store.len(), 1);
-    let found = store.get(265598).unwrap();
-    assert_eq!(found.symbol, "AAPL");
-
-    let by_sym = store.find("AAPL", SecurityType::Stock, "USD").unwrap();
-    assert_eq!(by_sym.con_id, 265598);
-
-    assert!(store.find("MSFT", SecurityType::Stock, "USD").is_none());
-}
-
-#[test]
-fn contract_store_update_replaces() {
-    let mut store = ContractStore::default();
-    store.insert(ContractDefinition {
-        con_id: 265598,
-        symbol: "AAPL".to_string(),
-        long_name: "OLD".to_string(),
-        ..Default::default()
-    });
-    store.insert(ContractDefinition {
-        con_id: 265598,
-        symbol: "AAPL".to_string(),
-        long_name: "APPLE INC".to_string(),
-        ..Default::default()
-    });
-    assert_eq!(store.len(), 1);
-    assert_eq!(store.get(265598).unwrap().long_name, "APPLE INC");
-}
 
 /// A definition that states both keeps the one that names the contract.
 /// Handing back the month instead turned a weekly option into something

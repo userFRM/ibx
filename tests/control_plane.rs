@@ -3,7 +3,6 @@
 //! Tests cross-module interactions: contracts ↔ FIX protocol, historical ↔ FIX protocol,
 //! Account parsing, and full workflows that span multiple control plane components.
 
-use ibx::control::account::*;
 use ibx::control::contracts::*;
 use ibx::control::historical::*;
 use ibx::protocol::fix;
@@ -86,44 +85,6 @@ fn contract_symbol_lookup_roundtrip() {
 }
 
 #[test]
-fn contract_store_multi_instrument_workflow() {
-    let mut store = ContractStore::default();
-
-    // Simulate receiving secdef responses for multiple instruments
-    let instruments = [
-        (265598, "AAPL", "CS", "NASDAQ", "USD", 0.01),
-        (272093, "MSFT", "CS", "NASDAQ", "USD", 0.01),
-        (756733, "SPY", "CS", "ARCA", "USD", 0.01),
-    ];
-
-    for &(con_id, symbol, sec_type, exchange, currency, min_tick) in &instruments {
-        store.insert(ContractDefinition {
-            con_id,
-            symbol: symbol.to_string(),
-            sec_type: SecurityType::from_fix(sec_type),
-            exchange: exchange.to_string(),
-            currency: currency.to_string(),
-            min_tick,
-            ..Default::default()
-        });
-    }
-
-    assert_eq!(store.len(), 3);
-
-    // Lookup by conId
-    assert_eq!(store.get(265598).unwrap().symbol, "AAPL");
-    assert_eq!(store.get(272093).unwrap().symbol, "MSFT");
-    assert_eq!(store.get(756733).unwrap().symbol, "SPY");
-
-    // Lookup by symbol
-    assert_eq!(
-        store.find("AAPL", SecurityType::Stock, "USD").unwrap().con_id,
-        265598
-    );
-    assert!(store.find("GOOG", SecurityType::Stock, "USD").is_none());
-}
-
-#[test]
 fn option_contract_full_workflow() {
     // Build option contract request by symbol
     let req = build_secdef_request_by_symbol(
@@ -159,12 +120,6 @@ fn option_contract_full_workflow() {
     assert_eq!(def.right, Some(OptionRight::Call));
     assert_eq!(def.multiplier, 100.0);
     assert_eq!(def.last_trade_date, "20260321");
-
-    // Store and retrieve
-    let mut store = ContractStore::default();
-    store.insert(def);
-    let found = store.get(99999).unwrap();
-    assert_eq!(found.strike, 200.0);
 }
 
 #[test]
@@ -369,98 +324,14 @@ fn historical_incomplete_then_complete() {
 // Account: parsing and tracking compatibility
 // ============================================================
 
-#[test]
-fn account_full_update_workflow() {
-    let mut summary = AccountSummary::default();
-
-    // Simulate a stream of account value updates
-    let updates = [
-        ("AccountCode", "DU12345"),
-        ("NetLiquidation", "250000.50"),
-        ("TotalCashValue", "50000.00"),
-        ("BuyingPower", "500000.00"),
-        ("GrossPositionValue", "200000.50"),
-        ("MaintMarginReq", "75000.00"),
-        ("AvailableFunds", "175000.50"),
-        ("ExcessLiquidity", "100000.50"),
-        ("Currency", "USD"),
-    ];
-
-    for (tag, val) in &updates {
-        parse_account_value(tag, val, &mut summary);
-    }
-
-    assert_eq!(summary.account_id, "DU12345");
-    assert_eq!(summary.net_liquidation, 250000.50);
-    assert_eq!(summary.buying_power, 500000.00);
-    assert_eq!(summary.currency, "USD");
-
-    // Verify accounting identity: available_funds ≈ net_liq - margin
-    let expected_available = summary.net_liquidation - summary.maintenance_margin;
-    assert!((summary.available_funds - expected_available).abs() < 0.01);
-}
-
-#[test]
-fn position_tracker_multi_instrument() {
-    let mut tracker = PositionTracker::default();
-
-    // Simulate position updates for multiple instruments
-    tracker.update(PositionUpdate {
-        account_id: "DU12345".to_string(),
-        con_id: 265598,
-        symbol: "AAPL".to_string(),
-        position: 100.0,
-        avg_cost: 150.25,
-        market_value: 15025.0,
-    });
-    tracker.update(PositionUpdate {
-        account_id: "DU12345".to_string(),
-        con_id: 272093,
-        symbol: "MSFT".to_string(),
-        position: -50.0,
-        avg_cost: 400.00,
-        market_value: -20000.0,
-    });
-    tracker.update(PositionUpdate {
-        account_id: "DU12345".to_string(),
-        con_id: 756733,
-        symbol: "SPY".to_string(),
-        position: 200.0,
-        avg_cost: 500.00,
-        market_value: 100000.0,
-    });
-
-    // Verify individual lookups
-    assert_eq!(tracker.get(265598).unwrap().position, 100.0);
-    assert_eq!(tracker.get(272093).unwrap().position, -50.0);
-    assert_eq!(tracker.get(756733).unwrap().position, 200.0);
-    assert!(tracker.get(999999).is_none());
-
-    // Verify iteration
-    let total_positions: f64 = tracker.all().map(|p| p.position).sum();
-    assert_eq!(total_positions, 250.0); // 100 - 50 + 200
-
-    // Simulate position close: AAPL position reduced to 0
-    tracker.update(PositionUpdate {
-        account_id: "DU12345".to_string(),
-        con_id: 265598,
-        symbol: "AAPL".to_string(),
-        position: 0.0,
-        avg_cost: 0.0,
-        market_value: 0.0,
-    });
-    assert_eq!(tracker.get(265598).unwrap().position, 0.0);
-}
-
 // ============================================================
 // Cross-module: contracts + historical + account
 // ============================================================
 
 #[test]
 fn contract_lookup_feeds_historical_request() {
-    // 1. Get contract definition
-    let mut store = ContractStore::default();
-    store.insert(ContractDefinition {
+    // 1. A contract definition, as the secdef path hands one back
+    let contract = ContractDefinition {
         con_id: 265598,
         symbol: "AAPL".to_string(),
         sec_type: SecurityType::Stock,
@@ -468,10 +339,9 @@ fn contract_lookup_feeds_historical_request() {
         currency: "USD".to_string(),
         min_tick: 0.01,
         ..Default::default()
-    });
+    };
 
     // 2. Use contract info to build historical request
-    let contract = store.get(265598).unwrap();
     let query_id = format!("hd;;{}@{}", contract.symbol, contract.exchange);
     let con_id = contract.con_id;
     let symbol = contract.symbol.clone();

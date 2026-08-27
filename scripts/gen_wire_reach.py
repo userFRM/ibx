@@ -28,6 +28,7 @@ drift away from the code.
 import pathlib
 import re
 import sys
+from _paths import published
 from collections import Counter
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -129,31 +130,6 @@ def classify(name: str, all_bodies: dict[str, str], seen: set[str] | None = None
     if "self.core." in body or "shared" in body.lower() or "callback" in body:
         return "session"
     return "silent"
-
-
-def published(pattern: str) -> list[list[int]]:
-    """The figures the capability matrix states, read back out of the sentence.
-
-    A number in a shipped document is a claim. This one was stated once and
-    then drifted, and the check that was supposed to hold it compared a
-    generated report against its own committed copy — which is regenerated and
-    committed by the same commit that moves the figure, so it never failed.
-    Compare against the published prose instead.
-    """
-    text = (ROOT / "docs/capabilities.md").read_text()
-    found = [
-        [int(g.replace(",", "")) for g in m.groups()]
-        for m in re.finditer(pattern, text)
-    ]
-    if not found:
-        # A claim that has been reworded is a claim nobody is checking. Read as
-        # "nothing published", this skipped silently and the figure it was
-        # written to hold drifted anyway.
-        raise SystemExit(
-            f"docs/capabilities.md states nothing matching {pattern!r}, so the "
-            f"figure it publishes is measured by nobody"
-        )
-    return found
 
 
 def main() -> int:

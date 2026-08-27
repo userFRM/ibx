@@ -11,7 +11,6 @@
 //! binaries, benchmarks and integration tests in this repository reach it.
 
 pub mod adjustments;
-pub mod account;
 pub mod calendar;
 pub mod contracts;
 pub mod fundamental;

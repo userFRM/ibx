@@ -2,7 +2,6 @@
 //!
 //! Key tag mappings: STK→CS (SecurityType), SMART→BEST (Exchange).
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::protocol::fix::{self, TAG_MSG_TYPE};
@@ -1240,42 +1239,6 @@ pub fn parse_market_rules(data: &[u8]) -> Vec<MarketRule> {
     rules
 }
 
-/// Cache of contract definitions by conId.
-#[derive(Debug, Default)]
-pub struct ContractStore {
-    by_con_id: HashMap<u32, ContractDefinition>,
-    by_symbol: HashMap<String, u32>,
-}
-
-impl ContractStore {
-    /// Remember a definition, replacing any held under the same id.
-    pub fn insert(&mut self, def: ContractDefinition) {
-        let key = format!("{}:{}:{}", def.symbol, def.sec_type.to_fix(), def.currency);
-        self.by_symbol.insert(key, def.con_id);
-        self.by_con_id.insert(def.con_id, def);
-    }
-
-    /// The definition held under an id, if there is one.
-    pub fn get(&self, con_id: u32) -> Option<&ContractDefinition> {
-        self.by_con_id.get(&con_id)
-    }
-
-    /// The definition matching a symbol, kind and currency, if there is one.
-    pub fn find(&self, symbol: &str, sec_type: SecurityType, currency: &str) -> Option<&ContractDefinition> {
-        let key = format!("{}:{}:{}", symbol, sec_type.to_fix(), currency);
-        self.by_symbol.get(&key).and_then(|id| self.by_con_id.get(id))
-    }
-
-    /// How many definitions are held.
-    pub fn len(&self) -> usize {
-        self.by_con_id.len()
-    }
-
-    /// Whether none are.
-    pub fn is_empty(&self) -> bool {
-        self.by_con_id.is_empty()
-    }
-}
 
 // ─── Schedule subscription ───
 

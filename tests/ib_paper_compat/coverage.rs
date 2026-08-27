@@ -59,22 +59,6 @@ const KNOWN_CONTROL_COMMAND_GAPS: &[(&str, &str)] = &[
          so the venue answers that it has none whatever is asked",
     ),
     (
-        "FetchNewsProviders",
-        "Gateway-local response path, no CCP round-trip in hot loop yet",
-    ),
-    (
-        "FetchSmartComponents",
-        "Gateway-local response path, no CCP round-trip in hot loop yet",
-    ),
-    (
-        "FetchSoftDollarTiers",
-        "Gateway-local response path, no CCP round-trip in hot loop yet",
-    ),
-    (
-        "FetchUserInfo",
-        "Gateway-local response path, no CCP round-trip in hot loop yet",
-    ),
-    (
         "Logout",
         "Ends the session rather than the loop. A phase that sent one would \
          take the session away from every phase after it, so the suite stops \

@@ -7,6 +7,7 @@ than failing. Both `gen_wire_coverage` and `gen_order_field_reach` were caught
 by this the day the engine's files were split.
 """
 
+import re
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -43,3 +44,28 @@ def module_files(name: str) -> list[pathlib.Path]:
     if not folder.is_dir():
         raise FileNotFoundError(f"no module at {name}.rs or {name}/")
     return sorted(f for f in folder.glob("*.rs") if f.stem != "tests")
+
+
+def published(pattern: str) -> list[list[int]]:
+    """The figures the capability matrix states, read back out of the sentence.
+
+    A number in a shipped document is a claim. This one was stated once and
+    then drifted, and the check that was supposed to hold it compared a
+    generated report against its own committed copy — which is regenerated and
+    committed by the same commit that moves the figure, so it never failed.
+    Compare against the published prose instead.
+    """
+    text = (ROOT / "docs/capabilities.md").read_text()
+    found = [
+        [int(g.replace(",", "")) for g in m.groups()]
+        for m in re.finditer(pattern, text)
+    ]
+    if not found:
+        # A claim that has been reworded is a claim nobody is checking. Read as
+        # "nothing published", this skipped silently and the figure it was
+        # written to hold drifted anyway.
+        raise SystemExit(
+            f"docs/capabilities.md states nothing matching {pattern!r}, so the "
+            f"figure it publishes is measured by nobody"
+        )
+    return found
