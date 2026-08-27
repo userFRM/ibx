@@ -5983,7 +5983,12 @@ fn a_bracket_that_closes_itself_is_refused() {
 #[test]
 fn bars_ask_for_what_the_instrument_has() {
     let (client, rx, _shared) = test_client();
-    for (sec_type, wanted) in [("STK", "TRADES"), ("CASH", "MIDPOINT"), ("CFD", "MIDPOINT")] {
+    // CFD asks for trades: a share CFD has them and an index one is refused
+    // by name, which is better than being answered with a series nobody asked
+    // for. Measured 2026-08-27, see `Contract::is_quoted_not_traded`.
+    for (sec_type, wanted) in
+        [("STK", "TRADES"), ("CASH", "MIDPOINT"), ("CMDTY", "MIDPOINT"), ("CFD", "TRADES")]
+    {
         let contract = Contract {
             con_id: 12087792, symbol: "EUR".into(), sec_type: sec_type.into(),
             exchange: "IDEALPRO".into(), currency: "USD".into(), ..Default::default()
