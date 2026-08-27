@@ -519,7 +519,7 @@ impl CcpState {
             Some(t) => t.as_str(),
             None => return,
         };
-        if std::env::var("IBX_CAPTURE_WIRE").is_ok() {
+        if *crate::engine::hot_loop::CAPTURE_WIRE {
             let hex: String = msg.iter().map(|b| format!("{b:02x}")).collect();
             shared.market.note_unread_wire("trading-msg", hex);
         }
@@ -2208,22 +2208,16 @@ impl CcpState {
     ) {
         *ccp_conn = Some(conn);
         self.disconnected = false;
-        // This connection has named nothing yet. Both of these said otherwise
-        // from the connection before it, so a caller asking what it had on was
-        // answered at once from the pre-drop book — every order in it
-        // Uncertain — while the venue's account of what it holds was still
-        // on its way. Cleared here, that caller waits for the new push the way
-        // it waited for the first.
-        self.hydrated_any = false;
-        shared.orders.clear_replay_done();
-        self.recovery_sweep_at = Some(Instant::now() + RECOVERY_PUSH_GRACE);
         // This connection has not yet named what it has working, and neither
-        // "none" nor the last connection's answer is that. Left set from
-        // before, a caller asking what it has on at the moment it reconnects is
-        // answered from the old session's record without waiting for the new
-        // one's, which is how the same order is placed twice.
+        // "none" nor the last connection's answer is that. Both of these said
+        // otherwise from the connection before it, so a caller asking what it
+        // had on was answered at once from the pre-drop book — every order in
+        // it Uncertain — while the venue's account was still on its way, which
+        // is how the same order is placed twice. Cleared here, that caller
+        // waits for the new push the way it waited for the first.
         self.hydrated_any = false;
         shared.orders.replay_is_pending();
+        self.recovery_sweep_at = Some(Instant::now() + RECOVERY_PUSH_GRACE);
         hb.last_ccp_sent = Instant::now();
         hb.last_ccp_recv = Instant::now();
         hb.pending_ccp_test = None;

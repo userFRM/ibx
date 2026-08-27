@@ -2562,6 +2562,14 @@ pub(crate) fn clone_for_event<T: Clone>(event_tx: &Option<EventSink>, value: &T)
 /// they keep failing, and re-dialling on the beat is what a server rate-limits.
 /// How long each consecutive failure waits before the next attempt, in
 /// milliseconds, before the spread below is added to it.
+/// Whether frames are being kept, read once.
+///
+/// Every setter is a capture tool stamping it before the engine starts, so it
+/// cannot change under a running session. Read per message, it cost a lock and
+/// an allocation on the decode path of every transport.
+pub(crate) static CAPTURE_WIRE: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var("IBX_CAPTURE_WIRE").is_ok());
+
 const LADDER_MS: [u64; 6] = [0, 5_000, 15_000, 30_000, 50_000, 60_000];
 
 /// The width of the window a wait is spread across, which opens by a step per
