@@ -61,13 +61,13 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Future | Verified | Verified | Verified | Available |
 | Futures option | Verified | Implemented | Implemented | Not yet verified |
 | Index | Verified | Verified | Blocked, the venue supports no order on the contract type | None required |
-| Bond | Verified | Implemented | Verified, quantified in face value | Available |
+| Bond | Verified | Verified | Verified, quantified in face value | Available |
 | Warrant | Verified | Implemented | Blocked, the venue supports no order of this kind on the exchange and security type | None required |
 | Combination | Verified | Not applicable | Verified | Available |
 | Crypto and CFD | Verified | Verified | Verified, crypto requires an immediate-or-cancel or minutes instruction | Available |
-| Commodity | Verified | Implemented | Verified | Available |
+| Commodity | Verified | Verified | Verified | Available |
 | Bill | Verified | Implemented | Verified | Available |
-| Fund | Verified | Implemented | Blocked, quantified in cash and then refused for residency, which is a property of the account | None required |
+| Fund | Verified | Verified | Blocked, quantified in cash and then refused for residency, which is a property of the account | None required |
 | Forward | Implemented | Implemented | Absent, the session states no permission for the type | None required |
 | Venues outside the United States | Verified | Verified | Verified | Available |
 
@@ -110,9 +110,12 @@ them serve a front end's own windows and have no caller here. These are the
 ones that do not, checked against this client's dispatch tables, with what
 would settle each.
 
-A wire on this list is one this client neither sends nor reads. Each is named
-in the log the first time the venue uses it, so a session that meets one leaves
-a record rather than discarding it in silence.
+A wire on this list is one this client neither sends nor reads. A message
+subtype it does not read is named in the log the first time the venue uses it,
+once per subtype, so a session that meets one leaves a record rather than
+discarding it in silence. A field on a contract definition that nothing reads is
+recorded rather than logged: it is on the session, under `unread_wire`, because
+one arriving is a fact about the contract and not an event worth a line.
 
 Some inbound subtypes exist to drive a front end's own windows and mean
 nothing without one. The table below carries the rest.
