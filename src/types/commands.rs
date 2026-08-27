@@ -486,28 +486,6 @@ pub enum ControlCommand {
         /// The caller's number for the request.
         req_id: u32,
     },
-    /// Request news providers list (gateway-local).
-    FetchNewsProviders {
-        /// The caller's number for the request.
-        req_id: u32,
-    },
-    /// Request SMART routing components.
-    FetchSmartComponents {
-        /// The caller's number for the request.
-        req_id: u32,
-        /// The mask whose venues are being asked about.
-        bbo_exchange: String,
-    },
-    /// Request soft dollar tiers.
-    FetchSoftDollarTiers {
-        /// The caller's number for the request.
-        req_id: u32,
-    },
-    /// Request user info.
-    FetchUserInfo {
-        /// The caller's number for the request.
-        req_id: u32,
-    },
     /// End the session with the venue. Sent before [`ControlCommand::Shutdown`]
     /// by a caller that is disconnecting. A caller that only stops the engine
     /// and keeps its connections does not send it, because a logout ends the
