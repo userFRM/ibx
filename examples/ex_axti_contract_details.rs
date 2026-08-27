@@ -45,7 +45,7 @@ impl Wrapper for ProbeWrapper {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    let _ = ibx::logging::try_init_from_env("error");
 
     let username = env::var("IB_USERNAME")?;
     let password = env::var("IB_PASSWORD")?;

@@ -13,7 +13,7 @@ use ibx::api::types::Contract;
 use ibx::control::option_model::{implied_volatility, option_price, OptionTerms, VenueModel};
 
 fn main() {
-    let _ = env_logger::try_init();
+    let _ = ibx::logging::try_init_from_env("error");
     // Keep every message the historical connection carries, so a reply this
     // client does not yet read still shows itself.
     // Safety: set before the engine starts, single-threaded here.

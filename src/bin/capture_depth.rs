@@ -26,7 +26,7 @@ fn spy(exchange: &str) -> Contract {
 
 fn main() {
     unsafe { std::env::set_var("IBX_CAPTURE_WIRE", "1") };
-    env_logger::init();
+    let _ = ibx::logging::try_init_from_env("error");
 
     let config = EClientConfig {
         username: std::env::var("IB_USERNAME").expect("IB_USERNAME"),

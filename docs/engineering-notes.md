@@ -591,10 +591,9 @@ i7-10700K with rustc 1.97:
 | Outbound: build + sign a modify | 939 ns |
 | Message type dispatch, body extraction | 4 ns each |
 
-These measure this engine only. `scripts/gateway_benchmark.cpp` is a TWS API harness that times
-the same operations through a running gateway; the two are not directly
-comparable — one is an in-process call, the other a round trip across a
-localhost socket into a JVM — and no ratio between them is published here.
+These measure this engine only. No comparison against a gateway round trip is
+published here: one is an in-process call and the other crosses a localhost
+socket, so a ratio between them would report the socket rather than the code.
 
 ## What this client sends that the gateway does not, and the other way round
 

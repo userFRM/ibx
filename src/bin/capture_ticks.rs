@@ -79,7 +79,7 @@ fn subjects() -> Vec<(&'static str, &'static str, Contract)> {
 const DUMP_LIMIT: usize = 200;
 
 fn main() {
-    let _ = env_logger::try_init();
+    let _ = ibx::logging::try_init_from_env("error");
 
     // This binary logs in with the paper credentials, which nothing else is
     // using. Only a run against the live account has to wait for a window.

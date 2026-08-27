@@ -101,6 +101,26 @@ pub fn redacted(identifier: &str) -> String {
     }
 }
 
+/// Install a console logger if none is installed yet.
+///
+/// For a process that runs for its own lifetime and has nowhere to keep a
+/// guard: records go straight to stderr rather than through the background
+/// writer, so there is nothing to flush and nothing to hold. Idempotent, so a
+/// second call while a logger is installed does nothing and reports that it
+/// did nothing.
+///
+/// `default_level` applies only when `RUST_LOG` says nothing.
+pub fn try_init_from_env(default_level: &str) -> bool {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_level));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_timer(NanoTimestamp)
+        .with_writer(std::io::stderr)
+        .try_init()
+        .is_ok()
+}
+
 /// Initialize the logging subsystem. Returns a [`LogGuard`] that **must** be
 /// held until process exit — dropping it flushes buffered records and joins the
 /// background writer thread.

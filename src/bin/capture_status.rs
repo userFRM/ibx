@@ -64,7 +64,7 @@ fn qty_scale() -> f64 {
 }
 
 fn main() {
-    let _ = env_logger::try_init();
+    let _ = ibx::logging::try_init_from_env("error");
 
     // Paper credentials, which nothing else is using, so this runs at any hour.
     // Market data is the same feed on both accounts.

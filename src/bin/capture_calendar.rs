@@ -33,7 +33,7 @@ impl Wrapper for Heard {
 }
 
 fn main() {
-    let _ = env_logger::try_init();
+    let _ = ibx::logging::try_init_from_env("error");
     let username = std::env::var("IB_USERNAME").unwrap_or_default();
     let password = std::env::var("IB_PASSWORD").unwrap_or_default();
     if username.trim().is_empty() || password.trim().is_empty() {
