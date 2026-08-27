@@ -1173,7 +1173,7 @@ def cancel_calculate_implied_volatility(req_id)
 
 #### `cancel_calculate_option_price`
 
-As for [`cancel_calculate_implied_volatility`](Self::cancel_calculate_implied_volatility).
+As for `cancel_calculate_implied_volatility`.
 
 ```python
 def cancel_calculate_option_price(req_id)
@@ -1187,7 +1187,7 @@ def cancel_calculate_option_price(req_id)
 
 #### `req_news_bulletins`
 
-Ask for the notices the venue broadcasts to everyone. Answered on `update_news_bulletin`.  `all_msgs` is taken and not applied, and already honoured for everything it can be. Nothing is sent to the venue: it broadcasts these unasked and this only decides whether they are delivered, so every bulletin the session has seen — including those from before this call — is handed over here. What cannot be had is anything from before the session existed, because there is no request to ask for it with. The last [`NEWS_BULLETIN_LIMIT`](crate::bridge::NEWS_BULLETIN_LIMIT) are kept for a caller who has not asked yet.
+Ask for the notices the venue broadcasts to everyone. Answered on `update_news_bulletin`.  `all_msgs` is taken and not applied, and already honoured for everything it can be. Nothing is sent to the venue: it broadcasts these unasked and this only decides whether they are delivered, so every bulletin the session has seen — including those from before this call — is handed over here. What cannot be had is anything from before the session existed, because there is no request to ask for it with. The last `NEWS_BULLETIN_LIMIT` are kept for a caller who has not asked yet.
 
 ```python
 def req_news_bulletins(all_msgs=True)

@@ -370,6 +370,19 @@ def version() -> str:
 
 # ── Parameter parsing ──
 
+def plain_intra_doc_links(doc: str) -> str:
+    """Drop the link, keep the words.
+
+    A doc comment links to a neighbouring item by its path, which the tool that
+    renders the crate's own documentation resolves. Markdown does not: the same
+    text becomes a link to a relative path that is not there, and a reader who
+    clicks it lands on nothing. The name is already the link text, and this page
+    lists every item, so the words alone say the same thing and go nowhere
+    wrong.
+    """
+    return re.sub(r"\[([^\]]+)\]\((?:Self|crate|[A-Z][A-Za-z0-9_]*)(?:::[A-Za-z0-9_]+)+\)", r"\1", doc)
+
+
 def parse_rust_params(args_str: str) -> list[dict]:
     """Parse Rust fn args into [{name, type}], skipping &self/&mut self."""
     params = []
@@ -458,6 +471,7 @@ def parse_rust_methods(path: Path) -> list[dict]:
                 doc_lines.append(line)
         doc = " ".join(doc_lines)
         doc = re.sub(r"\s*Matches `[^`]+` in C\+\+\.?", "", doc)
+        doc = plain_intra_doc_links(doc)
 
         # Parse return type
         ret_m = re.search(r'->\s*(.+)', ret_str)
@@ -553,6 +567,7 @@ def parse_pymethods(path: Path) -> list[dict]:
                     pyo3_sig = line
             doc = " ".join(doc_lines)
             doc = re.sub(r"\s*Matches `[^`]+` in C\+\+\.?", "", doc)
+            doc = plain_intra_doc_links(doc)
             params = parse_rust_params(args_str)
             # Filter out &self, py: Python
             params = [p for p in params if p["name"] != "py" and "Python" not in p.get("type", "")]
