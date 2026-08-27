@@ -108,13 +108,21 @@ def steps(suites):
 
 
 def generated_docs_are_current():
-    """What the workflow checks after running the generators: nothing moved."""
+    """What the workflow checks after running the generators: nothing moved.
+
+    This compares the whole of `docs/`, so it cannot tell a page a generator
+    rewrote from one a person edited and has not committed. Both fail, and both
+    should: the push carries a documents tree that does not match what was
+    committed either way. The message says what is known rather than guessing
+    which of the two it was.
+    """
     for tree in ("docs/",):
         subprocess.run(["git", "add", "-A", tree], check=False)
     done = subprocess.run(["git", "diff", "--cached", "--quiet", "docs/"])
     if done.returncode != 0:
-        print("\nFAILED: generated docs are stale — the generators just moved them, "
-              "so commit what they produced")
+        print("\nFAILED: docs/ does not match what is committed. Either a generator "
+              "moved a page, or an edit is uncommitted. `git diff --cached docs/` "
+              "says which; commit it either way.")
     return done.returncode
 
 
