@@ -4,6 +4,8 @@
 use super::{class_contracts::*, class_conditions::*};
 use super::contract::{by_reference_name, set_from_keywords};
 use pyo3::prelude::*;
+
+use super::{camel_aliases_copy, camel_aliases_owned};
 use crate::types::*;
 
 /// ibapi-compatible Order class.
@@ -724,60 +726,12 @@ impl Order {
     fn get_aux_price_alias(&self) -> f64 { self.aux_price }
     #[setter(auxPrice)]
     fn set_aux_price_alias(&mut self, v: f64) { self.aux_price = v; }
-    #[getter(lmtPrice)]
-    fn get_lmt_price_alias(&self) -> f64 { self.lmt_price }
-    #[setter(lmtPrice)]
-    fn set_lmt_price_alias(&mut self, v: f64) { self.lmt_price = v; }
-    #[getter(orderId)]
-    fn get_order_id_alias(&self) -> i64 { self.order_id }
-    #[setter(orderId)]
-    fn set_order_id_alias(&mut self, v: i64) { self.order_id = v; }
-    #[getter(totalQuantity)]
-    fn get_total_quantity_alias(&self) -> f64 { self.total_quantity }
-    #[setter(totalQuantity)]
-    fn set_total_quantity_alias(&mut self, v: f64) { self.total_quantity = v; }
-    #[getter(orderType)]
-    fn get_order_type_alias(&self) -> String { self.order_type.clone() }
-    #[setter(orderType)]
-    fn set_order_type_alias(&mut self, v: String) { self.order_type = v; }
 
     // ── New camelCase aliases ──
     #[getter(activeStartTime)]
     fn get_active_start_time_alias(&self) -> String { self.active_start_time.clone() }
     #[setter(activeStartTime)]
     fn set_active_start_time_alias(&mut self, v: String) { self.active_start_time = v; }
-    #[getter(activeStopTime)]
-    fn get_active_stop_time_alias(&self) -> String { self.active_stop_time.clone() }
-    #[setter(activeStopTime)]
-    fn set_active_stop_time_alias(&mut self, v: String) { self.active_stop_time = v; }
-    #[getter(adjustableTrailingUnit)]
-    fn get_adjustable_trailing_unit_alias(&self) -> i32 { self.adjustable_trailing_unit }
-    #[setter(adjustableTrailingUnit)]
-    fn set_adjustable_trailing_unit_alias(&mut self, v: i32) { self.adjustable_trailing_unit = v; }
-    #[getter(adjustedTrailingAmount)]
-    fn get_adjusted_trailing_amount_alias(&self) -> f64 { self.adjusted_trailing_amount }
-    #[setter(adjustedTrailingAmount)]
-    fn set_adjusted_trailing_amount_alias(&mut self, v: f64) { self.adjusted_trailing_amount = v; }
-    #[getter(adjustedOrderType)]
-    fn get_adjusted_order_type_alias(&self) -> String { self.adjusted_order_type.clone() }
-    #[setter(adjustedOrderType)]
-    fn set_adjusted_order_type_alias(&mut self, v: String) { self.adjusted_order_type = v; }
-    #[getter(adjustedStopPrice)]
-    fn get_adjusted_stop_price_alias(&self) -> f64 { self.adjusted_stop_price }
-    #[setter(adjustedStopPrice)]
-    fn set_adjusted_stop_price_alias(&mut self, v: f64) { self.adjusted_stop_price = v; }
-    #[getter(adjustedStopLimitPrice)]
-    fn get_adjusted_stop_limit_price_alias(&self) -> f64 { self.adjusted_stop_limit_price }
-    #[setter(adjustedStopLimitPrice)]
-    fn set_adjusted_stop_limit_price_alias(&mut self, v: f64) { self.adjusted_stop_limit_price = v; }
-    #[getter(advancedErrorOverride)]
-    fn get_advanced_error_override_alias(&self) -> String { self.advanced_error_override.clone() }
-    #[setter(advancedErrorOverride)]
-    fn set_advanced_error_override_alias(&mut self, v: String) { self.advanced_error_override = v; }
-    #[getter(algoId)]
-    fn get_algo_id_alias(&self) -> String { self.algo_id.clone() }
-    #[setter(algoId)]
-    fn set_algo_id_alias(&mut self, v: String) { self.algo_id = v; }
     #[getter(algoParams)]
     fn get_algo_params_alias(&self) -> Vec<TagValue> { self.algo_params.clone() }
     // Writable as well as readable. Readable only, parameters set under the
@@ -785,274 +739,6 @@ impl Order {
     // on the venue's default settings for that algo.
     #[setter(algoParams)]
     fn set_algo_params_alias(&mut self, v: Vec<TagValue>) { self.algo_params = v; }
-    #[getter(algoStrategy)]
-    fn get_algo_strategy_alias(&self) -> String { self.algo_strategy.clone() }
-    #[setter(algoStrategy)]
-    fn set_algo_strategy_alias(&mut self, v: String) { self.algo_strategy = v; }
-    #[getter(allOrNone)]
-    fn get_all_or_none_alias(&self) -> bool { self.all_or_none }
-    #[setter(allOrNone)]
-    fn set_all_or_none_alias(&mut self, v: bool) { self.all_or_none = v; }
-    #[getter(allowPreOpen)]
-    fn get_allow_pre_open_alias(&self) -> bool { self.allow_pre_open }
-    #[setter(allowPreOpen)]
-    fn set_allow_pre_open_alias(&mut self, v: bool) { self.allow_pre_open = v; }
-    #[getter(auctionStrategy)]
-    fn get_auction_strategy_alias(&self) -> i32 { self.auction_strategy }
-    #[setter(auctionStrategy)]
-    fn set_auction_strategy_alias(&mut self, v: i32) { self.auction_strategy = v; }
-    #[getter(autoCancelDate)]
-    fn get_auto_cancel_date_alias(&self) -> String { self.auto_cancel_date.clone() }
-    #[setter(autoCancelDate)]
-    fn set_auto_cancel_date_alias(&mut self, v: String) { self.auto_cancel_date = v; }
-    #[getter(autoCancelParent)]
-    fn get_auto_cancel_parent_alias(&self) -> bool { self.auto_cancel_parent }
-    #[setter(autoCancelParent)]
-    fn set_auto_cancel_parent_alias(&mut self, v: bool) { self.auto_cancel_parent = v; }
-    #[getter(basisPoints)]
-    fn get_basis_points_alias(&self) -> f64 { self.basis_points }
-    #[setter(basisPoints)]
-    fn set_basis_points_alias(&mut self, v: f64) { self.basis_points = v; }
-    #[getter(basisPointsType)]
-    fn get_basis_points_type_alias(&self) -> i32 { self.basis_points_type }
-    #[setter(basisPointsType)]
-    fn set_basis_points_type_alias(&mut self, v: i32) { self.basis_points_type = v; }
-    #[getter(blockOrder)]
-    fn get_block_order_alias(&self) -> bool { self.block_order }
-    #[setter(blockOrder)]
-    fn set_block_order_alias(&mut self, v: bool) { self.block_order = v; }
-    #[getter(bondAccruedInterest)]
-    fn get_bond_accrued_interest_alias(&self) -> String { self.bond_accrued_interest.clone() }
-    #[setter(bondAccruedInterest)]
-    fn set_bond_accrued_interest_alias(&mut self, v: String) { self.bond_accrued_interest = v; }
-    #[getter(cashQty)]
-    fn get_cash_qty_alias(&self) -> f64 { self.cash_qty }
-    #[setter(cashQty)]
-    fn set_cash_qty_alias(&mut self, v: f64) { self.cash_qty = v; }
-    #[getter(clearingAccount)]
-    fn get_clearing_account_alias(&self) -> String { self.clearing_account.clone() }
-    #[setter(clearingAccount)]
-    fn set_clearing_account_alias(&mut self, v: String) { self.clearing_account = v; }
-    #[getter(clearingIntent)]
-    fn get_clearing_intent_alias(&self) -> String { self.clearing_intent.clone() }
-    #[setter(clearingIntent)]
-    fn set_clearing_intent_alias(&mut self, v: String) { self.clearing_intent = v; }
-    #[getter(clientId)]
-    fn get_client_id_alias(&self) -> i32 { self.client_id }
-    #[setter(clientId)]
-    fn set_client_id_alias(&mut self, v: i32) { self.client_id = v; }
-    #[getter(competeAgainstBestOffset)]
-    fn get_compete_against_best_offset_alias(&self) -> f64 { self.compete_against_best_offset }
-    #[setter(competeAgainstBestOffset)]
-    fn set_compete_against_best_offset_alias(&mut self, v: f64) { self.compete_against_best_offset = v; }
-    #[getter(conditionsCancelOrder)]
-    fn get_conditions_cancel_order_alias(&self) -> bool { self.conditions_cancel_order }
-    #[setter(conditionsCancelOrder)]
-    fn set_conditions_cancel_order_alias(&mut self, v: bool) { self.conditions_cancel_order = v; }
-    #[getter(conditionsIgnoreRth)]
-    fn get_conditions_ignore_rth_alias(&self) -> bool { self.conditions_ignore_rth }
-    #[setter(conditionsIgnoreRth)]
-    fn set_conditions_ignore_rth_alias(&mut self, v: bool) { self.conditions_ignore_rth = v; }
-    #[getter(continuousUpdate)]
-    fn get_continuous_update_alias(&self) -> bool { self.continuous_update }
-    #[setter(continuousUpdate)]
-    fn set_continuous_update_alias(&mut self, v: bool) { self.continuous_update = v; }
-    #[getter(customerAccount)]
-    fn get_customer_account_alias(&self) -> String { self.customer_account.clone() }
-    #[setter(customerAccount)]
-    fn set_customer_account_alias(&mut self, v: String) { self.customer_account = v; }
-    #[getter(deltaNeutralAuxPrice)]
-    fn get_delta_neutral_aux_price_alias(&self) -> f64 { self.delta_neutral_aux_price }
-    #[setter(deltaNeutralAuxPrice)]
-    fn set_delta_neutral_aux_price_alias(&mut self, v: f64) { self.delta_neutral_aux_price = v; }
-    #[getter(deltaNeutralClearingAccount)]
-    fn get_delta_neutral_clearing_account_alias(&self) -> String { self.delta_neutral_clearing_account.clone() }
-    #[setter(deltaNeutralClearingAccount)]
-    fn set_delta_neutral_clearing_account_alias(&mut self, v: String) { self.delta_neutral_clearing_account = v; }
-    #[getter(deltaNeutralClearingIntent)]
-    fn get_delta_neutral_clearing_intent_alias(&self) -> String { self.delta_neutral_clearing_intent.clone() }
-    #[setter(deltaNeutralClearingIntent)]
-    fn set_delta_neutral_clearing_intent_alias(&mut self, v: String) { self.delta_neutral_clearing_intent = v; }
-    #[getter(deltaNeutralConId)]
-    fn get_delta_neutral_con_id_alias(&self) -> i32 { self.delta_neutral_con_id }
-    #[setter(deltaNeutralConId)]
-    fn set_delta_neutral_con_id_alias(&mut self, v: i32) { self.delta_neutral_con_id = v; }
-    #[getter(deltaNeutralDesignatedLocation)]
-    fn get_delta_neutral_designated_location_alias(&self) -> String { self.delta_neutral_designated_location.clone() }
-    #[setter(deltaNeutralDesignatedLocation)]
-    fn set_delta_neutral_designated_location_alias(&mut self, v: String) { self.delta_neutral_designated_location = v; }
-    #[getter(deltaNeutralOpenClose)]
-    fn get_delta_neutral_open_close_alias(&self) -> String { self.delta_neutral_open_close.clone() }
-    #[setter(deltaNeutralOpenClose)]
-    fn set_delta_neutral_open_close_alias(&mut self, v: String) { self.delta_neutral_open_close = v; }
-    #[getter(deltaNeutralOrderType)]
-    fn get_delta_neutral_order_type_alias(&self) -> String { self.delta_neutral_order_type.clone() }
-    #[setter(deltaNeutralOrderType)]
-    fn set_delta_neutral_order_type_alias(&mut self, v: String) { self.delta_neutral_order_type = v; }
-    #[getter(deltaNeutralSettlingFirm)]
-    fn get_delta_neutral_settling_firm_alias(&self) -> String { self.delta_neutral_settling_firm.clone() }
-    #[setter(deltaNeutralSettlingFirm)]
-    fn set_delta_neutral_settling_firm_alias(&mut self, v: String) { self.delta_neutral_settling_firm = v; }
-    #[getter(deltaNeutralShortSale)]
-    fn get_delta_neutral_short_sale_alias(&self) -> bool { self.delta_neutral_short_sale }
-    #[setter(deltaNeutralShortSale)]
-    fn set_delta_neutral_short_sale_alias(&mut self, v: bool) { self.delta_neutral_short_sale = v; }
-    #[getter(deltaNeutralShortSaleSlot)]
-    fn get_delta_neutral_short_sale_slot_alias(&self) -> i32 { self.delta_neutral_short_sale_slot }
-    #[setter(deltaNeutralShortSaleSlot)]
-    fn set_delta_neutral_short_sale_slot_alias(&mut self, v: i32) { self.delta_neutral_short_sale_slot = v; }
-    #[getter(designatedLocation)]
-    fn get_designated_location_alias(&self) -> String { self.designated_location.clone() }
-    #[setter(designatedLocation)]
-    fn set_designated_location_alias(&mut self, v: String) { self.designated_location = v; }
-    #[getter(discretionaryAmt)]
-    fn get_discretionary_amt_alias(&self) -> f64 { self.discretionary_amt }
-    #[setter(discretionaryAmt)]
-    fn set_discretionary_amt_alias(&mut self, v: f64) { self.discretionary_amt = v; }
-    #[getter(discretionaryUpToLimitPrice)]
-    fn get_discretionary_up_to_limit_price_alias(&self) -> bool { self.discretionary_up_to_limit_price }
-    #[setter(discretionaryUpToLimitPrice)]
-    fn set_discretionary_up_to_limit_price_alias(&mut self, v: bool) { self.discretionary_up_to_limit_price = v; }
-    #[getter(displaySize)]
-    fn get_display_size_alias(&self) -> i32 { self.display_size }
-    #[setter(displaySize)]
-    fn set_display_size_alias(&mut self, v: i32) { self.display_size = v; }
-    #[getter(dontUseAutoPriceForHedge)]
-    fn get_dont_use_auto_price_for_hedge_alias(&self) -> bool { self.dont_use_auto_price_for_hedge }
-    #[setter(dontUseAutoPriceForHedge)]
-    fn set_dont_use_auto_price_for_hedge_alias(&mut self, v: bool) { self.dont_use_auto_price_for_hedge = v; }
-    #[getter(exemptCode)]
-    fn get_exempt_code_alias(&self) -> i32 { self.exempt_code }
-    #[setter(exemptCode)]
-    fn set_exempt_code_alias(&mut self, v: i32) { self.exempt_code = v; }
-    #[getter(extOperator)]
-    fn get_ext_operator_alias(&self) -> String { self.ext_operator.clone() }
-    #[setter(extOperator)]
-    fn set_ext_operator_alias(&mut self, v: String) { self.ext_operator = v; }
-    #[getter(faGroup)]
-    fn get_fa_group_alias(&self) -> String { self.fa_group.clone() }
-    #[setter(faGroup)]
-    fn set_fa_group_alias(&mut self, v: String) { self.fa_group = v; }
-    #[getter(faMethod)]
-    fn get_fa_method_alias(&self) -> String { self.fa_method.clone() }
-    #[setter(faMethod)]
-    fn set_fa_method_alias(&mut self, v: String) { self.fa_method = v; }
-    #[getter(faPercentage)]
-    fn get_fa_percentage_alias(&self) -> String { self.fa_percentage.clone() }
-    #[setter(faPercentage)]
-    fn set_fa_percentage_alias(&mut self, v: String) { self.fa_percentage = v; }
-    #[getter(filledQuantity)]
-    fn get_filled_quantity_alias(&self) -> f64 { self.filled_quantity }
-    #[setter(filledQuantity)]
-    fn set_filled_quantity_alias(&mut self, v: f64) { self.filled_quantity = v; }
-    #[getter(goodAfterTime)]
-    fn get_good_after_time_alias(&self) -> String { self.good_after_time.clone() }
-    #[setter(goodAfterTime)]
-    fn set_good_after_time_alias(&mut self, v: String) { self.good_after_time = v; }
-    #[getter(goodTillDate)]
-    fn get_good_till_date_alias(&self) -> String { self.good_till_date.clone() }
-    #[setter(goodTillDate)]
-    fn set_good_till_date_alias(&mut self, v: String) { self.good_till_date = v; }
-    #[getter(hedgeParam)]
-    fn get_hedge_param_alias(&self) -> String { self.hedge_param.clone() }
-    #[setter(hedgeParam)]
-    fn set_hedge_param_alias(&mut self, v: String) { self.hedge_param = v; }
-    #[getter(hedgeType)]
-    fn get_hedge_type_alias(&self) -> String { self.hedge_type.clone() }
-    #[setter(hedgeType)]
-    fn set_hedge_type_alias(&mut self, v: String) { self.hedge_type = v; }
-    #[getter(ignoreOpenAuction)]
-    fn get_ignore_open_auction_alias(&self) -> bool { self.ignore_open_auction }
-    #[setter(ignoreOpenAuction)]
-    fn set_ignore_open_auction_alias(&mut self, v: bool) { self.ignore_open_auction = v; }
-    #[getter(imbalanceOnly)]
-    fn get_imbalance_only_alias(&self) -> bool { self.imbalance_only }
-    #[setter(imbalanceOnly)]
-    fn set_imbalance_only_alias(&mut self, v: bool) { self.imbalance_only = v; }
-    #[getter(includeOvernight)]
-    fn get_include_overnight_alias(&self) -> bool { self.include_overnight }
-    #[setter(includeOvernight)]
-    fn set_include_overnight_alias(&mut self, v: bool) { self.include_overnight = v; }
-    #[getter(isOmsContainer)]
-    fn get_is_oms_container_alias(&self) -> bool { self.is_oms_container }
-    #[setter(isOmsContainer)]
-    fn set_is_oms_container_alias(&mut self, v: bool) { self.is_oms_container = v; }
-    #[getter(isPeggedChangeAmountDecrease)]
-    fn get_is_pegged_change_amount_decrease_alias(&self) -> bool { self.is_pegged_change_amount_decrease }
-    #[setter(isPeggedChangeAmountDecrease)]
-    fn set_is_pegged_change_amount_decrease_alias(&mut self, v: bool) { self.is_pegged_change_amount_decrease = v; }
-    #[getter(lmtPriceOffset)]
-    fn get_lmt_price_offset_alias(&self) -> f64 { self.lmt_price_offset }
-    #[setter(lmtPriceOffset)]
-    fn set_lmt_price_offset_alias(&mut self, v: f64) { self.lmt_price_offset = v; }
-    #[getter(manualOrderIndicator)]
-    fn get_manual_order_indicator_alias(&self) -> i32 { self.manual_order_indicator }
-    #[setter(manualOrderIndicator)]
-    fn set_manual_order_indicator_alias(&mut self, v: i32) { self.manual_order_indicator = v; }
-    #[getter(manualOrderTime)]
-    fn get_manual_order_time_alias(&self) -> String { self.manual_order_time.clone() }
-    #[setter(manualOrderTime)]
-    fn set_manual_order_time_alias(&mut self, v: String) { self.manual_order_time = v; }
-    #[getter(midOffsetAtHalf)]
-    fn get_mid_offset_at_half_alias(&self) -> f64 { self.mid_offset_at_half }
-    #[setter(midOffsetAtHalf)]
-    fn set_mid_offset_at_half_alias(&mut self, v: f64) { self.mid_offset_at_half = v; }
-    #[getter(midOffsetAtWhole)]
-    fn get_mid_offset_at_whole_alias(&self) -> f64 { self.mid_offset_at_whole }
-    #[setter(midOffsetAtWhole)]
-    fn set_mid_offset_at_whole_alias(&mut self, v: f64) { self.mid_offset_at_whole = v; }
-    #[getter(mifid2DecisionAlgo)]
-    fn get_mifid2_decision_algo_alias(&self) -> String { self.mifid2_decision_algo.clone() }
-    #[setter(mifid2DecisionAlgo)]
-    fn set_mifid2_decision_algo_alias(&mut self, v: String) { self.mifid2_decision_algo = v; }
-    #[getter(mifid2DecisionMaker)]
-    fn get_mifid2_decision_maker_alias(&self) -> String { self.mifid2_decision_maker.clone() }
-    #[setter(mifid2DecisionMaker)]
-    fn set_mifid2_decision_maker_alias(&mut self, v: String) { self.mifid2_decision_maker = v; }
-    #[getter(mifid2ExecutionAlgo)]
-    fn get_mifid2_execution_algo_alias(&self) -> String { self.mifid2_execution_algo.clone() }
-    #[setter(mifid2ExecutionAlgo)]
-    fn set_mifid2_execution_algo_alias(&mut self, v: String) { self.mifid2_execution_algo = v; }
-    #[getter(mifid2ExecutionTrader)]
-    fn get_mifid2_execution_trader_alias(&self) -> String { self.mifid2_execution_trader.clone() }
-    #[setter(mifid2ExecutionTrader)]
-    fn set_mifid2_execution_trader_alias(&mut self, v: String) { self.mifid2_execution_trader = v; }
-    #[getter(minCompeteSize)]
-    fn get_min_compete_size_alias(&self) -> i32 { self.min_compete_size }
-    #[setter(minCompeteSize)]
-    fn set_min_compete_size_alias(&mut self, v: i32) { self.min_compete_size = v; }
-    #[getter(minQty)]
-    fn get_min_qty_alias(&self) -> i32 { self.min_qty }
-    #[setter(minQty)]
-    fn set_min_qty_alias(&mut self, v: i32) { self.min_qty = v; }
-    #[getter(minTradeQty)]
-    fn get_min_trade_qty_alias(&self) -> i32 { self.min_trade_qty }
-    #[setter(minTradeQty)]
-    fn set_min_trade_qty_alias(&mut self, v: i32) { self.min_trade_qty = v; }
-    #[getter(modelCode)]
-    fn get_model_code_alias(&self) -> String { self.model_code.clone() }
-    #[setter(modelCode)]
-    fn set_model_code_alias(&mut self, v: String) { self.model_code = v; }
-    #[getter(notHeld)]
-    fn get_not_held_alias(&self) -> bool { self.not_held }
-    #[setter(notHeld)]
-    fn set_not_held_alias(&mut self, v: bool) { self.not_held = v; }
-    #[getter(ocaGroup)]
-    fn get_oca_group_alias(&self) -> String { self.oca_group.clone() }
-    #[setter(ocaGroup)]
-    fn set_oca_group_alias(&mut self, v: String) { self.oca_group = v; }
-    #[getter(ocaType)]
-    fn get_oca_type_alias(&self) -> i32 { self.oca_type }
-    #[setter(ocaType)]
-    fn set_oca_type_alias(&mut self, v: i32) { self.oca_type = v; }
-    #[getter(openClose)]
-    fn get_open_close_alias(&self) -> String { self.open_close.clone() }
-    #[setter(openClose)]
-    fn set_open_close_alias(&mut self, v: String) { self.open_close = v; }
-    #[getter(optOutSmartRouting)]
-    fn get_opt_out_smart_routing_alias(&self) -> bool { self.opt_out_smart_routing }
-    #[setter(optOutSmartRouting)]
-    fn set_opt_out_smart_routing_alias(&mut self, v: bool) { self.opt_out_smart_routing = v; }
     // What the order holds, rather than an empty list whatever it holds: read
     // by the name the reference client uses, a combination priced per leg
     // reported no legs at all, and the same for the miscellaneous options.
@@ -1068,158 +754,6 @@ impl Order {
     }
     #[setter(orderMiscOptions)]
     fn set_order_misc_options_alias(&mut self, v: Vec<Py<PyAny>>) { self.order_misc_options = v; }
-    #[getter(orderRef)]
-    fn get_order_ref_alias(&self) -> String { self.order_ref.clone() }
-    #[setter(orderRef)]
-    fn set_order_ref_alias(&mut self, v: String) { self.order_ref = v; }
-    #[getter(outsideRth)]
-    fn get_outside_rth_alias(&self) -> bool { self.outside_rth }
-    #[setter(outsideRth)]
-    fn set_outside_rth_alias(&mut self, v: bool) { self.outside_rth = v; }
-    #[getter(overridePercentageConstraints)]
-    fn get_override_percentage_constraints_alias(&self) -> bool { self.override_percentage_constraints }
-    #[setter(overridePercentageConstraints)]
-    fn set_override_percentage_constraints_alias(&mut self, v: bool) { self.override_percentage_constraints = v; }
-    #[getter(parentId)]
-    fn get_parent_id_alias(&self) -> i64 { self.parent_id }
-    #[setter(parentId)]
-    fn set_parent_id_alias(&mut self, v: i64) { self.parent_id = v; }
-    #[getter(parentPermId)]
-    fn get_parent_perm_id_alias(&self) -> i64 { self.parent_perm_id }
-    #[setter(parentPermId)]
-    fn set_parent_perm_id_alias(&mut self, v: i64) { self.parent_perm_id = v; }
-    #[getter(peggedChangeAmount)]
-    fn get_pegged_change_amount_alias(&self) -> f64 { self.pegged_change_amount }
-    #[setter(peggedChangeAmount)]
-    fn set_pegged_change_amount_alias(&mut self, v: f64) { self.pegged_change_amount = v; }
-    #[getter(percentOffset)]
-    fn get_percent_offset_alias(&self) -> f64 { self.percent_offset }
-    #[setter(percentOffset)]
-    fn set_percent_offset_alias(&mut self, v: f64) { self.percent_offset = v; }
-    #[getter(permId)]
-    fn get_perm_id_alias(&self) -> i64 { self.perm_id }
-    #[setter(permId)]
-    fn set_perm_id_alias(&mut self, v: i64) { self.perm_id = v; }
-    #[getter(postOnly)]
-    fn get_post_only_alias(&self) -> bool { self.post_only }
-    #[setter(postOnly)]
-    fn set_post_only_alias(&mut self, v: bool) { self.post_only = v; }
-    #[getter(postToAts)]
-    fn get_post_to_ats_alias(&self) -> i32 { self.post_to_ats }
-    #[setter(postToAts)]
-    fn set_post_to_ats_alias(&mut self, v: i32) { self.post_to_ats = v; }
-    #[getter(professionalCustomer)]
-    fn get_professional_customer_alias(&self) -> bool { self.professional_customer }
-    #[setter(professionalCustomer)]
-    fn set_professional_customer_alias(&mut self, v: bool) { self.professional_customer = v; }
-    #[getter(ptOrderId)]
-    fn get_pt_order_id_alias(&self) -> i32 { self.pt_order_id }
-    #[setter(ptOrderId)]
-    fn set_pt_order_id_alias(&mut self, v: i32) { self.pt_order_id = v; }
-    #[getter(ptOrderType)]
-    fn get_pt_order_type_alias(&self) -> String { self.pt_order_type.clone() }
-    #[setter(ptOrderType)]
-    fn set_pt_order_type_alias(&mut self, v: String) { self.pt_order_type = v; }
-    #[getter(randomizePrice)]
-    fn get_randomize_price_alias(&self) -> bool { self.randomize_price }
-    #[setter(randomizePrice)]
-    fn set_randomize_price_alias(&mut self, v: bool) { self.randomize_price = v; }
-    #[getter(randomizeSize)]
-    fn get_randomize_size_alias(&self) -> bool { self.randomize_size }
-    #[setter(randomizeSize)]
-    fn set_randomize_size_alias(&mut self, v: bool) { self.randomize_size = v; }
-    #[getter(refFuturesConId)]
-    fn get_ref_futures_con_id_alias(&self) -> i32 { self.ref_futures_con_id }
-    #[setter(refFuturesConId)]
-    fn set_ref_futures_con_id_alias(&mut self, v: i32) { self.ref_futures_con_id = v; }
-    #[getter(referenceChangeAmount)]
-    fn get_reference_change_amount_alias(&self) -> f64 { self.reference_change_amount }
-    #[setter(referenceChangeAmount)]
-    fn set_reference_change_amount_alias(&mut self, v: f64) { self.reference_change_amount = v; }
-    #[getter(referenceContractId)]
-    fn get_reference_contract_id_alias(&self) -> i32 { self.reference_contract_id }
-    #[setter(referenceContractId)]
-    fn set_reference_contract_id_alias(&mut self, v: i32) { self.reference_contract_id = v; }
-    #[getter(referenceExchangeId)]
-    fn get_reference_exchange_id_alias(&self) -> String { self.reference_exchange_id.clone() }
-    #[setter(referenceExchangeId)]
-    fn set_reference_exchange_id_alias(&mut self, v: String) { self.reference_exchange_id = v; }
-    #[getter(referencePriceType)]
-    fn get_reference_price_type_alias(&self) -> i32 { self.reference_price_type }
-    #[setter(referencePriceType)]
-    fn set_reference_price_type_alias(&mut self, v: i32) { self.reference_price_type = v; }
-    #[getter(routeMarketableToBbo)]
-    fn get_route_marketable_to_bbo_alias(&self) -> bool { self.route_marketable_to_bbo }
-    #[setter(routeMarketableToBbo)]
-    fn set_route_marketable_to_bbo_alias(&mut self, v: bool) { self.route_marketable_to_bbo = v; }
-    #[getter(rule80A)]
-    fn get_rule80a_alias(&self) -> String { self.rule80a.clone() }
-    #[setter(rule80A)]
-    fn set_rule80a_alias(&mut self, v: String) { self.rule80a = v; }
-    #[getter(scaleAutoReset)]
-    fn get_scale_auto_reset_alias(&self) -> bool { self.scale_auto_reset }
-    #[setter(scaleAutoReset)]
-    fn set_scale_auto_reset_alias(&mut self, v: bool) { self.scale_auto_reset = v; }
-    #[getter(scaleInitFillQty)]
-    fn get_scale_init_fill_qty_alias(&self) -> i32 { self.scale_init_fill_qty }
-    #[setter(scaleInitFillQty)]
-    fn set_scale_init_fill_qty_alias(&mut self, v: i32) { self.scale_init_fill_qty = v; }
-    #[getter(scaleInitLevelSize)]
-    fn get_scale_init_level_size_alias(&self) -> i32 { self.scale_init_level_size }
-    #[setter(scaleInitLevelSize)]
-    fn set_scale_init_level_size_alias(&mut self, v: i32) { self.scale_init_level_size = v; }
-    #[getter(scaleInitPosition)]
-    fn get_scale_init_position_alias(&self) -> i32 { self.scale_init_position }
-    #[setter(scaleInitPosition)]
-    fn set_scale_init_position_alias(&mut self, v: i32) { self.scale_init_position = v; }
-    #[getter(scalePriceAdjustInterval)]
-    fn get_scale_price_adjust_interval_alias(&self) -> i32 { self.scale_price_adjust_interval }
-    #[setter(scalePriceAdjustInterval)]
-    fn set_scale_price_adjust_interval_alias(&mut self, v: i32) { self.scale_price_adjust_interval = v; }
-    #[getter(scalePriceAdjustValue)]
-    fn get_scale_price_adjust_value_alias(&self) -> f64 { self.scale_price_adjust_value }
-    #[setter(scalePriceAdjustValue)]
-    fn set_scale_price_adjust_value_alias(&mut self, v: f64) { self.scale_price_adjust_value = v; }
-    #[getter(scalePriceIncrement)]
-    fn get_scale_price_increment_alias(&self) -> f64 { self.scale_price_increment }
-    #[setter(scalePriceIncrement)]
-    fn set_scale_price_increment_alias(&mut self, v: f64) { self.scale_price_increment = v; }
-    #[getter(scaleProfitOffset)]
-    fn get_scale_profit_offset_alias(&self) -> f64 { self.scale_profit_offset }
-    #[setter(scaleProfitOffset)]
-    fn set_scale_profit_offset_alias(&mut self, v: f64) { self.scale_profit_offset = v; }
-    #[getter(scaleRandomPercent)]
-    fn get_scale_random_percent_alias(&self) -> bool { self.scale_random_percent }
-    #[setter(scaleRandomPercent)]
-    fn set_scale_random_percent_alias(&mut self, v: bool) { self.scale_random_percent = v; }
-    #[getter(scaleSubsLevelSize)]
-    fn get_scale_subs_level_size_alias(&self) -> i32 { self.scale_subs_level_size }
-    #[setter(scaleSubsLevelSize)]
-    fn set_scale_subs_level_size_alias(&mut self, v: i32) { self.scale_subs_level_size = v; }
-    #[getter(scaleTable)]
-    fn get_scale_table_alias(&self) -> String { self.scale_table.clone() }
-    #[setter(scaleTable)]
-    fn set_scale_table_alias(&mut self, v: String) { self.scale_table = v; }
-    #[getter(seekPriceImprovement)]
-    fn get_seek_price_improvement_alias(&self) -> bool { self.seek_price_improvement }
-    #[setter(seekPriceImprovement)]
-    fn set_seek_price_improvement_alias(&mut self, v: bool) { self.seek_price_improvement = v; }
-    #[getter(settlingFirm)]
-    fn get_settling_firm_alias(&self) -> String { self.settling_firm.clone() }
-    #[setter(settlingFirm)]
-    fn set_settling_firm_alias(&mut self, v: String) { self.settling_firm = v; }
-    #[getter(shortSaleSlot)]
-    fn get_short_sale_slot_alias(&self) -> i32 { self.short_sale_slot }
-    #[setter(shortSaleSlot)]
-    fn set_short_sale_slot_alias(&mut self, v: i32) { self.short_sale_slot = v; }
-    #[getter(slOrderId)]
-    fn get_sl_order_id_alias(&self) -> i32 { self.sl_order_id }
-    #[setter(slOrderId)]
-    fn set_sl_order_id_alias(&mut self, v: i32) { self.sl_order_id = v; }
-    #[getter(slOrderType)]
-    fn get_sl_order_type_alias(&self) -> String { self.sl_order_type.clone() }
-    #[setter(slOrderType)]
-    fn set_sl_order_type_alias(&mut self, v: String) { self.sl_order_type = v; }
     #[getter(smartComboRoutingParams)]
     fn get_smart_combo_routing_params_alias(&self) -> Vec<TagValue> { self.smart_combo_routing_params.clone() }
     #[setter(smartComboRoutingParams)]
@@ -1253,58 +787,6 @@ impl Order {
         self.soft_dollar_tier_display_name = text(["displayName", "display_name"]);
         Ok(())
     }
-    #[getter(startingPrice)]
-    fn get_starting_price_alias(&self) -> f64 { self.starting_price }
-    #[setter(startingPrice)]
-    fn set_starting_price_alias(&mut self, v: f64) { self.starting_price = v; }
-    #[getter(stockRangeLower)]
-    fn get_stock_range_lower_alias(&self) -> f64 { self.stock_range_lower }
-    #[setter(stockRangeLower)]
-    fn set_stock_range_lower_alias(&mut self, v: f64) { self.stock_range_lower = v; }
-    #[getter(stockRangeUpper)]
-    fn get_stock_range_upper_alias(&self) -> f64 { self.stock_range_upper }
-    #[setter(stockRangeUpper)]
-    fn set_stock_range_upper_alias(&mut self, v: f64) { self.stock_range_upper = v; }
-    #[getter(stockRefPrice)]
-    fn get_stock_ref_price_alias(&self) -> f64 { self.stock_ref_price }
-    #[setter(stockRefPrice)]
-    fn set_stock_ref_price_alias(&mut self, v: f64) { self.stock_ref_price = v; }
-    #[getter(sweepToFill)]
-    fn get_sweep_to_fill_alias(&self) -> bool { self.sweep_to_fill }
-    #[setter(sweepToFill)]
-    fn set_sweep_to_fill_alias(&mut self, v: bool) { self.sweep_to_fill = v; }
-    #[getter(trailStopPrice)]
-    fn get_trail_stop_price_alias(&self) -> f64 { self.trail_stop_price }
-    #[setter(trailStopPrice)]
-    fn set_trail_stop_price_alias(&mut self, v: f64) { self.trail_stop_price = v; }
-    #[getter(trailingPercent)]
-    fn get_trailing_percent_alias(&self) -> f64 { self.trailing_percent }
-    #[setter(trailingPercent)]
-    fn set_trailing_percent_alias(&mut self, v: f64) { self.trailing_percent = v; }
-    #[getter(triggerMethod)]
-    fn get_trigger_method_alias(&self) -> i32 { self.trigger_method }
-    #[setter(triggerMethod)]
-    fn set_trigger_method_alias(&mut self, v: i32) { self.trigger_method = v; }
-    #[getter(triggerPrice)]
-    fn get_trigger_price_alias(&self) -> f64 { self.trigger_price }
-    #[setter(triggerPrice)]
-    fn set_trigger_price_alias(&mut self, v: f64) { self.trigger_price = v; }
-    #[getter(usePriceMgmtAlgo)]
-    fn get_use_price_mgmt_algo_alias(&self) -> i32 { self.use_price_mgmt_algo }
-    #[setter(usePriceMgmtAlgo)]
-    fn set_use_price_mgmt_algo_alias(&mut self, v: i32) { self.use_price_mgmt_algo = v; }
-    #[getter(volatilityType)]
-    fn get_volatility_type_alias(&self) -> i32 { self.volatility_type }
-    #[setter(volatilityType)]
-    fn set_volatility_type_alias(&mut self, v: i32) { self.volatility_type = v; }
-    #[getter(whatIf)]
-    fn get_what_if_alias(&self) -> bool { self.what_if }
-    #[setter(whatIf)]
-    fn set_what_if_alias(&mut self, v: bool) { self.what_if = v; }
-    #[getter(whatIfType)]
-    fn get_what_if_type_alias(&self) -> i32 { self.what_if_type }
-    #[setter(whatIfType)]
-    fn set_what_if_type_alias(&mut self, v: i32) { self.what_if_type = v; }
 }
 
 impl Order {
@@ -2050,5 +1532,145 @@ mod unstated_figure_tests {
     fn a_stated_figure_is_left_as_the_venue_wrote_it() {
         assert_eq!(unstated_figure("96525.01"), "96525.01");
         assert_eq!(unstated_figure("0"), "0", "nothing is not zero, and zero is not nothing");
+    }
+}
+
+camel_aliases_copy! {
+    Order {
+        get_lmt_price_alias set_lmt_price_alias lmtPrice lmt_price f64;
+        get_order_id_alias set_order_id_alias orderId order_id i64;
+        get_total_quantity_alias set_total_quantity_alias totalQuantity total_quantity f64;
+        get_adjustable_trailing_unit_alias set_adjustable_trailing_unit_alias adjustableTrailingUnit adjustable_trailing_unit i32;
+        get_adjusted_trailing_amount_alias set_adjusted_trailing_amount_alias adjustedTrailingAmount adjusted_trailing_amount f64;
+        get_adjusted_stop_price_alias set_adjusted_stop_price_alias adjustedStopPrice adjusted_stop_price f64;
+        get_adjusted_stop_limit_price_alias set_adjusted_stop_limit_price_alias adjustedStopLimitPrice adjusted_stop_limit_price f64;
+        get_all_or_none_alias set_all_or_none_alias allOrNone all_or_none bool;
+        get_allow_pre_open_alias set_allow_pre_open_alias allowPreOpen allow_pre_open bool;
+        get_auction_strategy_alias set_auction_strategy_alias auctionStrategy auction_strategy i32;
+        get_auto_cancel_parent_alias set_auto_cancel_parent_alias autoCancelParent auto_cancel_parent bool;
+        get_basis_points_alias set_basis_points_alias basisPoints basis_points f64;
+        get_basis_points_type_alias set_basis_points_type_alias basisPointsType basis_points_type i32;
+        get_block_order_alias set_block_order_alias blockOrder block_order bool;
+        get_cash_qty_alias set_cash_qty_alias cashQty cash_qty f64;
+        get_client_id_alias set_client_id_alias clientId client_id i32;
+        get_compete_against_best_offset_alias set_compete_against_best_offset_alias competeAgainstBestOffset compete_against_best_offset f64;
+        get_conditions_cancel_order_alias set_conditions_cancel_order_alias conditionsCancelOrder conditions_cancel_order bool;
+        get_conditions_ignore_rth_alias set_conditions_ignore_rth_alias conditionsIgnoreRth conditions_ignore_rth bool;
+        get_continuous_update_alias set_continuous_update_alias continuousUpdate continuous_update bool;
+        get_delta_neutral_aux_price_alias set_delta_neutral_aux_price_alias deltaNeutralAuxPrice delta_neutral_aux_price f64;
+        get_delta_neutral_con_id_alias set_delta_neutral_con_id_alias deltaNeutralConId delta_neutral_con_id i32;
+        get_delta_neutral_short_sale_alias set_delta_neutral_short_sale_alias deltaNeutralShortSale delta_neutral_short_sale bool;
+        get_delta_neutral_short_sale_slot_alias set_delta_neutral_short_sale_slot_alias deltaNeutralShortSaleSlot delta_neutral_short_sale_slot i32;
+        get_discretionary_amt_alias set_discretionary_amt_alias discretionaryAmt discretionary_amt f64;
+        get_discretionary_up_to_limit_price_alias set_discretionary_up_to_limit_price_alias discretionaryUpToLimitPrice discretionary_up_to_limit_price bool;
+        get_display_size_alias set_display_size_alias displaySize display_size i32;
+        get_dont_use_auto_price_for_hedge_alias set_dont_use_auto_price_for_hedge_alias dontUseAutoPriceForHedge dont_use_auto_price_for_hedge bool;
+        get_exempt_code_alias set_exempt_code_alias exemptCode exempt_code i32;
+        get_filled_quantity_alias set_filled_quantity_alias filledQuantity filled_quantity f64;
+        get_ignore_open_auction_alias set_ignore_open_auction_alias ignoreOpenAuction ignore_open_auction bool;
+        get_imbalance_only_alias set_imbalance_only_alias imbalanceOnly imbalance_only bool;
+        get_include_overnight_alias set_include_overnight_alias includeOvernight include_overnight bool;
+        get_is_oms_container_alias set_is_oms_container_alias isOmsContainer is_oms_container bool;
+        get_is_pegged_change_amount_decrease_alias set_is_pegged_change_amount_decrease_alias isPeggedChangeAmountDecrease is_pegged_change_amount_decrease bool;
+        get_lmt_price_offset_alias set_lmt_price_offset_alias lmtPriceOffset lmt_price_offset f64;
+        get_manual_order_indicator_alias set_manual_order_indicator_alias manualOrderIndicator manual_order_indicator i32;
+        get_mid_offset_at_half_alias set_mid_offset_at_half_alias midOffsetAtHalf mid_offset_at_half f64;
+        get_mid_offset_at_whole_alias set_mid_offset_at_whole_alias midOffsetAtWhole mid_offset_at_whole f64;
+        get_min_compete_size_alias set_min_compete_size_alias minCompeteSize min_compete_size i32;
+        get_min_qty_alias set_min_qty_alias minQty min_qty i32;
+        get_min_trade_qty_alias set_min_trade_qty_alias minTradeQty min_trade_qty i32;
+        get_not_held_alias set_not_held_alias notHeld not_held bool;
+        get_oca_type_alias set_oca_type_alias ocaType oca_type i32;
+        get_opt_out_smart_routing_alias set_opt_out_smart_routing_alias optOutSmartRouting opt_out_smart_routing bool;
+        get_outside_rth_alias set_outside_rth_alias outsideRth outside_rth bool;
+        get_override_percentage_constraints_alias set_override_percentage_constraints_alias overridePercentageConstraints override_percentage_constraints bool;
+        get_parent_id_alias set_parent_id_alias parentId parent_id i64;
+        get_parent_perm_id_alias set_parent_perm_id_alias parentPermId parent_perm_id i64;
+        get_pegged_change_amount_alias set_pegged_change_amount_alias peggedChangeAmount pegged_change_amount f64;
+        get_percent_offset_alias set_percent_offset_alias percentOffset percent_offset f64;
+        get_perm_id_alias set_perm_id_alias permId perm_id i64;
+        get_post_only_alias set_post_only_alias postOnly post_only bool;
+        get_post_to_ats_alias set_post_to_ats_alias postToAts post_to_ats i32;
+        get_professional_customer_alias set_professional_customer_alias professionalCustomer professional_customer bool;
+        get_pt_order_id_alias set_pt_order_id_alias ptOrderId pt_order_id i32;
+        get_randomize_price_alias set_randomize_price_alias randomizePrice randomize_price bool;
+        get_randomize_size_alias set_randomize_size_alias randomizeSize randomize_size bool;
+        get_ref_futures_con_id_alias set_ref_futures_con_id_alias refFuturesConId ref_futures_con_id i32;
+        get_reference_change_amount_alias set_reference_change_amount_alias referenceChangeAmount reference_change_amount f64;
+        get_reference_contract_id_alias set_reference_contract_id_alias referenceContractId reference_contract_id i32;
+        get_reference_price_type_alias set_reference_price_type_alias referencePriceType reference_price_type i32;
+        get_route_marketable_to_bbo_alias set_route_marketable_to_bbo_alias routeMarketableToBbo route_marketable_to_bbo bool;
+        get_scale_auto_reset_alias set_scale_auto_reset_alias scaleAutoReset scale_auto_reset bool;
+        get_scale_init_fill_qty_alias set_scale_init_fill_qty_alias scaleInitFillQty scale_init_fill_qty i32;
+        get_scale_init_level_size_alias set_scale_init_level_size_alias scaleInitLevelSize scale_init_level_size i32;
+        get_scale_init_position_alias set_scale_init_position_alias scaleInitPosition scale_init_position i32;
+        get_scale_price_adjust_interval_alias set_scale_price_adjust_interval_alias scalePriceAdjustInterval scale_price_adjust_interval i32;
+        get_scale_price_adjust_value_alias set_scale_price_adjust_value_alias scalePriceAdjustValue scale_price_adjust_value f64;
+        get_scale_price_increment_alias set_scale_price_increment_alias scalePriceIncrement scale_price_increment f64;
+        get_scale_profit_offset_alias set_scale_profit_offset_alias scaleProfitOffset scale_profit_offset f64;
+        get_scale_random_percent_alias set_scale_random_percent_alias scaleRandomPercent scale_random_percent bool;
+        get_scale_subs_level_size_alias set_scale_subs_level_size_alias scaleSubsLevelSize scale_subs_level_size i32;
+        get_seek_price_improvement_alias set_seek_price_improvement_alias seekPriceImprovement seek_price_improvement bool;
+        get_short_sale_slot_alias set_short_sale_slot_alias shortSaleSlot short_sale_slot i32;
+        get_sl_order_id_alias set_sl_order_id_alias slOrderId sl_order_id i32;
+        get_starting_price_alias set_starting_price_alias startingPrice starting_price f64;
+        get_stock_range_lower_alias set_stock_range_lower_alias stockRangeLower stock_range_lower f64;
+        get_stock_range_upper_alias set_stock_range_upper_alias stockRangeUpper stock_range_upper f64;
+        get_stock_ref_price_alias set_stock_ref_price_alias stockRefPrice stock_ref_price f64;
+        get_sweep_to_fill_alias set_sweep_to_fill_alias sweepToFill sweep_to_fill bool;
+        get_trail_stop_price_alias set_trail_stop_price_alias trailStopPrice trail_stop_price f64;
+        get_trailing_percent_alias set_trailing_percent_alias trailingPercent trailing_percent f64;
+        get_trigger_method_alias set_trigger_method_alias triggerMethod trigger_method i32;
+        get_trigger_price_alias set_trigger_price_alias triggerPrice trigger_price f64;
+        get_use_price_mgmt_algo_alias set_use_price_mgmt_algo_alias usePriceMgmtAlgo use_price_mgmt_algo i32;
+        get_volatility_type_alias set_volatility_type_alias volatilityType volatility_type i32;
+        get_what_if_alias set_what_if_alias whatIf what_if bool;
+        get_what_if_type_alias set_what_if_type_alias whatIfType what_if_type i32;
+    }
+}
+
+camel_aliases_owned! {
+    Order {
+        get_order_type_alias set_order_type_alias orderType order_type String;
+        get_active_stop_time_alias set_active_stop_time_alias activeStopTime active_stop_time String;
+        get_adjusted_order_type_alias set_adjusted_order_type_alias adjustedOrderType adjusted_order_type String;
+        get_advanced_error_override_alias set_advanced_error_override_alias advancedErrorOverride advanced_error_override String;
+        get_algo_id_alias set_algo_id_alias algoId algo_id String;
+        get_algo_strategy_alias set_algo_strategy_alias algoStrategy algo_strategy String;
+        get_auto_cancel_date_alias set_auto_cancel_date_alias autoCancelDate auto_cancel_date String;
+        get_bond_accrued_interest_alias set_bond_accrued_interest_alias bondAccruedInterest bond_accrued_interest String;
+        get_clearing_account_alias set_clearing_account_alias clearingAccount clearing_account String;
+        get_clearing_intent_alias set_clearing_intent_alias clearingIntent clearing_intent String;
+        get_customer_account_alias set_customer_account_alias customerAccount customer_account String;
+        get_delta_neutral_clearing_account_alias set_delta_neutral_clearing_account_alias deltaNeutralClearingAccount delta_neutral_clearing_account String;
+        get_delta_neutral_clearing_intent_alias set_delta_neutral_clearing_intent_alias deltaNeutralClearingIntent delta_neutral_clearing_intent String;
+        get_delta_neutral_designated_location_alias set_delta_neutral_designated_location_alias deltaNeutralDesignatedLocation delta_neutral_designated_location String;
+        get_delta_neutral_open_close_alias set_delta_neutral_open_close_alias deltaNeutralOpenClose delta_neutral_open_close String;
+        get_delta_neutral_order_type_alias set_delta_neutral_order_type_alias deltaNeutralOrderType delta_neutral_order_type String;
+        get_delta_neutral_settling_firm_alias set_delta_neutral_settling_firm_alias deltaNeutralSettlingFirm delta_neutral_settling_firm String;
+        get_designated_location_alias set_designated_location_alias designatedLocation designated_location String;
+        get_ext_operator_alias set_ext_operator_alias extOperator ext_operator String;
+        get_fa_group_alias set_fa_group_alias faGroup fa_group String;
+        get_fa_method_alias set_fa_method_alias faMethod fa_method String;
+        get_fa_percentage_alias set_fa_percentage_alias faPercentage fa_percentage String;
+        get_good_after_time_alias set_good_after_time_alias goodAfterTime good_after_time String;
+        get_good_till_date_alias set_good_till_date_alias goodTillDate good_till_date String;
+        get_hedge_param_alias set_hedge_param_alias hedgeParam hedge_param String;
+        get_hedge_type_alias set_hedge_type_alias hedgeType hedge_type String;
+        get_manual_order_time_alias set_manual_order_time_alias manualOrderTime manual_order_time String;
+        get_mifid2_decision_algo_alias set_mifid2_decision_algo_alias mifid2DecisionAlgo mifid2_decision_algo String;
+        get_mifid2_decision_maker_alias set_mifid2_decision_maker_alias mifid2DecisionMaker mifid2_decision_maker String;
+        get_mifid2_execution_algo_alias set_mifid2_execution_algo_alias mifid2ExecutionAlgo mifid2_execution_algo String;
+        get_mifid2_execution_trader_alias set_mifid2_execution_trader_alias mifid2ExecutionTrader mifid2_execution_trader String;
+        get_model_code_alias set_model_code_alias modelCode model_code String;
+        get_oca_group_alias set_oca_group_alias ocaGroup oca_group String;
+        get_open_close_alias set_open_close_alias openClose open_close String;
+        get_order_ref_alias set_order_ref_alias orderRef order_ref String;
+        get_pt_order_type_alias set_pt_order_type_alias ptOrderType pt_order_type String;
+        get_reference_exchange_id_alias set_reference_exchange_id_alias referenceExchangeId reference_exchange_id String;
+        get_rule80a_alias set_rule80a_alias rule80A rule80a String;
+        get_scale_table_alias set_scale_table_alias scaleTable scale_table String;
+        get_settling_firm_alias set_settling_firm_alias settlingFirm settling_firm String;
+        get_sl_order_type_alias set_sl_order_type_alias slOrderType sl_order_type String;
     }
 }

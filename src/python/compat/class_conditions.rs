@@ -3,6 +3,8 @@
 // The other families, and the two helpers every class here uses.
 use super::contract::set_from_keywords;
 use pyo3::prelude::*;
+
+use super::{camel_aliases_copy, camel_aliases_owned};
 use crate::types::*;
 use super::super::types::PRICE_SCALE_F;
 
@@ -31,18 +33,6 @@ impl PriceCondition {
     fn get_con_id_alias(&self) -> i64 { self.con_id }
     #[setter(conId)]
     fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
-    #[getter(exch)]
-    fn get_exchange_alias(&self) -> String { self.exchange.clone() }
-    #[setter(exch)]
-    fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
-    #[getter(isMore)]
-    fn get_is_more_alias(&self) -> bool { self.is_more }
-    #[setter(isMore)]
-    fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
-    #[getter(triggerMethod)]
-    fn get_trigger_method_alias(&self) -> i32 { self.trigger_method }
-    #[setter(triggerMethod)]
-    fn set_trigger_method_alias(&mut self, v: i32) { self.trigger_method = v; }
 
     #[new]
     // Empty, which is what the reference client holds for a condition nobody
@@ -173,10 +163,6 @@ impl ExecutionCondition {
     fn get_exchange_alias(&self) -> String { self.exchange.clone() }
     #[setter(exch)]
     fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
-    #[getter(secType)]
-    fn get_sec_type_alias(&self) -> String { self.sec_type.clone() }
-    #[setter(secType)]
-    fn set_sec_type_alias(&mut self, v: String) { self.sec_type = v; }
 
     #[new]
     #[pyo3(signature = (symbol="".to_string(), exchange="".to_string(), sec_type="".to_string(), **keywords))]
@@ -224,14 +210,6 @@ impl VolumeCondition {
     fn get_con_id_alias(&self) -> i64 { self.con_id }
     #[setter(conId)]
     fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
-    #[getter(exch)]
-    fn get_exchange_alias(&self) -> String { self.exchange.clone() }
-    #[setter(exch)]
-    fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
-    #[getter(isMore)]
-    fn get_is_more_alias(&self) -> bool { self.is_more }
-    #[setter(isMore)]
-    fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
 
     #[new]
     #[pyo3(signature = (con_id=0, exchange=String::new(), volume=0, is_more=true, **keywords))]
@@ -281,18 +259,6 @@ impl PercentChangeCondition {
     fn get_con_id_alias(&self) -> i64 { self.con_id }
     #[setter(conId)]
     fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
-    #[getter(exch)]
-    fn get_exchange_alias(&self) -> String { self.exchange.clone() }
-    #[setter(exch)]
-    fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
-    #[getter(isMore)]
-    fn get_is_more_alias(&self) -> bool { self.is_more }
-    #[setter(isMore)]
-    fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
-    #[getter(changePercent)]
-    fn get_change_percent_alias(&self) -> f64 { self.change_percent }
-    #[setter(changePercent)]
-    fn set_change_percent_alias(&mut self, v: f64) { self.change_percent = v; }
 
     #[new]
     #[pyo3(signature = (con_id=0, exchange=String::new(), change_percent=0.0, is_more=true, **keywords))]
@@ -417,5 +383,49 @@ mod tests {
                 "what the venue reported is what a caller would place again",
             );
         });
+    }
+}
+
+camel_aliases_copy! {
+    PriceCondition {
+        get_is_more_alias set_is_more_alias isMore is_more bool;
+        get_trigger_method_alias set_trigger_method_alias triggerMethod trigger_method i32;
+    }
+}
+
+camel_aliases_owned! {
+    PriceCondition {
+        get_exchange_alias set_exchange_alias exch exchange String;
+    }
+}
+
+camel_aliases_owned! {
+    ExecutionCondition {
+        get_sec_type_alias set_sec_type_alias secType sec_type String;
+    }
+}
+
+camel_aliases_copy! {
+    VolumeCondition {
+        get_is_more_alias set_is_more_alias isMore is_more bool;
+    }
+}
+
+camel_aliases_owned! {
+    VolumeCondition {
+        get_exchange_alias set_exchange_alias exch exchange String;
+    }
+}
+
+camel_aliases_copy! {
+    PercentChangeCondition {
+        get_is_more_alias set_is_more_alias isMore is_more bool;
+        get_change_percent_alias set_change_percent_alias changePercent change_percent f64;
+    }
+}
+
+camel_aliases_owned! {
+    PercentChangeCondition {
+        get_exchange_alias set_exchange_alias exch exchange String;
     }
 }

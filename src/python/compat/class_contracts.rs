@@ -4,6 +4,8 @@
 use super::contract::{by_reference_name, set_from_keywords};
 use pyo3::prelude::*;
 
+use super::{camel_aliases_copy, camel_aliases_owned};
+
 /// ibapi-compatible Contract class.
 #[pyclass(from_py_object)]
 pub struct Contract {
@@ -288,50 +290,6 @@ impl Contract {
     fn get_con_id_alias(&self) -> i64 { self.con_id }
     #[setter(conId)]
     fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
-    #[getter(secType)]
-    fn get_sec_type_alias(&self) -> String { self.sec_type.clone() }
-    #[setter(secType)]
-    fn set_sec_type_alias(&mut self, v: String) { self.sec_type = v; }
-    #[getter(lastTradeDateOrContractMonth)]
-    fn get_ltdocm_alias(&self) -> String { self.last_trade_date_or_contract_month.clone() }
-    #[setter(lastTradeDateOrContractMonth)]
-    fn set_ltdocm_alias(&mut self, v: String) { self.last_trade_date_or_contract_month = v; }
-    #[getter(lastTradeDate)]
-    fn get_ltd_alias(&self) -> String { self.last_trade_date.clone() }
-    #[setter(lastTradeDate)]
-    fn set_ltd_alias(&mut self, v: String) { self.last_trade_date = v; }
-    #[getter(localSymbol)]
-    fn get_local_symbol_alias(&self) -> String { self.local_symbol.clone() }
-    #[setter(localSymbol)]
-    fn set_local_symbol_alias(&mut self, v: String) { self.local_symbol = v; }
-    #[getter(primaryExchange)]
-    fn get_primary_exchange_alias(&self) -> String { self.primary_exchange.clone() }
-    #[setter(primaryExchange)]
-    fn set_primary_exchange_alias(&mut self, v: String) { self.primary_exchange = v; }
-    #[getter(tradingClass)]
-    fn get_trading_class_alias(&self) -> String { self.trading_class.clone() }
-    #[setter(tradingClass)]
-    fn set_trading_class_alias(&mut self, v: String) { self.trading_class = v; }
-    #[getter(includeExpired)]
-    fn get_include_expired_alias(&self) -> bool { self.include_expired }
-    #[setter(includeExpired)]
-    fn set_include_expired_alias(&mut self, v: bool) { self.include_expired = v; }
-    #[getter(secIdType)]
-    fn get_sec_id_type_alias(&self) -> String { self.sec_id_type.clone() }
-    #[setter(secIdType)]
-    fn set_sec_id_type_alias(&mut self, v: String) { self.sec_id_type = v; }
-    #[getter(secId)]
-    fn get_sec_id_alias(&self) -> String { self.sec_id.clone() }
-    #[setter(secId)]
-    fn set_sec_id_alias(&mut self, v: String) { self.sec_id = v; }
-    #[getter(issuerId)]
-    fn get_issuer_id_alias(&self) -> String { self.issuer_id.clone() }
-    #[setter(issuerId)]
-    fn set_issuer_id_alias(&mut self, v: String) { self.issuer_id = v; }
-    #[getter(comboLegsDescrip)]
-    fn get_combo_legs_descrip_alias(&self) -> String { self.combo_legs_descrip.clone() }
-    #[setter(comboLegsDescrip)]
-    fn set_combo_legs_descrip_alias(&mut self, v: String) { self.combo_legs_descrip = v; }
     // What the contract holds, rather than an empty list whatever it holds: a
     // combination read by the name the reference client uses reported no legs,
     // and a delta-neutral contract reported none.
@@ -1055,5 +1013,26 @@ mod tests {
             assert_eq!(built[0].ratio, 0, "no ratio stated, so none is invented");
             assert_eq!(built[0].con_id, 756733);
         });
+    }
+}
+
+camel_aliases_copy! {
+    Contract {
+        get_include_expired_alias set_include_expired_alias includeExpired include_expired bool;
+    }
+}
+
+camel_aliases_owned! {
+    Contract {
+        get_sec_type_alias set_sec_type_alias secType sec_type String;
+        get_ltdocm_alias set_ltdocm_alias lastTradeDateOrContractMonth last_trade_date_or_contract_month String;
+        get_ltd_alias set_ltd_alias lastTradeDate last_trade_date String;
+        get_local_symbol_alias set_local_symbol_alias localSymbol local_symbol String;
+        get_primary_exchange_alias set_primary_exchange_alias primaryExchange primary_exchange String;
+        get_trading_class_alias set_trading_class_alias tradingClass trading_class String;
+        get_sec_id_type_alias set_sec_id_type_alias secIdType sec_id_type String;
+        get_sec_id_alias set_sec_id_alias secId sec_id String;
+        get_issuer_id_alias set_issuer_id_alias issuerId issuer_id String;
+        get_combo_legs_descrip_alias set_combo_legs_descrip_alias comboLegsDescrip combo_legs_descrip String;
     }
 }
