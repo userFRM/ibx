@@ -19,44 +19,6 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Accepted, not served | Call exists with the expected signature, returns normally, and reports through the error callback that it cannot be served |
 | Absent | No such call |
 
-## Capability matrix
-
-| Capability | Status | Evidence | Workstream |
-| --- | --- | --- | --- |
-| Session establishment and login | Verified | Live phase | Available |
-| Reconnect and subscription rebuild | Verified | Live phase | Available |
-| Second factor approval | Implemented | Live logins only. Paper logins do not present the factor | W3 |
-| Order submission, 23 order types | Verified | Live phase | Available |
-| Order modification | Verified | Live phase | Available |
-| Order cancellation, single, by permId, global | Verified | Live phase | Available |
-| Bracket and OCA linkage | Verified | Live phase | Available |
-| Execution reports and fills | Verified | Live phase | Available |
-| Replayed executions on reconnect | Verified | Live phase | Available |
-| Trade bust and correction handling | Verified | Synthetic bust and correction reports | Available |
-| Order conditions, price, volume, percent, execution | Verified | Live phase | Available |
-| Order conditions, standalone time | Verified | Live session: a limit carrying a time condition rests and cancels. It was recorded as refused while the venue's reasons were being discarded by this client | Available |
-| Combination orders | Verified | Live session: a two-leg vertical previews at the margin the position carries, and the reverse legs are refused as the opposite position | Available |
-| Market data, top of book | Verified | Live phase | Available |
-| Market data, frozen and delayed | Verified | Live measurement | Available |
-| Market depth | Verified | Live measurement, 144 updates in 20 seconds | Available |
-| Historical bars, ticks, head timestamp, schedules | Verified | Live phase | Available |
-| Contract definitions by identifier and symbol | Verified | Live phase | Available |
-| Contract definitions by ISIN or CUSIP | Verified | Live lookup by ISIN resolved the contract | Available |
-| Option chain discovery | Verified | Live session: an equity underlying returns every expiration and strike each venue lists | Available |
-| Scanners | Verified | Live phase | Available |
-| News, providers, articles, historical, bulletins | Verified | Live phase | Available |
-| Fundamental data | Verified | Live phase | Available |
-| Account values | Verified | Live phase | Available |
-| Account summary | Verified | Live session, rows and completion observed | Available |
-| Positions and round trip tracking | Verified | Live session: a market order fills and the holding read back moves by the quantity filled | Available |
-| P&L, per contract | Verified | Live session, valued from the venue's overnight marks against live quotes | Available |
-| P&L, account level subscription | Verified | Live session, reporting a daily figure for a held account rather than falling back to zero | Available |
-| Option exercise and lapse | Verified | Live session: one call exercised, filled at the strike, and the holding it delivered observed. A lapse before the last trading day is refused by the venue | Available |
-| Option analytics, implied volatility and greeks | Verified | Live session: the venue computes the model and publishes it per option, on a subscription of its own, and the volatility and greeks a caller reads are the venue's. Solved here is only a hypothetical the caller supplies, against that model, since the protocol carries no request that carries one. Asked before the venue has published a model, the question waits on the subscription that asking opens | Available |
-| Wall Street Horizon event data | Implemented | The calendar states what it carries and answers a query with a well-formed result. The events are a separate subscription this account does not hold, so every query answers empty | Available |
-| Financial advisor allocation | Accepted, not served | The venue carries the request; exercising it needs an advisor account | W3 |
-| Tick by tick data | Verified | Trades and quotes both stream, as distinct subscriptions, each record carrying the request it belongs to. A crypto is acknowledged and produces nothing, which is the venue's silence | Available |
-
 ## API surface
 
 | Measure | Count |
@@ -91,13 +53,13 @@ coverage matrix, which CI checks against the source.
 
 The contract layer names 24 security types. Coverage is stated per path.
 
-| Class | Definition | Market data | Orders | Workstream |
+| Class | Definition | Market data | Orders | Status |
 | --- | --- | --- | --- | --- |
 | Equity | Verified | Verified | Verified | Available |
 | Equity option | Verified | Verified | Verified | Available |
 | Forex | Verified | Verified | Verified | Available |
 | Future | Verified | Verified | Verified | Available |
-| Futures option | Verified | Implemented | Implemented | W2 |
+| Futures option | Verified | Implemented | Implemented | Not yet verified |
 | Index | Verified | Verified | Blocked, the venue supports no order on the contract type | None required |
 | Bond | Verified | Implemented | Verified, quantified in face value | Available |
 | Warrant | Verified | Implemented | Blocked, the venue supports no order of this kind on the exchange and security type | None required |
@@ -118,48 +80,9 @@ One release: **1.0.0**. There are no incremental feature releases before it.
 | Item | Position |
 | --- | --- |
 | Current code | 0.7.x, development. Tagged for traceability, not offered as a supported release |
-| 1.0.0 | First supported release. Requires every criterion in the workstreams below |
+| 1.0.0 | First supported release. Requires every documented call served, and the criteria below demonstrated |
 | Coverage bar for 1.0.0 | Every call served, or removed with the reason recorded. No call accepted and left unanswered |
 | Compatibility from 1.0.0 | Breaking changes require a major version |
-
-## Workstreams
-
-Every workstream gates 1.0.0. Exit criteria, not dates. A workstream closes when every criterion is demonstrated.
-
-### W1 Option surface
-
-| ID | Requirement | Acceptance | Status |
-| --- | --- | --- | --- |
-| W1.1 | Option chain discovery | Every expiration and strike a venue lists, for a named underlying, delivered through the chain callbacks | Met |
-| W1.2 | Option exercise and lapse | Request reaches the venue and the resulting position change is observed | Met. An exercise of one call is filled at the strike and the holding it delivers appears. A lapse is refused before the contract's last trading day, which is the venue's rule and is reported as it states it |
-| W1.3 | Option analytics | Implied volatility and option price return values, or the reason they cannot be recorded | Met. The volatility and greeks themselves are the venue's: it computes the model and publishes it per option, and this client subscribes to it. What this protocol carries no request for is a hypothetical — an option price or a volatility the caller supplies for the venue to work back from — so that one inversion is solved here, against the venue's own model. Where it has published none, the question is kept on the subscription that asking opens and answered when the model arrives; where the contract has no model to be had, the call reports that rather than deriving a number from an unstated rate |
-
-### W2 Asset class and instrumentation coverage
-
-| ID | Requirement | Acceptance | Status |
-| --- | --- | --- | --- |
-| W2.1 | Futures orders | Order accepted by the venue, with a regression test that fails if the ambiguity returns | Met |
-| W2.2 | Index, bond and warrant orders | Order accepted for each class against a live session, or the venue's refusal recorded | Met. A bond is accepted and returns margin. The venue refuses an index order for every account: orders are not supported for the contract type. It refuses a warrant order placed through an interface of this kind, on the exchange and security type combination |
-| W2.3 | Orders outside the United States | One venue accepted end to end, on an account holding the permission | Met |
-| W2.4 | Combination orders | Live phase covering leg construction and acceptance | Met. A two-leg vertical is ordered by its legs alone, with no lookup, and previews at the margin the position carries. Reversing the legs is refused, as it describes the opposite position |
-| W2.5 | Market depth | Depth updates observed, or entitlement recorded as the cause | Met |
-| W2.6 | Account summary and account level P&L | Both observed end to end in a live phase | Met |
-| W2.7 | Positions round trip | Live phase completes a fill and reconciles the resulting position | Met. A market order fills and the holding read back afterwards moves by the quantity filled |
-| W2.8 | Contract lookup by ISIN and CUSIP | Lookup confirmed against a live session | Met |
-| W2.9 | Trade bust and correction | Handling confirmed against a replayed or synthetic bust | Met |
-| W2.10 | Tick by tick data | Available, or the transport requirement recorded | Met. Trades and quotes both stream: 67,785 trades over a twenty-minute session, `Last` and `AllLast` as distinct streams, each record carrying the request it belongs to. A crypto is the exception — the subscription is acknowledged and produces nothing, which is the venue's silence rather than the request's |
-| W2.11 | Remaining security types | Crypto, CFD, commodity, fund, forward and bill orders accepted against a live session, or the class recorded as not orderable by this venue | Met. Crypto, commodity and bill are accepted and return margin. The session states no forward permission at all. A fund is refused for residency, which is a property of the account |
-
-### W3 Call contract and behaviour parity
-
-| ID | Requirement | Acceptance | Status |
-| --- | --- | --- | --- |
-| W3.1 | No silent request | Every call either serves its request or reports through the error callback why it cannot | Met. The display-group calls were the exception: they accepted and did nothing at all, and are served now |
-| W3.2 | Pre connection behaviour | A request issued before connection is reported on the error callback with code 504 on the Python surface, matching the reference client, and returns a typed error on the Rust surface | Met |
-| W3.3 | Financial advisor allocation | Allocation groups and methods carried, or the reason recorded | Met as far as an account without an advisor can carry it. The request reaches the server on both surfaces; the response needs an advisor account, and this one is not, so what it answers has not been observed |
-| W3.4 | Event data | Wall Street Horizon calls served, or the reason recorded | Met. The calendar states what it carries — 43 event types with their field schemas — and answers an event query with a well-formed result, over the security-definition connection. The events themselves are a separate subscription this account does not hold, so every query is answered with an empty set |
-| W3.5 | Compatibility statement | Every call published with its status and the evidence establishing it | Met. The coverage matrix carries, per call, how its status was established: exercised against a live session, exercised by the offline suites, stating why it cannot be served, or exercised by neither. Derived from the suites themselves, so it cannot go quietly out of date |
-| W3.6 | Second factor | Approval path covered by an automated live check, or the reason no such check can run recorded | Met against a live session, and not automated, because an approval a person must give is the thing a second factor is for. The paper session used for the rest of the verification is never presented with one, so the path was exercised where it does appear: the venue asked for the device factor, the connect call held, the approval was given on the device, and the gate released and completed the login. Read only — the run asked for the next order id and disconnected. The wire and the gate are covered by fifteen tests besides |
 
 ## Wire coverage
 
@@ -514,14 +437,6 @@ stream — skip outside one. It is dormant until `IB_USERNAME` and `IB_PASSWORD`
 repository secrets: without them each job reports that it was not run, rather
 than passing on a session it never opened.
 
-
-## Planned work
-
-One open item: settings decided by configuration where the server states a grant for them.
-
-The surface question is settled. `EClient`/`EWrapper` is the product; the ib_async shape and the Rust shape are adapters over it, and the rust-ibapi shape is not written.
-
-The one capability a gateway has and this does not is [#2](https://github.com/userFRM/ibx/issues/2): several programs sharing one logon. A gateway rents its single session out over a local socket, and this client, having no socket, cannot. One process holds one session.
 
 ## Architecture
 
