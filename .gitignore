@@ -48,3 +48,8 @@ __pycache__/
 # Reports the reach scripts write beside their exit code. The exit code is the
 # gate; these are for reading.
 target/gates/
+
+# Python tooling and the local virtualenv. Untracked either way; named here so
+# a working tree reads clean rather than listing them on every status.
+.pytest_cache/
+.venv/
