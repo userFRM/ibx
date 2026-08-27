@@ -256,16 +256,15 @@ multiplier on the execution report — and on a definition that number is a
 different field entirely. It stays unread until it is established rather than
 inferred from the pair.
 
-The same check run across every named attribute the protocol carries found
-162 this client does not write, and they read the same way — blotter tickets,
+The same check run across every named attribute the protocol carries found the
+unwritten ones read the same way — blotter tickets,
 cross and stock-loan bookkeeping, cost reports, model rebalancing. The one
 cluster among them that is a published feature is the scale order, and what is
 unwritten there is a scale reporting its own progress back to the sender,
 not the fields that place one. Those this client writes in full.
 
-Writing more fields is not the same as writing the right ones:
-this client states 163 fields against its 79 because much of what it states
-rides fields composed elsewhere. The number that matters is
+Writing more fields is not the same as writing the right ones: much of what
+this client states rides fields composed elsewhere. The number that matters is
 the fifty-one, and the twenty-eight beside it.
 
 ### Data this client states without the venue having stated it
