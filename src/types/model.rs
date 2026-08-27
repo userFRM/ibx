@@ -920,6 +920,16 @@ impl Order {
             // `Invalid value in field # 59`.
             "DTC" => b'6',
             "AUC" => b'8',
+            // A peg that lives by the minute. Refused here before, so a caller
+            // could not ask for it at all; the venue answers it by name and
+            // refuses only the pairing, which is a thing a caller can change.
+            //
+            // The two overnight lives are deliberately absent. They are named
+            // in the same family, and tag 59 answers both with
+            // `Invalid value in field # 59` — on the regular route and on the
+            // overnight one — exactly as it answers day-til-cancelled's own
+            // byte. A name for a life is not proof the field carries it.
+            "NMIN" => b'p',
             _ => b'0', // DAY
         }
     }
