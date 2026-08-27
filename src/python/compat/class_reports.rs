@@ -4,6 +4,8 @@
 use super::contract::by_reference_name;
 use pyo3::prelude::*;
 
+use super::{camel_aliases_copy, camel_aliases_owned};
+
 /// ibapi-compatible BarData class for historical data callbacks.
 #[pyclass(from_py_object)]
 #[derive(Clone)]
@@ -185,15 +187,7 @@ impl CommissionAndFeesReport {
     #[setter(commission)]
     fn set_commission_alias(&mut self, v: f64) { self.commission_and_fees = v; }
 
-    #[getter(commissionAndFees)]
-    fn get_commission_and_fees_alias(&self) -> f64 { self.commission_and_fees }
-    #[setter(commissionAndFees)]
-    fn set_commission_and_fees_alias(&mut self, v: f64) { self.commission_and_fees = v; }
 
-    #[getter(realizedPNL)]
-    fn get_realized_pnl_alias(&self) -> f64 { self.realized_pnl }
-    #[setter(realizedPNL)]
-    fn set_realized_pnl_alias(&mut self, v: f64) { self.realized_pnl = v; }
 
     /// Their spelling keeps the underscore: `yield` is a keyword in Python.
     #[getter(yield_)]
@@ -201,8 +195,17 @@ impl CommissionAndFeesReport {
     #[setter(yield_)]
     fn set_yield_alias(&mut self, v: f64) { self.yield_amount = v; }
 
-    #[getter(yieldRedemptionDate)]
-    fn get_yield_redemption_date_alias(&self) -> String { self.yield_redemption_date.clone() }
-    #[setter(yieldRedemptionDate)]
-    fn set_yield_redemption_date_alias(&mut self, v: String) { self.yield_redemption_date = v; }
+}
+
+camel_aliases_copy! {
+    CommissionAndFeesReport {
+        get_commission_and_fees_alias set_commission_and_fees_alias commissionAndFees commission_and_fees f64;
+        get_realized_pnl_alias set_realized_pnl_alias realizedPNL realized_pnl f64;
+    }
+}
+
+camel_aliases_owned! {
+    CommissionAndFeesReport {
+        get_yield_redemption_date_alias set_yield_redemption_date_alias yieldRedemptionDate yield_redemption_date String;
+    }
 }
