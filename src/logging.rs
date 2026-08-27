@@ -121,12 +121,24 @@ pub fn try_init_from_env(default_level: &str) -> bool {
         .is_ok()
 }
 
+/// Install the logger the environment asks for, when there may already be one.
+///
+/// `None` means a logger was already installed and this call did nothing, which
+/// is the answer a module initialiser wants rather than a panic.
+pub fn try_init(config: &LogConfig) -> Option<LogGuard> {
+    install(config)
+}
+
 /// Initialize the logging subsystem. Returns a [`LogGuard`] that **must** be
 /// held until process exit — dropping it flushes buffered records and joins the
 /// background writer thread.
 ///
 /// Existing `log::info!()` etc. calls are bridged automatically via `tracing-log`.
 pub fn init(config: &LogConfig) -> LogGuard {
+    install(config).expect("a logger is already installed")
+}
+
+fn install(config: &LogConfig) -> Option<LogGuard> {
     let filter = match &config.level {
         Some(level) => EnvFilter::try_new(level)
             .unwrap_or_else(|_| EnvFilter::new("info")),
@@ -148,7 +160,19 @@ pub fn init(config: &LogConfig) -> LogGuard {
         .with_timer(NanoTimestamp)
         .with_writer(writer)
         .with_ansi(config.log_dir.is_none())
-        .init();
+        .try_init()
+        .ok()
+        .map(|()| LogGuard { _guard: guard })
+}
 
-    LogGuard { _guard: guard }
+impl LogGuard {
+    /// The guard a process keeps for its own lifetime.
+    ///
+    /// A module initialiser has no scope to hold one in, and the writer behind
+    /// a log directory runs on a thread whose records outlive that scope, so
+    /// the guard is kept rather than dropped at the end of the call.
+    pub fn keep_for_the_process(self) {
+        static KEPT: std::sync::OnceLock<LogGuard> = std::sync::OnceLock::new();
+        let _ = KEPT.set(self);
+    }
 }

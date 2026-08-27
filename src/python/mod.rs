@@ -81,9 +81,19 @@ use pyo3::prelude::*;
 /// Python module definition.
 #[pymodule]
 fn ibx(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Forward Rust `log::*` macros to stderr when RUST_LOG is set.
-    // `try_init` is no-op if a logger is already installed (e.g. by tests).
-    let _ = crate::logging::try_init_from_env("warn");
+    // Forward Rust `log::*` records wherever the environment asks for them.
+    // `IBX_LOG_DIR` is published to callers as a setting, so a wheel that
+    // answered it with stderr was answering something else. Both paths are
+    // no-ops when a logger is already installed, which is what a module
+    // initialiser wants: it runs once per interpreter, not once per process.
+    let settings = crate::logging::LogConfig::from_env();
+    if settings.log_dir.is_some() {
+        if let Some(guard) = crate::logging::try_init(&settings) {
+            guard.keep_for_the_process();
+        }
+    } else {
+        let _ = crate::logging::try_init_from_env("warn");
+    }
     compat::register(m)?;
     Ok(())
 }
