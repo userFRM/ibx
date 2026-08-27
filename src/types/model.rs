@@ -2207,13 +2207,21 @@ impl Contract {
     /// Whether the venue quotes this instrument rather than printing trades on
     /// it.
     ///
-    /// A bar asked for as TRADES on one of these comes back empty, because
-    /// there are no trades to report: the price a caller wants is the midpoint
-    /// of the quote. Stated once because it was stated twice and the two
-    /// spellings had already drifted, so a commodity got an empty stream from
-    /// one call and a filled one from the other.
+    /// Asked rather than assumed. On 2026-08-27 the venue refused TRADES on
+    /// `EUR/CASH@IDEALPRO` and `XAUUSD/CMDTY@SMART` with 162, no historical
+    /// market data, and answered MIDPOINT on both. So those two have no trades
+    /// to report and the price a caller means is the midpoint of the quote.
+    ///
+    /// `CFD` is deliberately absent, and it was in this list before anyone
+    /// asked. The venue refused TRADES on `IBUS30/CFD` and answered 29 hourly
+    /// bars of it on `AAPL/CFD` over the same window: a contract for difference
+    /// on a share has the share's trades, one on an index has none. Nothing in
+    /// `sec_type` separates them, so this cannot answer for CFDs and does not
+    /// pretend to. A CFD is asked for what it says it wants; an index one is
+    /// refused by name, which a caller can act on, rather than being handed
+    /// midpoints it did not ask for.
     pub fn is_quoted_not_traded(&self) -> bool {
-        ["CASH", "CFD", "CMDTY"]
+        ["CASH", "CMDTY"]
             .iter()
             .any(|kind| self.sec_type.eq_ignore_ascii_case(kind))
     }
@@ -2423,16 +2431,20 @@ mod quoted_not_traded_tests {
     /// so a commodity was asked for trades that do not exist and the stream
     /// stayed empty. One predicate, and this says which classes are in it.
     #[test]
-    fn a_commodity_is_quoted_rather_than_traded() {
-        for kind in ["CASH", "CFD", "CMDTY", "cmdty"] {
+    fn only_what_the_venue_refused_trades_on_is_quoted() {
+        // Measured 2026-08-27: TRADES refused with 162 on both, MIDPOINT answered.
+        for kind in ["CASH", "CMDTY", "cmdty"] {
             let mut c = Contract::stock("X");
             c.sec_type = kind.to_string();
-            assert!(c.is_quoted_not_traded(), "{kind} is quoted, not traded");
+            assert!(c.is_quoted_not_traded(), "{kind} was refused TRADES by the venue");
         }
-        for kind in ["STK", "FUT", "OPT"] {
+        // A share CFD answered 29 TRADES bars where an index CFD refused, and
+        // the security type does not say which one is in hand. Guessing here
+        // hands a caller midpoints where trades exist.
+        for kind in ["STK", "FUT", "OPT", "CFD"] {
             let mut c = Contract::stock("X");
             c.sec_type = kind.to_string();
-            assert!(!c.is_quoted_not_traded(), "{kind} prints trades");
+            assert!(!c.is_quoted_not_traded(), "{kind} is not answered for here");
         }
     }
 }
