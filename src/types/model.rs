@@ -2204,6 +2204,20 @@ mod varying_a_ladder_tests {
 /// let eurusd = Contract::forex("EUR", "USD");
 /// ```
 impl Contract {
+    /// Whether the venue quotes this instrument rather than printing trades on
+    /// it.
+    ///
+    /// A bar asked for as TRADES on one of these comes back empty, because
+    /// there are no trades to report: the price a caller wants is the midpoint
+    /// of the quote. Stated once because it was stated twice and the two
+    /// spellings had already drifted, so a commodity got an empty stream from
+    /// one call and a filled one from the other.
+    pub fn is_quoted_not_traded(&self) -> bool {
+        ["CASH", "CFD", "CMDTY"]
+            .iter()
+            .any(|kind| self.sec_type.eq_ignore_ascii_case(kind))
+    }
+
     /// A share, routed to SMART and priced in dollars unless told otherwise.
     pub fn stock(symbol: &str) -> Self {
         Self {
@@ -2398,5 +2412,27 @@ impl Order {
     pub fn outside_regular_hours(mut self) -> Self {
         self.outside_rth = true;
         self
+    }
+}
+
+#[cfg(test)]
+mod quoted_not_traded_tests {
+    use super::Contract;
+
+    /// The rule was written twice and the second spelling had dropped a class,
+    /// so a commodity was asked for trades that do not exist and the stream
+    /// stayed empty. One predicate, and this says which classes are in it.
+    #[test]
+    fn a_commodity_is_quoted_rather_than_traded() {
+        for kind in ["CASH", "CFD", "CMDTY", "cmdty"] {
+            let mut c = Contract::stock("X");
+            c.sec_type = kind.to_string();
+            assert!(c.is_quoted_not_traded(), "{kind} is quoted, not traded");
+        }
+        for kind in ["STK", "FUT", "OPT"] {
+            let mut c = Contract::stock("X");
+            c.sec_type = kind.to_string();
+            assert!(!c.is_quoted_not_traded(), "{kind} prints trades");
+        }
     }
 }

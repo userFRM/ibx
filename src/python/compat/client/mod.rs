@@ -412,7 +412,13 @@ impl EClient {
             )),
             farm_conn, ccp_conn, hmds_conn, secdef_conn, core_id,
             crate::gateway::CallerAuth {
-                settings: Default::default(),
+                // The settings the session opened under, not the defaults. Left
+                // default here, a reconnect announced a different build, locale
+                // and timezone than the connect did, and asked for every
+                // execution the account holds where the caller asked for
+                // today's. The Rust surface states the same thing in
+                // `caller_auth`; this path had to state it too.
+                settings: config.settings.clone(),
                 host: connect_host,
                 username: connect_username,
                 password: connect_password,

@@ -425,9 +425,7 @@ impl Client {
         let req_id = asked.get();
         let (tx, rx) = std::sync::mpsc::sync_channel(TICK_BACKLOG);
         self.kept().stream_bars(req_id, tx);
-        let quoted_not_traded = contract.sec_type.eq_ignore_ascii_case("CASH")
-            || contract.sec_type.eq_ignore_ascii_case("CFD");
-        let what = if quoted_not_traded { "MIDPOINT" } else { "TRADES" };
+        let what = if contract.is_quoted_not_traded() { "MIDPOINT" } else { "TRADES" };
         self.client.req_real_time_bars(req_id, contract, 5, what, true)?;
         Ok(LiveBars { session: self.clone(), req_id, rx })
     }
