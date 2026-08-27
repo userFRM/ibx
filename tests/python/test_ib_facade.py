@@ -383,3 +383,27 @@ def test_an_empty_option_list_is_what_every_ordinary_call_passes():
     ib = connected_ib()
     ib.reqMktData(spy(), mktDataOptions=[])
     ib.reqMktData(spy(), mktDataOptions=None)
+
+
+def test_only_quote_subscriptions_are_recorded_for_the_ticker_scan():
+    """`ticker()` falls back to scanning the recorded subscriptions for a
+    matching contract id, so a record that is not a quote answers a question
+    about one with a request that cannot serve it.
+
+    Depth, bars and tick-by-tick were recorded there and never read back, and
+    two of the three were never removed on cancel, so the entry outlived its
+    subscription. The scan is what makes the record mean something, so the
+    record holds only what the scan may answer with.
+
+    Asserted on the record rather than on `ticker()`, which answers None for an
+    id it has no quote for either way and so cannot show the difference."""
+    ib = connected_ib()
+    contract = spy()
+    contract.conId = 756733
+    ib.reqMktDepth(contract, numRows=5)
+    ib.reqRealTimeBars(contract)
+    ib.reqTickByTickData(contract)
+    assert ib._subscribed == {}, f"only quotes belong here, found {ib._subscribed}"
+
+    quote_id, _ = ib._start_quote(contract)
+    assert list(ib._subscribed) == [quote_id], "and a quote does belong"
