@@ -198,6 +198,14 @@ pub struct SharedState {
     pub orders: OrderState,
     /// Everything that is not a price: contracts, history, news, scans.
     pub reference: ReferenceState,
+    /// Whether a corporate-actions question is already outstanding here.
+    ///
+    /// The venue files its answer against the contract rather than handing it
+    /// to whoever asked, so two questions about one contract at once would both
+    /// take the first reply — and one of them asked about a different range.
+    /// Held on the session, because two sessions have two records and one
+    /// waiting is no reason for the other to.
+    pub asking_adjustments: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// What the account holds and what it is worth.
     pub portfolio: PortfolioState,
     /// Last measured auth-connection round-trip time in nanoseconds
@@ -260,6 +268,7 @@ impl SharedState {
             market: MarketDataState::new(),
             orders: OrderState::new(),
             reference: ReferenceState::new(),
+            asking_adjustments: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             portfolio: PortfolioState::new(),
             ccp_rtt_ns: AtomicU64::new(0),
             connection_lost: AtomicBool::new(false),

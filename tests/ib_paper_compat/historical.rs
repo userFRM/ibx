@@ -1599,6 +1599,23 @@ pub(super) fn phase_corporate_actions_reply(mut conns: Conns) -> Conns {
     conns
 }
 
+/// Withdraw the scan this phase put up, on every way out of it.
+///
+/// A subscription left standing outlives the phase and is one more thing the
+/// account is running for no reason. Every path that leaves after subscribing
+/// comes through here, including the ones that leave because something failed.
+fn put_the_scan_back_down(hmds: &mut Connection, scan_id: &str) {
+    let ts = now_ib_timestamp();
+    if let Err(e) = hmds.send_fix(&[
+        (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
+        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+        (6040, "10004"),
+        (6118, &ibx::control::scanner::build_scanner_cancel_xml(scan_id)),
+    ]) {
+        println!("  note: the scan could not be withdrawn: {e}");
+    }
+}
+
 /// Whether a message is the session talking to itself rather than answering.
 ///
 /// A farm sends heartbeats and test requests on its own schedule, and one
@@ -1609,7 +1626,21 @@ pub(super) fn phase_corporate_actions_reply(mut conns: Conns) -> Conns {
 fn keeps_the_session_up(message: &str) -> bool {
     matches!(
         message.split('|').find_map(|f| f.strip_prefix("35=")),
-        Some("0" | "1" | "2" | "4" | "5" | "A"),
+        Some("0" | "1"),
+    )
+}
+
+/// Whether a message says the session is ending.
+///
+/// A logout is not housekeeping and not an answer: it is the connection going
+/// away. Filtered out with the heartbeats it would leave the phase reporting
+/// that the venue said nothing, when what happened is that the venue hung up —
+/// possibly because of what was just sent. That reading is published, so it has
+/// to be the one thing this cannot get wrong.
+fn ends_the_session(message: &str) -> bool {
+    matches!(
+        message.split('|').find_map(|f| f.strip_prefix("35=")),
+        Some("5"),
     )
 }
 
@@ -1675,10 +1706,15 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
 
     // The element each request arrives under is its own name, which is how the
     // subscription and the desubscription above are already sent and answered.
+    let mut session_ended = false;
     for (subtype, element, what) in [
         ("10006", "ScanSuspendRequest", "suspend that scan"),
         ("10007", "ScanResumeRequest", "resume that scan"),
     ] {
+        if session_ended {
+            println!("  {subtype} ({what}): not asked — the session had already ended");
+            continue;
+        }
         let xml = format!("<{element}><id>{scan_id}</id></{element}>");
         let ts = now_ib_timestamp();
         if let Err(e) = hmds.send_fix(&[
@@ -1688,17 +1724,31 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
             (6118, &xml),
         ]) {
             skipped!("  SKIP: {what} could not be sent: {e}\n");
+            put_the_scan_back_down(&mut hmds, scan_id);
             return conns;
         }
 
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut answered: Vec<String> = Vec::new();
+        let mut hung_up = false;
         while Instant::now() < deadline && answered.is_empty() {
-            let _ = hmds.try_recv();
+            // A read that fails is the connection going, and a phase that
+            // swallows it reports the venue saying nothing when nothing was
+            // listening. That reading is what this phase publishes, so it is
+            // the one thing it cannot get wrong.
+            if let Err(e) = hmds.try_recv()
+                && e.kind() != std::io::ErrorKind::WouldBlock
+            {
+                hung_up = true;
+                answered.push(format!("the connection went away: {e}"));
+            }
             for frame in hmds.extract_frames() {
                 let mut keep = |bytes: &[u8]| {
                     let text = String::from_utf8_lossy(bytes).replace('\x01', "|");
-                    if !keeps_the_session_up(&text) {
+                    if ends_the_session(&text) {
+                        hung_up = true;
+                        answered.push(text);
+                    } else if !keeps_the_session_up(&text) {
                         answered.push(text);
                     }
                 };
@@ -1723,7 +1773,11 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        if answered.is_empty() {
+        if hung_up {
+            session_ended = true;
+            println!("  {subtype} ({what}): the session ended while waiting, so nothing \
+                      here says what the venue makes of the request");
+        } else if answered.is_empty() {
             println!("  {subtype} ({what}): nothing in 8s — asked and unanswered, which is \
                       not the same as never asked");
         } else {
@@ -1734,14 +1788,7 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
         }
     }
 
-    // Put the scan back down whatever happened above.
-    let ts = now_ib_timestamp();
-    let _ = hmds.send_fix(&[
-        (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
-        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
-        (6040, "10004"),
-        (6118, &ibx::control::scanner::build_scanner_cancel_xml(scan_id)),
-    ]);
+    put_the_scan_back_down(&mut hmds, scan_id);
 
     println!();
     conns
