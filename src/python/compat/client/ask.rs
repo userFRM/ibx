@@ -175,15 +175,19 @@ impl EClient {
         // running while this one waits its turn. A mutex guard cannot cross
         // that boundary because it is not `Send`, so the turn is a flag and a
         // guard that puts it back.
-        static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        struct Turn;
+        //
+        // The flag belongs to the session, not to the process. Two clients hold
+        // two sessions and two records, and one waiting on its own venue is no
+        // reason for the other to wait at all.
+        struct Turn(Arc<std::sync::atomic::AtomicBool>);
         impl Drop for Turn {
             fn drop(&mut self) {
-                TAKEN.store(false, std::sync::atomic::Ordering::Release);
+                self.0.store(false, std::sync::atomic::Ordering::Release);
             }
         }
-        let _turn = py.detach(|| {
-            while TAKEN
+        let taken = Arc::clone(&shared.asking_adjustments);
+        let _turn = py.detach(move || {
+            while taken
                 .compare_exchange(
                     false, true,
                     std::sync::atomic::Ordering::AcqRel,
@@ -193,7 +197,7 @@ impl EClient {
             {
                 std::thread::sleep(POLL);
             }
-            Turn
+            Turn(taken)
         });
         // Cleared before asking, for the reason `forget_adjustments` states:
         // the record is kept against the contract, so an earlier answer about

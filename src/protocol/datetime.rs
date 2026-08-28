@@ -145,13 +145,25 @@ pub fn ib_datetime_to_unix_millis(stamped: &str) -> Option<i64> {
     // carrying something unreadable after it still says which second it names
     // — and refusing the whole stamp over the tail loses the second as well,
     // which is a clock reading thrown away over the part nobody asked for.
-    let digits: Vec<u8> = fraction.bytes().take_while(|b| b.is_ascii_digit()).collect();
-    let millis: i64 = if digits.is_empty() {
+    // Three digits are all a millisecond holds, so three are all that are read.
+    // A stamp carrying a very long fraction states no more than the first three
+    // of it, and collecting the rest would let the length of what arrived
+    // decide how much is allocated here.
+    let mut three = [b'0'; 3];
+    let mut stated = 0usize;
+    for b in fraction.bytes().take_while(u8::is_ascii_digit) {
+        if stated < three.len() {
+            three[stated] = b;
+        }
+        stated += 1;
+        if stated >= three.len() {
+            break;
+        }
+    }
+    let millis: i64 = if stated == 0 {
         0
     } else {
-        let mut three = digits;
-        three.resize(3, b'0');
-        std::str::from_utf8(&three[..3]).ok()?.parse().ok()?
+        std::str::from_utf8(&three).ok()?.parse().ok()?
     };
     let mut parts = time.split(':');
     let hours: i64 = parts.next()?.parse().ok()?;

@@ -1706,10 +1706,15 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
 
     // The element each request arrives under is its own name, which is how the
     // subscription and the desubscription above are already sent and answered.
+    let mut session_ended = false;
     for (subtype, element, what) in [
         ("10006", "ScanSuspendRequest", "suspend that scan"),
         ("10007", "ScanResumeRequest", "resume that scan"),
     ] {
+        if session_ended {
+            println!("  {subtype} ({what}): not asked — the session had already ended");
+            continue;
+        }
         let xml = format!("<{element}><id>{scan_id}</id></{element}>");
         let ts = now_ib_timestamp();
         if let Err(e) = hmds.send_fix(&[
@@ -1727,7 +1732,16 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
         let mut answered: Vec<String> = Vec::new();
         let mut hung_up = false;
         while Instant::now() < deadline && answered.is_empty() {
-            let _ = hmds.try_recv();
+            // A read that fails is the connection going, and a phase that
+            // swallows it reports the venue saying nothing when nothing was
+            // listening. That reading is what this phase publishes, so it is
+            // the one thing it cannot get wrong.
+            if let Err(e) = hmds.try_recv()
+                && e.kind() != std::io::ErrorKind::WouldBlock
+            {
+                hung_up = true;
+                answered.push(format!("the connection went away: {e}"));
+            }
             for frame in hmds.extract_frames() {
                 let mut keep = |bytes: &[u8]| {
                     let text = String::from_utf8_lossy(bytes).replace('\x01', "|");
@@ -1760,6 +1774,7 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
         }
 
         if hung_up {
+            session_ended = true;
             println!("  {subtype} ({what}): the session ended while waiting, so nothing \
                       here says what the venue makes of the request");
         } else if answered.is_empty() {

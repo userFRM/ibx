@@ -954,7 +954,7 @@ impl HmdsState {
                                         crate::control::adjustments::parse_adjustments(body);
                                     match waiting {
                                         Some(pos) => {
-                                            let (_, _, asked_about) = self.pending_adjustments[pos];
+                                            let (_, answers, asked_about) = self.pending_adjustments[pos].clone();
                                             // The body names its own contract.
                                             // One naming a different contract
                                             // from the one asked about is not
@@ -966,7 +966,7 @@ impl HmdsState {
                                                     "corporate actions for {}: {} stated",
                                                     contract.con_id, actions.len(),
                                                 );
-                                                shared.reference.note_adjustments(contract, actions);
+                                                shared.reference.note_adjustments(contract, actions, answers);
                                             } else {
                                                 shared.market.note_unread_wire(
                                                     "historical",
@@ -1620,9 +1620,10 @@ fn build_tbt_query(
 
     /// Ask the historical farm for a contract's corporate actions.
     ///
-    /// No pending entry is kept for it: the reply names the contract it is for
-    /// and is filed against that, so an answer is matched by what it says
-    /// rather than by the order the requests went out in.
+    /// The id it goes out under is kept until it is answered. The reply names
+    /// the contract it is for and echoes that id, and both are checked before
+    /// anything is filed: the contract alone cannot say which of two questions
+    /// about it an answer belongs to.
     pub(crate) fn send_adjustments_request(
         &mut self, req_id: u32, con_id: u32, sec_type: &str, exchange: &str,
         start_date: &str, end_date: &str,

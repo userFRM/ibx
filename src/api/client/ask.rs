@@ -440,7 +440,9 @@ impl EClient {
             if let Some(refusal) = why.lock().unwrap().take() {
                 return Err(refusal);
             }
-            if let Some((_, actions)) = self.adjustments(&con_id) {
+            if let Some(actions) =
+                self.shared.reference.adjustments_answering(&con_id, asked.get() as u32)
+            {
                 return Ok(actions);
             }
             std::thread::sleep(Duration::from_millis(10));

@@ -163,13 +163,7 @@ pub struct AdjustedContract {
     pub exchange: String,
 }
 
-/// Every corporate action in a reply, and the contract they belong to.
-///
-/// The venue answers a name on its own line and the rows under it, until the
-/// next name: the query comes back echoed as XML and the actions arrive beside
-/// it as text. An action stating fewer values than its kind names is kept with
-/// the rest empty rather than dropped, because a partial answer is still the
-/// venue's answer, and discarding it would leave a series looking unadjusted/// The query id the venue echoes back on a reply.
+/// The query id the venue echoes back on a reply.
 ///
 /// A reply names the contract it is about, which is enough to file it and not
 /// enough to know whose question it answers. Two questions about one contract
@@ -181,7 +175,13 @@ pub fn parse_response_query_id(xml: &str) -> Option<String> {
     crate::control::xml::tag(xml, "id").map(|s| s.to_string())
 }
 
-
+/// Every corporate action in a reply, and the contract they belong to.
+///
+/// The venue answers a name on its own line and the rows under it, until the
+/// next name: the query comes back echoed as XML and the actions arrive beside
+/// it as text. An action stating fewer values than its kind names is kept with
+/// the rest empty rather than dropped, because a partial answer is still the
+/// venue's answer, and discarding it would leave a series looking unadjusted
 /// for a reason nobody could see.
 pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
     let mut contract = AdjustedContract::default();
@@ -319,6 +319,13 @@ pub fn scale_volume_before_stated(date: &str, actions: &[Adjustment]) -> Result<
     scale_before_stated(date, actions).map(|f| 1.0 / f)
 }
 
+/// The largest count that survives a trip through a float unchanged.
+///
+/// Two to the fifty-third. Past it the conversion starts rounding, and a volume
+/// that comes back one short of what the venue said is a wrong number wearing
+/// the shape of a right one.
+const EXACT_IN_A_FLOAT: u64 = 1 << 53;
+
 /// The day a bar is dated, as an action states its own.
 ///
 /// A bar states a day and sometimes a time after it; an action states only a
@@ -372,8 +379,19 @@ pub fn scale_bars(
             // what the venue served.
             let volume = scale_volume_before_stated(&day, actions)?;
             if volume != 1.0 {
+                // Checked before the conversion as well as after. A count past
+                // what a float holds exactly loses bits on the way in, and a
+                // factor that then brings it back under the limit hides that:
+                // the answer passes the test on the way out having already been
+                // rounded on the way in.
+                if b.volume.unsigned_abs() > EXACT_IN_A_FLOAT {
+                    return Err(format!(
+                        "the bar dated {} states a volume of {}, which is more than a \
+                         scale can be applied to without changing it", b.date, b.volume,
+                    ));
+                }
                 let scaled = b.volume as f64 * volume;
-                if !scaled.is_finite() || scaled.abs() >= 9.007_199_254_740_992e15 {
+                if !scaled.is_finite() || scaled.abs() > EXACT_IN_A_FLOAT as f64 {
                     return Err(format!(
                         "the volume of the bar dated {} does not survive being put on one \
                          scale, and a count nobody can state is not one to hand back", b.date,
