@@ -59,16 +59,16 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Equity option | Verified | Verified | Verified | Available |
 | Forex | Verified | Verified | Verified | Available |
 | Future | Verified | Verified | Verified | Available |
-| Futures option | Verified | Implemented | Implemented | Not yet verified |
+| Futures option | Verified | Verified | Verified | Available. A lookup must name an expiry: one expiry on the index future returns ten thousand eight hundred and fifty contracts in 11.5s, and every expiry at once does not answer inside the deadline a request is given. An order must state the security type: sent under an id alone the venue answers `Unsupported type` |
 | Index | Verified | Verified | Blocked, the venue supports no order on the contract type | None required |
 | Bond | Verified | Verified | Verified, quantified in face value | Available |
-| Warrant | Verified | Implemented | Blocked, the venue supports no order of this kind on the exchange and security type | None required |
+| Warrant | Verified | Accepted, and answered with nothing | Permitted, sixty-three order types stated. Refused on the exchange and security type one attempt named, which is that pairing and not the type | Named on the venue they list on rather than a routed one: `SWB` returns four thousand four hundred and sixty-nine against a single underlying in 5.5s, where every other venue asked either ran past the deadline or held none. A quote on three of them is accepted and answered with nothing, and no reason is stated, which is the shape an account without the data for that venue is answered with. Silence is not a pass, so this stays short of verified |
 | Combination | Verified | Not applicable | Verified | Available |
 | Crypto and CFD | Verified | Verified | Verified, crypto requires an immediate-or-cancel or minutes instruction | Available |
 | Commodity | Verified | Verified | Verified | Available |
-| Bill | Verified | Implemented | Verified | Available |
+| Bill | Verified | Verified | Verified | Available. A bill is named by its issuer, not by a ticker: `US-T` returns fifty-nine of them in 0.2s, and the first quotes. The venue's symbol search does not surface them, so the issuer is how one is found |
 | Fund | Verified | Verified | Blocked, quantified in cash and then refused for residency, which is a property of the account | None required |
-| Forward | Implemented | Implemented | Absent, the session states no permission for the type | None required |
+| Forward | Not permitted on this account | Not permitted on this account | Absent, the session states no permission for the type | None required. The venue lists twenty-one security types this account may trade and this is not among them, which settles the row: nothing to reach rather than something unreached |
 | Venues outside the United States | Verified | Verified | Verified | Available |
 
 ## Release policy
@@ -98,7 +98,7 @@ asks what arrived unread.
 | Market data connection | Every type read. A venue refusing to show its book now reaches the caller that asked |
 | Historical connection | Records anything it does not read |
 | The venue's fourth connection | Not needed. It carries a topic-keyed message bus for news search, notifications and window layouts, and no contract or reference data |
-| Host redirection, before any session exists | Implemented. The venue can retarget this client to another host and it follows |
+| Host redirection, before any session exists | Verified. The venue retargets this client to another host and it follows: seventy-eight redirections across live sessions on 2026-08-28, each one reconnecting and going on to log on |
 
 The messages this client reads are published in the wire coverage reference,
 taken from its own dispatch tables.
