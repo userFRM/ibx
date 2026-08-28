@@ -296,6 +296,31 @@ impl EClient {
         })
     }
 
+    // ── Corporate actions ──
+
+    /// Ask for a contract's corporate actions over a range of days.
+    ///
+    /// The answer is filed against the contract it names rather than handed to
+    /// a callback under this id, because the venue answers per contract:
+    /// [`EClient::adjustments`](crate::EClient::adjustments) reads it once it
+    /// has arrived, and [`corporate_actions`](crate::EClient::corporate_actions)
+    /// asks and waits in one call.
+    ///
+    /// `start_date` and `end_date` are days, as `YYYYMMDD`.
+    pub fn req_adjustments(
+        &self, req_id: i64, con_id: i64, sec_type: &str, exchange: &str,
+        start_date: &str, end_date: &str,
+    ) -> Result<(), Refusal> {
+        self.send(ControlCommand::FetchAdjustments {
+            req_id: wire_req_id(req_id)?,
+            con_id: wire_con_id(con_id, "a request for corporate actions")?,
+            sec_type: sec_type.into(),
+            exchange: exchange.into(),
+            start_date: start_date.into(),
+            end_date: end_date.into(),
+        })
+    }
+
     // ── Fundamental Data ──
 
     /// Request fundamental data. Matches `reqFundamentalData` in C++.

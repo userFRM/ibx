@@ -23,9 +23,10 @@ RUST_REF = BOOK_SRC / "api" / "rust-reference.md"
 PYTHON_REF = BOOK_SRC / "api" / "python-reference.md"
 COVERAGE_REF = BOOK_SRC / "reference" / "coverage-data.md"
 
-FILE_ORDER = ["mod", "account", "orders", "market_data", "reference", "stubs"]
+FILE_ORDER = ["mod", "ask", "account", "orders", "market_data", "reference", "stubs"]
 SECTION_NAMES = {
     "mod": "Connection",
+    "ask": "Calls That Answer",
     "account": "Account & Portfolio",
     "orders": "Orders",
     "market_data": "Market Data",
@@ -455,9 +456,40 @@ def rust_type_to_py(ty: str) -> str:
 
 # ── Rust parser ──
 
+def eclient_impls(text: str) -> str:
+    """Just the `impl EClient` blocks, where a file holds more than its own.
+
+    A file may define a type of its own beside the client — a report with an
+    `is_done` on it — and those methods belong to that type, not to `EClient`.
+    Scanning the file whole would file them under the client, which is where a
+    reader would then look for them and not find them.
+    """
+    if "impl EClient" not in text:
+        return text
+    out = []
+    i = 0
+    while (i := text.find("impl EClient", i)) != -1:
+        j = text.find("{", i)
+        if j == -1:
+            break
+        depth = 0
+        for k in range(j, len(text)):
+            if text[k] == "{":
+                depth += 1
+            elif text[k] == "}":
+                depth -= 1
+                if depth == 0:
+                    out.append(text[i:k + 1])
+                    i = k + 1
+                    break
+        else:
+            break
+    return "\n".join(out)
+
+
 def parse_rust_methods(path: Path) -> list[dict]:
     """Extract pub fn methods with doc comments and parsed parameters."""
-    text = path.read_text(encoding="utf-8")
+    text = eclient_impls(path.read_text(encoding="utf-8"))
     results = []
     for m in re.finditer(
         r'((?:\s*///[^\n]*\n)*)(?:\s*#\[[^\]]*\]\s*\n)*\s*pub fn (\w+)\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)([^{;]*)',
