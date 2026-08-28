@@ -97,6 +97,7 @@ pub mod protocol;
 mod python;
 
 // Re-exports for convenience.
+pub use control::adjustments::{AdjustedContract, Adjustment, AdjustmentKind, scale_before};
 pub use error_codes::Refusal;
 pub use api::{EClient, EClientConfig, Wrapper};
 

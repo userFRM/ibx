@@ -174,6 +174,22 @@ pub fn shared_state(&self) -> &Arc<SharedState>
 
 ---
 
+#### `adjustments`
+
+Every corporate action the venue has stated for a contract this session, and the contract as it named it. The venue serves no adjusted series of its own: asked for one by name it answers that it has no such data, and the trades it does serve are raw. A series that crosses a split steps by the split's ratio with nothing in it saying so, which is a wrong number rather than a missing one. This is what a caller adjusts with. `scale_before` turns a date and these actions into the factor a price from that date carries, so a caller can put a series on one scale. Splits are what it applies: the ratio is the value the action states, established against a contract that split ten for one where the closes either side were 1208.88 and 121.79. Dividends are stated here and not applied by it, because how much of one comes off a historical price is a convention this client has not established against anything it can check. Empty until the venue has stated them for the contract, which it does once per contract on a historical request.
+
+```rust
+pub fn adjustments(&self, con_id: &str) -> Option<(AdjustedContract, Vec<Adjustment>)>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `con_id` | `&str` | Contract ID. Unique per instrument. |
+
+**Returns:** `Option<(AdjustedContract, Vec<Adjustment>)>`
+
+---
+
 #### `unread_wire`
 
 Frames this session kept exactly as the venue sent them, by connection. Empty unless `IBX_CAPTURE_WIRE` is set. A reading checked only against frames this client made up says nothing about the ones that arrive.
