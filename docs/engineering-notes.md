@@ -161,12 +161,14 @@ here.
 
 ### The account decides these
 
-Nothing here is a gap in the code. A wire the venue does not send to this account, or one an entitlement or an advisor account gates, is answered by what the account holds and not by what is written here. Whether any of them can be asked for is open: see the issue on establishing that, because "not sent" and "never asked" are not the same and this table has not told them apart.
+Nothing here is a gap in the code. A wire the venue does not send to this account, or one an entitlement or an advisor account gates, is answered by what the account holds and not by what is written here.
+
+Whether any of them can be asked for was open for as long as this table existed, because "not sent" and "never asked" are not the same. The scanner pair has since been asked properly — a scan subscribed, then suspended and resumed by its own id — and is recorded below as what that returned. The rest are subtypes the venue sends rather than requests a caller makes, so there is nothing to ask; a caller provokes them or does not.
 
 | Wire | What it carries | Why |
 | --- | --- | --- |
 | `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
-| `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
+| `6040` 10006, 10007 | Suspending and resuming a scanner | Asked and unanswered. A session subscribed a scan, suspended it and resumed it by its own id, and the venue said nothing either way. That is consistent with a control message that never replies and with one this account may not send, and it does not tell those apart — but it does settle that the request reaches the venue and is not merely unsent |
 | `6040` 146, 151, 208 | Trade-report records, including per-leg fills on a combination | Not sent to this account |
 | `6040` 200 | Execution history | Not sent to this account |
 | `6040` 109 | An advisor's allocation groups and profiles | Needs an advisor account |
@@ -421,10 +423,10 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,815 | No |
+| Rust unit and integration | 1,816 | No |
 | Python | 469 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (137 phases) | 35 tests | Yes |
+| Paper compatibility suite (138 phases) | 36 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure
