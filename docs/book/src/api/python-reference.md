@@ -5,6 +5,7 @@
 ## Table of Contents
 
 - [EClient: Connection](#connection)
+- [EClient: Calls That Answer](#calls-that-answer)
 - [EClient: Account & Portfolio](#account--portfolio)
 - [EClient: Orders](#orders)
 - [EClient: Market Data](#market-data)
@@ -143,6 +144,196 @@ def misc_url(key)
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `key` | `str` | Account value key (e.g. `"NetLiquidation"`, `"BuyingPower"`). |
+
+---
+
+## Calls That Answer
+
+#### `contract_details`
+
+Everything the venue knows about the contracts matching a description.  Sends the lookup, waits for the venue to say it has finished, and hands back every match. A description matching nothing returns an empty list; a venue that refuses the lookup raises with the reason it gave.
+
+```python
+def contract_details(contract)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+
+---
+
+#### `corporate_actions`
+
+A contract's corporate actions, asked for and waited on.  One dict per action, stating what the venue stated: its kind as the two-letter name the venue uses, the day it takes effect, its value, and the dates and dividend descriptions the kind carries. A field the kind does not carry is empty rather than invented.  `contract` must carry the venue's id for it. Days are `YYYYMMDD`.
+
+```python
+def corporate_actions(contract, start_date, end_date)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `start_date` | `str` |  |
+| `end_date` | `str` |  |
+
+---
+
+#### `historical_data`
+
+Bars for a contract over a period, handed back rather than delivered a bar at a time to a callback.  `ADJUSTED_LAST` is served here and refused by `reqHistoricalData`. The venue has no adjusted series to pass through: an adjusted one is built from the raw trades and the contract's actions, which means holding both before a bar is handed over. A call that waits can; one that answers on a callback would have to hand over raw bars under an adjusted name.
+
+```python
+def historical_data(contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth=1)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `end_date_time` | `str` | End date/time in `"YYYYMMDD HH:MM:SS"` format, or empty for now. |
+| `duration_str` | `str` | Duration string, e.g. `"1 D"`, `"1 W"`, `"1 M"`, `"1 Y"`. |
+| `bar_size_setting` | `str` | Bar size: `"1 min"`, `"5 mins"`, `"1 hour"`, `"1 day"`, etc. |
+| `what_to_show` | `str` | Data type: `"TRADES"`, `"MIDPOINT"`, `"BID"`, `"ASK"`, `"BID_ASK"`, etc. |
+| `use_rth` | `int` | If `true`, only return data from Regular Trading Hours. |
+
+---
+
+#### `head_timestamp`
+
+The earliest moment the venue holds data for a contract.
+
+```python
+def head_timestamp(contract, what_to_show="TRADES", use_rth=1)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `what_to_show` | `str` | Data type: `"TRADES"`, `"MIDPOINT"`, `"BID"`, `"ASK"`, `"BID_ASK"`, etc. |
+| `use_rth` | `int` | If `true`, only return data from Regular Trading Hours. |
+
+---
+
+#### `matching_symbols`
+
+Contracts whose symbol or name matches a pattern.
+
+```python
+def matching_symbols(pattern)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pattern` | `str` | Symbol search pattern. |
+
+---
+
+#### `news_headlines`
+
+The option chains an underlying has, answered rather than only sent.  The client this follows returns them. Sending the request and returning nothing left a program that assigned the result holding nothing, with no way to tell that from an underlying with no options at all. The headlines the venue holds for a contract.  Answers rather than reporting through the wrapper, because a program written against the reference client reads the return value.
+
+```python
+def news_headlines(con_id, provider_codes, start_date_time, end_date_time, total_results)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `con_id` | `int` | Contract ID. Unique per instrument. |
+| `provider_codes` | `str` | Pipe-separated news provider codes. |
+| `start_date_time` | `str` | Start date/time for tick query. |
+| `end_date_time` | `str` | End date/time in `"YYYYMMDD HH:MM:SS"` format, or empty for now. |
+| `total_results` | `int` | Maximum number of news results. |
+
+---
+
+#### `trading_schedule`
+
+When a contract trades, over a stretch of days.  Each session is its opening, its close, and the day it belongs to; the time zone they are stated in comes with them.
+
+```python
+def trading_schedule(contract, end_date_time, duration_str, use_rth)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `end_date_time` | `str` | End date/time in `"YYYYMMDD HH:MM:SS"` format, or empty for now. |
+| `duration_str` | `str` | Duration string, e.g. `"1 D"`, `"1 W"`, `"1 M"`, `"1 Y"`. |
+| `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
+
+---
+
+#### `option_chains`
+
+Every venue's option chain for an underlying, returned rather than delivered on a callback: expiries and strikes, per venue.
+
+```python
+def option_chains(underlying_symbol, fut_fop_exchange, underlying_sec_type, underlying_con_id)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `underlying_symbol` | `str` | Underlying symbol (e.g. `"AAPL"`). |
+| `fut_fop_exchange` | `str` | Exchange for futures/FOP options. |
+| `underlying_sec_type` | `str` | Underlying security type (e.g. `"STK"`). |
+| `underlying_con_id` | `int` | Underlying contract ID. |
+
+---
+
+#### `histogram_data`
+
+How a contract's traded volume is spread across prices over a period.
+
+```python
+def histogram_data(contract, use_rth=True, time_period="3 days")
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
+| `time_period` | `str` | Histogram time period. |
+
+---
+
+#### `fundamental_data`
+
+A fundamental report on a contract, as the venue supplies it.
+
+```python
+def fundamental_data(contract, report_type)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `report_type` | `str` | Report type: `"ReportSnapshot"`, `"ReportsFinSummary"`, `"RESC"`, etc. |
+
+---
+
+#### `qualify_contract`
+
+```python
+def qualify_contract(contract)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+
+---
+
+#### `qualify_contracts`
+
+Fill in a whole list of contracts, keeping their order.  One that cannot be resolved fails the call rather than being dropped: a list quietly shorter than it was asked for is how a program trades something other than what it named.
+
+```python
+def qualify_contracts(contracts)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contracts` | `list` | Contract specification (symbol, secType, exchange, currency, etc.). |
 
 ---
 

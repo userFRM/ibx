@@ -150,7 +150,7 @@ Nothing here is a gap in the code. A wire the venue does not send to this accoun
 | `6040` 141, 154, 175 | Combination position state and leg definitions | Not sent to this account |
 | `6040` 145 | A session-level control message, sibling of the error channel | Not sent to this account |
 | `6040` 188 | A newly added or linked account, and what it may do | The one of these with a consequence: a client managing linked accounts that ignores it does not learn of a new one until it reconnects. This session holds a single account and is sent none |
-| `6040` 119 | Model allocation figures, per account | Answers a request for them, which this client does not send |
+| `6040` 119 | Model allocation figures, per account | Needs an advisor account. It states how an advisor's model is allocated across the accounts under it, and this session holds one account that is not one |
 | `6040` 148 | Which order types and algorithms each venue accepts for each security type | Refuses an order before sending it. This client lets the venue refuse, and reads what it permits at logon |
 | `6040` 212 | Who decided and who executed, for European transaction reporting | Fills those fields on an order ticket. A caller states them itself |
 | `6040` 258 | Which balance panels a front end should show | Nothing to trade on |
