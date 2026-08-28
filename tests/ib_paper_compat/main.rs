@@ -531,6 +531,7 @@ fn query_error_phase_live() {
 
     let conns = historical::phase_query_error_surfaces(conns);
     let conns = historical::phase_corporate_actions_reply(conns);
+    let conns = historical::phase_what_the_gated_wires_answer(conns);
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
 }
@@ -2348,4 +2349,30 @@ fn adjusted_series_and_the_clock_live() {
     }
 
     println!("\n=== done ===");
+}
+
+/// Ask the gated wires on their own. Runs that one phase, because what comes
+/// back is the whole result and the full suite is a long way to read it.
+/// Run: cargo test --test ib_paper_compat gated_wires_phase_live -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn gated_wires_phase_live() {
+    start_logging();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } =
+        Gateway::connect(&config).expect("Gateway::connect() failed");
+    // The phase opens a farm of its own, which needs the session's own
+    // credentials to reach.
+    remember_recovery_auth(&gw, &config);
+    let conns = Conns {
+        farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone(),
+    };
+
+    let conns = historical::phase_what_the_gated_wires_answer(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
 }
