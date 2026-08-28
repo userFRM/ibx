@@ -62,7 +62,7 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Futures option | Verified | Verified | Verified | Available. A lookup must name an expiry: one expiry on the index future returns ten thousand eight hundred and fifty contracts in 11.5s, and every expiry at once does not answer inside the deadline a request is given. An order must state the security type: sent under an id alone the venue answers `Unsupported type` |
 | Index | Verified | Verified | Blocked, the venue supports no order on the contract type | None required |
 | Bond | Verified | Verified | Verified, quantified in face value | Available |
-| Warrant | Verified | Implemented | Blocked, the venue supports no order of this kind on the exchange and security type | None required |
+| Warrant | Verified | Implemented | Blocked, the venue supports no order of this kind on the exchange and security type | The venue lists warrants against seven underlyings this client asked about, so they exist to be reached. A lookup naming an underlying and no more does not answer inside the deadline a request is given, which is the same wall an unfiltered option lookup meets |
 | Combination | Verified | Not applicable | Verified | Available |
 | Crypto and CFD | Verified | Verified | Verified, crypto requires an immediate-or-cancel or minutes instruction | Available |
 | Commodity | Verified | Verified | Verified | Available |
