@@ -1624,9 +1624,14 @@ fn put_the_scan_back_down(hmds: &mut Connection, scan_id: &str) {
 /// "the venue answers this", which is the opposite of the truth and the whole
 /// result of the phase.
 fn keeps_the_session_up(message: &str) -> bool {
+    // Every session-control type the venue sends on its own account, minus the
+    // logout, which `ends_the_session` reports instead. Narrowed to the
+    // heartbeats alone, a sequence reset or a logon would arrive here as an
+    // answer to what the probe sent, and the phase would publish the venue
+    // answering a question it had not.
     matches!(
         message.split('|').find_map(|f| f.strip_prefix("35=")),
-        Some("0" | "1"),
+        Some("0" | "1" | "2" | "4" | "A"),
     )
 }
 
@@ -1700,7 +1705,15 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
         return conns;
     }
     std::thread::sleep(Duration::from_secs(3));
-    let _ = hmds.try_recv();
+    if let Err(e) = hmds.try_recv()
+        && e.kind() != std::io::ErrorKind::WouldBlock
+    {
+        // The subscription is what everything below asks about. If the
+        // connection went while it was being made, nothing after this says
+        // anything about what the venue makes of a suspend.
+        skipped!("  SKIP: the connection went away while subscribing: {e}\n");
+        return conns;
+    }
     let _ = hmds.extract_frames();
     println!("  subscribed scan {scan_id}, so there is one to suspend");
 
