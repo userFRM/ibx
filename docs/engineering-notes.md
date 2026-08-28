@@ -168,10 +168,24 @@ Nothing here is a gap in the code. A wire the venue does not send to this accoun
 | `6040` 188 | A newly added or linked account, and what it may do | The one of these with a consequence: a client managing linked accounts that ignores it does not learn of a new one until it reconnects. This session holds a single account and is sent none |
 | `6040` 119 | Model allocation figures, per account | Needs an advisor account. It states how an advisor's model is allocated across the accounts under it, and this session holds one account that is not one |
 | `6040` 148 | Which order types and algorithms each venue accepts for each security type | Refuses an order before sending it. This client lets the venue refuse, and reads what it permits at logon |
-| `6040` 212 | Who decided and who executed, for European transaction reporting | Fills those fields on an order ticket. A caller states them itself |
+| `6040` 212 | Who decided and who executed, for European transaction reporting | Fills those fields on an order ticket. A caller states them itself, and this client carries all four of them on an order: the decision maker, the algorithm that decided, the executing trader and the algorithm that executed |
+| `6040` 211 | A request for the account's own transaction-reporting configuration, which is what would tell a caller the four values rather than leaving them to state them | Not sent. The request names the account and the firm; what its answer looks like is not established here, and sending a question this client cannot read the answer to buys nothing |
 | `6040` 258 | Which balance panels a front end should show | Nothing to trade on |
 | A midpoint peg stated as two offsets | A peg to the midpoint whose offset is given as a whole-tick part and a half-tick part, rather than as one continuous number. A different order type is sent for it, and only when both parts are set and both sit on the destination's tick boundaries. A caller here states one offset, which is the other form and is sent correctly |
 | `35=2` | Resending missed messages | Never observed in either direction on any of this client's connections. Implementing it would be work against a wire that never fires |
+
+### Order options this client does not carry
+
+The reference API lets nine of its requests carry a list of free-form
+key-and-value options — market data, an order, market depth, historical data, a
+scanner subscription, real-time bars, a news article, historical news and
+historical ticks. The list is not free-form in practice: exactly one key is
+accepted, `manual`, and its value is `0` or `1`.
+
+An order stating any option is refused here rather than sent without it. The
+one key is a statement about how the order came to be placed, and this client
+has not established what carrying it changes on the wire — so it is refused
+where a caller can see it, rather than accepted and dropped where they cannot.
 
 ### Read, or deliberately read past
 
