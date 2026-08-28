@@ -426,6 +426,20 @@ impl ReferenceState {
         self.adjustments.lock().unwrap().get(con_id).cloned()
     }
 
+    /// Forget what a contract's actions were, so the next answer is the next
+    /// answer.
+    ///
+    /// The record is kept against the contract, not against the request that
+    /// asked, because the venue answers per contract. That is right for
+    /// reading it and wrong for waiting on it: a second question about the
+    /// same contract over a different range would be handed the first
+    /// question's answer the moment it looked, having asked for something else
+    /// entirely. Whoever is about to ask clears it first and then waits for an
+    /// answer that can only be theirs.
+    pub fn forget_adjustments(&self, con_id: &str) {
+        self.adjustments.lock().unwrap().remove(con_id);
+    }
+
     #[doc(hidden)] pub fn note_adjustments(
         &self,
         contract: crate::control::adjustments::AdjustedContract,
@@ -1028,5 +1042,43 @@ mod adjustments_store_tests {
         assert_eq!(acts.len(), 1);
         assert!(state.adjustments_for("756733").is_some(), "and still held after reading");
         assert!(state.adjustments_for("999").is_none(), "a contract with none says so");
+    }
+
+
+    /// An answer about a contract is cleared before that contract is asked again.
+    ///
+    /// The record is kept against the contract, so a second question over a
+    /// different range finds the first question's answer waiting. Whoever waits
+    /// on the record must clear it first, or they are handed an answer to a
+    /// question they did not ask — and over a narrower range that is a series
+    /// adjusted by fewer actions than moved it.
+    #[test]
+    fn an_old_answer_is_cleared_before_the_same_contract_is_asked_again() {
+        use crate::control::adjustments::{AdjustedContract, Adjustment, AdjustmentKind};
+        let state = ReferenceState::new();
+        let split = vec![Adjustment {
+            kind: Some(AdjustmentKind::Split),
+            date: "20240610".into(),
+            value: "10".into(),
+            ..Default::default()
+        }];
+        state.note_adjustments(
+            AdjustedContract { con_id: "4815747".into(), ..Default::default() },
+            split,
+        );
+        assert!(state.adjustments_for("4815747").is_some(), "the answer is held");
+
+        state.forget_adjustments("4815747");
+        assert!(
+            state.adjustments_for("4815747").is_none(),
+            "cleared, so the next look can only find the next answer",
+        );
+        // Another contract's answer is untouched by it.
+        state.note_adjustments(
+            AdjustedContract { con_id: "756733".into(), ..Default::default() },
+            Vec::new(),
+        );
+        state.forget_adjustments("4815747");
+        assert!(state.adjustments_for("756733").is_some(), "one contract at a time");
     }
 }

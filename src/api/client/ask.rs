@@ -413,6 +413,10 @@ impl EClient {
         // collector that keeps nothing and the record is watched instead.
         struct Nothing;
         impl Wrapper for Nothing {}
+        // Cleared before asking: the record is kept against the contract, so
+        // an answer to an earlier question about the same one is sitting there
+        // and would be taken for this one's the moment this looked.
+        self.shared.reference.forget_adjustments(&con_id);
         let asked = ask_id(&self.shared);
         self.req_adjustments(
             asked.get(), contract.con_id, &contract.sec_type, &contract.exchange,
