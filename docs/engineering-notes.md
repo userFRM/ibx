@@ -136,6 +136,22 @@ One, and it says what a caller loses by it.
 sent for the same reason: the request is answered once per contract and nothing
 stays open behind it.
 
+### Callbacks the reference API defines and this client does not fire
+
+The reference API names a fixed set of messages a client can be handed. This
+client answers all of them but the two below, which is worth stating plainly
+because a program written against that API and pointed at this one would wait
+on them forever rather than be told they are not coming.
+
+| Callback | What it carries | Why not |
+| --- | --- | --- |
+| `rerouteMktDataReq`, `rerouteMktDepthReq` | A request id, a contract id and a venue: the answer to a market data request is "ask again, for this contract, over there" | The redirection is decided from contract data rather than stated on the wire, and this client has not established what decides it. Sending one on a rule of this client's own invention would send a caller to a contract the venue never named |
+| `config` | A configuration exchange between a front end and its own process | There is no such process here. This client is the thing a front end would have been talking to |
+
+`currentTimeInMillis` was on this list and is not any more: it reads the same
+clock `currentTime` does, at whatever precision the venue stamped, which is the
+whole of what it adds.
+
 ### The account decides these
 
 Nothing here is a gap in the code. A wire the venue does not send to this account, or one an entitlement or an advisor account gates, is answered by what the account holds and not by what is written here. Whether any of them can be asked for is open: see the issue on establishing that, because "not sent" and "never asked" are not the same and this table has not told them apart.
@@ -384,7 +400,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,811 | No |
+| Rust unit and integration | 1,813 | No |
 | Python | 469 | No |
 | Python, live | 135 | Yes |
 | Paper compatibility suite (137 phases) | 34 tests | Yes |
