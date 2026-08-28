@@ -62,13 +62,13 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Futures option | Verified | Verified | Verified | Available. A lookup must name an expiry: one expiry on the index future returns ten thousand eight hundred and fifty contracts in 11.5s, and every expiry at once does not answer inside the deadline a request is given. An order must state the security type: sent under an id alone the venue answers `Unsupported type` |
 | Index | Verified | Verified | Blocked, the venue supports no order on the contract type | None required |
 | Bond | Verified | Verified | Verified, quantified in face value | Available |
-| Warrant | Verified | Implemented | Blocked, the venue supports no order of this kind on the exchange and security type | The venue lists warrants against seven underlyings this client asked about, so they exist to be reached. A lookup naming an underlying and no more does not answer inside the deadline a request is given, which is the same wall an unfiltered option lookup meets |
+| Warrant | Verified | Not reachable from an underlying | Blocked, the venue supports no order of this kind on the exchange and security type | The venue names warrants against seven underlyings asked about, so they exist. Naming one is another matter: a lookup by underlying alone runs past the deadline, the same underlying with an expiry is answered that no such definition exists, and the derivative type the venue itself lists is answered the same way. A warrant is its own instrument under its own name, and nothing here turns an underlying into one |
 | Combination | Verified | Not applicable | Verified | Available |
 | Crypto and CFD | Verified | Verified | Verified, crypto requires an immediate-or-cancel or minutes instruction | Available |
 | Commodity | Verified | Verified | Verified | Available |
-| Bill | Verified | Implemented | Verified | Available |
+| Bill | Verified | Not reachable on this account | Verified | Available. The venue's own symbol search returns no instrument of this type against any pattern asked, and a lookup naming one directly is answered that no such definition exists |
 | Fund | Verified | Verified | Blocked, quantified in cash and then refused for residency, which is a property of the account | None required |
-| Forward | Implemented | Implemented | Absent, the session states no permission for the type | None required |
+| Forward | Not reachable on this account | Not reachable on this account | Absent, the session states no permission for the type | None required. The venue's own symbol search returns no instrument of this type, which is of a piece with the session stating no permission for it |
 | Venues outside the United States | Verified | Verified | Verified | Available |
 
 ## Release policy
