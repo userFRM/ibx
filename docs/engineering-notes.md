@@ -59,7 +59,7 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Equity option | Verified | Verified | Verified | Available |
 | Forex | Verified | Verified | Verified | Available |
 | Future | Verified | Verified | Verified | Available |
-| Futures option | Verified | Implemented | Implemented | Not yet verified |
+| Futures option | Verified | Verified | Verified | Available. A lookup must name an expiry: one expiry on the index future returns ten thousand eight hundred and fifty contracts in 11.5s, and every expiry at once does not answer inside the deadline a request is given. An order must state the security type: sent under an id alone the venue answers `Unsupported type` |
 | Index | Verified | Verified | Blocked, the venue supports no order on the contract type | None required |
 | Bond | Verified | Verified | Verified, quantified in face value | Available |
 | Warrant | Verified | Implemented | Blocked, the venue supports no order of this kind on the exchange and security type | None required |
@@ -98,7 +98,7 @@ asks what arrived unread.
 | Market data connection | Every type read. A venue refusing to show its book now reaches the caller that asked |
 | Historical connection | Records anything it does not read |
 | The venue's fourth connection | Not needed. It carries a topic-keyed message bus for news search, notifications and window layouts, and no contract or reference data |
-| Host redirection, before any session exists | Implemented. The venue can retarget this client to another host and it follows |
+| Host redirection, before any session exists | Verified. The venue retargets this client to another host and it follows: seventy-eight redirections across live sessions on 2026-08-28, each one reconnecting and going on to log on |
 
 The messages this client reads are published in the wire coverage reference,
 taken from its own dispatch tables.
