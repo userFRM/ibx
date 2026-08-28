@@ -473,8 +473,9 @@ def parse_rust_methods(path: Path) -> list[dict]:
         doc = re.sub(r"\s*Matches `[^`]+` in C\+\+\.?", "", doc)
         doc = plain_intra_doc_links(doc)
 
-        # Parse return type
-        ret_m = re.search(r'->\s*(.+)', ret_str)
+        # Parse return type. A signature wide enough to wrap carries its return
+        # across lines, so read it as one before looking for the arrow.
+        ret_m = re.search(r'->\s*(.+)', re.sub(r'\s+', ' ', ret_str))
         ret_type = ret_m.group(1).strip() if ret_m else ""
 
         # Parse parameters

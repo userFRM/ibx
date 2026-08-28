@@ -46,6 +46,7 @@ mod stubs;
 mod tests;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use crate::control::adjustments::{AdjustedContract, Adjustment};
 use crate::error_codes::Refusal;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -632,7 +633,7 @@ impl EClient {
     /// it saying so, which is a wrong number rather than a missing one.
     ///
     /// This is what a caller adjusts with.
-    /// [`scale_before`](crate::control::adjustments::scale_before) turns a date
+    /// [`scale_before`](crate::scale_before) turns a date
     /// and these actions into the factor a price from that date carries, so a
     /// caller can put a series on one scale. Splits are what it applies: the
     /// ratio is the value the action states, established against a contract
@@ -643,10 +644,7 @@ impl EClient {
     ///
     /// Empty until the venue has stated them for the contract, which it does
     /// once per contract on a historical request.
-    pub fn adjustments(&self, con_id: &str)
-        -> Option<(crate::control::adjustments::AdjustedContract,
-                   Vec<crate::control::adjustments::Adjustment>)>
-    {
+    pub fn adjustments(&self, con_id: &str) -> Option<(AdjustedContract, Vec<Adjustment>)> {
         self.shared.reference.adjustments_for(con_id)
     }
 
