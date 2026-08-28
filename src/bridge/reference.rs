@@ -13,6 +13,18 @@ use crate::control::contracts::MarketRule;
 use crate::types::*;
 use crate::types::model as api;
 
+/// A contract's corporate actions as the venue stated them, and the request its
+/// answer belongs to.
+///
+/// The request is kept because the venue answers per contract: without it, an
+/// answer to a question already given up on is indistinguishable from an answer
+/// to the question being asked now.
+type StatedActions = (
+    crate::control::adjustments::AdjustedContract,
+    Vec<crate::control::adjustments::Adjustment>,
+    u32,
+);
+
 /// Historical data, contract definitions, scanners, news archives, market rules,
 /// contract cache.
 pub struct ReferenceState {
@@ -53,7 +65,7 @@ pub struct ReferenceState {
     /// Keyed by the contract and not by a request, because that is how the
     /// venue sends them: the reply names the contract it is about, and one
     /// arrives per contract rather than per question asked.
-    adjustments: Mutex<std::collections::HashMap<String, (crate::control::adjustments::AdjustedContract, Vec<crate::control::adjustments::Adjustment>)>>,
+    adjustments: Mutex<std::collections::HashMap<String, StatedActions>>,
     /// Errors surfaced by HMDS for in-flight reference queries (req_id, code, message).
     /// Drained by the dispatcher and forwarded to `Wrapper::error`.
     historical_errors: Mutex<Vec<(u32, i32, String)>>,
@@ -423,7 +435,23 @@ impl ReferenceState {
     pub fn adjustments_for(&self, con_id: &str)
         -> Option<(crate::control::adjustments::AdjustedContract, Vec<crate::control::adjustments::Adjustment>)>
     {
-        self.adjustments.lock().unwrap().get(con_id).cloned()
+        self.adjustments.lock().unwrap().get(con_id).map(|(c, a, _)| (c.clone(), a.clone()))
+    }
+
+    /// The actions filed for a contract, but only if they answer this request.
+    ///
+    /// A caller that gave up waiting leaves its question outstanding, and the
+    /// answer can still arrive and be filed afterwards. Filed against the
+    /// contract, that late answer is sitting there for the next question about
+    /// the same contract to find — over a different range, which is a series
+    /// adjusted by actions nobody asked about. The request each answer belongs
+    /// to is kept beside it, so a caller can tell its own from someone else's.
+    pub fn adjustments_answering(&self, con_id: &str, req_id: u32)
+        -> Option<Vec<crate::control::adjustments::Adjustment>>
+    {
+        self.adjustments.lock().unwrap().get(con_id)
+            .filter(|(_, _, answered)| *answered == req_id)
+            .map(|(_, a, _)| a.clone())
     }
 
     /// Forget what a contract's actions were, so the next answer is the next
@@ -444,11 +472,13 @@ impl ReferenceState {
         &self,
         contract: crate::control::adjustments::AdjustedContract,
         actions: Vec<crate::control::adjustments::Adjustment>,
+        answering: u32,
     ) {
         if contract.con_id.is_empty() {
             return;
         }
-        self.adjustments.lock().unwrap().insert(contract.con_id.clone(), (contract, actions));
+        self.adjustments.lock().unwrap()
+            .insert(contract.con_id.clone(), (contract, actions, answering));
     }
 
     /// Take the historical schedule answering one request, leaving the rest.
@@ -1035,7 +1065,7 @@ mod adjustments_store_tests {
         let answered = "conc\n756733,-1,-1\nconexch\n756733,AMEX,20090223\nCD\n\
 20240315,1.594937,USD,20240314,20240318,20240430,R,NA\n";
         let (contract, actions) = crate::control::adjustments::parse_adjustments(answered);
-        state.note_adjustments(contract, actions);
+        state.note_adjustments(contract, actions, 1);
 
         let (held, acts) = state.adjustments_for("756733").expect("held against its contract");
         assert_eq!(held.exchange, "AMEX");
@@ -1064,7 +1094,7 @@ mod adjustments_store_tests {
         }];
         state.note_adjustments(
             AdjustedContract { con_id: "4815747".into(), ..Default::default() },
-            split,
+            split, 1,
         );
         assert!(state.adjustments_for("4815747").is_some(), "the answer is held");
 
@@ -1076,9 +1106,47 @@ mod adjustments_store_tests {
         // Another contract's answer is untouched by it.
         state.note_adjustments(
             AdjustedContract { con_id: "756733".into(), ..Default::default() },
-            Vec::new(),
+            Vec::new(), 1,
         );
         state.forget_adjustments("4815747");
         assert!(state.adjustments_for("756733").is_some(), "one contract at a time");
+    }
+
+
+    /// A late answer to a question already given up on is not the next one's.
+    ///
+    /// Clearing the record before asking is not enough on its own. A caller
+    /// that waited and gave up leaves its question outstanding, and the answer
+    /// can still arrive afterwards and be filed — sitting there for the next
+    /// question about the same contract to pick up, over a range it never asked
+    /// about. What each answer belongs to is kept beside it, so the next caller
+    /// can see that this one is not theirs.
+    #[test]
+    fn a_late_answer_belongs_to_the_question_that_asked_it() {
+        use crate::control::adjustments::{AdjustedContract, Adjustment, AdjustmentKind};
+        let state = ReferenceState::new();
+        let split = vec![Adjustment {
+            kind: Some(AdjustmentKind::Split),
+            date: "20240610".into(),
+            value: "10".into(),
+            ..Default::default()
+        }];
+        // The first question is given up on; its answer arrives anyway.
+        state.note_adjustments(
+            AdjustedContract { con_id: "4815747".into(), ..Default::default() },
+            split, 7,
+        );
+        // The second question, over some other range, must not take it.
+        assert!(
+            state.adjustments_answering("4815747", 8).is_none(),
+            "an answer to request 7 is not the answer to request 8",
+        );
+        assert!(
+            state.adjustments_answering("4815747", 7).is_some(),
+            "and it is still the answer to the one that did ask it",
+        );
+        // The plain reader is unchanged: it states what is known about the
+        // contract, which is a different question from whose answer it is.
+        assert!(state.adjustments_for("4815747").is_some());
     }
 }

@@ -23,12 +23,12 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 
 | Measure | Count |
 | --- | --- |
-| Canonical calls | 77 |
-| Served, Rust | 75 |
-| Served, Python | 75 |
+| Canonical calls | 78 |
+| Served, Rust | 76 |
+| Served, Python | 76 |
 | Accepted and not served, Rust | 2 |
 | Accepted and not served, Python | 2 |
-| Canonical callbacks | 81 |
+| Canonical callbacks | 82 |
 | Calls where the two surfaces differ | 0 |
 | Callbacks where the two surfaces differ | 0 |
 
@@ -163,7 +163,7 @@ here.
 
 Nothing here is a gap in the code. A wire the venue does not send to this account, or one an entitlement or an advisor account gates, is answered by what the account holds and not by what is written here.
 
-Whether any of them can be asked for was open for as long as this table existed, because "not sent" and "never asked" are not the same. The scanner pair has since been asked properly — a scan subscribed, then suspended and resumed by its own id — and is recorded below as what that returned. The rest are subtypes the venue sends rather than requests a caller makes, so there is nothing to ask; a caller provokes them or does not.
+Whether any of them can be asked for was open for as long as this table existed, because "not sent" and "never asked" are not the same. The scanner pair has since been asked properly — a scan subscribed, then suspended and resumed by its own id — and is recorded below as what that returned. Most of the rest are subtypes the venue sends rather than requests a caller makes, so there is nothing to ask: a caller provokes them or does not. Two in the table are requests and are unasked by choice rather than by nature. A request for quote is a message to the people who would quote it rather than a question about this account, and the transaction-reporting configuration names a firm this session has no value for, so asking it would establish that a field was wrong rather than whether the request is reachable.
 
 | Wire | What it carries | Why |
 | --- | --- | --- |
@@ -423,8 +423,8 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,816 | No |
-| Python | 469 | No |
+| Rust unit and integration | 1,820 | No |
+| Python | 470 | No |
 | Python, live | 135 | Yes |
 | Paper compatibility suite (138 phases) | 36 tests | Yes |
 

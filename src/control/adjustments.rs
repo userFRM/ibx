@@ -66,13 +66,18 @@ impl AdjustmentKind {
     /// reciprocal of one, so it is inverted here and every other kind is taken
     /// as it stands.
     pub fn factor(self, value: f64) -> Option<f64> {
-        if value <= 0.0 {
+        // Finite first, because every comparison with a NaN is false: tested
+        // only for being positive, a NaN passes as a factor and every price it
+        // touches becomes one, which is a series of holes handed back as an
+        // adjusted one.
+        if !value.is_finite() || value <= 0.0 {
             return None;
         }
-        Some(match self {
+        let factor = match self {
             Self::SpinOff => 1.0 / value,
             _ => value,
-        })
+        };
+        factor.is_finite().then_some(factor).filter(|f| *f > 0.0)
     }
 }
 
@@ -156,6 +161,18 @@ pub struct AdjustedContract {
     pub symbol: String,
     /// Which venue.
     pub exchange: String,
+}
+
+/// The query id the venue echoes back on a reply.
+///
+/// A reply names the contract it is about, which is enough to file it and not
+/// enough to know whose question it answers. Two questions about one contract
+/// over different ranges are answered by two replies that name the same
+/// contract, so the id the venue echoes is what tells them apart. Without it a
+/// late answer to the first satisfies the second, and a series comes back
+/// adjusted by the actions of a range nobody asked for.
+pub fn parse_response_query_id(xml: &str) -> Option<String> {
+    crate::control::xml::tag(xml, "id").map(|s| s.to_string())
 }
 
 /// Every corporate action in a reply, and the contract they belong to.
@@ -250,19 +267,42 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
 /// by what this returns rather than dividing. [`scale_volume_before`] states
 /// that, so neither caller has to remember which way round it goes.
 pub fn scale_before(date: &str, actions: &[Adjustment]) -> f64 {
-    let mut factor = 1.0;
+    scale_before_stated(date, actions).unwrap_or(1.0)
+}
+
+/// What [`scale_before`] returns, or what stopped it stating one.
+///
+/// An action that moves the scale and does not say by how much is the case
+/// this exists for. Skipping it leaves the price it should have moved exactly
+/// as the venue served it, and a caller who asked for an adjusted series is
+/// handed a raw one with nothing saying so — which is the wrong number this
+/// whole module exists to remove, reintroduced by the one action it could not
+/// read. Said out loud instead.
+pub fn scale_before_stated(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
+    let mut factor: f64 = 1.0;
     for a in actions {
         let Some(kind) = a.kind else { continue };
         if !kind.moves_the_scale() || a.date.as_str() <= date {
             continue;
         }
-        if let Ok(value) = a.value.parse::<f64>()
-            && let Some(f) = kind.factor(value)
-        {
-            factor /= f;
+        let stated = a.value.parse::<f64>().ok().and_then(|v| kind.factor(v));
+        let Some(f) = stated else {
+            return Err(format!(
+                "the {} of {} states {:?}, which is not a factor a price can be put on \
+                 the scale of. Adjusting around it would hand back the price the venue \
+                 served under the name of an adjusted one",
+                kind.code(), a.date, a.value,
+            ));
+        };
+        factor /= f;
+        if !factor.is_finite() || factor <= 0.0 {
+            return Err(format!(
+                "the actions up to {} multiply out to a scale no price survives, which \
+                 is not a series anyone can be handed", a.date,
+            ));
         }
     }
-    factor
+    Ok(factor)
 }
 
 /// What a volume before `date` must be multiplied by to count on the same scale
@@ -273,6 +313,18 @@ pub fn scale_before(date: &str, actions: &[Adjustment]) -> f64 {
 pub fn scale_volume_before(date: &str, actions: &[Adjustment]) -> f64 {
     1.0 / scale_before(date, actions)
 }
+
+/// What [`scale_volume_before`] returns, or what stopped it stating one.
+pub fn scale_volume_before_stated(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
+    scale_before_stated(date, actions).map(|f| 1.0 / f)
+}
+
+/// The largest count that survives a trip through a float unchanged.
+///
+/// Two to the fifty-third. Past it the conversion starts rounding, and a volume
+/// that comes back one short of what the venue said is a wrong number wearing
+/// the shape of a right one.
+const EXACT_IN_A_FLOAT: u64 = 1 << 53;
 
 /// The day a bar is dated, as an action states its own.
 ///
@@ -315,13 +367,38 @@ pub fn scale_bars(
                      putting it on one scale would be guesswork", b.date,
                 ));
             };
-            let price = scale_before(&day, actions);
+            let price = scale_before_stated(&day, actions)?;
             b.open *= price;
             b.high *= price;
             b.low *= price;
             b.close *= price;
             b.wap *= price;
-            b.volume = (b.volume as f64 * scale_volume_before(&day, actions)).round() as i64;
+            // Volume is a count, and a count that does not survive the trip
+            // through a float is not reported as though it had. Left as it was
+            // where nothing moved it, so an unadjusted series is bit for bit
+            // what the venue served.
+            let volume = scale_volume_before_stated(&day, actions)?;
+            if volume != 1.0 {
+                // Checked before the conversion as well as after. A count past
+                // what a float holds exactly loses bits on the way in, and a
+                // factor that then brings it back under the limit hides that:
+                // the answer passes the test on the way out having already been
+                // rounded on the way in.
+                if b.volume.unsigned_abs() > EXACT_IN_A_FLOAT {
+                    return Err(format!(
+                        "the bar dated {} states a volume of {}, which is more than a \
+                         scale can be applied to without changing it", b.date, b.volume,
+                    ));
+                }
+                let scaled = b.volume as f64 * volume;
+                if !scaled.is_finite() || scaled.abs() > EXACT_IN_A_FLOAT as f64 {
+                    return Err(format!(
+                        "the volume of the bar dated {} does not survive being put on one \
+                         scale, and a count nobody can state is not one to hand back", b.date,
+                    ));
+                }
+                b.volume = scaled.round() as i64;
+            }
             Ok(b)
         })
         .collect()
@@ -535,5 +612,57 @@ mod tests {
         }];
         let epoch = BarData { date: "1717718400".into(), close: 1208.88, ..Default::default() };
         assert!(scale_bars(vec![epoch], &split).is_err());
+    }
+
+
+    /// A moving action nobody can read a factor from stops the series.
+    ///
+    /// Skipping it is the failure this module exists to prevent, arriving by
+    /// the other door: the price it should have moved is handed back exactly as
+    /// the venue served it, under the name of an adjusted one. A split with no
+    /// value, or a value that is not a number, or one that multiplies out to
+    /// nothing, is said out loud instead.
+    #[test]
+    fn a_factor_nobody_can_read_is_stated_rather_than_skipped() {
+        use crate::types::model::BarData;
+        let bar = BarData { date: "20240607".into(), close: 1208.88, volume: 100, ..Default::default() };
+        for unreadable in ["", "nan", "0", "-10", "inf", "banana"] {
+            let split = vec![Adjustment {
+                kind: Some(AdjustmentKind::Split),
+                date: "20240610".into(),
+                value: unreadable.into(),
+                ..Default::default()
+            }];
+            assert!(
+                scale_bars(vec![bar.clone()], &split).is_err(),
+                "a split stating {unreadable:?} must not pass as an adjusted series",
+            );
+        }
+        // A NaN is the one that gets through a `value <= 0.0` test, because
+        // every comparison with it is false.
+        assert_eq!(AdjustmentKind::Split.factor(f64::NAN), None);
+        assert_eq!(AdjustmentKind::Split.factor(f64::INFINITY), None);
+        assert_eq!(AdjustmentKind::SpinOff.factor(f64::NAN), None);
+    }
+
+    /// An action that does not move the scale is not read for a factor at all.
+    ///
+    /// A cash dividend states an amount of money, which is not a factor and
+    /// never was. Reading one would refuse the series over a number that was
+    /// never going to be used.
+    #[test]
+    fn a_dividend_that_states_no_factor_is_not_an_error() {
+        use crate::types::model::BarData;
+        let bar = BarData { date: "20240607".into(), close: 100.0, volume: 5, ..Default::default() };
+        let dividend = vec![Adjustment {
+            kind: Some(AdjustmentKind::CashDividend),
+            date: "20240610".into(),
+            value: "0.04".into(),
+            currency: "USD".into(),
+            ..Default::default()
+        }];
+        let out = scale_bars(vec![bar], &dividend).expect("a dividend moves nothing");
+        assert_eq!(out[0].close, 100.0);
+        assert_eq!(out[0].volume, 5, "and the count is what the venue served, exactly");
     }
 }
