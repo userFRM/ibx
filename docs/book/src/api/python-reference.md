@@ -951,6 +951,23 @@ def req_historical_news(req_id, con_id, provider_codes, start_date_time, end_dat
 
 ---
 
+#### `req_adjustments`
+
+```python
+def req_adjustments(req_id, con_id, sec_type, exchange, start_date, end_date)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `int` | Request identifier. Used to match responses to requests. |
+| `con_id` | `int` | Contract ID. Unique per instrument. |
+| `sec_type` | `str` |  |
+| `exchange` | `str` | Exchange name. |
+| `start_date` | `str` |  |
+| `end_date` | `str` |  |
+
+---
+
 #### `req_fundamental_data`
 
 ```python

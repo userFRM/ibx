@@ -298,6 +298,35 @@ impl EClient {
         Ok(())
     }
 
+
+    /// Ask for a contract's corporate actions over a range of days.
+    ///
+    /// The venue answers per contract, not per request, so the answer is filed
+    /// against the contract it names. `corporate_actions` asks and waits in one
+    /// call; this is the request on its own.
+    #[pyo3(signature = (req_id, con_id, sec_type, exchange, start_date, end_date))]
+    pub(crate) fn req_adjustments(
+        &self,
+        py: Python<'_>,
+        req_id: i64,
+        con_id: i64,
+        sec_type: &str,
+        exchange: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> PyResult<()> {
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        Self::send_control(py, &tx, ControlCommand::FetchAdjustments {
+            req_id: wire_req_id(req_id)?,
+            con_id: super::wire_u32("con_id", con_id)?,
+            sec_type: sec_type.to_string(),
+            exchange: exchange.to_string(),
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        })?;
+        Ok(())
+    }
+
     /// Request fundamental data.
     ///
     /// `fundamental_data_options` is taken and not applied. This protocol's

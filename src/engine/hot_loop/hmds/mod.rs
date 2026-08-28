@@ -1552,6 +1552,40 @@ fn build_tbt_query(
         self.pending_news.push((query_id, req_id));
     }
 
+    /// Ask the historical farm for a contract's corporate actions.
+    ///
+    /// No pending entry is kept for it: the reply names the contract it is for
+    /// and is filed against that, so an answer is matched by what it says
+    /// rather than by the order the requests went out in.
+    pub(crate) fn send_adjustments_request(
+        &mut self, req_id: u32, con_id: u32, sec_type: &str, exchange: &str,
+        start_date: &str, end_date: &str,
+        hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState,
+    ) {
+        let xml = crate::control::adjustments::build_adjustments_request_xml(
+            &crate::control::adjustments::AdjustmentRequest {
+                query_id: format!("adj_{}", self.next_hmds_query_id),
+                con_id,
+                sec_type: sec_type.to_string(),
+                exchange: exchange.to_string(),
+                start_date: start_date.to_string(),
+                end_date: end_date.to_string(),
+            },
+        );
+        self.next_hmds_query_id += 1;
+        if let Some(conn) = hmds_conn.as_mut() {
+            let ts = chrono_free_timestamp();
+            let _ = conn.send_fix(&[
+                (fix::TAG_MSG_TYPE, "U"),
+                (fix::TAG_SENDING_TIME, &ts),
+                (6040, "10020"),
+                (6118, &xml),
+            ]);
+            hb.last_hmds_sent = Instant::now();
+            log::info!("Sent corporate actions request: req_id={req_id} con_id={con_id}");
+        }
+    }
+
     pub(crate) fn send_news_article_request(&mut self, req_id: u32, provider_code: &str, article_id: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let query_id = format!("art_{}", self.next_hmds_query_id);
         let req = crate::control::news::NewsArticleRequest {

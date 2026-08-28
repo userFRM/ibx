@@ -44,23 +44,22 @@ impl BarDataType {
             "BID" => Self::Bid,
             "ASK" => Self::Ask,
             "BID_ASK" => Self::BidAsk,
-            // Refused rather than asked for. The reference client answers
-            // this by asking for what traded and applying the splits and
-            // dividends itself, from a feed of corporate actions it keeps and
-            // this client does not read. Asked for by name instead, the venue
-            // answers "no historical market data ... NoType" and nothing
-            // comes back — so every caller that asked for an adjusted series
-            // got silence. Better to say why than to answer trade bars under
-            // the name of adjusted ones.
+            // Not a name the venue answers to. Asked for it by name the venue
+            // states it has no such data, and what it does serve is raw. An
+            // adjusted series is built from those raw trades and the
+            // contract's own actions, which means holding both before a bar
+            // can be handed over — and this call answers on a callback, one
+            // bar at a time, with the actions possibly still in flight.
+            // `EClient::historical_data` waits, so it can hold both and does
+            // serve this. Refused here rather than answered with trade bars
+            // under an adjusted name.
             "ADJUSTED_LAST" => return Err(
-                "the venue states no adjusted series to ask for: asked for one by name it \
-                 answers that it has no such data, and the trades it does serve are raw. \
-                 Ask for TRADES and put them on one scale with the contract's own actions, \
-                 which this client reads and hands back: `EClient::adjustments` states them \
-                 and `control::adjustments::scale_before` turns a date and them into the \
-                 factor a price from that date carries. Splits are applied by it; dividends \
-                 are stated and not applied, because how much of one comes off a historical \
-                 price is not established here"
+                "an adjusted series is built from the raw trades and the contract's own \
+                 actions, and a call that answers bar by bar on a callback cannot hold \
+                 both. Ask `EClient::historical_data` for ADJUSTED_LAST, which waits and \
+                 does. To do it by hand, ask here for TRADES and put them on one scale \
+                 with `EClient::corporate_actions` and \
+                 `control::adjustments::scale_bars`"
                     .to_string(),
             ),
             "HISTORICAL_VOLATILITY" => Self::HistoricalVolatility,

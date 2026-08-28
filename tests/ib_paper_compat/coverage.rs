@@ -29,6 +29,7 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
     "CancelScanner",
     "FetchHistoricalNews",
     "FetchNewsArticle",
+    "FetchAdjustments",
     "FetchFundamentalData",
     "CancelFundamentalData",
     "FetchHistogramData",

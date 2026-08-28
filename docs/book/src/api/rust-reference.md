@@ -1369,6 +1369,27 @@ pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &st
 
 ---
 
+#### `req_adjustments`
+
+Ask for a contract's corporate actions over a range of days. The answer is filed against the contract it names rather than handed to a callback under this id, because the venue answers per contract: `EClient::adjustments` reads it once it has arrived, and `corporate_actions` asks and waits in one call. `start_date` and `end_date` are days, as `YYYYMMDD`.
+
+```rust
+pub fn req_adjustments( &self, req_id: i64, con_id: i64, sec_type: &str, exchange: &str, start_date: &str, end_date: &str, ) -> Result<(), Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `con_id` | `i64` | Contract ID. Unique per instrument. |
+| `sec_type` | `&str` |  |
+| `exchange` | `&str` | Exchange name. |
+| `start_date` | `&str` |  |
+| `end_date` | `&str` |  |
+
+**Returns:** `Result<(), Refusal>`
+
+---
+
 #### `req_fundamental_data`
 
 Request fundamental data. Three reports, which are the three the venue states: `ReportSnapshot`, `RESC` for what analysts expect, and `CalendarReport` for what the issuer has coming. The contract is named by its venue id and nothing else of it is carried, so pass one that has an id: from `qualify_contract`, or from any contract-details answer. A description is refused rather than sent as a request about contract zero.

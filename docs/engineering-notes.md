@@ -126,12 +126,15 @@ vanish.
 
 ### Not built
 
-Two, and each says what a caller loses by it.
+One, and it says what a caller loses by it.
 
 | Wire | What it carries | Why |
 | --- | --- | --- |
-| `6040` 10020, 10021 | Contract adjustments, for splits and dividends | Not yet built. Historical prices are unadjusted without it |
-| `6040` 10031 | Cancelling a news subscription | Not yet built. Historical news is answered once, so there is nothing outstanding for a caller to withdraw |
+| `6040` 10031 | Cancelling a news subscription | Not built. Historical news is answered once, so there is nothing outstanding for a caller to withdraw |
+
+`6040` 10021, the cancel that pairs with the corporate-actions request, is not
+sent for the same reason: the request is answered once per contract and nothing
+stays open behind it.
 
 ### The account decides these
 
@@ -381,7 +384,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,806 | No |
+| Rust unit and integration | 1,811 | No |
 | Python | 469 | No |
 | Python, live | 135 | Yes |
 | Paper compatibility suite (137 phases) | 34 tests | Yes |
