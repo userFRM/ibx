@@ -202,9 +202,62 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
     (contract, out)
 }
 
+/// What a price before `date` must be multiplied by to sit on the same scale
+/// as prices after every action in `actions`.
+///
+/// A split is the only action here that moves the scale, and its value is the
+/// ratio: a share split ten for one states ten, and a price from before that
+/// day is a tenth of what it reads once the split has happened. Established
+/// against a contract that split ten for one on a stated day, where the close
+/// before it was 1208.88 and the close after was 121.79: dividing the first by
+/// the stated ten gives 120.89, which is the same scale as the second.
+///
+/// A dividend does not move the scale. It is a payment out of the price rather
+/// than a restatement of it, and how much of one to take off a historical
+/// price is a convention this client has not established, so it takes none:
+/// a number nobody can check is worse than one nobody applied.
+pub fn scale_before(date: &str, actions: &[Adjustment]) -> f64 {
+    let mut factor = 1.0;
+    for a in actions {
+        if a.kind != Some(AdjustmentKind::Split) || a.date.as_str() <= date {
+            continue;
+        }
+        if let Ok(ratio) = a.value.parse::<f64>()
+            && ratio > 0.0
+        {
+            factor /= ratio;
+        }
+    }
+    factor
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A price from before a split reads on the scale after it.
+    ///
+    /// The venue stated a ten-for-one split on a day, and a bar series across
+    /// that day closed at 1208.88 the session before and 121.79 the session
+    /// after: a tenfold step with nothing in the series saying so. Scaled by
+    /// what the split states, the earlier close reads 120.89, which is the
+    /// later one's scale. That is the whole of what an adjusted series is, and
+    /// both numbers are ones a session was answered with.
+    #[test]
+    fn a_price_from_before_a_split_reads_on_the_scale_after_it() {
+        let answered = "conc\n4815747,-1,-1\n\
+                        CD\n20240305,0.04,USD,20240221,20240306,20240327,R,NA\n\
+                        SS\n20240610,10,,20240522\n";
+        let (_, actions) = parse_adjustments(answered);
+        let before = 1208.88 * scale_before("20240607", &actions);
+        assert!((before - 120.888).abs() < 0.001, "scaled to {before}, not 120.888");
+        let after = 121.79 * scale_before("20240611", &actions);
+        assert!((after - 121.79).abs() < 0.001, "a price after the split is unmoved");
+        assert!(
+            (before - 121.79).abs() / 121.79 < 0.01,
+            "and the sessions either side sit within a day's move of each other",
+        );
+    }
 
     #[test]
     fn a_request_names_the_contract_and_the_range() {
