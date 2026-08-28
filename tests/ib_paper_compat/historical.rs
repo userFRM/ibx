@@ -1806,3 +1806,163 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
     println!();
     conns
 }
+
+/// Ask for the account's transaction-reporting configuration, and report what
+/// comes back.
+///
+/// The four fields it would state are already carried on an order, and a caller
+/// states them itself. The request that would state them instead was on the
+/// unsent list because what its answer looks like is not established here — and
+/// that stays true until something asks. This asks.
+///
+/// Nothing is asserted. What the venue makes of it is the venue's business: an
+/// answer establishes a shape nobody here has seen, a refusal names why the
+/// account cannot have it, and silence says the request as built reaches
+/// nothing. All three are worth more than the row that said it had never been
+/// tried.
+///
+/// The firm is left empty. This session has no value for it, and putting a made
+/// up one in would establish that a wrong field is refused rather than whether
+/// the request is reachable.
+pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
+    phase!("--- Phase 189: what asking for the reporting configuration answers ---");
+
+    /// The id this request goes out under, and the only thing that marks a
+    /// reply as answering it.
+    const ASKED_UNDER: &str = "mifid_1";
+
+    let account = conns.account_id.clone();
+    let mut unrelated = 0usize;
+    let ts = now_ib_timestamp();
+    // The firm is stated empty rather than made up. A session asking without it
+    // at all was told the field must be there, which says the venue reads this
+    // request and wants that field; sending it empty asks the next question,
+    // whether it is the field's presence or its content that is required.
+    if let Err(e) = conns.ccp.send_fix(&[
+        (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
+        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+        (6040, "211"),
+        (6556, ASKED_UNDER),
+        (1, &account),
+        (8234, ""),
+    ]) {
+        skipped!("  SKIP: the request could not be sent: {e}\n");
+        return conns;
+    }
+    println!("  asked for account {}", redacted(&account));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut answered: Vec<String> = Vec::new();
+    while Instant::now() < deadline && answered.is_empty() {
+        if let Err(e) = conns.ccp.try_recv()
+            && e.kind() != std::io::ErrorKind::WouldBlock
+        {
+            skipped!("  SKIP: the connection went away while waiting: {e}\n");
+            return conns;
+        }
+        for frame in conns.ccp.extract_frames() {
+            for m in messages_in(&mut conns.ccp, &frame) {
+                let text = String::from_utf8_lossy(&m).replace('\x01', "|");
+                // Only what names this request counts. The venue sends its own
+                // traffic on its own schedule — its clock arrived inside the
+                // window the first time this ran — and anything that happens to
+                // land here is not an answer to what was sent. Either the id
+                // comes back or nothing did.
+                if text.contains(ASKED_UNDER) {
+                    answered.push(text);
+                } else if !keeps_the_session_up(&text) {
+                    unrelated += 1;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    if answered.is_empty() {
+        println!(
+            "  nothing naming {ASKED_UNDER} in 10s, with {unrelated} other message(s) \
+             arriving meanwhile. The request reaches the venue and is answered with \
+             neither a shape nor a reason, so what it would state stays unestablished\n"
+        );
+    } else {
+        for msg in answered.iter().take(3) {
+            let shown: String = msg.chars().take(500).collect();
+            println!("  answered: {shown}");
+        }
+        println!();
+    }
+    conns
+}
+
+/// Ask the venue for a quote, and report what it makes of the request.
+///
+/// This is the one wire on the unsent list that is a message to other people
+/// rather than a question about this account: a request for quote goes to whoever
+/// would quote it. It is sent here on a paper session, where the people who would
+/// quote it are the venue's own simulation, and it asks for a quote rather than
+/// placing anything — nothing here can fill.
+///
+/// Nothing is asserted. The row said instruments that accept one are not held by
+/// this account, which was a statement about the account made without asking. A
+/// reply naming the request settles that it is reachable; a rejection names what
+/// the venue wants instead; silence says the request as built reaches nothing.
+pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
+    phase!("--- Phase 190: what a request for quote answers ---");
+
+    /// The id this request goes out under, and the only thing that marks a
+    /// reply as answering it.
+    const ASKED_UNDER: &str = "rfq_1";
+
+    let ts = now_ib_timestamp();
+    if let Err(e) = conns.ccp.send_fix(&[
+        (ibx::protocol::fix::TAG_MSG_TYPE, "R"),
+        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+        // The standard field for the id a quote request is answered under.
+        (131, ASKED_UNDER),
+        (ibx::control::contracts::TAG_SYMBOL, "SPY"),
+        (ibx::control::contracts::TAG_SECURITY_TYPE, "STK"),
+        (ibx::control::contracts::TAG_EXCHANGE, "SMART"),
+        (ibx::control::contracts::TAG_CURRENCY, "USD"),
+    ]) {
+        skipped!("  SKIP: the request could not be sent: {e}\n");
+        return conns;
+    }
+    println!("  asked under {ASKED_UNDER} for a stock every session here can see");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut answered: Vec<String> = Vec::new();
+    let mut unrelated = 0usize;
+    while Instant::now() < deadline && answered.is_empty() {
+        if let Err(e) = conns.ccp.try_recv()
+            && e.kind() != std::io::ErrorKind::WouldBlock
+        {
+            skipped!("  SKIP: the connection went away while waiting: {e}\n");
+            return conns;
+        }
+        for frame in conns.ccp.extract_frames() {
+            for m in messages_in(&mut conns.ccp, &frame) {
+                let text = String::from_utf8_lossy(&m).replace('\x01', "|");
+                if text.contains(ASKED_UNDER) {
+                    answered.push(text);
+                } else if !keeps_the_session_up(&text) {
+                    unrelated += 1;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    if answered.is_empty() {
+        println!(
+            "  nothing naming {ASKED_UNDER} in 10s, with {unrelated} other message(s) \
+             arriving meanwhile\n"
+        );
+    } else {
+        for msg in answered.iter().take(3) {
+            let shown: String = msg.chars().take(500).collect();
+            println!("  answered: {shown}");
+        }
+        println!();
+    }
+    conns
+}

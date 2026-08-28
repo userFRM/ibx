@@ -532,6 +532,8 @@ fn query_error_phase_live() {
     let conns = historical::phase_query_error_surfaces(conns);
     let conns = historical::phase_corporate_actions_reply(conns);
     let conns = historical::phase_what_the_gated_wires_answer(conns);
+    let conns = historical::phase_transaction_reporting_config(conns);
+    let conns = historical::phase_what_a_quote_request_answers(conns);
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
 }
@@ -2373,6 +2375,8 @@ fn gated_wires_phase_live() {
     };
 
     let conns = historical::phase_what_the_gated_wires_answer(conns);
+    let conns = historical::phase_transaction_reporting_config(conns);
+    let conns = historical::phase_what_a_quote_request_answers(conns);
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
 }
