@@ -103,23 +103,20 @@ asks what arrived unread.
 The messages this client reads are published in the wire coverage reference,
 taken from its own dispatch tables.
 
-## Wires not implemented
+## Wires this client does not send or read
 
 The venue's protocol carries more messages than this client sends. Most of
 them serve a front end's own windows and have no caller here. These are the
 ones that do not, checked against this client's dispatch tables, with what
 would settle each.
-
 A wire on this list is one this client neither sends nor reads. A message
 subtype it does not read is named in the log the first time the venue uses it,
 once per subtype, so a session that meets one leaves a record rather than
 discarding it in silence. A field on a contract definition that nothing reads is
 recorded rather than logged: it is on the session, under `unread_wire`, because
 one arriving is a fact about the contract and not an event worth a line.
-
 Some inbound subtypes exist to drive a front end's own windows and mean
 nothing without one. The table below carries the rest.
-
 **What a live session actually sends.** A session that logs on, subscribes,
 asks for holdings and account values, then places, modifies and cancels an
 order, receives **nothing this client does not read**. Every subtype below is
@@ -127,23 +124,28 @@ one this venue does not use for this account. Each is named in the log the
 first time it arrives, so the day one does, it will say so rather than
 vanish.
 
-| Wire | What it carries | Why it is not implemented |
+### Not built
+
+Two, and each says what a caller loses by it.
+
+| Wire | What it carries | Why |
 | --- | --- | --- |
-| Out-of-band `AP`, `DO`, `DP` | Holdings the broker does not hold itself: held away, shown but not held, and one set it reports apart without saying why | Read. They carry the same fields in the same tags as the account's own holdings, and are kept apart from them |
-| `6040` 192, 278 | The venue's error channel | Read. Both numbers are one channel: which one it arrives under depends on a capability the session negotiated, not on the error |
-| `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
-| `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
 | `6040` 10020, 10021 | Contract adjustments, for splits and dividends | Not yet built. Historical prices are unadjusted without it |
 | `6040` 10031 | Cancelling a news subscription | Not yet built. Historical news is answered once, so there is nothing outstanding for a caller to withdraw |
-| `6040` 110 | A live order's price and state, keyed by the order's own id | Not sent to this account: a full order lifecycle — placed, modified, cancelled — produced none. Order state arrives on execution reports here |
-| `6040` 7 | The price increments a contract trades in, pushed | Not sent to this account. The same rules arrive attached to a contract's details, which is where this client reads them |
-| `6040` 60 | A trade record | Sent, and read past. What it reports arrives first on the execution reports this client already reads, and a fill counted from both would be counted twice |
+
+### The account decides these
+
+Nothing here is a gap in the code. A wire the venue does not send to this account, or one an entitlement or an advisor account gates, is answered by what the account holds and not by what is written here. Whether any of them can be asked for is open: see the issue on establishing that, because "not sent" and "never asked" are not the same and this table has not told them apart.
+
+| Wire | What it carries | Why |
+| --- | --- | --- |
+| `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
+| `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
 | `6040` 146, 151, 208 | Trade-report records, including per-leg fills on a combination | Not sent to this account |
 | `6040` 200 | Execution history | Not sent to this account |
 | `6040` 109 | An advisor's allocation groups and profiles | Needs an advisor account |
 | `6040` 141, 154, 175 | Combination position state and leg definitions | Not sent to this account |
 | `6040` 145 | A session-level control message, sibling of the error channel | Not sent to this account |
-| `6040` 18 | The venue's clock, for drift against the local one | Sent, and read past. Every message the venue sends carries the time it sent it, and that is what this client keeps and answers a caller with, so a message stating the same clock again adds nothing |
 | `6040` 188 | A newly added or linked account, and what it may do | The one of these with a consequence: a client managing linked accounts that ignores it does not learn of a new one until it reconnects. This session holds a single account and is sent none |
 | `6040` 119 | Model allocation figures, per account | Answers a request for them, which this client does not send |
 | `6040` 148 | Which order types and algorithms each venue accepts for each security type | Refuses an order before sending it. This client lets the venue refuse, and reads what it permits at logon |
@@ -151,6 +153,19 @@ vanish.
 | `6040` 258 | Which balance panels a front end should show | Nothing to trade on |
 | A midpoint peg stated as two offsets | A peg to the midpoint whose offset is given as a whole-tick part and a half-tick part, rather than as one continuous number. A different order type is sent for it, and only when both parts are set and both sit on the destination's tick boundaries. A caller here states one offset, which is the other form and is sent correctly |
 | `35=2` | Resending missed messages | Never observed in either direction on any of this client's connections. Implementing it would be work against a wire that never fires |
+
+### Read, or deliberately read past
+
+These describe working behaviour and are here so the list of subtypes is complete. A wire read past carries something that reaches this client first by another route, and reading both would count it twice.
+
+| Wire | What it carries | Why |
+| --- | --- | --- |
+| `6040` 110 | A live order's price and state, keyed by the order's own id | Arrives by another route: order state is on the execution reports this client reads. Not sent to this account either, and a full order lifecycle produced none |
+| `6040` 7 | The price increments a contract trades in, pushed | Arrives by another route: the same rules are attached to a contract's details, which is where this client reads them. Not sent to this account either |
+| Out-of-band `AP`, `DO`, `DP` | Holdings the broker does not hold itself: held away, shown but not held, and one set it reports apart without saying why | Read. They carry the same fields in the same tags as the account's own holdings, and are kept apart from them |
+| `6040` 192, 278 | The venue's error channel | Read. Both numbers are one channel: which one it arrives under depends on a capability the session negotiated, not on the error |
+| `6040` 60 | A trade record | Sent, and read past. What it reports arrives first on the execution reports this client already reads, and a fill counted from both would be counted twice |
+| `6040` 18 | The venue's clock, for drift against the local one | Sent, and read past. Every message the venue sends carries the time it sent it, and that is what this client keeps and answers a caller with, so a message stating the same clock again adds nothing |
 
 ## Excluded surface
 
