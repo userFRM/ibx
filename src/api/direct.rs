@@ -816,6 +816,12 @@ impl Client {
         self.inner.req_current_time(&mut *r);
     }
 
+    /// Ask the venue for its own clock, in milliseconds.
+    pub fn req_current_time_in_millis(&self) {
+        let mut r = self.recorded.lock().unwrap();
+        self.inner.req_current_time_in_millis(&mut *r);
+    }
+
     /// Every account this login may act for, once the session has stated them.
     pub fn managed_accounts(&self) -> Option<String> {
         self.recorded.lock().unwrap().managed_accounts.clone()

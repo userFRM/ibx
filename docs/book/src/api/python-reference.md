@@ -1427,6 +1427,16 @@ def req_current_time()
 
 ---
 
+#### `req_current_time_in_millis`
+
+Ask the venue for its own clock in milliseconds. Answered on `current_time_in_millis`.  The same clock `req_current_time` reports and read the same way. What differs is the precision kept: the venue sometimes stamps a fraction of a second, and asking in seconds throws it away. A stamp with no fraction lands on a whole second, which is the precision the venue stated rather than a rounding of something finer.  Answered whether or not a session is up, which is what the request surface does and so what a caller of either client gets. Before anything has been stamped there is nothing to report but this machine's clock, and the log says so rather than leaving a caller waiting on a callback that is not coming.
+
+```python
+def req_current_time_in_millis()
+```
+
+---
+
 #### `request_fa`
 
 Ask the venue for a partition of the advisor's own configuration.  The reference client names the partition by a number: its groups, its allocation profiles, its aliases. The venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition.  The request reaches the venue; its answer is not read back yet, so `receive_fa` does not fire. What the venue replies with lands among the messages this client records as unread. Reading it needs an advisor account to state the reply's shape, and inventing one would be a guess about a frame nobody here has seen. Said here because a caller waiting on a callback that cannot come has nothing else to tell them.
@@ -1714,6 +1724,16 @@ The venue clock, in seconds since the epoch.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `time` | `int` | Tick timestamp (Unix seconds). |
+
+---
+
+#### `current_time_in_millis`
+
+The venue clock, in milliseconds since the epoch.  The same clock `current_time` reports, at the precision the venue stated it in: whole seconds unless the stamp carried a fraction.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `time_in_millis` | `int` |  |
 
 ---
 

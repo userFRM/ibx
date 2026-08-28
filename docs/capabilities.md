@@ -15,10 +15,10 @@ Verification runs against a paper account on IBKR production servers, and the or
 
 | | |
 | --- | --- |
-| Requests | 79. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
+| Requests | 80. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
 | Order fields | 154. 114 are sent; 35 have no field in the protocol to carry them and the call says so rather than dropping them; 5 are what the venue fills on the way back, which an order does not carry out |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 2,280 offline, and 169 more that live in the suites run against a broker session |
+| Tests | 2,282 offline, and 169 more that live in the suites run against a broker session |
 
 45 of the 47 capabilities are verified against IBKR production servers. Of the
 other two, advisor configuration reaches the server and needs an advisor
@@ -36,7 +36,7 @@ Every figure above is measured on each commit, and the build fails if one moves.
 | `EClient` / `EWrapper` (TWS API shape) | ✅ Supported | `tests/ib_paper_compat`, `tests/python/test_compat_tier1..3.py` |
 | `ib_async`, unmodified | ✅ Supported | Their `IB` on this engine through `ibx.ib_async.attach` — their events, async variants and types, with no gateway. All 67 transport calls their library makes are carried and gated, and their own suite runs against it; see the note below. `tests/python/test_ib_async_transport.py`, `tests/ib_async_upstream/conftest.py` |
 | `ibx.IB` (ib_async shape) | ✅ Supported | 90/90 methods present; `tests/python/test_ib_facade.py`, `scripts/sdk_sweep.py` |
-| `ibx::Client` (Rust) | ✅ Supported | 79/79 callable; 3 return an error naming a local-process facility this client does not have |
+| `ibx::Client` (Rust) | ✅ Supported | 80/80 callable; 3 return an error naming a local-process facility this client does not have |
 | Gateway settings | ✅ Supported | 17 settings carried, 7 recorded as having no counterpart; `tests/python/test_gateway_settings.py`, `tests/python/test_settings_parity.py`; session opened under a stated build and time zone |
 | Rust/Python equivalence | ✅ Supported | 4 static gates (settings, order fields, surface, error behaviour) plus `scripts/conformance.py --compare`, which compares 10 server responses across both clients |
 
@@ -117,7 +117,7 @@ stops holding.
 
 | What is guaranteed | Where it stands |
 | --- | --- |
-| A call never returns success having sent nothing | 79 requests, none silent |
+| A call never returns success having sent nothing | 80 requests, none silent |
 | A field a caller sets is never quietly ignored | 154 order fields, none dropped |
 | A field the server sends is never thrown away | What this client has no name for is kept under its tag number — 49 such fields on an equity definition, 46 on a bond |
 

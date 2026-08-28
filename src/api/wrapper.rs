@@ -35,6 +35,13 @@ pub trait Wrapper {
     fn error(&mut self, req_id: i64, error_code: i64, error_string: &str, advanced_order_reject_json: &str) {}
     /// The venue's clock, in seconds since the epoch.
     fn current_time(&mut self, time: i64) {}
+    /// The venue's clock, in milliseconds since the epoch.
+    ///
+    /// The same clock [`current_time`](Self::current_time) reports, at the
+    /// precision the venue stated it in: whole seconds unless the stamp
+    /// carried a fraction, which is what makes this worth asking for
+    /// separately rather than multiplying the other by a thousand.
+    fn current_time_in_millis(&mut self, time_in_millis: i64) {}
 
     // ── Market Data ──
 
@@ -415,6 +422,10 @@ impl<A: Wrapper + ?Sized, B: Wrapper + ?Sized> Wrapper for Tee<'_, A, B> {
     fn current_time(&mut self, time: i64) {
         self.asked.current_time(time);
         self.kept.current_time(time);
+    }
+    fn current_time_in_millis(&mut self, time_in_millis: i64) {
+        self.asked.current_time_in_millis(time_in_millis);
+        self.kept.current_time_in_millis(time_in_millis);
     }
     fn tick_price(&mut self, req_id: i64, tick_type: i32, price: f64, attrib: &TickAttrib) {
         self.asked.tick_price(req_id, tick_type, price, attrib);

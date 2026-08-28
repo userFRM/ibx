@@ -99,7 +99,25 @@ fn days_in_month(year: i64, month: u32) -> u32 {
 /// accepted; anything else returns nothing rather than a plausible wrong
 /// instant, because a clock comparison is exactly where a silently wrong number
 /// does the most harm.
+///
+/// A fractional second is more precision than seconds can carry, so it is
+/// dropped here. [`ib_datetime_to_unix_millis`] keeps it.
 pub fn ib_datetime_to_unix(stamped: &str) -> Option<i64> {
+    ib_datetime_to_unix_millis(stamped).map(|ms| ms.div_euclid(1_000))
+}
+
+/// Read the venue's timestamp back to unix milliseconds (UTC).
+///
+/// The same stamp as [`ib_datetime_to_unix`] reads, keeping the fractional
+/// second where the venue states one. Where it does not, the answer lands on a
+/// whole second, which is the precision the venue gave and not a rounding of
+/// something finer.
+///
+/// A fraction is read as a decimal: `.5` is five hundred milliseconds, not
+/// five. More than three digits are the venue stating more precision than
+/// milliseconds hold, and the extra is dropped rather than rounded — rounding
+/// up would put the answer in a millisecond the venue did not state.
+pub fn ib_datetime_to_unix_millis(stamped: &str) -> Option<i64> {
     let (date, time) = stamped.split_once(['-', ' '])?;
     if date.len() != 8 || !date.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -115,9 +133,22 @@ pub fn ib_datetime_to_unix(stamped: &str) -> Option<i64> {
         return None;
     }
 
-    // A fractional second is more precision than seconds can carry, so it is
-    // dropped rather than rounded.
-    let time = time.split(['.', ',']).next()?;
+    let (time, fraction) = match time.split_once(['.', ',']) {
+        Some((whole, rest)) => (whole, rest),
+        None => (time, ""),
+    };
+    let millis: i64 = if fraction.is_empty() {
+        0
+    } else {
+        if !fraction.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        // Read as a decimal and cut at milliseconds: three digits, padded
+        // where the venue stated fewer.
+        let mut digits = fraction.as_bytes().to_vec();
+        digits.resize(3, b'0');
+        std::str::from_utf8(&digits[..3]).ok()?.parse().ok()?
+    };
     let mut parts = time.split(':');
     let hours: i64 = parts.next()?.parse().ok()?;
     let minutes: i64 = parts.next()?.parse().ok()?;
@@ -127,7 +158,7 @@ pub fn ib_datetime_to_unix(stamped: &str) -> Option<i64> {
     }
 
     let days = ymd_to_days(year, month, day)?;
-    Some(days * 86_400 + hours * 3_600 + minutes * 60 + seconds)
+    Some((days * 86_400 + hours * 3_600 + minutes * 60 + seconds) * 1_000 + millis)
 }
 
 /// Days since the epoch for a civil date, by the same reckoning `days_to_ymd`
@@ -431,6 +462,29 @@ mod venue_clock_tests {
             ib_datetime_to_unix("20260101-00:00:00"),
             ib_datetime_to_unix("20260101 00:00:00"),
         );
+    }
+
+
+    /// A fraction the venue states is kept when the answer is in milliseconds.
+    ///
+    /// Reading the stamp in seconds throws the fraction away, which is the
+    /// whole reason a caller asks in milliseconds. It is a decimal, so `.5` is
+    /// five hundred milliseconds and not five, and a stamp with no fraction
+    /// lands on a whole second rather than being rounded to something finer
+    /// than the venue stated.
+    #[test]
+    fn a_stated_fraction_survives_into_milliseconds() {
+        let whole = ib_datetime_to_unix_millis("20260815-12:00:00").expect("a stamp");
+        assert_eq!(whole, 1_786_795_200_000);
+        assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00.250"), Some(whole + 250));
+        // A decimal, not a count of milliseconds: one digit is tenths.
+        assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00.5"), Some(whole + 500));
+        assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00,25"), Some(whole + 250));
+        // More precision than milliseconds hold is cut, not rounded up into a
+        // millisecond the venue did not state.
+        assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00.2509"), Some(whole + 250));
+        // And the seconds reading still drops it.
+        assert_eq!(ib_datetime_to_unix("20260815-12:00:00.999"), Some(1_786_795_200));
     }
 
     /// More precision than seconds can carry is dropped, not rounded.

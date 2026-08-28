@@ -5412,6 +5412,39 @@ fn the_current_time_is_the_venues_own() {
     assert_ne!(heard.0[1], local, "and not this machine's clock");
 }
 
+/// Asking in milliseconds keeps the fraction asking in seconds throws away.
+///
+/// Both calls read the same clock — the venue's own last stamp — so the answer
+/// to one is the answer to the other times a thousand, except where the venue
+/// stamped a fraction of a second. That case is the only reason the second
+/// call exists, so it is the one worth pinning.
+#[test]
+fn the_millisecond_clock_keeps_what_the_second_one_drops() {
+    #[derive(Default)]
+    struct Heard { secs: Vec<i64>, millis: Vec<i64> }
+    impl Wrapper for Heard {
+        fn current_time(&mut self, t: i64) { self.secs.push(t); }
+        fn current_time_in_millis(&mut self, t: i64) { self.millis.push(t); }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let mut heard = Heard::default();
+
+    // A stamp with no fraction: the two agree to the thousand.
+    shared.market.note_venue_time("20260815-12:00:00");
+    client.req_current_time(&mut heard);
+    client.req_current_time_in_millis(&mut heard);
+    assert_eq!(heard.secs[0], 1_786_795_200);
+    assert_eq!(heard.millis[0], 1_786_795_200_000);
+
+    // One with a fraction: seconds cannot carry it, milliseconds can.
+    shared.market.note_venue_time("20260815-12:00:00.250");
+    client.req_current_time(&mut heard);
+    client.req_current_time_in_millis(&mut heard);
+    assert_eq!(heard.secs[1], 1_786_795_200, "the same second");
+    assert_eq!(heard.millis[1], 1_786_795_200_250, "and a quarter of it besides");
+}
+
 /// Arguments this protocol cannot carry are refused rather than dropped.
 ///
 /// A tick-by-tick subscription states the contract and the kind of stream and
