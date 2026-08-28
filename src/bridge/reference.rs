@@ -48,6 +48,12 @@ pub struct ReferenceState {
     histogram_data: Mutex<Vec<(u32, Vec<HistogramEntry>)>>,
     historical_ticks: Mutex<Vec<(u32, HistoricalTickData, String, bool)>>,
     historical_schedules: Mutex<Vec<(u32, HistoricalScheduleResponse)>>,
+    /// A contract's corporate actions, against the contract they belong to.
+    ///
+    /// Keyed by the contract and not by a request, because that is how the
+    /// venue sends them: the reply names the contract it is about, and one
+    /// arrives per contract rather than per question asked.
+    adjustments: Mutex<std::collections::HashMap<String, (crate::control::adjustments::AdjustedContract, Vec<crate::control::adjustments::Adjustment>)>>,
     /// Errors surfaced by HMDS for in-flight reference queries (req_id, code, message).
     /// Drained by the dispatcher and forwarded to `Wrapper::error`.
     historical_errors: Mutex<Vec<(u32, i32, String)>>,
@@ -105,6 +111,7 @@ impl ReferenceState {
             histogram_data: Mutex::new(Vec::with_capacity(4)),
             historical_ticks: Mutex::new(Vec::with_capacity(4)),
             historical_schedules: Mutex::new(Vec::with_capacity(4)),
+            adjustments: Mutex::new(std::collections::HashMap::new()),
             historical_errors: Mutex::new(Vec::with_capacity(4)),
             market_rules: Mutex::new(Vec::new()),
             depth_exchanges_cache: Mutex::new(Vec::new()),
@@ -406,6 +413,28 @@ impl ReferenceState {
     /// Take the fundamental answering one request, leaving the rest.
     pub fn take_fundamental_for(&self, req_id: u32) -> Option<String> {
         Self::take_one(&self.fundamental_data, req_id)
+    }
+
+    /// Every corporate action the venue has stated for a contract this session.
+    ///
+    /// Read rather than taken: the actions belong to the contract for as long as
+    /// the session holds it, and a caller adjusting one series does not spend
+    /// them for the next.
+    pub fn adjustments_for(&self, con_id: &str)
+        -> Option<(crate::control::adjustments::AdjustedContract, Vec<crate::control::adjustments::Adjustment>)>
+    {
+        self.adjustments.lock().unwrap().get(con_id).cloned()
+    }
+
+    #[doc(hidden)] pub fn note_adjustments(
+        &self,
+        contract: crate::control::adjustments::AdjustedContract,
+        actions: Vec<crate::control::adjustments::Adjustment>,
+    ) {
+        if contract.con_id.is_empty() {
+            return;
+        }
+        self.adjustments.lock().unwrap().insert(contract.con_id.clone(), (contract, actions));
     }
 
     /// Take the historical schedule answering one request, leaving the rest.
@@ -974,5 +1003,30 @@ mod ask_id_band {
 
         assert!(mine.is_ours(id), "another session's release took mine with it");
         assert!(!theirs.is_ours(id), "and its own release still took effect");
+    }
+}
+
+#[cfg(test)]
+mod adjustments_store_tests {
+    use super::*;
+
+    /// The actions a session was answered with are held against their contract.
+    ///
+    /// Read rather than taken, because a caller adjusting one series must not
+    /// spend them for the next: two questions about the same contract are
+    /// answered from the one reply the venue sent for it.
+    #[test]
+    fn the_actions_stay_against_the_contract_they_name() {
+        let state = ReferenceState::new();
+        let answered = "conc\n756733,-1,-1\nconexch\n756733,AMEX,20090223\nCD\n\
+20240315,1.594937,USD,20240314,20240318,20240430,R,NA\n";
+        let (contract, actions) = crate::control::adjustments::parse_adjustments(answered);
+        state.note_adjustments(contract, actions);
+
+        let (held, acts) = state.adjustments_for("756733").expect("held against its contract");
+        assert_eq!(held.exchange, "AMEX");
+        assert_eq!(acts.len(), 1);
+        assert!(state.adjustments_for("756733").is_some(), "and still held after reading");
+        assert!(state.adjustments_for("999").is_none(), "a contract with none says so");
     }
 }

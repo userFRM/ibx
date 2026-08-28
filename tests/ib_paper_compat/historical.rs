@@ -1528,7 +1528,10 @@ pub(super) fn phase_corporate_actions_reply(mut conns: Conns) -> Conns {
     let xml = ibx::control::adjustments::build_adjustments_request_xml(
         &ibx::control::adjustments::AdjustmentRequest {
             query_id: "adj_1".into(),
-            con_id: 756733,
+            // A contract that split inside the window and paid dividends across
+            // it, so one answer states both kinds and a bar series over the same
+            // days can be checked against what it says.
+            con_id: 4815747,
             sec_type: "STK".into(),
             exchange: "SMART".into(),
             start_date: "20240101".into(),

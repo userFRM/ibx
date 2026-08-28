@@ -202,9 +202,62 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
     (contract, out)
 }
 
+/// What a price before `date` must be multiplied by to sit on the same scale
+/// as prices after every action in `actions`.
+///
+/// A split is the only action here that moves the scale, and its value is the
+/// ratio: a share split ten for one states ten, and a price from before that
+/// day is a tenth of what it reads once the split has happened. Established
+/// against a contract that split ten for one on a stated day, where the close
+/// before it was 1208.88 and the close after was 121.79: dividing the first by
+/// the stated ten gives 120.89, which is the same scale as the second.
+///
+/// A dividend does not move the scale. It is a payment out of the price rather
+/// than a restatement of it, and how much of one to take off a historical
+/// price is a convention this client has not established, so it takes none:
+/// a number nobody can check is worse than one nobody applied.
+pub fn scale_before(date: &str, actions: &[Adjustment]) -> f64 {
+    let mut factor = 1.0;
+    for a in actions {
+        if a.kind != Some(AdjustmentKind::Split) || a.date.as_str() <= date {
+            continue;
+        }
+        if let Ok(ratio) = a.value.parse::<f64>()
+            && ratio > 0.0
+        {
+            factor /= ratio;
+        }
+    }
+    factor
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A price from before a split reads on the scale after it.
+    ///
+    /// The venue stated a ten-for-one split on a day, and a bar series across
+    /// that day closed at 1208.88 the session before and 121.79 the session
+    /// after: a tenfold step with nothing in the series saying so. Scaled by
+    /// what the split states, the earlier close reads 120.89, which is the
+    /// later one's scale. That is the whole of what an adjusted series is, and
+    /// both numbers are ones a session was answered with.
+    #[test]
+    fn a_price_from_before_a_split_reads_on_the_scale_after_it() {
+        let answered = "conc\n4815747,-1,-1\n\
+                        CD\n20240305,0.04,USD,20240221,20240306,20240327,R,NA\n\
+                        SS\n20240610,10,,20240522\n";
+        let (_, actions) = parse_adjustments(answered);
+        let before = 1208.88 * scale_before("20240607", &actions);
+        assert!((before - 120.888).abs() < 0.001, "scaled to {before}, not 120.888");
+        let after = 121.79 * scale_before("20240611", &actions);
+        assert!((after - 121.79).abs() < 0.001, "a price after the split is unmoved");
+        assert!(
+            (before - 121.79).abs() / 121.79 < 0.01,
+            "and the sessions either side sit within a day's move of each other",
+        );
+    }
 
     #[test]
     fn a_request_names_the_contract_and_the_range() {
@@ -222,6 +275,30 @@ mod tests {
         assert!(xml.contains("<startDate>20240101</startDate>"));
         assert!(xml.contains("<endDate>20241231</endDate>"));
         assert!(xml.contains("<divRequestType>T</divRequestType>"));
+    }
+
+    /// The reply carries its actions in the raw field, and parsing keeps them.
+    ///
+    /// The query comes back echoed as XML on one tag and the actions arrive on
+    /// another, under the length that precedes it. Nothing here would work if
+    /// the length-prefixed field did not survive being parsed, so that is
+    /// asserted rather than assumed: this is the message a live session was
+    /// answered with, put back together and read the way the engine reads one.
+    #[test]
+    fn the_actions_survive_being_parsed_out_of_the_reply() {
+        let payload = "conc\n756733,-1,-1\nconexch\n756733,AMEX,20090223\nCD\n\
+20240315,1.594937,USD,20240314,20240318,20240430,R,NA\n";
+        let msg = format!(
+            "8=FIX.4.1\x019=000355\x0135=U\x016040=10022\x016118=<ConAdjResponse>\
+             <id>adj_1</id></ConAdjResponse>\x0195={}\x0196={}\x0110=200\x01",
+            payload.len(), payload,
+        );
+        let parsed = crate::protocol::fix::fix_parse(msg.as_bytes());
+        let carried = parsed.get(&96).expect("the actions are on the raw field");
+        assert_eq!(carried.len(), payload.len(), "and the whole of it is kept");
+        let (contract, adj) = parse_adjustments(carried);
+        assert_eq!(contract.con_id, "756733");
+        assert_eq!(adj.len(), 1, "the action in it is read");
     }
 
     /// What a live session was answered with, kept as it arrived.
