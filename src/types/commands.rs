@@ -350,6 +350,25 @@ pub enum ControlCommand {
         /// The caller's number for the request.
         req_id: u32,
     },
+    /// Ask for a contract's corporate actions.
+    ///
+    /// Answered against the contract rather than the request, so the reply
+    /// names which contract it is for and this id is only what the request
+    /// went out under.
+    FetchAdjustments {
+        /// The caller's number for the request this answers.
+        req_id: u32,
+        /// The venue's id for the contract.
+        con_id: u32,
+        /// The contract's security type.
+        sec_type: String,
+        /// The venue it is listed on.
+        exchange: String,
+        /// The first day of the range asked for, as `YYYYMMDD`.
+        start_date: String,
+        /// The last day of it.
+        end_date: String,
+    },
     /// Request historical news via historical data connection.
     FetchHistoricalNews {
         /// The caller's number for the request this answers.

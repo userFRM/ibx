@@ -5,6 +5,7 @@
 ## Table of Contents
 
 - [EClient: Connection](#connection)
+- [EClient: Calls That Answer](#calls-that-answer)
 - [EClient: Account & Portfolio](#account--portfolio)
 - [EClient: Orders](#orders)
 - [EClient: Market Data](#market-data)
@@ -263,6 +264,326 @@ pub fn token_type(&self) -> &str
 ```
 
 **Returns:** `&str`
+
+---
+
+## Calls That Answer
+
+#### `historical_data`
+
+Bars for a contract, as `req_historical_data` asks for them. `ADJUSTED_LAST` is served here and refused by `req_historical_data`, and the difference is not arbitrary. The venue has no adjusted series to pass through: what it serves is raw, and adjusting it needs the contract's actions in hand before a bar can be handed to anyone. A call that waits can hold both; one that answers on a callback cannot, and would have to hand over raw bars under an adjusted name.
+
+```rust
+pub fn historical_data( &self, contract: &Contract, end_date_time: &str, duration: &str, bar_size: &str, what_to_show: &str, use_rth: bool, ) -> Result<Vec<BarData>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `end_date_time` | `&str` | End date/time in `"YYYYMMDD HH:MM:SS"` format, or empty for now. |
+| `duration` | `&str` | Duration string, e.g. `"1 D"`, `"1 W"`, `"1 M"`, `"1 Y"`. |
+| `bar_size` | `&str` | Bar size: `"1 min"`, `"5 mins"`, `"1 hour"`, `"1 day"`, etc. |
+| `what_to_show` | `&str` | Data type: `"TRADES"`, `"MIDPOINT"`, `"BID"`, `"ASK"`, `"BID_ASK"`, etc. |
+| `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
+
+**Returns:** `Result<Vec<BarData>, Refusal>`
+
+---
+
+#### `corporate_actions`
+
+A contract's corporate actions, asked for and waited on. The venue answers these per contract rather than per request, so this asks and then watches the contract's own record for them rather than matching an id. A contract the venue states nothing for answers empty, which is an answer: it is how a contract that has never split says so. `contract` must carry the venue's id for it, which `qualify_contract` supplies. Days are `YYYYMMDD`.
+
+```rust
+pub fn corporate_actions( &self, contract: &Contract, start_date: &str, end_date: &str, ) -> Result<Vec<crate::control::adjustments::Adjustment>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `start_date` | `&str` |  |
+| `end_date` | `&str` |  |
+
+**Returns:** `Result<Vec<crate::control::adjustments::Adjustment>, Refusal>`
+
+---
+
+#### `option_chain`
+
+Every expiration and strike each venue lists for an underlying. `underlying` must carry the id of the contract the options are on — the stock, not the option — which `qualify_contract` supplies.
+
+```rust
+pub fn option_chain( &self, underlying: &Contract, ) -> Result<Vec<OptionChain>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `underlying` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+
+**Returns:** `Result<Vec<OptionChain>, Refusal>`
+
+---
+
+#### `head_timestamp`
+
+The earliest moment the venue holds data for a contract. The same question `req_head_time_stamp` asks.
+
+```rust
+pub fn head_timestamp( &self, contract: &Contract, what_to_show: &str, use_rth: bool, ) -> Result<String, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `what_to_show` | `&str` | Data type: `"TRADES"`, `"MIDPOINT"`, `"BID"`, `"ASK"`, `"BID_ASK"`, etc. |
+| `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
+
+**Returns:** `Result<String, Refusal>`
+
+---
+
+#### `matching_symbols`
+
+Contracts whose name or symbol matches a pattern.
+
+```rust
+pub fn matching_symbols( &self, pattern: &str, ) -> Result<Vec<crate::types::model::ContractDescription>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pattern` | `&str` | Symbol search pattern. |
+
+**Returns:** `Result<Vec<crate::types::model::ContractDescription>, Refusal>`
+
+---
+
+#### `news_headlines`
+
+The headlines the venue holds for a contract, up to the number asked for. Each is the time, the provider's code, the article's id and the headline itself. Reading an article needs the first two. The venue states whether it holds more than it sent, and that is reported through the log rather than in the returned rows: what comes back is a page, and a full one is not evidence there is no next one. Ask for more, or narrow the window, to see the rest.
+
+```rust
+pub fn news_headlines( &self, con_id: i64, provider_codes: &str, start_date_time: &str, end_date_time: &str, total_results: i32, ) -> Result<Vec<Headline>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `con_id` | `i64` | Contract ID. Unique per instrument. |
+| `provider_codes` | `&str` | Pipe-separated news provider codes. |
+| `start_date_time` | `&str` | Start date/time for tick query. |
+| `end_date_time` | `&str` | End date/time in `"YYYYMMDD HH:MM:SS"` format, or empty for now. |
+| `total_results` | `i32` | Maximum number of news results. |
+
+**Returns:** `Result<Vec<Headline>, Refusal>`
+
+---
+
+#### `histogram_data`
+
+How a contract's trades were spread across prices.
+
+```rust
+pub fn histogram_data( &self, contract: &Contract, use_rth: bool, period: &str, ) -> Result<Vec<(f64, i64)>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `use_rth` | `bool` | If `true`, only return data from Regular Trading Hours. |
+| `period` | `&str` | Histogram period, e.g. `"1week"`, `"1month"`. |
+
+**Returns:** `Result<Vec<(f64, i64)>, Refusal>`
+
+---
+
+#### `fundamental_data`
+
+A fundamental document about a contract, as the venue writes it.
+
+```rust
+pub fn fundamental_data( &self, contract: &Contract, report_type: &str, ) -> Result<String, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `report_type` | `&str` | Report type: `"ReportSnapshot"`, `"ReportsFinSummary"`, `"RESC"`, etc. |
+
+**Returns:** `Result<String, Refusal>`
+
+---
+
+#### `what_if_order`
+
+What the venue says an order would cost, without placing it. The order is marked as a question rather than an instruction, so nothing reaches the market. The preview states the order's own type, so a security that refuses a type refuses the preview of it rather than answering about an order that was not asked about. What it cannot state is the instruction that separates types sharing one: trailing, relative and the pegged pair are all sent as "P" and separated by their ExecInst, which a preview does not carry, so the venue reads any of them as the same peg. The margin is the same either way — it follows the position the order would leave, not the instruction that reaches it. A type this client states no value for is previewed as a limit at the same price, which is the only thing left to ask.
+
+```rust
+pub fn what_if_order( &self, contract: &Contract, order: &crate::types::model::Order, ) -> Result<crate::types::model::OrderState, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `order` | `&crate::types::model::Order` | Order parameters (action, quantity, type, price, TIF, etc.). |
+
+**Returns:** `Result<crate::types::model::OrderState, Refusal>`
+
+---
+
+#### `positions`
+
+Every holding in the account.
+
+```rust
+pub fn positions(&self) -> Result<Vec<PositionRow>, Refusal>
+```
+
+**Returns:** `Result<Vec<PositionRow>, Refusal>`
+
+---
+
+#### `account_summary`
+
+The account values named by `tags`, as `req_account_summary` asks for them. `tags` is a comma-separated list, or `All`.
+
+```rust
+pub fn account_summary(&self, tags: &str) -> Result<Vec<AccountValue>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `tags` | `&str` | Comma-separated account tags: `"NetLiquidation,BuyingPower,..."`. |
+
+**Returns:** `Result<Vec<AccountValue>, Refusal>`
+
+---
+
+#### `await_order`
+
+Wait for an order to reach a state the venue will not move it from. Placing an order says only that it was sent. What happened to it arrives later, on a callback, spread across a status and possibly a refusal. This waits for the venue to finish with it and reports where it landed — including the refusal, which is the part a caller most needs and the part most easily missed. A wait that runs out is not a failure of the order: it says only that the venue had not finished, and the order is still working.
+
+```rust
+pub fn await_order( &self, order_id: i64, timeout: Duration, ) -> Result<OrderReport, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `order_id` | `i64` | Order identifier. Must be unique per session. |
+| `timeout` | `Duration` |  |
+
+**Returns:** `Result<OrderReport, Refusal>`
+
+---
+
+#### `contract_details`
+
+Every contract matching the one described. The same question `req_contract_details` asks, answered here instead of on a callback.
+
+```rust
+pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+
+**Returns:** `Result<Vec<ContractDetails>, Refusal>`
+
+---
+
+#### `qualify_contract`
+
+Fill in what the venue knows about a contract, above all its id. Most of what this client sends carries a contract, and a contract with an id is worth more than one without: market data is answered only for a contract named by id, and an order that carries one needs to state nothing else. Ask this first and pass the result around. A description matching more than one contract is refused rather than resolved to whichever came back first — the same symbol on the same venue exists in more than one currency, and picking one silently is how an order ends up on the wrong one.
+
+```rust
+pub fn qualify_contract(&self, contract: &Contract) -> Result<Contract, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+
+**Returns:** `Result<Contract, Refusal>`
+
+---
+
+#### `qualify_contracts`
+
+Fill in a batch of contracts, keeping the caller's order. Stops at the first that cannot be named, because a caller building a basket wants to know which one is wrong, not to trade the rest.
+
+```rust
+pub fn qualify_contracts(&self, contracts: &[Contract]) -> Result<Vec<Contract>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contracts` | `&[Contract]` | Contract specification (symbol, secType, exchange, currency, etc.). |
+
+**Returns:** `Result<Vec<Contract>, Refusal>`
+
+---
+
+#### `scan`
+
+Run a scan and hand back what it found. The subscription is withdrawn before this returns: a scan asked for once is a question, and left running it keeps answering into a session nobody is reading.
+
+```rust
+pub fn scan( &self, instrument: &str, location: &str, scan_code: &str, most: u32, ) -> Result<Vec<ScanRow>, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `instrument` | `&str` | Instrument type for scanner (e.g. `"STK"`, `"FUT"`). |
+| `location` | `&str` |  |
+| `scan_code` | `&str` | Scanner code (e.g. `"TOP_PERC_GAIN"`, `"HIGH_OPT_IMP_VOLAT"`). |
+| `most` | `u32` |  |
+
+**Returns:** `Result<Vec<ScanRow>, Refusal>`
+
+---
+
+#### `schedule`
+
+When a contract trades, over a window ending now.
+
+```rust
+pub fn schedule(&self, contract: &Contract, duration: &str) -> Result<Schedule, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `contract` | `&Contract` | Contract specification (symbol, secType, exchange, currency, etc.). |
+| `duration` | `&str` | Duration string, e.g. `"1 D"`, `"1 W"`, `"1 M"`, `"1 Y"`. |
+
+**Returns:** `Result<Schedule, Refusal>`
+
+---
+
+#### `calendar_schema`
+
+What the corporate-events calendar says it carries. As the venue's JSON: it states a schema of its own that changes without notice, and a shape imposed here would be a shape to keep in step with it.
+
+```rust
+pub fn calendar_schema(&self) -> Result<String, Refusal>
+```
+
+**Returns:** `Result<String, Refusal>`
+
+---
+
+#### `calendar_events`
+
+The calendar's events for one contract, as the venue's JSON.
+
+```rust
+pub fn calendar_events(&self, con_id: i64) -> Result<String, Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `con_id` | `i64` | Contract ID. Unique per instrument. |
+
+**Returns:** `Result<String, Refusal>`
 
 ---
 
@@ -1364,6 +1685,27 @@ pub fn req_news_article(&self, req_id: i64, provider_code: &str, article_id: &st
 | `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `provider_code` | `&str` | News provider code (e.g. `"BRFG"`). |
 | `article_id` | `&str` | News article identifier. |
+
+**Returns:** `Result<(), Refusal>`
+
+---
+
+#### `req_adjustments`
+
+Ask for a contract's corporate actions over a range of days. The answer is filed against the contract it names rather than handed to a callback under this id, because the venue answers per contract: `EClient::adjustments` reads it once it has arrived, and `corporate_actions` asks and waits in one call. `start_date` and `end_date` are days, as `YYYYMMDD`.
+
+```rust
+pub fn req_adjustments( &self, req_id: i64, con_id: i64, sec_type: &str, exchange: &str, start_date: &str, end_date: &str, ) -> Result<(), Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+| `con_id` | `i64` | Contract ID. Unique per instrument. |
+| `sec_type` | `&str` |  |
+| `exchange` | `&str` | Exchange name. |
+| `start_date` | `&str` |  |
+| `end_date` | `&str` |  |
 
 **Returns:** `Result<(), Refusal>`
 
