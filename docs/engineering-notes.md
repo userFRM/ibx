@@ -141,8 +141,6 @@ Nothing here is a gap in the code. A wire the venue does not send to this accoun
 | --- | --- | --- |
 | `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Needs a scanner entitlement |
-| `6040` 110 | A live order's price and state, keyed by the order's own id | Not sent to this account: a full order lifecycle — placed, modified, cancelled — produced none. Order state arrives on execution reports here |
-| `6040` 7 | The price increments a contract trades in, pushed | Not sent to this account. The same rules arrive attached to a contract's details, which is where this client reads them |
 | `6040` 146, 151, 208 | Trade-report records, including per-leg fills on a combination | Not sent to this account |
 | `6040` 200 | Execution history | Not sent to this account |
 | `6040` 109 | An advisor's allocation groups and profiles | Needs an advisor account |
@@ -162,6 +160,8 @@ These describe working behaviour and are here so the list of subtypes is complet
 
 | Wire | What it carries | Why |
 | --- | --- | --- |
+| `6040` 110 | A live order's price and state, keyed by the order's own id | Arrives by another route: order state is on the execution reports this client reads. Not sent to this account either, and a full order lifecycle produced none |
+| `6040` 7 | The price increments a contract trades in, pushed | Arrives by another route: the same rules are attached to a contract's details, which is where this client reads them. Not sent to this account either |
 | Out-of-band `AP`, `DO`, `DP` | Holdings the broker does not hold itself: held away, shown but not held, and one set it reports apart without saying why | Read. They carry the same fields in the same tags as the account's own holdings, and are kept apart from them |
 | `6040` 192, 278 | The venue's error channel | Read. Both numbers are one channel: which one it arrives under depends on a capability the session negotiated, not on the error |
 | `6040` 60 | A trade record | Sent, and read past. What it reports arrives first on the execution reports this client already reads, and a fill counted from both would be counted twice |
