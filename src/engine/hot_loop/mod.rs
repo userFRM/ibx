@@ -1188,6 +1188,13 @@ impl HotLoop {
                         self.hmds.send_historical_news_request(req_id, con_id, &provider_codes, &start_time, &end_time, max_results, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
+                ControlCommand::FetchAdjustments { req_id, con_id, sec_type, exchange, start_date, end_date } => {
+                    if self.hmds_conn.is_none() {
+                        self.emit_hmds_unavailable(req_id, false);
+                    } else {
+                        self.hmds.send_adjustments_request(req_id, con_id, &sec_type, &exchange, &start_date, &end_date, &mut self.hmds_conn, &mut self.hb);
+                    }
+                }
                 ControlCommand::FetchNewsArticle { req_id, provider_code, article_id } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);

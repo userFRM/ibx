@@ -1505,10 +1505,11 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns) -> Conns {
 /// Ask the venue for a contract's corporate actions, and record what it says.
 ///
 /// `src/control/adjustments.rs` parses a reply of these and builds the request
-/// that asks for one, and nothing sends it. The reply side reads as captured:
-/// its element names are the venue's own terse ones. The request side is not
-/// established, so this asks, and reports the answer rather than asserting a
-/// shape.
+/// that asks for one, and `EClient::corporate_actions` sends it. This phase
+/// asks over the same connection the client would, and reports what came back
+/// rather than asserting a shape: what the venue states for a contract is the
+/// venue's business, and a test that pinned it would be testing the contract
+/// rather than the client.
 ///
 /// The envelope follows the one the news requests use, which is the only
 /// grounded pattern for a query of this family: a user message carrying its

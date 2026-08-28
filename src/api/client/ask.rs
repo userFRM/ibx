@@ -305,10 +305,20 @@ impl EClient {
     }
 
     /// Bars for a contract, as `req_historical_data` asks for them.
+    ///
+    /// `ADJUSTED_LAST` is served here and refused by `req_historical_data`,
+    /// and the difference is not arbitrary. The venue has no adjusted series
+    /// to pass through: what it serves is raw, and adjusting it needs the
+    /// contract's actions in hand before a bar can be handed to anyone. A call
+    /// that waits can hold both; one that answers on a callback cannot, and
+    /// would have to hand over raw bars under an adjusted name.
     pub fn historical_data(
         &self, contract: &Contract, end_date_time: &str, duration: &str,
         bar_size: &str, what_to_show: &str, use_rth: bool,
     ) -> Result<Vec<BarData>, Refusal> {
+        if what_to_show.eq_ignore_ascii_case("ADJUSTED_LAST") {
+            return self.adjusted_bars(contract, end_date_time, duration, bar_size, use_rth);
+        }
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         struct Bars { req_id: i64, state: Arc<Mutex<Pending<BarData>>> }
@@ -339,6 +349,88 @@ impl EClient {
             req_id, contract, end_date_time, duration, bar_size, what_to_show, use_rth, 1, false,
         )?;
         self.wait_for(&mut collector, &state, &format!("{duration} of bars for {}", contract.symbol))
+    }
+
+    /// What traded, put on the scale it trades on now.
+    ///
+    /// The trades the venue serves are raw: a series crossing a ten-for-one
+    /// split steps by ten with nothing in it saying so. This asks for those
+    /// trades and for the contract's own actions, and puts the two together.
+    ///
+    /// A split, a stock dividend and a spin-off each move the scale, and a bar
+    /// dated before one is divided by the factor it states while its volume is
+    /// multiplied by it: the same shares changed hands either side. A cash
+    /// dividend and a rights offer do not move it — one is a payment out of
+    /// the price rather than a restatement of it, the other moves what a holder
+    /// paid rather than what the share is quoted at — so neither is applied
+    /// here, and a caller wanting them can read them from
+    /// [`corporate_actions`](Self::corporate_actions).
+    ///
+    /// The actions are asked for from the first bar to today rather than to
+    /// the end of the bars: a split last month moves a series that ended last
+    /// year, and stopping at the last bar would leave it on a scale nothing
+    /// trades on.
+    fn adjusted_bars(
+        &self, contract: &Contract, end_date_time: &str, duration: &str,
+        bar_size: &str, use_rth: bool,
+    ) -> Result<Vec<BarData>, Refusal> {
+        let bars = self.historical_data(
+            contract, end_date_time, duration, bar_size, "TRADES", use_rth,
+        )?;
+        let Some(first) = bars.first() else { return Ok(bars) };
+        let from: String = first.date.chars().take(8).collect();
+        let today: String = crate::protocol::datetime::chrono_free_timestamp()
+            .chars().take(8).collect();
+        let actions = self.corporate_actions(contract, &from, &today)?;
+        if actions.is_empty() {
+            return Ok(bars);
+        }
+        crate::control::adjustments::scale_bars(bars, &actions).map_err(Refusal::no_answer)
+    }
+
+    /// A contract's corporate actions, asked for and waited on.
+    ///
+    /// The venue answers these per contract rather than per request, so this
+    /// asks and then watches the contract's own record for them rather than
+    /// matching an id. A contract the venue states nothing for answers empty,
+    /// which is an answer: it is how a contract that has never split says so.
+    ///
+    /// `contract` must carry the venue's id for it, which `qualify_contract`
+    /// supplies. Days are `YYYYMMDD`.
+    pub fn corporate_actions(
+        &self, contract: &Contract, start_date: &str, end_date: &str,
+    ) -> Result<Vec<crate::control::adjustments::Adjustment>, Refusal> {
+        // One question at a time: see `EClient::asking`.
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        if contract.con_id == 0 {
+            return Err(Refusal::no_answer(
+                "corporate actions are asked for by the venue's id for the contract, \
+                 which this one does not carry: qualify it first".to_string(),
+            ));
+        }
+        let con_id = contract.con_id.to_string();
+        // Nothing here arrives on a callback, so the pump is driven with a
+        // collector that keeps nothing and the record is watched instead.
+        struct Nothing;
+        impl Wrapper for Nothing {}
+        let asked = ask_id(&self.shared);
+        self.req_adjustments(
+            asked.get(), contract.con_id, &contract.sec_type, &contract.exchange,
+            start_date, end_date,
+        )?;
+        let _notice = LeaveTheCloseNoticeForTheCaller::new(self);
+        let deadline = Instant::now() + ANSWER_TIMEOUT;
+        while Instant::now() < deadline {
+            self.pump_for_ask(&mut Nothing);
+            if let Some((_, actions)) = self.adjustments(&con_id) {
+                return Ok(actions);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Err(Refusal::no_answer(format!(
+            "no answer within {}s to the corporate actions of {}",
+            ANSWER_TIMEOUT.as_secs(), contract.symbol,
+        )))
     }
 
     /// Every expiration and strike each venue lists for an underlying.

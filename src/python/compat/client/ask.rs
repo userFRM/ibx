@@ -147,6 +147,36 @@ impl EClient {
             .clone()
             .ok_or_else(|| PyRuntimeError::new_err("not connected"))
     }
+
+    /// A contract's corporate actions, asked for and waited on.
+    ///
+    /// The venue files its answer against the contract it names rather than
+    /// the request that asked, so this watches the contract's own record for
+    /// it. Kept off the Python surface deliberately: it hands back this
+    /// client's own types, and `corporate_actions` is what states them to a
+    /// caller.
+    fn actions_for(
+        &self, py: Python<'_>, contract: &Contract, start_date: &str, end_date: &str,
+    ) -> PyResult<Vec<crate::control::adjustments::Adjustment>> {
+        if contract.con_id == 0 {
+            return Err(PyValueError::new_err(
+                "corporate actions are asked for by the venue's id for the contract, \
+                 which this one does not carry: qualify it first",
+            ));
+        }
+        let shared = self.connected_shared()?;
+        let asked = ask_id(&shared);
+        let req_id = asked.get();
+        self.req_adjustments(
+            py, req_id, contract.con_id, &contract.sec_type, &contract.exchange,
+            start_date, end_date,
+        )?;
+        let con_id = contract.con_id.to_string();
+        let what = format!("the corporate actions of {}", contract.symbol);
+        wait_for(py, &shared, req_id, &what, |sh| {
+            sh.reference.adjustments_for(&con_id).map(|(_, actions)| actions)
+        })
+    }
 }
 
 /// The time zone a venue states its hours in, and each session as its
@@ -172,8 +202,47 @@ impl EClient {
     }
 
 
+    /// A contract's corporate actions, asked for and waited on.
+    ///
+    /// One dict per action, stating what the venue stated: its kind as the
+    /// two-letter name the venue uses, the day it takes effect, its value, and
+    /// the dates and dividend descriptions the kind carries. A field the kind
+    /// does not carry is empty rather than invented.
+    ///
+    /// `contract` must carry the venue's id for it. Days are `YYYYMMDD`.
+    #[pyo3(signature = (contract, start_date, end_date))]
+    fn corporate_actions(
+        &self, py: Python<'_>, contract: &Contract, start_date: &str, end_date: &str,
+    ) -> PyResult<Vec<std::collections::BTreeMap<String, String>>> {
+        Ok(self.actions_for(py, contract, start_date, end_date)?
+            .into_iter()
+            .map(|a| {
+                [
+                    ("kind", a.kind.map(|k| k.code()).unwrap_or("").to_string()),
+                    ("date", a.date),
+                    ("value", a.value),
+                    ("currency", a.currency),
+                    ("announce_date", a.announce_date),
+                    ("record_date", a.record_date),
+                    ("pay_date", a.pay_date),
+                    ("payment_type", a.payment_type),
+                    ("distribution_type", a.distribution_type),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect()
+            })
+            .collect())
+    }
+
     /// Bars for a contract over a period, handed back rather than delivered a
     /// bar at a time to a callback.
+    ///
+    /// `ADJUSTED_LAST` is served here and refused by `reqHistoricalData`. The
+    /// venue has no adjusted series to pass through: an adjusted one is built
+    /// from the raw trades and the contract's actions, which means holding both
+    /// before a bar is handed over. A call that waits can; one that answers on
+    /// a callback would have to hand over raw bars under an adjusted name.
     #[pyo3(signature = (contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth=1))]
     fn historical_data(
         &self,
@@ -185,6 +254,38 @@ impl EClient {
         what_to_show: &str,
         use_rth: i32,
     ) -> PyResult<Vec<BarData>> {
+        if what_to_show.eq_ignore_ascii_case("ADJUSTED_LAST") {
+            let bars = self.historical_data(
+                py, contract, end_date_time, duration_str, bar_size_setting, "TRADES", use_rth,
+            )?;
+            let Some(first) = bars.first() else { return Ok(bars) };
+            // From the first bar to today rather than to the last: a split
+            // last month moves a series that ended last year.
+            let from: String = first.date.chars().take(8).collect();
+            let today: String = crate::protocol::datetime::chrono_free_timestamp()
+                .chars().take(8).collect();
+            let actions = self.actions_for(py, contract, &from, &today)?;
+            if actions.is_empty() {
+                return Ok(bars);
+            }
+            let raw = bars
+                .iter()
+                .map(|b| crate::types::model::BarData {
+                    date: b.date.clone(), open: b.open, high: b.high, low: b.low,
+                    close: b.close, volume: b.volume, wap: b.wap,
+                    bar_count: b.bar_count, timezone: b.timezone.clone(),
+                })
+                .collect();
+            let scaled = crate::control::adjustments::scale_bars(raw, &actions)
+                .map_err(PyValueError::new_err)?;
+            return Ok(scaled
+                .into_iter()
+                .map(|b| BarData::new(
+                    b.date, b.open, b.high, b.low, b.close, b.volume, b.wap,
+                    b.bar_count, b.timezone,
+                ))
+                .collect());
+        }
         let shared = self.connected_shared()?;
         let asked = ask_id(&shared);
         let req_id = asked.get();
