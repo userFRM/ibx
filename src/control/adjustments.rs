@@ -224,6 +224,30 @@ mod tests {
         assert!(xml.contains("<divRequestType>T</divRequestType>"));
     }
 
+    /// The reply carries its actions in the raw field, and parsing keeps them.
+    ///
+    /// The query comes back echoed as XML on one tag and the actions arrive on
+    /// another, under the length that precedes it. Nothing here would work if
+    /// the length-prefixed field did not survive being parsed, so that is
+    /// asserted rather than assumed: this is the message a live session was
+    /// answered with, put back together and read the way the engine reads one.
+    #[test]
+    fn the_actions_survive_being_parsed_out_of_the_reply() {
+        let payload = "conc\n756733,-1,-1\nconexch\n756733,AMEX,20090223\nCD\n\
+20240315,1.594937,USD,20240314,20240318,20240430,R,NA\n";
+        let msg = format!(
+            "8=FIX.4.1\x019=000355\x0135=U\x016040=10022\x016118=<ConAdjResponse>\
+             <id>adj_1</id></ConAdjResponse>\x0195={}\x0196={}\x0110=200\x01",
+            payload.len(), payload,
+        );
+        let parsed = crate::protocol::fix::fix_parse(msg.as_bytes());
+        let carried = parsed.get(&96).expect("the actions are on the raw field");
+        assert_eq!(carried.len(), payload.len(), "and the whole of it is kept");
+        let (contract, adj) = parse_adjustments(carried);
+        assert_eq!(contract.con_id, "756733");
+        assert_eq!(adj.len(), 1, "the action in it is read");
+    }
+
     /// What a live session was answered with, kept as it arrived.
     ///
     /// Asked for one contract's actions over 2024, the venue answered a name on
