@@ -54,6 +54,29 @@ impl EClient {
         wrapper.current_time(now);
     }
 
+    /// The venue's clock in milliseconds, as `reqCurrentTimeInMillis` reports it.
+    ///
+    /// The same clock [`req_current_time`](Self::req_current_time) reports and
+    /// read the same way — the venue's own last stamp, falling back to this
+    /// machine only before the session has been stamped at all. What differs
+    /// is the precision kept: the venue sometimes stamps a fraction of a
+    /// second, and asking in seconds throws it away.
+    ///
+    /// A stamp with no fraction lands on a whole second. That is the precision
+    /// the venue stated, not a rounding of something finer.
+    pub fn req_current_time_in_millis(&self, wrapper: &mut impl Wrapper) {
+        let stated = self.shared.market.venue_time()
+            .as_deref()
+            .and_then(crate::protocol::datetime::ib_datetime_to_unix_millis);
+        let now = stated.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64
+        });
+        wrapper.current_time_in_millis(now);
+    }
+
     // ── FA (Financial Advisor) ──
 
     /// Ask the venue for a partition of the advisor's own configuration.
