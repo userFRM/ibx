@@ -412,8 +412,11 @@ def test_req_current_time_in_millis_fires_callback_and_agrees_with_seconds():
     assert "current_time" in heard and "current_time_in_millis" in heard, w.events
     seconds, millis = heard["current_time"], heard["current_time_in_millis"]
     assert isinstance(millis, int)
-    # The same clock, so one is the other's thousandfold to the second.
-    assert millis // 1000 == seconds, (seconds, millis)
+    # The same clock, so one is the other's thousandfold — give or take the
+    # second boundary the two calls can land either side of. Pinned exactly,
+    # this test fails roughly whenever a run crosses one, which is a test that
+    # reports the calendar rather than the code.
+    assert 0 <= millis // 1000 - seconds <= 1, (seconds, millis)
 
 
 def test_req_current_time_fires_callback():

@@ -163,11 +163,11 @@ here.
 
 Nothing here is a gap in the code. A wire the venue does not send to this account, or one an entitlement or an advisor account gates, is answered by what the account holds and not by what is written here.
 
-Whether any of them can be asked for was open for as long as this table existed, because "not sent" and "never asked" are not the same. The scanner pair has since been asked properly — a scan subscribed, then suspended and resumed by its own id — and is recorded below as what that returned. Most of the rest are subtypes the venue sends rather than requests a caller makes, so there is nothing to ask: a caller provokes them or does not. Two in the table are requests and are unasked by choice rather than by nature. A request for quote is a message to the people who would quote it rather than a question about this account, and the transaction-reporting configuration names a firm this session has no value for, so asking it would establish that a field was wrong rather than whether the request is reachable.
+Whether any of them can be asked for was open for as long as this table existed, because "not sent" and "never asked" are not the same. The scanner pair has since been asked properly — a scan subscribed, then suspended and resumed by its own id — and is recorded below as what that returned. Most of the rest are subtypes the venue sends rather than requests a caller makes, so there is nothing to ask: a caller provokes them or does not. Two in the table are requests rather than subtypes the venue sends, and both have since been asked. Neither is refused for anything about this account: the venue reads both and rejects each for a field it did not carry. What stops them now is stated in their rows and is not the account — one wants a firm this session has no value for, and the other wants the field that turns a question into a live quote order.
 
 | Wire | What it carries | Why |
 | --- | --- | --- |
-| `35=R` | Request for quote | Instruments that accept an RFQ, which this account does not hold |
+| `35=R` | Request for quote | Reachable, and answered. A session sent one and the venue replied on the execution channel, echoing the id, stating the order type it had read it as, and rejecting it for a field it did not carry — not for anything about the account. What it wants is a side, and a request carrying one is a live quote order rather than a question, which is why this client sends none and why the phase that established this stops where it does |
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Asked and unanswered. A session subscribed a scan, suspended it and resumed it by its own id, and the venue said nothing either way. That is consistent with a control message that never replies and with one this account may not send, and it does not tell those apart — but it does settle that the request reaches the venue and is not merely unsent |
 | `6040` 146, 151, 208 | Trade-report records, including per-leg fills on a combination | Not sent to this account |
 | `6040` 200 | Execution history | Not sent to this account |
@@ -178,7 +178,7 @@ Whether any of them can be asked for was open for as long as this table existed,
 | `6040` 119 | Model allocation figures, per account | Needs an advisor account. It states how an advisor's model is allocated across the accounts under it, and this session holds one account that is not one |
 | `6040` 148 | Which order types and algorithms each venue accepts for each security type | Refuses an order before sending it. This client lets the venue refuse, and reads what it permits at logon |
 | `6040` 212 | Who decided and who executed, for European transaction reporting | Fills those fields on an order ticket. A caller states them itself, and this client carries all four of them on an order: the decision maker, the algorithm that decided, the executing trader and the algorithm that executed |
-| `6040` 211 | A request for the account's own transaction-reporting configuration, which is what would tell a caller the four values rather than leaving them to state them | Not sent. The request names the account and the firm; what its answer looks like is not established here, and sending a question this client cannot read the answer to buys nothing |
+| `6040` 211 | A request for the account's own transaction-reporting configuration, which is what would tell a caller the four values rather than leaving them to state them | Reachable. A session sent one and the venue rejected it naming the field it must carry: the firm. Sent empty, it is rejected the same way, so the firm wants a value and not merely a place. This session has none to give it, and inventing one would establish that a wrong firm is refused rather than what the answer looks like |
 | `6040` 258 | Which balance panels a front end should show | Nothing to trade on |
 | A midpoint peg stated as two offsets | A peg to the midpoint whose offset is given as a whole-tick part and a half-tick part, rather than as one continuous number. A different order type is sent for it, and only when both parts are set and both sit on the destination's tick boundaries. A caller here states one offset, which is the other form and is sent correctly |
 | `35=2` | Resending missed messages | Never observed in either direction on any of this client's connections. Implementing it would be work against a wire that never fires |
@@ -423,10 +423,10 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,820 | No |
+| Rust unit and integration | 1,821 | No |
 | Python | 470 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (138 phases) | 36 tests | Yes |
+| Paper compatibility suite (140 phases) | 37 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

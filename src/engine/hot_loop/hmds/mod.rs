@@ -927,9 +927,11 @@ impl HmdsState {
                             //
                             // The query is echoed back as XML and the actions
                             // arrive beside it on the raw field, a name on its own
-                            // line and the rows under it. Read against the contract
-                            // they name rather than the request that asked, because
-                            // the venue sends one per contract.
+                            // line and the rows under it. Matched on the echoed
+                            // id and then checked against the contract that id
+                            // asked about: the venue sends one reply per
+                            // contract, which says which contract an answer is
+                            // about and not which question it answers.
                             match parsed.get(&96) {
                                 Some(body) => {
                                     // Matched to the question it answers, not
