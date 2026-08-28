@@ -158,13 +158,43 @@ impl EClient {
     fn actions_for(
         &self, py: Python<'_>, contract: &Contract, start_date: &str, end_date: &str,
     ) -> PyResult<Vec<crate::control::adjustments::Adjustment>> {
-        if contract.con_id == 0 {
-            return Err(PyValueError::new_err(
+        if contract.con_id <= 0 {
+            return Err(PyValueError::new_err(format!(
                 "corporate actions are asked for by the venue's id for the contract, \
-                 which this one does not carry: qualify it first",
-            ));
+                 and {} is not one: qualify the contract first and pass what comes back",
+                contract.con_id,
+            )));
         }
         let shared = self.connected_shared()?;
+        // One of these at a time in this process. The answer is filed against
+        // the contract rather than handed to whoever asked, so two callers
+        // waiting on the same contract at once would both take the first reply
+        // to arrive — and one of them asked about a different range.
+        //
+        // Waited for without the interpreter lock, so other threads keep
+        // running while this one waits its turn. A mutex guard cannot cross
+        // that boundary because it is not `Send`, so the turn is a flag and a
+        // guard that puts it back.
+        static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        struct Turn;
+        impl Drop for Turn {
+            fn drop(&mut self) {
+                TAKEN.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        let _turn = py.detach(|| {
+            while TAKEN
+                .compare_exchange(
+                    false, true,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Acquire,
+                )
+                .is_err()
+            {
+                std::thread::sleep(POLL);
+            }
+            Turn
+        });
         // Cleared before asking, for the reason `forget_adjustments` states:
         // the record is kept against the contract, so an earlier answer about
         // the same one would be taken for this one's.

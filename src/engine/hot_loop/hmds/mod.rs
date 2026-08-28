@@ -65,6 +65,15 @@ pub(crate) struct HmdsState {
     pub(crate) pending_articles: Vec<(String, u32)>,
     pub(crate) pending_fundamental: Vec<(String, u32)>,
     pub(crate) pending_histogram: Vec<(String, u32)>,
+    /// In-flight corporate-action queries: the id the request went out under,
+    /// the request it answers, and the contract it asked about.
+    ///
+    /// The venue answers per contract, so a reply names a contract and not a
+    /// question. Two questions about one contract over different ranges are
+    /// answered by two replies that name the same contract; kept here, the
+    /// echoed id tells them apart and a late answer to a question already given
+    /// up on is discarded rather than taken for the next one's.
+    pub(crate) pending_adjustments: Vec<(String, u32, u32)>,
     /// (query name, caller's request id, end date the request stated). The
     /// response carries no end date, so the requested one is reported back.
     pub(crate) pending_schedule: Vec<(String, u32, String)>,
@@ -231,6 +240,7 @@ impl HmdsState {
             pending_scanner_params: false,
             pending_scanner: Vec::new(),
             next_scanner_id: 1,
+            pending_adjustments: Vec::new(),
             pending_news: Vec::new(),
             pending_articles: Vec::new(),
             pending_fundamental: Vec::new(),
@@ -284,6 +294,7 @@ impl HmdsState {
         stranded.extend(self.pending_articles.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_fundamental.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_histogram.drain(..).map(|(_, rid)| (rid, false)));
+        stranded.extend(self.pending_adjustments.drain(..).map(|(_, rid, _)| (rid, false)));
         stranded.extend(self.pending_schedule.drain(..).map(|(_, rid, _)| (rid, false)));
         stranded.extend(self.pending_ticks.drain(..).map(|(_, rid, _)| (rid, false)));
         if stranded.is_empty() {
@@ -721,6 +732,9 @@ impl HmdsState {
                             } else if let Some(pos) = self.pending_histogram.iter().position(|(q, _)| q == qid) {
                                 let (_, req_id) = self.pending_histogram.remove(pos);
                                 released_req_id = Some(req_id);
+                            } else if let Some(pos) = self.pending_adjustments.iter().position(|(q, _, _)| q == qid) {
+                                let (_, req_id, _) = self.pending_adjustments.remove(pos);
+                                released_req_id = Some(req_id);
                             } else if let Some(pos) = self.pending_ticks.iter().position(|(q, _, _)| q == qid) {
                                 let (_, req_id, _) = self.pending_ticks.remove(pos);
                                 released_req_id = Some(req_id);
@@ -918,13 +932,65 @@ impl HmdsState {
                             // the venue sends one per contract.
                             match parsed.get(&96) {
                                 Some(body) => {
+                                    // Matched to the question it answers, not
+                                    // filed for whoever asked about this
+                                    // contract last. The venue echoes the id
+                                    // the request went out under, and two
+                                    // questions about one contract over
+                                    // different ranges are otherwise
+                                    // indistinguishable: the late answer to
+                                    // the first would be handed to the second,
+                                    // and a series would come back adjusted by
+                                    // a range nobody asked for.
+                                    let echoed = parsed
+                                        .get(&6118)
+                                        .and_then(|xml| crate::control::adjustments::parse_response_query_id(xml));
+                                    let waiting = echoed.as_deref().and_then(|qid| {
+                                        self.pending_adjustments
+                                            .iter()
+                                            .position(|(q, _, _)| q == qid)
+                                    });
                                     let (contract, actions) =
                                         crate::control::adjustments::parse_adjustments(body);
-                                    log::debug!(
-                                        "corporate actions for {}: {} stated",
-                                        contract.con_id, actions.len(),
-                                    );
-                                    shared.reference.note_adjustments(contract, actions);
+                                    match waiting {
+                                        Some(pos) => {
+                                            let (_, _, asked_about) = self.pending_adjustments[pos];
+                                            // The body names its own contract.
+                                            // One naming a different contract
+                                            // from the one asked about is not
+                                            // this answer, whatever id it
+                                            // carries.
+                                            if contract.con_id.parse::<u32>() == Ok(asked_about) {
+                                                self.pending_adjustments.remove(pos);
+                                                log::debug!(
+                                                    "corporate actions for {}: {} stated",
+                                                    contract.con_id, actions.len(),
+                                                );
+                                                shared.reference.note_adjustments(contract, actions);
+                                            } else {
+                                                shared.market.note_unread_wire(
+                                                    "historical",
+                                                    format!(
+                                                        "6040=10022 named contract {} where {asked_about} was asked about",
+                                                        contract.con_id,
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                        // Nobody is waiting on this id: a late
+                                        // answer to a question already given up
+                                        // on, or one this session never asked.
+                                        // Recorded rather than filed, because
+                                        // filing it would answer somebody
+                                        // else's question with it.
+                                        None => shared.market.note_unread_wire(
+                                            "historical",
+                                            format!(
+                                                "6040=10022 for {} answered no request this session is waiting on",
+                                                contract.con_id,
+                                            ),
+                                        ),
+                                    }
                                 }
                                 // The subtype with nothing on the field it states
                                 // its answer on is recorded rather than guessed at.
@@ -1562,9 +1628,10 @@ fn build_tbt_query(
         start_date: &str, end_date: &str,
         hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState,
     ) {
+        let query_id = format!("adj_{}", self.next_hmds_query_id);
         let xml = crate::control::adjustments::build_adjustments_request_xml(
             &crate::control::adjustments::AdjustmentRequest {
-                query_id: format!("adj_{}", self.next_hmds_query_id),
+                query_id: query_id.clone(),
                 con_id,
                 sec_type: sec_type.to_string(),
                 exchange: exchange.to_string(),
@@ -1583,6 +1650,7 @@ fn build_tbt_query(
             ]);
             hb.last_hmds_sent = Instant::now();
             log::info!("Sent corporate actions request: req_id={req_id} con_id={con_id}");
+            self.pending_adjustments.push((query_id, req_id, con_id));
         }
     }
 

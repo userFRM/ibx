@@ -22,8 +22,8 @@ that did not run.
 
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
-| **EClient methods** | 77 | 75 impl, 2 stub | 75 impl, 2 stub |
-| **EWrapper callbacks** | 81 | 76 impl, 5 stub | 76 impl, 5 stub |
+| **EClient methods** | 78 | 76 impl, 2 stub | 76 impl, 2 stub |
+| **EWrapper callbacks** | 82 | 77 impl, 5 stub | 77 impl, 5 stub |
 
 ## EClient Methods
 
@@ -34,6 +34,7 @@ that did not run.
 |  | `is_connected` | `isConnected` | Y | Y | Live session |
 |  | `set_server_log_level` | `setServerLogLevel` | Y | Y | Live session |
 |  | `req_current_time` | `reqCurrentTime` | Y | Y | Live session |
+|  | `req_current_time_in_millis` | `reqCurrentTimeInMillis` | Y | Y | Live session |
 | Market Data | `req_mkt_data` | `reqMktData` | Y | Y | Live session |
 |  | `cancel_mkt_data` | `cancelMktData` | Y | Y | Live session |
 |  | `req_market_data_type` | `reqMarketDataType` | Y | Y | Live session |
@@ -117,6 +118,7 @@ that did not run.
 |  | `managed_accounts` | Y | Y |
 |  | `error` | Y | Y |
 |  | `current_time` | Y | Y |
+|  | `current_time_in_millis` | Y | Y |
 | Market Data | `tick_price` | Y | Y |
 |  | `tick_size` | Y | Y |
 |  | `tick_string` | Y | Y |

@@ -409,15 +409,26 @@ impl EClient {
             ));
         }
         let con_id = contract.con_id.to_string();
-        // Nothing here arrives on a callback, so the pump is driven with a
-        // collector that keeps nothing and the record is watched instead.
-        struct Nothing;
-        impl Wrapper for Nothing {}
+        // The actions arrive on the contract's own record rather than a
+        // callback, so the record is what is watched. A refusal does arrive on
+        // one, and without keeping it a rejected request reads as a request
+        // nothing answered — the caller waits out the whole deadline and is
+        // told no answer came, when the venue said why immediately.
+        struct Refused { req_id: i64, why: Arc<Mutex<Option<Refusal>>> }
+        impl Wrapper for Refused {
+            fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
+                if req_id == self.req_id && !is_connection_notice(code) {
+                    *self.why.lock().unwrap() = Some(Refusal::stated(code as i32, message));
+                }
+            }
+        }
         // Cleared before asking: the record is kept against the contract, so
         // an answer to an earlier question about the same one is sitting there
         // and would be taken for this one's the moment this looked.
         self.shared.reference.forget_adjustments(&con_id);
         let asked = ask_id(&self.shared);
+        let why = Arc::new(Mutex::new(None));
+        let mut refused = Refused { req_id: asked.get(), why: Arc::clone(&why) };
         self.req_adjustments(
             asked.get(), contract.con_id, &contract.sec_type, &contract.exchange,
             start_date, end_date,
@@ -425,7 +436,10 @@ impl EClient {
         let _notice = LeaveTheCloseNoticeForTheCaller::new(self);
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         while Instant::now() < deadline {
-            self.pump_for_ask(&mut Nothing);
+            self.pump_for_ask(&mut refused);
+            if let Some(refusal) = why.lock().unwrap().take() {
+                return Err(refusal);
+            }
             if let Some((_, actions)) = self.adjustments(&con_id) {
                 return Ok(actions);
             }

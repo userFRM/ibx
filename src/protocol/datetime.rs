@@ -137,17 +137,21 @@ pub fn ib_datetime_to_unix_millis(stamped: &str) -> Option<i64> {
         Some((whole, rest)) => (whole, rest),
         None => (time, ""),
     };
-    let millis: i64 = if fraction.is_empty() {
+    // Read as a decimal and cut at milliseconds: three digits, padded where
+    // the venue stated fewer.
+    //
+    // Only the digits are read, and what follows them is left alone rather
+    // than refused. The second is stated before the fraction, so a stamp
+    // carrying something unreadable after it still says which second it names
+    // — and refusing the whole stamp over the tail loses the second as well,
+    // which is a clock reading thrown away over the part nobody asked for.
+    let digits: Vec<u8> = fraction.bytes().take_while(|b| b.is_ascii_digit()).collect();
+    let millis: i64 = if digits.is_empty() {
         0
     } else {
-        if !fraction.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        // Read as a decimal and cut at milliseconds: three digits, padded
-        // where the venue stated fewer.
-        let mut digits = fraction.as_bytes().to_vec();
-        digits.resize(3, b'0');
-        std::str::from_utf8(&digits[..3]).ok()?.parse().ok()?
+        let mut three = digits;
+        three.resize(3, b'0');
+        std::str::from_utf8(&three[..3]).ok()?.parse().ok()?
     };
     let mut parts = time.split(':');
     let hours: i64 = parts.next()?.parse().ok()?;
@@ -524,5 +528,31 @@ mod venue_clock_tests {
         ] {
             assert!(ib_datetime_to_unix(good).is_some(), "{good}");
         }
+    }
+
+
+    /// A stamp the seconds reading used to accept still reads the same second.
+    ///
+    /// Reading the fraction meant looking at what follows the second, and a
+    /// stamp carrying something unreadable there had been accepted for as long
+    /// as this function existed — the tail was dropped unexamined. Refusing the
+    /// whole stamp over it loses the second as well, and the caller that asked
+    /// what time the venue thinks it is gets this machine's clock instead.
+    #[test]
+    fn a_tail_after_the_fraction_does_not_cost_the_second() {
+        let whole = 1_786_795_200;
+        for stamped in [
+            "20260815-12:00:00",
+            "20260815-12:00:00.xyz",
+            "20260815-12:00:00.123junk",
+            "20260815-12:00:00.",
+        ] {
+            assert_eq!(
+                ib_datetime_to_unix(stamped), Some(whole),
+                "{stamped:?} names a second and should still read as one",
+            );
+        }
+        // What the digits do say is still read.
+        assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00.25xyz"), Some(whole * 1_000 + 250));
     }
 }

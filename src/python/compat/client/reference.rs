@@ -316,9 +316,20 @@ impl EClient {
         end_date: &str,
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        // Narrowed the way the request surface narrows it: a contract id of
+        // zero, or a negative one, names nothing and the venue answers it with
+        // silence — which reads as a contract with no actions rather than a
+        // question that was never askable.
+        let con_id = u32::try_from(con_id).ok().filter(|id| *id > 0).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "corporate actions are asked for by the venue's id for the contract, \
+                 and {con_id} is not one: qualify the contract first and pass what \
+                 comes back",
+            ))
+        })?;
         Self::send_control(py, &tx, ControlCommand::FetchAdjustments {
             req_id: wire_req_id(req_id)?,
-            con_id: super::wire_u32("con_id", con_id)?,
+            con_id,
             sec_type: sec_type.to_string(),
             exchange: exchange.to_string(),
             start_date: start_date.to_string(),

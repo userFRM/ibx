@@ -28,6 +28,9 @@ class Tier1Wrapper(EWrapper):
     def current_time(self, time):
         self.events.append(("current_time", time))
 
+    def current_time_in_millis(self, time_in_millis):
+        self.events.append(("current_time_in_millis", time_in_millis))
+
     def next_valid_id(self, order_id):
         self.events.append(("next_valid_id", order_id))
 
@@ -389,6 +392,28 @@ def test_req_current_time_before_connecting_is_reported():
     client = EClient(probe)
     client.req_current_time()
     assert probe.not_connected, "the call reports rather than answering"
+
+
+def test_req_current_time_in_millis_fires_callback_and_agrees_with_seconds():
+    """The millisecond clock answers, and answers the same clock.
+
+    Nothing checked that it arrives at all. The parity gate beside this one asks
+    whether a call that cannot be served says so, and this one cannot fail — so
+    a binding that stopped delivering it entirely would have been caught by
+    neither.
+    """
+    w = Tier1Wrapper()
+    client = EClient(w)
+    client._test_connect("DU0000000")
+    client.req_current_time()
+    client.req_current_time_in_millis()
+
+    heard = dict(w.events)
+    assert "current_time" in heard and "current_time_in_millis" in heard, w.events
+    seconds, millis = heard["current_time"], heard["current_time_in_millis"]
+    assert isinstance(millis, int)
+    # The same clock, so one is the other's thousandfold to the second.
+    assert millis // 1000 == seconds, (seconds, millis)
 
 
 def test_req_current_time_fires_callback():
