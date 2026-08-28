@@ -216,6 +216,46 @@ impl EClient {
         Ok(())
     }
 
+    /// Ask the venue for its own clock in milliseconds. Answered on
+    /// `current_time_in_millis`.
+    ///
+    /// The same clock `req_current_time` reports and read the same way. What
+    /// differs is the precision kept: the venue sometimes stamps a fraction of
+    /// a second, and asking in seconds throws it away. A stamp with no
+    /// fraction lands on a whole second, which is the precision the venue
+    /// stated rather than a rounding of something finer.
+    ///
+    /// Answered whether or not a session is up, which is what the request
+    /// surface does and so what a caller of either client gets. Before
+    /// anything has been stamped there is nothing to report but this machine's
+    /// clock, and the log says so rather than leaving a caller waiting on a
+    /// callback that is not coming.
+    fn req_current_time_in_millis(&self, py: Python<'_>) -> PyResult<()> {
+        let from_venue = self
+            .shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.market.venue_time())
+            .and_then(|stamped| crate::protocol::datetime::ib_datetime_to_unix_millis(&stamped));
+
+        let millis = match from_venue {
+            Some(ms) => ms,
+            None => {
+                log::warn!(
+                    "current_time_in_millis: the venue has stamped no message yet, so \
+                     this reports the local clock"
+                );
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64
+            }
+        };
+        self.callback(py, "current_time_in_millis", (millis,))?;
+        Ok(())
+    }
+
     // ── FA (Financial Advisor) ──
 
     /// Ask the venue for a partition of the advisor's own configuration.

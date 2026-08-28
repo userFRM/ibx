@@ -81,6 +81,12 @@ impl EWrapper {
     /// The venue clock, in seconds since the epoch.
     fn current_time(&self, _time: i64) {}
 
+    /// The venue clock, in milliseconds since the epoch.
+    ///
+    /// The same clock `current_time` reports, at the precision the venue
+    /// stated it in: whole seconds unless the stamp carried a fraction.
+    fn current_time_in_millis(&self, _time_in_millis: i64) {}
+
     // ── Market Data ──
 
     /// One price of a quote, and which price it is. `tick_type` names it —
