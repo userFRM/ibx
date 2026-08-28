@@ -532,6 +532,8 @@ fn query_error_phase_live() {
     let conns = historical::phase_query_error_surfaces(conns);
     let conns = historical::phase_corporate_actions_reply(conns);
     let conns = historical::phase_what_the_gated_wires_answer(conns);
+    let conns = historical::phase_transaction_reporting_config(conns);
+    let conns = historical::phase_what_a_quote_request_answers(conns);
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
 }
@@ -2373,6 +2375,150 @@ fn gated_wires_phase_live() {
     };
 
     let conns = historical::phase_what_the_gated_wires_answer(conns);
+    let conns = historical::phase_transaction_reporting_config(conns);
+    let conns = historical::phase_what_a_quote_request_answers(conns);
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
+}
+
+/// What kinds of corporate action the venue actually states, across contracts
+/// chosen for having had the rarer ones.
+///
+/// Splits and cash dividends are established: a session has been answered with
+/// both and the arithmetic is checked against closes either side of one. The
+/// other four kinds are read from the protocol and have never been seen. A
+/// spin-off in particular is the one kind whose value reads as the reciprocal,
+/// so it is the one branch of the factor that no answer has ever exercised.
+///
+/// This asks a handful of contracts that had one, and reports every kind that
+/// comes back. Nothing is asserted about which kinds appear — what a company
+/// did is the company's business — but a spin-off that does appear is checked
+/// for being applied the way round the protocol states, because that is this
+/// client's business.
+///
+/// Run: cargo test --test ib_paper_compat what_kinds_of_action_the_venue_states_live -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn what_kinds_of_action_the_venue_states_live() {
+    start_logging();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    let settings = ibx::EClientConfig {
+        username: config.username.clone(),
+        password: config.password.to_string(),
+        paper: config.paper,
+        ..Default::default()
+    };
+    let client = EClient::connect(&settings).expect("connect failed");
+
+    println!("=== what kinds of action the venue states ===\n");
+    // Chosen for having separated a business out, issued shares rather than
+    // cash, or offered rights, inside the window asked for.
+    let candidates = [
+        ("GE", "20220101", "20241231"),
+        ("MMM", "20230101", "20241231"),
+        ("K", "20230101", "20241231"),
+        ("WDC", "20240101", "20251231"),
+        ("SNDK", "20240101", "20251231"),
+        ("T", "20210101", "20221231"),
+        ("XOM", "20230101", "20241231"),
+    ];
+
+    let mut seen: std::collections::BTreeMap<&'static str, usize> = Default::default();
+    for (symbol, from, to) in candidates {
+        let contract = match client.qualify_contract(&ApiContract {
+            symbol: symbol.into(), sec_type: "STK".into(), exchange: "SMART".into(),
+            currency: "USD".into(), ..Default::default()
+        }) {
+            Ok(c) => c,
+            Err(e) => { println!("  {symbol}: not qualified ({e})"); continue; }
+        };
+        match client.corporate_actions(&contract, from, to) {
+            Err(e) => println!("  {symbol}: {e}"),
+            Ok(actions) => {
+                let mut kinds: std::collections::BTreeMap<&'static str, usize> = Default::default();
+                for a in &actions {
+                    let code = a.kind.map(|k| k.code()).unwrap_or("??");
+                    *kinds.entry(code).or_default() += 1;
+                    *seen.entry(code).or_default() += 1;
+                }
+                let summary: Vec<String> =
+                    kinds.iter().map(|(k, n)| format!("{k}x{n}")).collect();
+                println!("  {symbol} {from}..{to}: {} action(s) — {}",
+                    actions.len(), summary.join(" "));
+                for a in actions.iter().filter(|a| {
+                    !matches!(a.kind, Some(ibx::AdjustmentKind::CashDividend))
+                }) {
+                    println!("      {:<3} {} value={} announced={}",
+                        a.kind.map(|k| k.code()).unwrap_or("??"), a.date, a.value, a.announce_date);
+                    // The one branch no answer has exercised: a spin-off's
+                    // value is the reciprocal, so it multiplies a price where a
+                    // split divides one. Checked here against a real stated
+                    // value rather than a made-up one.
+                    if a.kind == Some(ibx::AdjustmentKind::SpinOff)
+                        && let Ok(v) = a.value.parse::<f64>()
+                        && v > 0.0
+                    {
+                        let before = ibx::scale_before("19000101", std::slice::from_ref(a));
+                        assert!(
+                            (before - v).abs() < 1e-9,
+                            "a spin-off stating {v} must scale an earlier price by {v}, not {before}",
+                        );
+                        println!("      ^ the reciprocal branch: an earlier price scales by {v}");
+                    }
+                }
+            }
+        }
+    }
+
+    // The strongest thing a session can say about the reciprocal branch: a
+    // series across a real spin-off, raw and adjusted, from the venue's own
+    // bars. The split was established this way and the spin-off was not.
+    let ge = client.qualify_contract(&ApiContract {
+        symbol: "GE".into(), sec_type: "STK".into(), exchange: "SMART".into(),
+        currency: "USD".into(), ..Default::default()
+    });
+    if let Ok(ge) = ge {
+        let step = |bars: &[ibx::types::model::BarData]| -> (f64, String) {
+            let mut worst = (1.0_f64, String::new());
+            for w in bars.windows(2) {
+                let (a, b) = (w[0].close, w[1].close);
+                if a > 0.0 && b > 0.0 {
+                    let s = (a / b).max(b / a);
+                    if s > worst.0 {
+                        worst = (s, format!("{} -> {}: {a} -> {b}", w[0].date, w[1].date));
+                    }
+                }
+            }
+            worst
+        };
+        let ask = |what: &str| client.historical_data(&ge, "20230201-00:00:00", "2 M", "1 day", what, true);
+        match (ask("TRADES"), ask("ADJUSTED_LAST")) {
+            (Ok(raw), Ok(adj)) if !raw.is_empty() => {
+                let (raw_step, raw_where) = step(&raw);
+                let (adj_step, adj_where) = step(&adj);
+                println!("\n  a series across a real spin-off:");
+                println!("    raw:      {raw_step:.4}x  {raw_where}");
+                println!("    adjusted: {adj_step:.4}x  {adj_where}");
+                assert!(
+                    adj_step <= raw_step + 1e-9,
+                    "putting a series on one scale must not make its biggest step larger",
+                );
+            }
+            (a, b) => println!("\n  a spin-off series was not returned: {a:?} {b:?}"),
+        }
+    }
+
+    println!("\n  kinds the venue stated across all of them:");
+    for (code, n) in &seen {
+        println!("    {code}: {n}");
+    }
+    for unseen in ["SD", "SO", "RO", "FR"] {
+        if !seen.contains_key(unseen) {
+            println!("    {unseen}: none stated by any contract asked");
+        }
+    }
+    println!("\n=== done ===");
 }

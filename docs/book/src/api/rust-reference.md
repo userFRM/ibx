@@ -292,7 +292,7 @@ pub fn historical_data( &self, contract: &Contract, end_date_time: &str, duratio
 
 #### `corporate_actions`
 
-A contract's corporate actions, asked for and waited on. The venue answers these per contract rather than per request, so this asks and then watches the contract's own record for them rather than matching an id. A contract the venue states nothing for answers empty, which is an answer: it is how a contract that has never split says so. `contract` must carry the venue's id for it, which `qualify_contract` supplies. Days are `YYYYMMDD`.
+A contract's corporate actions, asked for and waited on. The venue answers these per contract rather than per request, which is enough to file an answer and not enough to know whose question it answers: two questions about one contract over different ranges are answered by two replies naming the same contract. The id the request went out under is carried through, and this takes only the answer to its own. A contract the venue states nothing for answers empty, which is an answer: it is how a contract that has never split says so. `contract` must carry the venue's id for it, which `qualify_contract` supplies. Days are `YYYYMMDD`.
 
 ```rust
 pub fn corporate_actions( &self, contract: &Contract, start_date: &str, end_date: &str, ) -> Result<Vec<crate::control::adjustments::Adjustment>, Refusal>

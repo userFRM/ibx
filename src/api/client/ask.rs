@@ -390,10 +390,13 @@ impl EClient {
 
     /// A contract's corporate actions, asked for and waited on.
     ///
-    /// The venue answers these per contract rather than per request, so this
-    /// asks and then watches the contract's own record for them rather than
-    /// matching an id. A contract the venue states nothing for answers empty,
-    /// which is an answer: it is how a contract that has never split says so.
+    /// The venue answers these per contract rather than per request, which is
+    /// enough to file an answer and not enough to know whose question it
+    /// answers: two questions about one contract over different ranges are
+    /// answered by two replies naming the same contract. The id the request
+    /// went out under is carried through, and this takes only the answer to its
+    /// own. A contract the venue states nothing for answers empty, which is an
+    /// answer: it is how a contract that has never split says so.
     ///
     /// `contract` must carry the venue's id for it, which `qualify_contract`
     /// supplies. Days are `YYYYMMDD`.
@@ -441,12 +444,15 @@ impl EClient {
                 return Err(refusal);
             }
             if let Some(actions) =
-                self.shared.reference.adjustments_answering(&con_id, asked.get() as u32)
+                self.shared.reference.take_adjustments_answering(asked.get() as u32)
             {
                 return Ok(actions);
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        // Given up on. Whatever arrives for it later answers nobody, and leaving
+        // it filed would keep it for as long as the session lasts.
+        self.shared.reference.take_adjustments_answering(asked.get() as u32);
         Err(Refusal::no_answer(format!(
             "no answer within {}s to the corporate actions of {}",
             ANSWER_TIMEOUT.as_secs(), contract.symbol,

@@ -66,6 +66,13 @@ pub struct ReferenceState {
     /// venue sends them: the reply names the contract it is about, and one
     /// arrives per contract rather than per question asked.
     adjustments: Mutex<std::collections::HashMap<String, StatedActions>>,
+    /// The answer to each outstanding request, until whoever asked takes it.
+    ///
+    /// Separate from the record above because that one holds what arrived last
+    /// for a contract, and two questions about one contract would otherwise
+    /// share a slot — the second answer replacing the first before the first
+    /// caller had looked.
+    adjustments_by_request: Mutex<std::collections::HashMap<u32, Vec<crate::control::adjustments::Adjustment>>>,
     /// Errors surfaced by HMDS for in-flight reference queries (req_id, code, message).
     /// Drained by the dispatcher and forwarded to `Wrapper::error`.
     historical_errors: Mutex<Vec<(u32, i32, String)>>,
@@ -124,6 +131,7 @@ impl ReferenceState {
             historical_ticks: Mutex::new(Vec::with_capacity(4)),
             historical_schedules: Mutex::new(Vec::with_capacity(4)),
             adjustments: Mutex::new(std::collections::HashMap::new()),
+            adjustments_by_request: Mutex::new(std::collections::HashMap::new()),
             historical_errors: Mutex::new(Vec::with_capacity(4)),
             market_rules: Mutex::new(Vec::new()),
             depth_exchanges_cache: Mutex::new(Vec::new()),
@@ -438,20 +446,22 @@ impl ReferenceState {
         self.adjustments.lock().unwrap().get(con_id).map(|(c, a, _)| (c.clone(), a.clone()))
     }
 
-    /// The actions filed for a contract, but only if they answer this request.
+    /// The answer to one request, taken.
     ///
-    /// A caller that gave up waiting leaves its question outstanding, and the
-    /// answer can still arrive and be filed afterwards. Filed against the
-    /// contract, that late answer is sitting there for the next question about
-    /// the same contract to find — over a different range, which is a series
-    /// adjusted by actions nobody asked about. The request each answer belongs
-    /// to is kept beside it, so a caller can tell its own from someone else's.
-    pub fn adjustments_answering(&self, con_id: &str, req_id: u32)
+    /// Kept apart from the contract's own record, which holds whatever arrived
+    /// last and is what a caller reads to ask "what does this session know
+    /// about this contract". A caller waiting on an answer is asking something
+    /// narrower — "what answered the question I asked" — and the two must not
+    /// share a slot: an answer filed for one request and then overwritten by a
+    /// late answer to another is an answer that arrived and was lost, and the
+    /// caller waiting on it is told nothing came.
+    ///
+    /// Taken rather than read, so what nobody is waiting for does not
+    /// accumulate. A caller that gives up takes its own on the way out.
+    pub fn take_adjustments_answering(&self, req_id: u32)
         -> Option<Vec<crate::control::adjustments::Adjustment>>
     {
-        self.adjustments.lock().unwrap().get(con_id)
-            .filter(|(_, _, answered)| *answered == req_id)
-            .map(|(_, a, _)| a.clone())
+        self.adjustments_by_request.lock().unwrap().remove(&req_id)
     }
 
     /// Forget what a contract's actions were, so the next answer is the next
@@ -477,6 +487,7 @@ impl ReferenceState {
         if contract.con_id.is_empty() {
             return;
         }
+        self.adjustments_by_request.lock().unwrap().insert(answering, actions.clone());
         self.adjustments.lock().unwrap()
             .insert(contract.con_id.clone(), (contract, actions, answering));
     }
@@ -1138,12 +1149,31 @@ mod adjustments_store_tests {
         );
         // The second question, over some other range, must not take it.
         assert!(
-            state.adjustments_answering("4815747", 8).is_none(),
+            state.take_adjustments_answering(8).is_none(),
             "an answer to request 7 is not the answer to request 8",
         );
         assert!(
-            state.adjustments_answering("4815747", 7).is_some(),
+            state.take_adjustments_answering(7).is_some(),
             "and it is still the answer to the one that did ask it",
+        );
+        assert!(
+            state.take_adjustments_answering(7).is_none(),
+            "taken, so it is not there to be taken twice",
+        );
+
+        // An answer to one question does not displace an answer to another
+        // that is still waiting to be read.
+        state.note_adjustments(
+            AdjustedContract { con_id: "4815747".into(), ..Default::default() },
+            Vec::new(), 9,
+        );
+        state.note_adjustments(
+            AdjustedContract { con_id: "4815747".into(), ..Default::default() },
+            Vec::new(), 10,
+        );
+        assert!(
+            state.take_adjustments_answering(9).is_some(),
+            "the first answer survives the second arriving before anyone read it",
         );
         // The plain reader is unchanged: it states what is known about the
         // contract, which is a different question from whose answer it is.
