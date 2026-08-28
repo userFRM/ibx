@@ -63,7 +63,10 @@ impl EClient {
     /// second, and asking in seconds throws it away.
     ///
     /// A stamp with no fraction lands on a whole second. That is the precision
-    /// the venue stated, not a rounding of something finer.
+    /// the venue stated, not a rounding of something finer — and it is what a
+    /// session measured against this venue actually gets, because the stamps
+    /// seen here carried no fraction at all. The call reads one where the
+    /// venue states one; it does not manufacture precision where it does not.
     pub fn req_current_time_in_millis(&self, wrapper: &mut impl Wrapper) {
         let stated = self.shared.market.venue_time()
             .as_deref()

@@ -38,9 +38,11 @@ pub trait Wrapper {
     /// The venue's clock, in milliseconds since the epoch.
     ///
     /// The same clock [`current_time`](Self::current_time) reports, at the
-    /// precision the venue stated it in: whole seconds unless the stamp
-    /// carried a fraction, which is what makes this worth asking for
-    /// separately rather than multiplying the other by a thousand.
+    /// precision the venue stated it in. The stamp can carry a fraction of a
+    /// second and this reads it where it does — but on the sessions measured
+    /// here the venue stated none, so the answer lands on a whole second and
+    /// is the other call's thousandfold. Read the precision off the number
+    /// rather than assuming this one has more of it.
     fn current_time_in_millis(&mut self, time_in_millis: i64) {}
 
     // ── Market Data ──

@@ -84,7 +84,9 @@ impl EWrapper {
     /// The venue clock, in milliseconds since the epoch.
     ///
     /// The same clock `current_time` reports, at the precision the venue
-    /// stated it in: whole seconds unless the stamp carried a fraction.
+    /// stated it in. The stamp can carry a fraction of a second and this reads
+    /// it where it does, but the stamps measured against this venue carried
+    /// none, so the answer lands on a whole second.
     fn current_time_in_millis(&self, _time_in_millis: i64) {}
 
     // ── Market Data ──

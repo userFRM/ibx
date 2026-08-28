@@ -2222,3 +2222,130 @@ fn conditions_round_trip_phase_live() {
         None => panic!("the venue did not state the resting order at all"),
     }
 }
+
+/// An adjusted series, end to end, against the venue that serves the raw one.
+///
+/// The arithmetic was established against two closes a session was already
+/// answered with. What was never established is the whole path: asking for a
+/// contract's actions, the venue filing its answer against that contract, and
+/// a series coming back on one scale because of it. Every part of that is new,
+/// and none of it had run against a real session.
+///
+/// The assertion is deliberately not "this bar equals that number". A series
+/// that crosses a ten-for-one split steps by ten, and the point of adjusting it
+/// is that it stops doing that — so what is checked is the size of the biggest
+/// step either side of the same request. Raw it must be large; adjusted it must
+/// not be. That holds whatever the venue's exact closes are on the day, which a
+/// test has no business pinning.
+///
+/// Run: cargo test --test ib_paper_compat adjusted_series_and_the_clock_live -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn adjusted_series_and_the_clock_live() {
+    start_logging();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    let settings = ibx::EClientConfig {
+        username: config.username.clone(),
+        password: config.password.to_string(),
+        paper: config.paper,
+        ..Default::default()
+    };
+
+    println!("=== an adjusted series, end to end ===\n");
+    let client = EClient::connect(&settings).expect("connect failed");
+
+    // A contract that split ten for one and paid dividends across the same
+    // window, so one answer states both kinds and a series over those days can
+    // be read against what it says.
+    let nvda = client.qualify_contract(&ApiContract {
+        symbol: "NVDA".into(), sec_type: "STK".into(), exchange: "SMART".into(),
+        currency: "USD".into(), ..Default::default()
+    }).expect("qualify NVDA failed");
+    println!("  contract: NVDA con_id {}", nvda.con_id);
+
+    // ── The actions, over the production request this client now sends ──
+    let actions = client.corporate_actions(&nvda, "20240101", "20241231")
+        .expect("the venue did not state the contract's actions");
+    println!("\n  {} corporate action(s) stated:", actions.len());
+    for a in &actions {
+        println!(
+            "    {:<3} {} value={:<12} currency={:<4} announced={} rec={} pay={} {} {}",
+            a.kind.map(|k| k.code()).unwrap_or("??"), a.date, a.value, a.currency,
+            a.announce_date, a.record_date, a.pay_date, a.payment_type, a.distribution_type,
+        );
+    }
+    assert!(!actions.is_empty(), "this contract split inside the window asked for");
+    assert!(
+        actions.iter().any(|a| a.kind == Some(ibx::AdjustmentKind::Split)),
+        "the split is the action the rest of this rests on",
+    );
+
+    // ── The same window, raw and adjusted ──
+    let biggest_step = |bars: &[ibx::types::model::BarData]| -> (f64, String) {
+        let mut worst = (1.0_f64, String::new());
+        for w in bars.windows(2) {
+            let (a, b) = (w[0].close, w[1].close);
+            if a > 0.0 && b > 0.0 {
+                let step = (a / b).max(b / a);
+                if step > worst.0 {
+                    worst = (step, format!("{} -> {}: {a} -> {b}", w[0].date, w[1].date));
+                }
+            }
+        }
+        worst
+    };
+
+    let ask = |what: &str| {
+        client.historical_data(&nvda, "20240701-00:00:00", "3 M", "1 day", what, true)
+            .unwrap_or_else(|e| panic!("{what}: {e}"))
+    };
+
+    let raw = ask("TRADES");
+    let adjusted = ask("ADJUSTED_LAST");
+    println!("\n  {} raw bars, {} adjusted bars", raw.len(), adjusted.len());
+    assert_eq!(raw.len(), adjusted.len(), "adjusting a series does not change how many bars are in it");
+
+    let (raw_step, raw_where) = biggest_step(&raw);
+    let (adj_step, adj_where) = biggest_step(&adjusted);
+    println!("  biggest step raw:      {raw_step:.3}x   {raw_where}");
+    println!("  biggest step adjusted: {adj_step:.3}x   {adj_where}");
+
+    assert!(
+        raw_step > 5.0,
+        "the raw series is expected to step across the split; it stepped {raw_step:.3}x, so \
+         either the venue now serves something adjusted or this window missed the split",
+    );
+    assert!(
+        adj_step < 1.5,
+        "the adjusted series still steps {adj_step:.3}x at {adj_where} — putting it on one \
+         scale is exactly what should have removed that",
+    );
+
+    // Volume runs the other way, so the same day states more of it once scaled.
+    if let (Some(r), Some(a)) = (raw.first(), adjusted.first()) {
+        println!("  first bar {}: close {} -> {}, volume {} -> {}", r.date, r.close, a.close, r.volume, a.volume);
+        assert!(a.volume >= r.volume, "a split multiplies the count it divides out of the price");
+    }
+
+    // ── The clock, at both precisions ──
+    #[derive(Default)]
+    struct Clock { secs: Vec<i64>, millis: Vec<i64> }
+    impl ibx::Wrapper for Clock {
+        fn current_time(&mut self, t: i64) { self.secs.push(t) }
+        fn current_time_in_millis(&mut self, t: i64) { self.millis.push(t) }
+    }
+    let mut clock = Clock::default();
+    client.req_current_time(&mut clock);
+    client.req_current_time_in_millis(&mut clock);
+    let (s, ms) = (clock.secs[0], clock.millis[0]);
+    println!("\n  clock: {s}s   {ms}ms   fraction stated: {}", ms % 1000);
+    assert_eq!(ms / 1000, s, "both read the same clock, so they agree to the second");
+    if ms % 1000 == 0 {
+        println!("  note: this venue stamped no fraction, so the millisecond call lands on a whole second");
+    }
+
+    println!("\n=== done ===");
+}
