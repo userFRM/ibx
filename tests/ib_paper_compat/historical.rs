@@ -1501,3 +1501,96 @@ pub(super) fn phase_historical_and_orders(mut conns: Conns) -> Conns {
     }
     conns
 }
+
+/// Ask the venue for a contract's corporate actions, and record what it says.
+///
+/// `src/control/adjustments.rs` parses a reply of these and builds the request
+/// that asks for one, and nothing sends it. The reply side reads as captured:
+/// its element names are the venue's own terse ones. The request side is not
+/// established, so this asks, and reports the answer rather than asserting a
+/// shape.
+///
+/// The envelope follows the one the news requests use, which is the only
+/// grounded pattern for a query of this family: a user message carrying its
+/// number and the query as XML.
+pub(super) fn phase_corporate_actions_reply(mut conns: Conns) -> Conns {
+    phase!("--- Phase 187: corporate actions, what the venue answers ---");
+
+    ccp_keepalive(&mut conns.ccp);
+    let mut hmds = match open_farm(ibx::gateway::Farm::Historical) {
+        Ok(c) => c,
+        Err(e) => {
+            skipped!("  SKIP: the historical farm could not be reached: {e}\n");
+            return conns;
+        }
+    };
+
+    let xml = ibx::control::adjustments::build_adjustments_request_xml(
+        &ibx::control::adjustments::AdjustmentRequest {
+            query_id: "adj_1".into(),
+            con_id: 756733,
+            sec_type: "STK".into(),
+            exchange: "SMART".into(),
+            start_date: "20240101".into(),
+            end_date: "20241231".into(),
+        },
+    );
+    let ts = now_ib_timestamp();
+    if let Err(e) = hmds.send_fix(&[
+        (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
+        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+        (6040, "10020"),
+        (6118, &xml),
+    ]) {
+        skipped!("  SKIP: the request could not be sent: {e}\n");
+        return conns;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut answered: Vec<String> = Vec::new();
+    while Instant::now() < deadline && answered.is_empty() {
+        let _ = hmds.try_recv();
+        for frame in hmds.extract_frames() {
+            match frame {
+                // A compressed frame carries its messages inside, and printing
+                // the envelope says nothing about what the venue answered.
+                ibx::protocol::connection::Frame::FixComp(raw) => {
+                    if let Some(unsigned) = hmds.unsign(&raw)
+                        && let Ok(inner) = ibx::protocol::fixcomp::fixcomp_decompress(&unsigned)
+                    {
+                        for m in inner {
+                            answered.push(String::from_utf8_lossy(&m).replace('\x01', "|"));
+                        }
+                    }
+                }
+                ibx::protocol::connection::Frame::Fix(raw) => {
+                    if let Some(unsigned) = hmds.unsign(&raw) {
+                        answered.push(String::from_utf8_lossy(&unsigned).replace('\x01', "|"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    if answered.is_empty() {
+        // Silence is the one answer this cannot read. A request the venue does
+        // not recognise and a request it recognises and has nothing for look
+        // the same from here, so it is reported as unestablished rather than
+        // as either.
+        skipped!(
+            "  SKIP: nothing came back in 20s. The request this client builds is not \
+             established against the venue, and the module that builds it stays unwired\n"
+        );
+    } else {
+        for (n, msg) in answered.iter().enumerate().take(3) {
+            // By characters, not bytes: the reply carries bytes that are not
+            // text, so a byte index lands inside one and slicing there panics.
+            let shown: String = msg.chars().take(900).collect();
+            println!("  reply {}: {shown}", n + 1);
+        }
+        println!("  PASS ({} message(s) answered the request)\n", answered.len());
+    }
+    conns
+}

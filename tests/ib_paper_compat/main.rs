@@ -530,6 +530,7 @@ fn query_error_phase_live() {
     };
 
     let conns = historical::phase_query_error_surfaces(conns);
+    let conns = historical::phase_corporate_actions_reply(conns);
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
 }

@@ -134,65 +134,71 @@ pub struct AdjustedContract {
     pub exchange: String,
 }
 
-fn element_body<'a>(xml: &'a str, tag: &str, from: usize) -> Option<(&'a str, usize)> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = xml[from..].find(&open)? + from + open.len();
-    let end = xml[start..].find(&close)? + start;
-    Some((&xml[start..end], end + close.len()))
-}
-
 /// Every corporate action in a reply, and the contract they belong to.
 ///
-/// Each action is its own element named for the kind, and its body is the
-/// values in one comma-separated run. An action stating fewer values than its
-/// kind names is kept with the rest empty rather than dropped: a partial answer
-/// from the venue is still the venue's answer, and discarding it would leave a
-/// series looking unadjusted for a reason nobody could
-pub fn parse_adjustments(xml: &str) -> (AdjustedContract, Vec<Adjustment>) {
+/// The venue answers a name on its own line and the rows under it, until the
+/// next name: the query comes back echoed as XML and the actions arrive beside
+/// it as text. An action stating fewer values than its kind names is kept with
+/// the rest empty rather than dropped, because a partial answer is still the
+/// venue's answer, and discarding it would leave a series looking unadjusted
+/// for a reason nobody could see.
+pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
     let mut contract = AdjustedContract::default();
-    if let Some((v, _)) = element_body(xml, "conc", 0) {
-        contract.con_id = v.trim().to_string();
-    }
-    if let Some((v, _)) = element_body(xml, "consym", 0) {
-        contract.symbol = v.trim().to_string();
-    }
-    if let Some((v, _)) = element_body(xml, "conexch", 0) {
-        contract.exchange = v.trim().to_string();
-    }
-
     let mut out = Vec::new();
-    for code in ["CD", "SD", "SS", "SO", "RO", "FR"] {
-        let kind = AdjustmentKind::from_code(code);
-        let mut at = 0usize;
-        while let Some((body, next)) = element_body(xml, code, at) {
-            at = next;
-            let mut a = Adjustment { kind, ..Default::default() };
-            let values: Vec<&str> = if body.trim().is_empty() {
-                Vec::new()
-            } else {
-                body.split(',').collect()
-            };
-            // Stated in one fixed order, so a value is read by where it sits.
-            for (i, v) in values.iter().enumerate() {
-                let v = v.trim().to_string();
-                match i {
-                    0 => a.date = v,
-                    1 => a.value = v,
-                    2 => a.currency = v,
-                    3 => a.announce_date = v,
-                    4 => a.record_date = v,
-                    5 => a.pay_date = v,
-                    6 => a.payment_type = v,
-                    7 => a.distribution_type = v,
-                    _ => {}
+    // A name on its own line, then the records under it until the next name.
+    // The reply carries no markup around them: the query is echoed as XML and
+    // the actions arrive beside it as text, which is what a live session was
+    // answered with.
+    let mut under: Option<&str> = None;
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !line.contains(',') {
+            under = Some(line);
+            continue;
+        }
+        let values: Vec<&str> = line.split(',').map(str::trim).collect();
+        match under {
+            // The contract states its own id first, then what the row is for.
+            Some("conc") => contract.con_id = values[0].to_string(),
+            Some("consym") => contract.symbol = values.last().unwrap_or(&"").to_string(),
+            // Its id, the venue it is listed on, and the date that listing began.
+            Some("conexch") => {
+                if let Some(exchange) = values.get(1) {
+                    contract.exchange = (*exchange).to_string();
                 }
             }
-            out.push(a);
+            Some(code) => {
+                let kind = AdjustmentKind::from_code(code);
+                if kind.is_none() {
+                    // A name this client does not know: its rows are left
+                    // rather than read under the wrong kind.
+                    continue;
+                }
+                let mut a = Adjustment { kind, ..Default::default() };
+                // Stated in one fixed order, so a value is read by where it sits.
+                for (i, v) in values.iter().enumerate() {
+                    let v = (*v).to_string();
+                    match i {
+                        0 => a.date = v,
+                        1 => a.value = v,
+                        2 => a.currency = v,
+                        3 => a.announce_date = v,
+                        4 => a.record_date = v,
+                        5 => a.pay_date = v,
+                        6 => a.payment_type = v,
+                        7 => a.distribution_type = v,
+                        _ => {}
+                    }
+                }
+                out.push(a);
+            }
+            None => {}
         }
     }
-    out
-        .sort_by(|a, b| a.date.cmp(&b.date));
+    out.sort_by(|a, b| a.date.cmp(&b.date));
     (contract, out)
 }
 
@@ -218,55 +224,30 @@ mod tests {
         assert!(xml.contains("<divRequestType>T</divRequestType>"));
     }
 
-    /// Each kind states a different number of values, in one order, and the
-    /// ones it does not state stay empty rather than shifting the rest along.
+    /// What a live session was answered with, kept as it arrived.
+    ///
+    /// Asked for one contract's actions over 2024, the venue answered a name on
+    /// its own line and the rows under it. The contract states its id and the
+    /// venue it is listed on; each dividend states its date, what it paid, in
+    /// what currency, and the three dates around it.
     #[test]
-    fn each_kind_reads_the_values_it_states() {
-        let xml = "<conc>756733</conc><consym>SPY</consym><conexch>ARCA</conexch>\
-                   <CD>20240315,1.59,USD,20240301,20240315,20240425,REGULAR,INCOME</CD>\
-                   <SS>20240610,4.0,USD,20240520</SS>\
-                   <FR></FR>";
-        let (contract, adj) = parse_adjustments(xml);
-        assert_eq!(contract.symbol, "SPY");
-        assert_eq!(contract.con_id, "756733");
-
-        let cd = adj.iter().find(|a| a.kind == Some(AdjustmentKind::CashDividend)).unwrap();
-        assert_eq!(cd.date, "20240315");
-        assert_eq!(cd.value, "1.59");
-        assert_eq!(cd.currency, "USD");
-        assert_eq!(cd.record_date, "20240315");
-        assert_eq!(cd.pay_date, "20240425");
-        assert_eq!(cd.payment_type, "REGULAR");
-        assert_eq!(cd.distribution_type, "INCOME");
-
-        let ss = adj.iter().find(|a| a.kind == Some(AdjustmentKind::Split)).unwrap();
-        assert_eq!(ss.value, "4.0");
-        assert_eq!(ss.announce_date, "20240520");
-        // A split states no record or pay date, and none is invented for it.
-        assert!(ss.record_date.is_empty() && ss.pay_date.is_empty());
-
-        assert!(adj.iter().any(|a| a.kind == Some(AdjustmentKind::FutureRollover)));
-    }
-
-    /// A dividend paid out of something the venue does not name arrives with
-    /// that value empty, which is a value, not a short record.
-    #[test]
-    fn an_unstated_distribution_is_empty_rather_than_missing() {
-        let (_, adj) = parse_adjustments("<CD>20240315,1.59,USD,20240301,20240315,20240425,SPECIAL,</CD>");
-        assert_eq!(adj.len(), 1);
-        assert_eq!(adj[0].payment_type, "SPECIAL");
-        assert!(adj[0].distribution_type.is_empty());
-    }
-
-    /// Several actions of the same kind are several records.
-    #[test]
-    fn repeated_actions_are_all_kept() {
-        let (_, adj) = parse_adjustments(
-            "<CD>20240315,1.59,USD,20240301,20240315,20240425,REGULAR,INCOME</CD>\
-             <CD>20240615,1.61,USD,20240601,20240615,20240725,REGULAR,INCOME</CD>",
-        );
-        assert_eq!(adj.len(), 2);
+    fn what_the_venue_answered_is_read() {
+        let answered = "conc\n756733,-1,-1\n\
+                        conexch\n756733,AMEX,20090223\n\
+                        CD\n\
+                        20240315,1.594937,USD,20240314,20240318,20240430,R,NA\n\
+                        20240621,1.759024,USD,20240620,20240621,20240731,R,NA\n\
+                        20240920,1.745531,USD,20240919,20240920,20241031,R,NA\n\
+                        20241220,1.965548,USD,20241219,20241220,20250131,R,NA\n";
+        let (contract, adj) = parse_adjustments(answered);
+        assert_eq!(contract.con_id, "756733", "the contract names itself first");
+        assert_eq!(contract.exchange, "AMEX", "and the venue it is listed on");
+        assert_eq!(adj.len(), 4, "four dividends were paid over the year asked for");
+        assert_eq!(adj[0].kind, Some(AdjustmentKind::CashDividend));
         assert_eq!(adj[0].date, "20240315");
-        assert_eq!(adj[1].date, "20240615");
+        assert_eq!(adj[0].value, "1.594937");
+        assert_eq!(adj[0].currency, "USD");
+        assert_eq!(adj[0].pay_date, "20240430");
+        assert_eq!(adj[3].date, "20241220", "and they come back in date order");
     }
 }
