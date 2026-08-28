@@ -209,11 +209,19 @@ impl EClient {
             py, req_id, contract.con_id, &contract.sec_type, &contract.exchange,
             start_date, end_date,
         )?;
-        let con_id = contract.con_id.to_string();
         let what = format!("the corporate actions of {}", contract.symbol);
-        wait_for(py, &shared, req_id, &what, |sh| {
-            sh.reference.adjustments_for(&con_id).map(|(_, actions)| actions)
-        })
+        // The answer to this request, not the last answer about this contract.
+        // Reading the contract's own record here would hand a caller a late
+        // answer to a question somebody else gave up on, over a range this one
+        // never asked about.
+        let answer = wait_for(py, &shared, req_id, &what, |sh| {
+            sh.reference.take_adjustments_answering(req_id as u32)
+        });
+        if answer.is_err() {
+            // Given up on: whatever arrives for it later answers nobody.
+            shared.reference.take_adjustments_answering(req_id as u32);
+        }
+        answer
     }
 }
 
