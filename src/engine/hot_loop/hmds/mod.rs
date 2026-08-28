@@ -907,13 +907,31 @@ impl HmdsState {
                             }
                         }
                         "10022" => {
-                            // ConAdjResponse: corporate-actions / dividend history,
-                            // pushed once per contract per session on the first
-                            // historical request (any bar size). Not a bar frame and
-                            // not a completion sentinel — bar completion rides
-                            // <eoq>true> in the ResultSetBar. Nothing here
-                            // reads this subtype; it is recorded as unread.
-                            shared.market.note_unread_wire("historical", "6040=10022".to_string());
+                            // A contract's corporate actions. Not a bar frame and
+                            // not a completion sentinel: bar completion rides
+                            // <eoq>true> in the ResultSetBar.
+                            //
+                            // The query is echoed back as XML and the actions
+                            // arrive beside it on the raw field, a name on its own
+                            // line and the rows under it. Read against the contract
+                            // they name rather than the request that asked, because
+                            // the venue sends one per contract.
+                            match parsed.get(&96) {
+                                Some(body) => {
+                                    let (contract, actions) =
+                                        crate::control::adjustments::parse_adjustments(body);
+                                    log::debug!(
+                                        "corporate actions for {}: {} stated",
+                                        contract.con_id, actions.len(),
+                                    );
+                                    shared.reference.note_adjustments(contract, actions);
+                                }
+                                // The subtype with nothing on the field it states
+                                // its answer on is recorded rather than guessed at.
+                                None => shared.market.note_unread_wire(
+                                    "historical", "6040=10022 with no body".to_string(),
+                                ),
+                            }
                         }
                         // An unread subtype is recorded, as an unknown
                         // message type is.

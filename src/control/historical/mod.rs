@@ -53,10 +53,14 @@ impl BarDataType {
             // got silence. Better to say why than to answer trade bars under
             // the name of adjusted ones.
             "ADJUSTED_LAST" => return Err(
-                "adjusted bars are built by applying the venue's corporate actions to what \
-                 traded, and this client does not read them. The venue states no adjusted \
-                 series of its own to ask for: asking for one is answered with nothing. Ask \
-                 for TRADES and apply the actions, or ask for what the venue does state"
+                "the venue states no adjusted series to ask for: asked for one by name it \
+                 answers that it has no such data, and the trades it does serve are raw. \
+                 Ask for TRADES and put them on one scale with the contract's own actions, \
+                 which this client reads and hands back: `EClient::adjustments` states them \
+                 and `control::adjustments::scale_before` turns a date and them into the \
+                 factor a price from that date carries. Splits are applied by it; dividends \
+                 are stated and not applied, because how much of one comes off a historical \
+                 price is not established here"
                     .to_string(),
             ),
             "HISTORICAL_VOLATILITY" => Self::HistoricalVolatility,
