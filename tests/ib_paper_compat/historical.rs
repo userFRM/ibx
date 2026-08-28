@@ -1598,3 +1598,151 @@ pub(super) fn phase_corporate_actions_reply(mut conns: Conns) -> Conns {
     }
     conns
 }
+
+/// Whether a message is the session talking to itself rather than answering.
+///
+/// A farm sends heartbeats and test requests on its own schedule, and one
+/// landing inside the window a probe is watching is not a reply to what the
+/// probe sent. Counted as one, it turns "the venue does not answer this" into
+/// "the venue answers this", which is the opposite of the truth and the whole
+/// result of the phase.
+fn keeps_the_session_up(message: &str) -> bool {
+    matches!(
+        message.split('|').find_map(|f| f.strip_prefix("35=")),
+        Some("0" | "1" | "2" | "4" | "5" | "A"),
+    )
+}
+
+/// Ask for the wires the notes record as the account's to decide, and report
+/// what comes back.
+///
+/// The table of them says the venue does not send these to this account. That
+/// is a different statement from "this account may not ask", and the notes have
+/// said so for as long as the table has existed without anything telling the
+/// two apart. Silence when nobody asked is not evidence of anything.
+///
+/// So this asks. Nothing here is asserted: what an account may reach is the
+/// account's business, and a test that pinned it would fail the day an
+/// entitlement changed. What it does is put the answer — including no answer —
+/// into the run's output, so the table can say which it is.
+///
+/// Two are left out on purpose. A request for quote is a message to the people
+/// who would quote it, not a question about this account, and this suite does
+/// not send those. The transaction-reporting configuration names a firm this
+/// session has no value for, so asking would establish that a field was wrong
+/// rather than whether the request is reachable.
+pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
+    phase!("--- Phase 188: what the gated wires answer when asked ---");
+
+    ccp_keepalive(&mut conns.ccp);
+    let mut hmds = match open_farm(ibx::gateway::Farm::Historical) {
+        Ok(c) => c,
+        Err(e) => {
+            skipped!("  SKIP: the historical farm could not be reached: {e}\n");
+            return conns;
+        }
+    };
+
+    // A scanner has to exist before suspending one means anything. Asking to
+    // suspend nothing and hearing nothing back says only that the request was
+    // empty, so one is subscribed first and it is that scan the rest asks
+    // about. The id is this client's to choose, as it is on every query here.
+    let scan_id = "scan_gate_1";
+    let subscribe = ibx::control::scanner::build_scanner_subscribe_xml(
+        &ibx::control::scanner::ScannerSubscription {
+            instrument: "STK".into(),
+            location_code: "STK.US.MAJOR".into(),
+            scan_code: "TOP_PERC_GAIN".into(),
+            max_items: 10,
+            filters: Vec::new(),
+        },
+        scan_id,
+    );
+    let ts = now_ib_timestamp();
+    if let Err(e) = hmds.send_fix(&[
+        (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
+        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+        (6040, "10003"),
+        (6118, &subscribe),
+    ]) {
+        skipped!("  SKIP: the scanner could not be subscribed to suspend: {e}\n");
+        return conns;
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    let _ = hmds.try_recv();
+    let _ = hmds.extract_frames();
+    println!("  subscribed scan {scan_id}, so there is one to suspend");
+
+    // The element each request arrives under is its own name, which is how the
+    // subscription and the desubscription above are already sent and answered.
+    for (subtype, element, what) in [
+        ("10006", "ScanSuspendRequest", "suspend that scan"),
+        ("10007", "ScanResumeRequest", "resume that scan"),
+    ] {
+        let xml = format!("<{element}><id>{scan_id}</id></{element}>");
+        let ts = now_ib_timestamp();
+        if let Err(e) = hmds.send_fix(&[
+            (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
+            (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+            (6040, subtype),
+            (6118, &xml),
+        ]) {
+            skipped!("  SKIP: {what} could not be sent: {e}\n");
+            return conns;
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut answered: Vec<String> = Vec::new();
+        while Instant::now() < deadline && answered.is_empty() {
+            let _ = hmds.try_recv();
+            for frame in hmds.extract_frames() {
+                let mut keep = |bytes: &[u8]| {
+                    let text = String::from_utf8_lossy(bytes).replace('\x01', "|");
+                    if !keeps_the_session_up(&text) {
+                        answered.push(text);
+                    }
+                };
+                match frame {
+                    ibx::protocol::connection::Frame::FixComp(raw) => {
+                        if let Some(unsigned) = hmds.unsign(&raw)
+                            && let Ok(inner) = ibx::protocol::fixcomp::fixcomp_decompress(&unsigned)
+                        {
+                            for m in inner {
+                                keep(&m);
+                            }
+                        }
+                    }
+                    ibx::protocol::connection::Frame::Fix(raw) => {
+                        if let Some(unsigned) = hmds.unsign(&raw) {
+                            keep(&unsigned);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        if answered.is_empty() {
+            println!("  {subtype} ({what}): nothing in 8s — asked and unanswered, which is \
+                      not the same as never asked");
+        } else {
+            for msg in answered.iter().take(2) {
+                let shown: String = msg.chars().take(400).collect();
+                println!("  {subtype} ({what}): {shown}");
+            }
+        }
+    }
+
+    // Put the scan back down whatever happened above.
+    let ts = now_ib_timestamp();
+    let _ = hmds.send_fix(&[
+        (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
+        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+        (6040, "10004"),
+        (6118, &ibx::control::scanner::build_scanner_cancel_xml(scan_id)),
+    ]);
+
+    println!();
+    conns
+}
