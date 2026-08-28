@@ -1870,7 +1870,7 @@ pub fn req_current_time(&self, wrapper: &mut impl Wrapper)
 
 #### `req_current_time_in_millis`
 
-The venue's clock in milliseconds, as `reqCurrentTimeInMillis` reports it. The same clock `req_current_time` reports and read the same way — the venue's own last stamp, falling back to this machine only before the session has been stamped at all. What differs is the precision kept: the venue sometimes stamps a fraction of a second, and asking in seconds throws it away. A stamp with no fraction lands on a whole second. That is the precision the venue stated, not a rounding of something finer.
+The venue's clock in milliseconds, as `reqCurrentTimeInMillis` reports it. The same clock `req_current_time` reports and read the same way — the venue's own last stamp, falling back to this machine only before the session has been stamped at all. What differs is the precision kept: the venue sometimes stamps a fraction of a second, and asking in seconds throws it away. A stamp with no fraction lands on a whole second. That is the precision the venue stated, not a rounding of something finer — and it is what a session measured against this venue actually gets, because the stamps seen here carried no fraction at all. The call reads one where the venue states one; it does not manufacture precision where it does not.
 
 ```rust
 pub fn req_current_time_in_millis(&self, wrapper: &mut impl Wrapper)
@@ -2154,7 +2154,7 @@ The venue's clock, in seconds since the epoch.
 
 #### `current_time_in_millis`
 
-The venue's clock, in milliseconds since the epoch.  The same clock [`current_time`](Self::current_time) reports, at the precision the venue stated it in: whole seconds unless the stamp carried a fraction, which is what makes this worth asking for separately rather than multiplying the other by a thousand.
+The venue's clock, in milliseconds since the epoch.  The same clock [`current_time`](Self::current_time) reports, at the precision the venue stated it in. The stamp can carry a fraction of a second and this reads it where it does — but on the sessions measured here the venue stated none, so the answer lands on a whole second and is the other call's thousandfold. Read the precision off the number rather than assuming this one has more of it.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

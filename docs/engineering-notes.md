@@ -149,8 +149,15 @@ on them forever rather than be told they are not coming.
 | `config` | A configuration exchange between a front end and its own process | There is no such process here. This client is the thing a front end would have been talking to |
 
 `currentTimeInMillis` was on this list and is not any more: it reads the same
-clock `currentTime` does, at whatever precision the venue stamped, which is the
-whole of what it adds.
+clock `currentTime` does, at whatever precision the venue stamped.
+
+What it adds, measured rather than assumed, is currently nothing. The stamp
+format carries a fraction of a second and this client reads one where the venue
+states it, but across the sessions run against this venue the stamps carried no
+fraction, so the answer is the other call's thousandfold. The call is served
+because the reference API defines it and a caller written against that API
+waits on it otherwise, not because it has been seen to carry more precision
+here.
 
 ### The account decides these
 
@@ -414,10 +421,10 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,813 | No |
+| Rust unit and integration | 1,815 | No |
 | Python | 469 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (137 phases) | 34 tests | Yes |
+| Paper compatibility suite (137 phases) | 35 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

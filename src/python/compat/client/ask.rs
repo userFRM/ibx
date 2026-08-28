@@ -165,6 +165,10 @@ impl EClient {
             ));
         }
         let shared = self.connected_shared()?;
+        // Cleared before asking, for the reason `forget_adjustments` states:
+        // the record is kept against the contract, so an earlier answer about
+        // the same one would be taken for this one's.
+        shared.reference.forget_adjustments(&contract.con_id.to_string());
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_adjustments(

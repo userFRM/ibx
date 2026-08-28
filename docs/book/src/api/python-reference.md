@@ -1729,7 +1729,7 @@ The venue clock, in seconds since the epoch.
 
 #### `current_time_in_millis`
 
-The venue clock, in milliseconds since the epoch.  The same clock `current_time` reports, at the precision the venue stated it in: whole seconds unless the stamp carried a fraction.
+The venue clock, in milliseconds since the epoch.  The same clock `current_time` reports, at the precision the venue stated it in. The stamp can carry a fraction of a second and this reads it where it does, but the stamps measured against this venue carried none, so the answer lands on a whole second.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
