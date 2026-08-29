@@ -13,16 +13,10 @@ use crate::control::contracts::MarketRule;
 use crate::types::*;
 use crate::types::model as api;
 
-/// A contract's corporate actions as the venue stated them, and the request its
-/// answer belongs to.
-///
-/// The request is kept because the venue answers per contract: without it, an
-/// answer to a question already given up on is indistinguishable from an answer
-/// to the question being asked now.
+/// A contract's corporate actions as the venue stated them.
 type StatedActions = (
     crate::control::adjustments::AdjustedContract,
     Vec<crate::control::adjustments::Adjustment>,
-    u32,
 );
 
 /// Historical data, contract definitions, scanners, news archives, market rules,
@@ -443,15 +437,17 @@ impl ReferenceState {
         Self::take_one(&self.fundamental_data, req_id)
     }
 
-    /// Every corporate action the venue has stated for a contract this session.
+    /// What the venue last stated for a contract, over whatever range was last
+    /// asked about.
     ///
-    /// Read rather than taken: the actions belong to the contract for as long as
-    /// the session holds it, and a caller adjusting one series does not spend
-    /// them for the next.
+    /// Not every action of the contract's life: each question replaces what the
+    /// one before it left, and a narrower question leaves a narrower answer.
+    /// Read rather than taken, so a caller adjusting one series does not spend
+    /// it for the next.
     pub fn adjustments_for(&self, con_id: &str)
         -> Option<(crate::control::adjustments::AdjustedContract, Vec<crate::control::adjustments::Adjustment>)>
     {
-        self.adjustments.lock().unwrap().get(con_id).map(|(c, a, _)| (c.clone(), a.clone()))
+        self.adjustments.lock().unwrap().get(con_id).cloned()
     }
 
     /// Say that an answer to this request is going to be waited for.
@@ -522,7 +518,7 @@ impl ReferenceState {
             *slot = Some(actions.clone());
         }
         self.adjustments.lock().unwrap()
-            .insert(contract.con_id.clone(), (contract, actions, answering));
+            .insert(contract.con_id.clone(), (contract, actions));
     }
 
     /// Take the historical schedule answering one request, leaving the rest.
