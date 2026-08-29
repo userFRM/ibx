@@ -150,11 +150,11 @@ impl EClient {
 
     /// A contract's corporate actions, asked for and waited on.
     ///
-    /// The venue files its answer against the contract it names rather than
-    /// the request that asked, so this watches the contract's own record for
-    /// it. Kept off the Python surface deliberately: it hands back this
-    /// client's own types, and `corporate_actions` is what states them to a
-    /// caller.
+    /// The venue answers per contract, which says which contract an answer is
+    /// about and not which question it answers, so the engine files it against
+    /// the request that asked and this takes its own. Kept off the Python
+    /// surface deliberately: it hands back this client's own types, and
+    /// `corporate_actions` is what states them to a caller.
     fn actions_for(
         &self, py: Python<'_>, contract: &Contract, start_date: &str, end_date: &str,
     ) -> PyResult<Vec<crate::control::adjustments::Adjustment>> {
@@ -166,10 +166,11 @@ impl EClient {
             )));
         }
         let shared = self.connected_shared()?;
-        // One of these at a time in this process. The answer is filed against
-        // the contract rather than handed to whoever asked, so two callers
-        // waiting on the same contract at once would both take the first reply
-        // to arrive — and one of them asked about a different range.
+        // One of these at a time per session. Each caller takes only the answer
+        // to its own request, so a second caller cannot be handed the first's;
+        // what serialising prevents is the two of them clearing and rewriting
+        // the contract's own record around each other, which is what
+        // `EClient::adjustments` reads.
         //
         // Waited for without the interpreter lock, so other threads keep
         // running while this one waits its turn. A mutex guard cannot cross
@@ -205,6 +206,10 @@ impl EClient {
         shared.reference.forget_adjustments(&contract.con_id.to_string());
         let asked = ask_id(&shared);
         let req_id = asked.get();
+        // Said before the request goes out, so an answer that arrives has
+        // somewhere to be put. Nothing is filed for a request nobody said they
+        // would wait on.
+        shared.reference.expect_adjustments(req_id as u32);
         self.req_adjustments(
             py, req_id, contract.con_id, &contract.sec_type, &contract.exchange,
             start_date, end_date,
@@ -217,10 +222,9 @@ impl EClient {
         let answer = wait_for(py, &shared, req_id, &what, |sh| {
             sh.reference.take_adjustments_answering(req_id as u32)
         });
-        if answer.is_err() {
-            // Given up on: whatever arrives for it later answers nobody.
-            shared.reference.take_adjustments_answering(req_id as u32);
-        }
+        // Given up on either way: an answer arriving after this has nobody to
+        // go to, and a slot left behind is one the session never reclaims.
+        shared.reference.stop_waiting_for_adjustments(req_id as u32);
         answer
     }
 }
