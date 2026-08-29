@@ -157,10 +157,10 @@ def sent_subtypes(srcs: dict) -> list:
         # `TAG_` names the tag itself rather than a subtype travelling under it,
         # and reading it as one published the tag's own number as a subtype.
         found |= set(re.findall(
-            r'const (?!TAG_)\w*SUB_PROTOCOL\w*: (?:u32 = (\d+)|&str = "(\d+)")\s*;', text,
+            r'const (?!TAG_)(?!\w*(?:REPLY|ANSWER|RESPONSE))\w*SUB_PROTOCOL\w*: (?:u32 = (\d+)|&str = "(\d+)")\s*;', text,
         ) and [
             g for pair in re.findall(
-                r'const (?!TAG_)\w*SUB_PROTOCOL\w*: (?:u32 = (\d+)|&str = "(\d+)")\s*;', text,
+                r'const (?!TAG_)(?!\w*(?:REPLY|ANSWER|RESPONSE))\w*SUB_PROTOCOL\w*: (?:u32 = (\d+)|&str = "(\d+)")\s*;', text,
             ) for g in pair if g
         ])
     return sorted(found, key=int)

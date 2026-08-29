@@ -378,10 +378,16 @@ fn day_of(bar_date: &str) -> Option<String> {
         return None;
     }
     match bar_date.as_bytes().get(8) {
-        None => Some(day),
-        Some(c) if !c.is_ascii_digit() => Some(day),
-        Some(_) => None,
+        None | Some(b' ' | b'-' | b'T') => {}
+        Some(c) if !c.is_ascii_digit() => {}
+        Some(_) => return None,
     }
+    // Eight digits are a shape, not a date. The thirteenth month and the
+    // thirty-second of a month both pass the shape and name no day, and read
+    // as text they sort among the days that do — so an action stated on one
+    // would move the prices either side of a day that never happened.
+    crate::protocol::datetime::ib_datetime_to_unix(&format!("{day}-00:00:00"))?;
+    Some(day)
 }
 
 pub fn scale_bars(
@@ -721,7 +727,9 @@ mod tests {
     fn a_day_nobody_can_read_stops_the_series_as_a_factor_does() {
         use crate::types::model::BarData;
         let bar = BarData { date: "20240607".into(), close: 1208.88, volume: 100, ..Default::default() };
-        for undated in ["", "2024-06-10", "1717718400", "june"] {
+        // The last two are shapes without days in them: a thirteenth month and
+        // a thirty-first of February pass eight digits and name nothing.
+        for undated in ["", "2024-06-10", "1717718400", "june", "20241340", "20240231"] {
             let split = vec![Adjustment {
                 kind: Some(AdjustmentKind::Split),
                 date: undated.into(),
