@@ -2088,3 +2088,142 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
     }
     conns
 }
+
+/// Withdraw a news request after it has been answered, and report what the
+/// venue makes of that.
+///
+/// The notes have said this is not built because historical news is answered
+/// once, so there is nothing outstanding for a caller to withdraw. That is a
+/// statement about the venue made without asking it, which is the same shape as
+/// the two rows beside it that turned out to be worth asking.
+///
+/// So this asks: a news request goes out, its answer is waited for, and the
+/// withdrawal is sent under the same id. Nothing is asserted. A reply naming the
+/// id says the venue tracks the request after answering it; nothing says the
+/// row's reasoning holds; an error says what it wants instead.
+pub(super) fn phase_what_withdrawing_news_answers(conns: Conns) -> Conns {
+    phase!("--- Phase 191: what withdrawing an answered news request answers ---");
+
+    /// The id both the request and its withdrawal go out under.
+    const ASKED_UNDER: &str = "news_gate_1";
+
+    let mut hmds = match open_farm(ibx::gateway::Farm::Historical) {
+        Ok(c) => c,
+        Err(e) => {
+            skipped!("  SKIP: the historical farm could not be reached: {e}\n");
+            return conns;
+        }
+    };
+
+    let request = ibx::control::news::build_historical_news_xml(
+        &ibx::control::news::HistoricalNewsRequest {
+            query_id: ASKED_UNDER.to_string(),
+            // The contract and the providers a phase in this suite is already
+            // answered for. Asked with no provider named, the venue answers
+            // nothing — which says the request was wrong, not that news is
+            // unavailable.
+            con_id: 265598,
+            provider_codes: "BRFG+BRFUPDN+DJ-N+DJ-RTA+DJ-RTE+DJ-RTG+DJ-RTPRO+DJNL".into(),
+            start_time: String::new(),
+            end_time: String::new(),
+            max_results: 5,
+        },
+    );
+    let ts = now_ib_timestamp();
+    if let Err(e) = hmds.send_fix(&[
+        (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
+        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+        (6040, "10030"),
+        (6118, &request),
+    ]) {
+        skipped!("  SKIP: the news request could not be sent: {e}\n");
+        return conns;
+    }
+
+    // Answered first, because withdrawing something still being worked on asks
+    // a different question from withdrawing something already finished.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut answered = false;
+    while Instant::now() < deadline && !answered {
+        if let Err(e) = hmds.try_recv()
+            && e.kind() != std::io::ErrorKind::WouldBlock
+        {
+            skipped!("  SKIP: the connection went away while asking for news: {e}\n");
+            return conns;
+        }
+        for frame in hmds.extract_frames() {
+            for m in messages_in(&mut hmds, &frame) {
+                let text = String::from_utf8_lossy(&m).replace('\x01', "|");
+                if text.contains(ASKED_UNDER) || text.contains("|6040=10032|") {
+                    answered = true;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if !answered {
+        skipped!("  SKIP: the news request itself was not answered in 15s, so there is \
+                  nothing answered to withdraw\n");
+        return conns;
+    }
+    println!("  the news request was answered; withdrawing it under the same id");
+
+    // The withdrawal arrives under its own name, as every query of this family
+    // does — the same pattern the subscription and desubscription beside it are
+    // already sent and answered under.
+    let withdraw = format!("<CancelQuery><id>{ASKED_UNDER}</id></CancelQuery>");
+    let ts = now_ib_timestamp();
+    if let Err(e) = hmds.send_fix(&[
+        (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
+        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+        (6040, "10031"),
+        (6118, &withdraw),
+    ]) {
+        skipped!("  SKIP: the withdrawal could not be sent: {e}\n");
+        return conns;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut said: Vec<String> = Vec::new();
+    let mut unrelated = 0usize;
+    let mut hung_up = false;
+    while Instant::now() < deadline && said.is_empty() && !hung_up {
+        if let Err(e) = hmds.try_recv()
+            && e.kind() != std::io::ErrorKind::WouldBlock
+        {
+            hung_up = true;
+            said.push(format!("the connection went away: {e}"));
+        }
+        for frame in hmds.extract_frames() {
+            for m in messages_in(&mut hmds, &frame) {
+                let text = String::from_utf8_lossy(&m).replace('\x01', "|");
+                if ends_the_session(&text) {
+                    hung_up = true;
+                } else if text.contains(ASKED_UNDER) {
+                    said.push(text);
+                } else if !keeps_the_session_up(&text) {
+                    unrelated += 1;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    if hung_up {
+        println!("  the session ended while waiting, so nothing here says what the venue \
+                  makes of the withdrawal\n");
+    } else if said.is_empty() {
+        println!(
+            "  nothing naming {ASKED_UNDER} in 10s, with {unrelated} other message(s) \
+             meanwhile. The withdrawal drew no reply carrying its id, which is what the \
+             row's reasoning expects of a request already answered\n"
+        );
+    } else {
+        for msg in said.iter().take(2) {
+            let shown: String = msg.chars().take(500).collect();
+            println!("  answered: {shown}");
+        }
+        println!();
+    }
+    conns
+}
