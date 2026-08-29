@@ -200,16 +200,28 @@ impl EClient {
             }
             Turn(taken)
         });
-        // Cleared before asking, for the reason `forget_adjustments` states:
-        // the record is kept against the contract, so an earlier answer about
-        // the same one would be taken for this one's.
+        // The contract's own record is what `EClient::adjustments` reads, and
+        // it is cleared here so that reader states this question's answer
+        // rather than a previous one's. What this call waits on is its own
+        // slot, which no other question can fill.
         shared.reference.forget_adjustments(&contract.con_id.to_string());
         let asked = ask_id(&shared);
         let req_id = asked.get();
         // Said before the request goes out, so an answer that arrives has
         // somewhere to be put. Nothing is filed for a request nobody said they
         // would wait on.
+        //
+        // Given up by a guard rather than by a line at the end, because the
+        // send below can fail and return, and a slot left behind by a call that
+        // never waited is one the session never reclaims.
+        struct StopWaiting(Arc<SharedState>, u32);
+        impl Drop for StopWaiting {
+            fn drop(&mut self) {
+                self.0.reference.stop_waiting_for_adjustments(self.1);
+            }
+        }
         shared.reference.expect_adjustments(req_id as u32);
+        let _stop = StopWaiting(Arc::clone(&shared), req_id as u32);
         self.req_adjustments(
             py, req_id, contract.con_id, &contract.sec_type, &contract.exchange,
             start_date, end_date,
@@ -219,13 +231,9 @@ impl EClient {
         // Reading the contract's own record here would hand a caller a late
         // answer to a question somebody else gave up on, over a range this one
         // never asked about.
-        let answer = wait_for(py, &shared, req_id, &what, |sh| {
+        wait_for(py, &shared, req_id, &what, |sh| {
             sh.reference.take_adjustments_answering(req_id as u32)
-        });
-        // Given up on either way: an answer arriving after this has nobody to
-        // go to, and a slot left behind is one the session never reclaims.
-        shared.reference.stop_waiting_for_adjustments(req_id as u32);
-        answer
+        })
     }
 }
 
