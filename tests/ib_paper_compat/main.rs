@@ -2461,7 +2461,8 @@ fn what_kinds_of_action_the_venue_states_live() {
                         && let Ok(v) = a.value.parse::<f64>()
                         && v > 0.0
                     {
-                        let before = ibx::scale_before("19000101", std::slice::from_ref(a));
+                        let before = ibx::scale_before("19000101", std::slice::from_ref(a))
+                            .expect("the venue stated this factor");
                         assert!(
                             (before - v).abs() < 1e-9,
                             "a spin-off stating {v} must scale an earlier price by {v}, not {before}",
