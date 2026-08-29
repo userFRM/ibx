@@ -244,7 +244,7 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
 }
 
 /// What a price before `date` must be multiplied by to sit on the same scale
-/// as prices after every action in `actions`.
+/// as prices after every action in `actions`, or what stopped it stating one.
 ///
 /// An action moves the scale for a price dated before it, and leaves a price
 /// dated on or after it alone. Three kinds move it: a split, a stock dividend
@@ -262,27 +262,37 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
 /// it. A rights offer moves what a holder paid, not what the share is quoted
 /// at. A rollover states no value at all.
 ///
+/// An action that moves the scale and does not say by how much stops this. It
+/// could be skipped, and skipping it leaves the price it should have moved
+/// exactly as the venue served it — a raw price handed back under the name of
+/// an adjusted one, which is the wrong number this module exists to remove
+/// arriving by its own back door.
+///
 /// Volume runs the other way: the shares that traded before a ten-for-one split
 /// count for ten times as many after it, so a caller scaling volume multiplies
-/// by what this returns rather than dividing. [`scale_volume_before`] states
-/// that, so neither caller has to remember which way round it goes.
-pub fn scale_before(date: &str, actions: &[Adjustment]) -> f64 {
-    scale_before_stated(date, actions).unwrap_or(1.0)
-}
-
-/// What [`scale_before`] returns, or what stopped it stating one.
-///
-/// An action that moves the scale and does not say by how much is the case
-/// this exists for. Skipping it leaves the price it should have moved exactly
-/// as the venue served it, and a caller who asked for an adjusted series is
-/// handed a raw one with nothing saying so — which is the wrong number this
-/// whole module exists to remove, reintroduced by the one action it could not
-/// read. Said out loud instead.
-pub fn scale_before_stated(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
+/// by the reciprocal of this. [`scale_volume_before`] states that, so neither
+/// caller has to remember which way round it goes.
+pub fn scale_before(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
     let mut factor: f64 = 1.0;
     for a in actions {
         let Some(kind) = a.kind else { continue };
-        if !kind.moves_the_scale() || a.date.as_str() <= date {
+        if !kind.moves_the_scale() {
+            continue;
+        }
+        // A day this cannot read is the same failure as a factor it cannot
+        // read, arriving through the other field. An empty one compares before
+        // every date there is, so the action reads as already past and is
+        // skipped — leaving the price it should have moved exactly as the venue
+        // served it, under the name of an adjusted one.
+        if day_of(&a.date).is_none() {
+            return Err(format!(
+                "the {} in this contract's actions is dated {:?}, which is not a day a \
+                 price can be placed before or after. Adjusting around it would hand \
+                 back the price the venue served under the name of an adjusted one",
+                kind.code(), a.date,
+            ));
+        }
+        if a.date.as_str() <= date {
             continue;
         }
         let stated = a.value.parse::<f64>().ok().and_then(|v| kind.factor(v));
@@ -310,13 +320,8 @@ pub fn scale_before_stated(date: &str, actions: &[Adjustment]) -> Result<f64, St
 ///
 /// The reciprocal of [`scale_before`]: the same shares are the same shares, so
 /// what a split divides out of the price it multiplies into the count.
-pub fn scale_volume_before(date: &str, actions: &[Adjustment]) -> f64 {
-    1.0 / scale_before(date, actions)
-}
-
-/// What [`scale_volume_before`] returns, or what stopped it stating one.
-pub fn scale_volume_before_stated(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
-    scale_before_stated(date, actions).map(|f| 1.0 / f)
+pub fn scale_volume_before(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
+    scale_before(date, actions).map(|f| 1.0 / f)
 }
 
 /// The largest count that survives a trip through a float unchanged.
@@ -350,12 +355,6 @@ fn day_of(bar_date: &str) -> Option<String> {
     }
 }
 
-/// Put a series of bars on the scale the contract trades on now.
-///
-/// Prices are divided by what the actions before them state and volume is
-/// multiplied by it, because the same shares changed hands either side of a
-/// split. A bar that states no day to compare against is an error rather than
-/// a bar left on its own scale in the middle of a series that moved.
 pub fn scale_bars(
     bars: Vec<crate::types::model::BarData>, actions: &[Adjustment],
 ) -> Result<Vec<crate::types::model::BarData>, String> {
@@ -367,7 +366,7 @@ pub fn scale_bars(
                      putting it on one scale would be guesswork", b.date,
                 ));
             };
-            let price = scale_before_stated(&day, actions)?;
+            let price = scale_before(&day, actions)?;
             b.open *= price;
             b.high *= price;
             b.low *= price;
@@ -377,7 +376,22 @@ pub fn scale_bars(
             // through a float is not reported as though it had. Left as it was
             // where nothing moved it, so an unadjusted series is bit for bit
             // what the venue served.
-            let volume = scale_volume_before_stated(&day, actions)?;
+            //
+            // It moves for every kind that moves the price, spin-offs included.
+            // That reads wrong at first — a spin-off restates what a share is
+            // worth without changing how many were traded — and it is what the
+            // protocol does: one routine applies a factor to an event, it
+            // divides the prices and multiplies the count, and every scale
+            // moving kind goes through it. A count scaled differently here
+            // would be this client's own convention rather than the one the
+            // series is stated in.
+            //
+            // A factor that is not a whole number leaves a count that is not
+            // one either, and an integer cannot hold it: a three-for-two on a
+            // hundred and one shares is a hundred and fifty one and a half.
+            // Rounded, because the field is a count and the alternative is
+            // refusing a series over half a share.
+            let volume = scale_volume_before(&day, actions)?;
             if volume != 1.0 {
                 // Checked before the conversion as well as after. A count past
                 // what a float holds exactly loses bits on the way in, and a
@@ -422,9 +436,9 @@ mod tests {
                         CD\n20240305,0.04,USD,20240221,20240306,20240327,R,NA\n\
                         SS\n20240610,10,,20240522\n";
         let (_, actions) = parse_adjustments(answered);
-        let before = 1208.88 * scale_before("20240607", &actions);
+        let before = 1208.88 * scale_before("20240607", &actions).expect("a stated split");
         assert!((before - 120.888).abs() < 0.001, "scaled to {before}, not 120.888");
-        let after = 121.79 * scale_before("20240611", &actions);
+        let after = 121.79 * scale_before("20240611", &actions).expect("a stated split");
         assert!((after - 121.79).abs() < 0.001, "a price after the split is unmoved");
         assert!(
             (before - 121.79).abs() / 121.79 < 0.01,
@@ -520,9 +534,9 @@ mod tests {
             }]
         };
         // Two for one: a price before it reads half.
-        assert!((scale_before("20240607", &at(AdjustmentKind::StockDividend, "2")) - 0.5).abs() < 1e-9);
+        assert!((scale_before("20240607", &at(AdjustmentKind::StockDividend, "2")).unwrap() - 0.5).abs() < 1e-9);
         // The same number on a spin-off is the reciprocal, so the price doubles.
-        assert!((scale_before("20240607", &at(AdjustmentKind::SpinOff, "2")) - 2.0).abs() < 1e-9);
+        assert!((scale_before("20240607", &at(AdjustmentKind::SpinOff, "2")).unwrap() - 2.0).abs() < 1e-9);
     }
 
     /// A cash dividend and a rights offer leave the scale where it is.
@@ -541,7 +555,7 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        assert_eq!(scale_before("20240607", &actions), 1.0);
+        assert_eq!(scale_before("20240607", &actions), Ok(1.0));
     }
 
     /// Volume goes the other way from price.
@@ -557,8 +571,8 @@ mod tests {
             value: "10".into(),
             ..Default::default()
         }];
-        assert!((scale_before("20240607", &split) - 0.1).abs() < 1e-9);
-        assert!((scale_volume_before("20240607", &split) - 10.0).abs() < 1e-9);
+        assert!((scale_before("20240607", &split).unwrap() - 0.1).abs() < 1e-9);
+        assert!((scale_volume_before("20240607", &split).unwrap() - 10.0).abs() < 1e-9);
     }
 
 
@@ -664,5 +678,39 @@ mod tests {
         let out = scale_bars(vec![bar], &dividend).expect("a dividend moves nothing");
         assert_eq!(out[0].close, 100.0);
         assert_eq!(out[0].volume, 5, "and the count is what the venue served, exactly");
+    }
+
+
+    /// A moving action with no usable day stops the series too.
+    ///
+    /// The same failure as a factor nobody can read, arriving through the other
+    /// field. An empty day compares before every date there is, so the action
+    /// reads as already past and is skipped — and the price it should have
+    /// moved comes back exactly as the venue served it, under the name of an
+    /// adjusted one.
+    #[test]
+    fn a_day_nobody_can_read_stops_the_series_as_a_factor_does() {
+        use crate::types::model::BarData;
+        let bar = BarData { date: "20240607".into(), close: 1208.88, volume: 100, ..Default::default() };
+        for undated in ["", "2024-06-10", "1717718400", "june"] {
+            let split = vec![Adjustment {
+                kind: Some(AdjustmentKind::Split),
+                date: undated.into(),
+                value: "10".into(),
+                ..Default::default()
+            }];
+            assert!(
+                scale_bars(vec![bar.clone()], &split).is_err(),
+                "a split dated {undated:?} must not pass as an adjusted series",
+            );
+        }
+        // A kind that moves nothing is not read for a day it never uses.
+        let dividend = vec![Adjustment {
+            kind: Some(AdjustmentKind::CashDividend),
+            date: String::new(),
+            value: "0.04".into(),
+            ..Default::default()
+        }];
+        assert!(scale_bars(vec![bar], &dividend).is_ok(), "a dividend moves nothing, dated or not");
     }
 }
