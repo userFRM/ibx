@@ -233,8 +233,12 @@ impl EClient {
     }
 
     /// Cancel multi-account updates. Matches `cancelAccountUpdatesMulti` in C++.
+    ///
+    /// `_req_id` reaches nothing, because there is nothing to withdraw: the
+    /// request it would name is answered from what this session already holds,
+    /// before a caller has this to cancel it with.
     pub fn cancel_account_updates_multi(&self, _req_id: i64) {
-        // No-op: delivered immediately.
+
     }
 
     /// Request positions for multiple accounts/models. Matches `reqPositionsMulti` in

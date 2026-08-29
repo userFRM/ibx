@@ -253,7 +253,8 @@ Dark Ice, PctVol. Conditions: price, volume, percent change, margin, execution
 and time. Brackets, one-cancels-all, and combinations with a price per leg.
 
 **Settings.** The gateway's configuration file is replaced by settings on the
-client: announced build, time zone, message pacing, execution-report scope, and
-others — 17 in total, readable at runtime. Seven gateway settings have no
-counterpart and report why (no window geometry, no local listening socket, no
-JVM heap). Rust: `EClientConfig.gateway`. Python: `ibx.configure()`.
+client: announced build, time zone, execution-report scope, and others — 14 in
+total, readable at runtime. Ten gateway settings have no counterpart and report
+why (no window geometry, no local listening socket, no JVM heap, and no message
+pacing: nothing here paces outgoing messages, which the gateway ships with off).
+Rust: `EClientConfig.gateway`. Python: `ibx.configure()`.

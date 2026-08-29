@@ -494,7 +494,7 @@ def req_account_updates_multi(req_id, account, model_code, ledger_and_nlv=False)
 
 #### `cancel_account_updates_multi`
 
-Cancel multi-account updates.
+Cancel multi-account updates.  `req_id` reaches nothing, because there is nothing to withdraw: account values arrive with the session rather than by subscription.
 
 ```python
 def cancel_account_updates_multi(req_id)

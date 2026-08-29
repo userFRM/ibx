@@ -24,10 +24,10 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Measure | Count |
 | --- | --- |
 | Canonical calls | 78 |
-| Served, Rust | 78 |
-| Served, Python | 78 |
-| Accepted and not served, Rust | 0 |
-| Accepted and not served, Python | 0 |
+| Served, Rust | 77 |
+| Served, Python | 77 |
+| Accepted and not served, Rust | 1 |
+| Accepted and not served, Python | 1 |
 | Canonical callbacks | 85 |
 | Calls where the two surfaces differ | 0 |
 | Callbacks where the two surfaces differ | 0 |
@@ -44,10 +44,15 @@ Every call that exists with the expected signature and reports, through the
 error callback, that it cannot be served. Taken from the generated coverage
 matrix, which CI checks against the source.
 
-There are none. The two that stood here — the advisor configuration request and
-its replacement — send to the venue like every other call; what does not happen
-is that their replies are read, which is a callback nothing reaches and is
-counted as one on the limits page.
+One. `set_server_log_level` is taken and not applied: the session holds no log
+level of its own and the protocol carries no message asking the venue to change
+one, so what a caller states is written to this client's log and reaches nothing
+else.
+
+The two that stood here before it — the advisor configuration request and its
+replacement — are not among them: they send to the venue like every other call,
+and what does not happen is that their replies are read, which is a callback
+nothing reaches and is counted as one on the limits page.
 
 ## Asset classes
 

@@ -657,6 +657,11 @@ impl EClient {
         }
     }
 
+    /// Work an option-model answer out of what the venue has stated.
+    ///
+    /// `req_id` reaches nothing here: this states the answer and the caller
+    /// above it is what carries the number, so naming it twice would let the
+    /// two disagree.
     fn answer_option_model(
         &self,
         req_id: i64,

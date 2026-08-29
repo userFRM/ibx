@@ -1242,7 +1242,15 @@ def _status_icon(name: str, impl_set: set[str], stub_names: set[str]) -> str:
 #: replies are read, which is a callback that does not fire and is recorded as
 #: one below. Anything added here has to be a call that genuinely sends
 #: nothing, and a call whose answer goes unread is not one of them.
-STUB_METHODS: set[str] = set()
+STUB_METHODS: set[str] = {
+    # Taken and not applied. The session holds no log level of its own and the
+    # protocol carries no message asking the venue to change one, so what a
+    # caller states is written to this client's log and reaches nothing. That
+    # is the definition on the matrix's own first page, and it was published as
+    # implemented because the gate that catches a silent request reads only
+    # names beginning `req_`, `cancel_` and their siblings.
+    "set_server_log_level",
+}
 
 #: Callbacks nothing fires. Each for its own reason, and none of them a
 #: message this client fails to read: the advisor replies are not parsed,
