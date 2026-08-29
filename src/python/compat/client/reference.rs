@@ -315,6 +315,19 @@ impl EClient {
         start_date: &str,
         end_date: &str,
     ) -> PyResult<()> {
+        // Refused for every caller. The answering calls number themselves in a
+        // band of their own and hold a number while they wait, so a request
+        // numbered inside it has its answer taken by one of those calls, about
+        // a contract and a range it did not ask for. That call sends its own
+        // command directly and does not come through here.
+        if crate::bridge::ReferenceState::is_ask_id(super::wire_u32("req_id", req_id)?) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "req_id {req_id} is inside the range this client numbers its own \
+                 answering calls in, and an answer under it would be taken for one of \
+                 theirs: number the request below {}",
+                crate::bridge::ReferenceState::ASK_ID_BASE,
+            )));
+        }
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         // Narrowed the way the request surface narrows it: a contract id of
         // zero, or a negative one, names nothing and the venue answers it with
