@@ -14,6 +14,13 @@ What this does **not** establish: a type absent here is one this client
 neither sends nor handles, which is not the same as one the venue never
 sends. Settling that needs a record of everything the venue can send.
 
+How it is read: the four connections' dispatch tables, the subtypes
+written beside the tag that carries them under either of its names, and
+the constants named as sub-protocols. A subtype reaching the wire by
+some other shape would be missing from this page, and one has been:
+the calendar's, passed as a named constant rather than spelled out,
+which is why constants are read too.
+
 ## Sent
 
 ### Message types
@@ -50,9 +57,12 @@ A user message carries what it is for on tag 6040.
 | `116` |
 | `138` |
 | `142` |
+| `155` |
 | `185` |
 | `193` |
 | `209` |
+| `6040` |
+| `10001` |
 | `10003` |
 | `10004` |
 | `10010` |
@@ -148,4 +158,13 @@ A user message carries what it is for on tag 6040.
 | `10012` |
 | `10022` |
 | `10032` |
+
+### On the security definition connection
+
+| Type | Meaning |
+| --- | --- |
+| `0` | Heartbeat |
+| `1` | Test request |
+| `3` | Session reject |
+| `U` | User message |
 
