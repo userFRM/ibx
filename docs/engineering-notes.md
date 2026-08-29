@@ -17,6 +17,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Implemented | Implemented and unit tested. No live session has confirmed it |
 | Blocked | Implemented. The venue refuses the request and the cause is stated |
 | Accepted, not served | Call exists with the expected signature, returns normally, and reports through the error callback that it cannot be served |
+| Taken, not applied | Call exists with the expected signature and returns normally, and what a caller states reaches nothing. It says so where a reader will look — its own documentation — rather than on the error callback, because a program written against the reference client calls it as a matter of course and an error on every call is noise, not news |
 | Absent | No such call |
 
 ## API surface
@@ -44,10 +45,14 @@ Every call that exists with the expected signature and reports, through the
 error callback, that it cannot be served. Taken from the generated coverage
 matrix, which CI checks against the source.
 
-One. `set_server_log_level` is taken and not applied: the session holds no log
-level of its own and the protocol carries no message asking the venue to change
-one, so what a caller states is written to this client's log and reaches nothing
-else.
+None report through the error callback. One is taken and not applied:
+`set_server_log_level`. The session holds no log level of its own and the
+protocol carries no message asking the venue to change one, so what a caller
+states is written to this client's log and reaches nothing else. It is counted
+with the calls that are not served, because a caller who set one and expected
+the venue to act on it got neither — and it says so in its own documentation
+rather than on the error callback, which a program calling it as a matter of
+course would hear on every call.
 
 The two that stood here before it — the advisor configuration request and its
 replacement — are not among them: they send to the venue like every other call,

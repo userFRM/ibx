@@ -100,7 +100,10 @@ jobs:
           python scripts/gen_wire_reach.py
           python scripts/gen_order_field_reach.py
           python scripts/gen_arg_reach.py
-          git diff --exit-code docs/
+          # Staged first, because a plain diff says nothing about a page a
+          # generator has only just started producing.
+          git add -A docs/
+          git diff --cached --exit-code docs/
 
       - name: Documentation builds
         run: cargo doc --no-deps --lib
