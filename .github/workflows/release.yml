@@ -92,6 +92,15 @@ jobs:
           python scripts/check_wrapper_tee.py
           python scripts/check_injection_stays_out_of_the_wheel.py
           python scripts/check_orphaned_docs.py
+          # The generators are gates too: each one fails when a published page
+          # or count stops matching the source, and a tag that skips them ships
+          # a promise the ordinary build would have refused.
+          python scripts/gen_api_docs.py
+          python scripts/gen_wire_coverage.py
+          python scripts/gen_wire_reach.py
+          python scripts/gen_order_field_reach.py
+          python scripts/gen_arg_reach.py
+          git diff --exit-code docs/
 
       - name: Documentation builds
         run: cargo doc --no-deps --lib
