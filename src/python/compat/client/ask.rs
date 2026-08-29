@@ -185,6 +185,10 @@ impl EClient {
             }
             (shared, tx)
         };
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         // Said before the request goes out, so an answer that arrives has
@@ -336,6 +340,10 @@ impl EClient {
                 .collect());
         }
         let shared = self.connected_shared()?;
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_historical_data(
@@ -384,6 +392,10 @@ impl EClient {
         use_rth: i32,
     ) -> PyResult<String> {
         let shared = self.connected_shared()?;
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_head_time_stamp(py, req_id, contract, what_to_show, use_rth, 1)?;
@@ -401,6 +413,10 @@ impl EClient {
         pattern: &str,
     ) -> PyResult<Vec<ContractDescription>> {
         let shared = self.connected_shared()?;
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_matching_symbols(py, req_id, pattern)?;
@@ -440,6 +456,10 @@ impl EClient {
         total_results: i32,
     ) -> PyResult<Vec<(String, String, String, String)>> {
         let shared = self.connected_shared()?;
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_historical_news(
@@ -469,6 +489,10 @@ impl EClient {
         use_rth: bool,
     ) -> PyResult<TradingSchedule> {
         let shared = self.connected_shared()?;
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_historical_schedule(py, req_id, contract, end_date_time, duration_str, use_rth)?;
@@ -497,6 +521,10 @@ impl EClient {
         underlying_con_id: i64,
     ) -> PyResult<Vec<crate::python::compat::contract::OptionChain>> {
         let shared = self.connected_shared()?;
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_sec_def_opt_params(
@@ -530,6 +558,10 @@ impl EClient {
         time_period: &str,
     ) -> PyResult<Vec<(f64, i64)>> {
         let shared = self.connected_shared()?;
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_histogram_data(py, req_id, contract, use_rth, time_period)?;
@@ -548,6 +580,10 @@ impl EClient {
         report_type: &str,
     ) -> PyResult<String> {
         let shared = self.connected_shared()?;
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_fundamental_data(py, req_id, contract, report_type, Vec::new())?;
@@ -617,6 +653,10 @@ impl EClient {
     ) -> Result<Vec<ContractDetails>, Refusal> {
         let shared = self.shared_state()
             .map_err(|e| Refusal::not_connected(e.to_string()))?;
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else. Marked here because this is where
+        // the number is taken, and every one of them takes it here.
+        let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
         self.req_contract_details(py, req_id, contract)

@@ -307,6 +307,36 @@ impl Drop for EClient {
     }
 }
 
+thread_local! {
+    /// Whether this thread is inside one of the calls that answer.
+    ///
+    /// Those number themselves in a band of their own and reach the wire
+    /// through the same requests a caller does, so the number alone cannot say
+    /// which of the two is asking. Set for the length of the call and read
+    /// where a caller's number is narrowed.
+    static ANSWERING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether this thread is inside a call that answers.
+pub(crate) fn answering_now() -> bool {
+    ANSWERING.with(std::cell::Cell::get)
+}
+
+/// Mark this thread as inside a call that answers, until dropped.
+pub(crate) struct Answering(bool);
+
+impl Answering {
+    pub(crate) fn begin() -> Self {
+        Self(ANSWERING.replace(true))
+    }
+}
+
+impl Drop for Answering {
+    fn drop(&mut self) {
+        ANSWERING.set(self.0);
+    }
+}
+
 /// Narrow a caller's req_id to the width the request carries on the wire.
 ///
 /// `EClient` takes req_id as `i64` for ibapi parity, but these requests encode
@@ -320,6 +350,22 @@ pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, Refusal> {
             "req_id {req_id} is outside the range this request can carry (0..={})", u32::MAX,
         ))
     })?;
+    // The band the answering calls number themselves in is not a caller's to
+    // use. An answer is handed to whoever is waiting under its number, so a
+    // request numbered inside it has its answer taken by one of those calls,
+    // about something it did not ask for — and that call loses its own.
+    //
+    // Told apart by who is asking rather than by the number, because the number
+    // is held precisely while the collision is possible: an answering call
+    // marks itself for the length of its own call, and nothing else can.
+    if crate::bridge::ReferenceState::is_ask_id(id) && !answering_now() {
+        return Err(Refusal::validation(format!(
+            "req_id {req_id} is inside the range this client numbers its own answering \
+             calls in, and an answer under it would be taken for one of theirs: number \
+             the request below {}",
+            crate::bridge::ReferenceState::ASK_ID_BASE,
+        )));
+    }
     // The top of the range already means something: it is what this client
     // reports when a message names no request at all, and it reaches a caller
     // as minus one. A request numbered with it is answered under a number that

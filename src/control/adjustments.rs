@@ -278,6 +278,18 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
 /// by the reciprocal of this. [`scale_volume_before`] states that, so neither
 /// caller has to remember which way round it goes.
 pub fn scale_before(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
+    // The day given is compared against the days the actions state, so it has
+    // to be one. A stamp in seconds opens with eight digits and compares below
+    // every date there is, so a price from after a split would be scaled by it
+    // — and the caller reaching this helper directly, rather than through
+    // `scale_bars`, had nothing checking that for them.
+    let Some(date) = day_of(date) else {
+        return Err(format!(
+            "{date:?} is not a day a price can be placed before or after, so no scale \
+             can be stated for it",
+        ));
+    };
+    let date = date.as_str();
     let mut factor: f64 = 1.0;
     for a in actions {
         let Some(kind) = a.kind else {
