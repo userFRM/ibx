@@ -28,7 +28,7 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Served, Python | 76 |
 | Accepted and not served, Rust | 2 |
 | Accepted and not served, Python | 2 |
-| Canonical callbacks | 82 |
+| Canonical callbacks | 85 |
 | Calls where the two surfaces differ | 0 |
 | Callbacks where the two surfaces differ | 0 |
 
@@ -154,7 +154,7 @@ One, and it says what a caller loses by it.
 
 | Wire | What it carries | Why |
 | --- | --- | --- |
-| `6040` 10031 | Cancelling a news subscription | Not built, and the reasoning is now tested rather than assumed. A session asked for news, was answered, and withdrew the request under the same id: the venue said nothing carrying that id. A request already answered has nothing outstanding, so a caller withdrawing one would be told nothing either — which is what not building it costs them |
+| `6040` 10031 | Cancelling a news subscription | Not built. A session asked for news, was answered, and withdrew the request under the same id: nothing carrying that id came back. That is consistent with a request already answered having nothing outstanding, and it does not prove it — silence is what the venue did not say. What it does settle is that a caller building this would have the same silence to work with |
 
 `6040` 10021, the cancel that pairs with the corporate-actions request, is not
 sent for the same reason: the request is answered once per contract and nothing
@@ -193,7 +193,7 @@ Whether any of them can be asked for was open for as long as this table existed,
 | Wire | What it carries | Why |
 | --- | --- | --- |
 | `35=R` | Request for quote | Reachable, read, and refused for the instrument. A session sent one and the venue answered on the execution channel, echoing the id and naming each field it wanted in turn — a side, then a quantity — and answered the complete request with "the order type QuoteRequest is invalid for this combination of exchange and security type". So the row's original reading was right and is now the venue's own words rather than an assumption: what refuses it is the instrument, not the account. Nothing is left working, because nothing is accepted |
-| `6040` 10006, 10007 | Suspending and resuming a scanner | Asked and unanswered. A session subscribed a scan, suspended it and resumed it by its own id, and the venue said nothing either way. That is consistent with a control message that never replies and with one this account may not send, and it does not tell those apart — but it does settle that the request reaches the venue and is not merely unsent |
+| `6040` 10006, 10007 | Suspending and resuming a scanner | Asked and unanswered. A session subscribed a scan, suspended it and resumed it by its own id, and nothing carrying that id came back. That is consistent with a control message that never replies and with one this account may not send, and it does not tell those apart. Nor does it establish that the venue read either request: what was observed is that the bytes went out and nothing named them coming back |
 | `6040` 146, 151, 208 | Trade-report records, including per-leg fills on a combination | Not sent to this account |
 | `6040` 200 | Execution history | Not sent to this account |
 | `6040` 109 | An advisor's allocation groups and profiles | Needs an advisor account |

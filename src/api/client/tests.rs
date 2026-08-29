@@ -2930,12 +2930,20 @@ fn an_unwireable_req_id_is_refused() {
             assert!(err.message.contains("req_id"), "{name}: the error names the field: {err}");
             assert!(rx.try_recv().is_err(), "{name}: and nothing reaches the wire");
         }
-        // The largest id the wire can carry is still a request, not an error.
+        // The largest id a request can take is one below the top of the range,
+        // because the top of it already means something: it is what this client
+        // reports when a message names no request, and an answer under it
+        // reaches a caller as minus one.
         let (client, rx, _shared) = test_client();
-        if let Err(e) = call(&client, u32::MAX as i64) {
-            panic!("{name}: the largest carryable id must still request: {e}");
+        if let Err(e) = call(&client, (u32::MAX - 1) as i64) {
+            panic!("{name}: the largest usable id must still request: {e}");
         }
         assert!(rx.try_recv().is_ok(), "{name}: and it reaches the wire");
+
+        let (client, rx, _shared) = test_client();
+        let refused = call(&client, u32::MAX as i64);
+        assert!(refused.is_err(), "{name}: the number that means no request is not one");
+        assert!(rx.try_recv().is_err(), "{name}: and nothing reaches the wire under it");
     }
 }
 

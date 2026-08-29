@@ -1611,10 +1611,8 @@ fn still_connected(conn: &mut Connection) -> bool {
         return false;
     }
     for frame in conn.extract_frames() {
-        if let ibx::protocol::connection::Frame::Fix(raw) = frame
-            && let Some(unsigned) = conn.unsign(&raw)
-        {
-            let text = String::from_utf8_lossy(&unsigned).replace('\x01', "|");
+        for m in messages_in(conn, &frame) {
+            let text = String::from_utf8_lossy(&m).replace('\x01', "|");
             if ends_the_session(&text) {
                 return false;
             }
@@ -1739,13 +1737,12 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
     // rejection here means there is no scan, and everything below would then be
     // asking about one that does not exist while reporting silence as though it
     // were the venue's answer about a live subscription.
+    // Read the same way the loop below reads: a compressed frame carries its
+    // messages inside, and looking only at the plain ones turns a refusal that
+    // arrived compressed into a subscription this phase never saw.
     for frame in hmds.extract_frames() {
-        let raw = match frame {
-            ibx::protocol::connection::Frame::Fix(raw) => hmds.unsign(&raw),
-            _ => None,
-        };
-        if let Some(unsigned) = raw {
-            let text = String::from_utf8_lossy(&unsigned).replace('\x01', "|");
+        for m in messages_in(&mut hmds, &frame) {
+            let text = String::from_utf8_lossy(&m).replace('\x01', "|");
             if ends_the_session(&text) {
                 skipped!("  SKIP: the session ended while subscribing, so there is no \
                           scan to ask about\n");
@@ -1958,32 +1955,6 @@ pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
             let shown: String = msg.chars().take(500).collect();
             println!("  answered: {shown}");
         }
-        // Anything the venue is working is taken back. A quote left standing
-        // outlives the phase, and a suite that leaves orders on an account is
-        // not one anybody should run twice.
-        let working = answered.iter().find_map(|m| {
-            let alive = m.split('|').any(|f| matches!(f, "39=0" | "39=A" | "39=1"));
-            let id = m.split('|').find_map(|f| f.strip_prefix("37="))?;
-            (alive && id != "0").then(|| id.to_string())
-        });
-        if let Some(order_id) = working {
-            let ts = now_ib_timestamp();
-            let sent = conns.ccp.send_fix(&[
-                (ibx::protocol::fix::TAG_MSG_TYPE, "F"),
-                (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
-                (37, &order_id),
-                (11, ASKED_UNDER),
-                (54, "1"),
-                (ibx::control::contracts::TAG_SYMBOL, "SPY"),
-            ]);
-            match sent {
-                Ok(()) => println!("  the venue is working order {order_id}; withdrawn"),
-                Err(e) => println!("  the venue is working order {order_id} and it could \
-                                    not be withdrawn: {e}"),
-            }
-        } else {
-            println!("  nothing is left working: the venue answered without one");
-        }
         println!();
     }
     conns
@@ -2083,6 +2054,32 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
         for msg in answered.iter().take(3) {
             let shown: String = msg.chars().take(500).collect();
             println!("  answered: {shown}");
+        }
+        // Anything the venue is working is taken back. A quote left standing
+        // outlives the phase, and a suite that leaves orders on an account is
+        // not one anybody should run twice.
+        let working = answered.iter().find_map(|m| {
+            let alive = m.split('|').any(|f| matches!(f, "39=0" | "39=A" | "39=1"));
+            let id = m.split('|').find_map(|f| f.strip_prefix("37="))?;
+            (alive && id != "0").then(|| id.to_string())
+        });
+        if let Some(order_id) = working {
+            let ts = now_ib_timestamp();
+            let sent = conns.ccp.send_fix(&[
+                (ibx::protocol::fix::TAG_MSG_TYPE, "F"),
+                (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+                (37, &order_id),
+                (11, ASKED_UNDER),
+                (54, "1"),
+                (ibx::control::contracts::TAG_SYMBOL, "SPY"),
+            ]);
+            match sent {
+                Ok(()) => println!("  the venue is working order {order_id}; withdrawn"),
+                Err(e) => println!("  the venue is working order {order_id} and it could \
+                                    not be withdrawn: {e}"),
+            }
+        } else {
+            println!("  nothing is left working: the venue answered without one");
         }
         println!();
     }
