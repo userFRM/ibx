@@ -311,8 +311,24 @@ impl EClient {
         &self, req_id: i64, con_id: i64, sec_type: &str, exchange: &str,
         start_date: &str, end_date: &str,
     ) -> Result<(), Refusal> {
+        let numbered = wire_req_id(req_id)?;
+        // An answer to this request is handed to whoever is waiting under its
+        // number. The answering calls number themselves in a band of their own
+        // and hold a number while they wait, so a request numbered the same as
+        // one of those — and not by that call — has its answer taken by it,
+        // about a contract and a range it did not ask for.
+        if crate::bridge::ReferenceState::is_ask_id(numbered)
+            && !self.shared.reference.is_ours(req_id)
+        {
+            return Err(Refusal::validation(format!(
+                "req_id {req_id} is inside the range this client numbers its own \
+                 answering calls in, and an answer under it would be taken for one of \
+                 theirs: number the request below {}",
+                crate::bridge::ReferenceState::ASK_ID_BASE,
+            )));
+        }
         self.send(ControlCommand::FetchAdjustments {
-            req_id: wire_req_id(req_id)?,
+            req_id: numbered,
             con_id: wire_con_id(con_id, "a request for corporate actions")?,
             sec_type: sec_type.into(),
             exchange: exchange.into(),
