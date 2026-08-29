@@ -292,6 +292,11 @@ impl EClient {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        // Once more before giving up. The loop pumps, sleeps, and then tests
+        // the deadline, so an answer arriving during that last sleep is still
+        // queued when the loop ends — and the caller is told nothing came about
+        // an answer that had.
+        self.pump_for_ask(collector);
         let mut s = state.lock().unwrap();
         if let Some(e) = s.error.take() {
             return Err(e);
@@ -321,6 +326,9 @@ impl EClient {
         }
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Bars { req_id: i64, state: Arc<Mutex<Pending<BarData>>> }
         impl Wrapper for Bars {
             fn historical_data(&mut self, req_id: i64, bar: &BarData) {
@@ -405,6 +413,9 @@ impl EClient {
     ) -> Result<Vec<crate::control::adjustments::Adjustment>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         if contract.con_id == 0 {
             return Err(Refusal::no_answer(
                 "corporate actions are asked for by the venue's id for the contract, \
@@ -495,6 +506,9 @@ impl EClient {
     ) -> Result<Vec<OptionChain>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Chain { req_id: i64, state: Arc<Mutex<Pending<OptionChain>>> }
         impl Wrapper for Chain {
             fn security_definition_option_parameter(
@@ -550,6 +564,9 @@ impl EClient {
     ) -> Result<String, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Head { req_id: i64, state: Arc<Mutex<Pending<String>>> }
         impl Wrapper for Head {
             fn head_timestamp(&mut self, req_id: i64, head_timestamp: &str) {
@@ -582,6 +599,9 @@ impl EClient {
     ) -> Result<Vec<crate::types::model::ContractDescription>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Matches {
             req_id: i64,
             state: Arc<Mutex<Pending<crate::types::model::ContractDescription>>>,
@@ -628,6 +648,9 @@ impl EClient {
     ) -> Result<Vec<Headline>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Headlines { req_id: i64, state: Arc<Mutex<Pending<Headline>>> }
         impl Wrapper for Headlines {
             fn historical_news(
@@ -687,6 +710,9 @@ impl EClient {
     ) -> Result<Vec<(f64, i64)>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Histogram { req_id: i64, state: Arc<Mutex<Pending<(f64, i64)>>> }
         impl Wrapper for Histogram {
             fn histogram_data(&mut self, req_id: i64, items: &[(f64, i64)]) {
@@ -719,6 +745,9 @@ impl EClient {
     ) -> Result<String, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Document { req_id: i64, state: Arc<Mutex<Pending<String>>> }
         impl Wrapper for Document {
             fn fundamental_data(&mut self, req_id: i64, data: &str) {
@@ -766,6 +795,9 @@ impl EClient {
     ) -> Result<crate::types::model::OrderState, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Preview {
             order_id: i64,
             state: Arc<Mutex<Pending<crate::types::model::OrderState>>>,
@@ -803,6 +835,9 @@ impl EClient {
     pub fn positions(&self) -> Result<Vec<PositionRow>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Held { state: Arc<Mutex<Pending<PositionRow>>> }
         impl Wrapper for Held {
             fn position(&mut self, account: &str, contract: &Contract, position: f64, avg_cost: f64) {
@@ -842,6 +877,9 @@ impl EClient {
     pub fn account_summary(&self, tags: &str) -> Result<Vec<AccountValue>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Values { req_id: i64, state: Arc<Mutex<Pending<AccountValue>>> }
         impl Wrapper for Values {
             fn account_summary(&mut self, req_id: i64, account: &str, tag: &str, value: &str, currency: &str) {
@@ -892,6 +930,9 @@ impl EClient {
     ) -> Result<OrderReport, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         self.await_order_holding_the_turn(order_id, timeout)
     }
 
@@ -990,6 +1031,9 @@ impl EClient {
     pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         let asked = ask_id(&self.shared);
         let req_id = asked.get();
         let answer = Arc::new(Mutex::new(Answer::default()));
@@ -1133,6 +1177,9 @@ impl EClient {
     ) -> Result<Vec<ScanRow>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Rows { req_id: i64, state: Arc<Mutex<Pending<ScanRow>>> }
         impl Wrapper for Rows {
             fn scanner_data(
@@ -1180,6 +1227,9 @@ impl EClient {
     pub fn schedule(&self, contract: &Contract, duration: &str) -> Result<Schedule, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct When { req_id: i64, state: Arc<Mutex<Pending<Schedule>>> }
         impl Wrapper for When {
             fn historical_schedule(
@@ -1231,6 +1281,9 @@ impl EClient {
     fn ask_wsh(&self, con_id: Option<i64>) -> Result<String, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        // Numbered in the band reserved for these calls, which the request
+        // surface refuses to anyone else.
+        let _answering = super::Answering::begin();
         struct Json { req_id: i64, state: Arc<Mutex<Pending<String>>> }
         impl Json {
             fn take(&mut self, req_id: i64, data: &str) {
