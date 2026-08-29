@@ -149,15 +149,23 @@ pub fn ib_datetime_to_unix_millis(stamped: &str) -> Option<i64> {
     // A stamp carrying a very long fraction states no more than the first three
     // of it, and collecting the rest would let the length of what arrived
     // decide how much is allocated here.
+    //
+    // A fraction that is not digits all the way is not a fraction this can
+    // read, and the second it follows is still stated: the answer keeps the
+    // second and drops the fraction. Reading the digits up to the rubbish
+    // would report a precision the venue never stated — `.25xyz` is not two
+    // hundred and fifty milliseconds, it is a second with something unreadable
+    // after it.
+    let readable = fraction.is_empty() || fraction.bytes().all(|b| b.is_ascii_digit());
     let mut three = [b'0'; 3];
     let mut stated = 0usize;
-    for b in fraction.bytes().take_while(u8::is_ascii_digit) {
-        if stated < three.len() {
+    if readable {
+        for b in fraction.bytes() {
             three[stated] = b;
-        }
-        stated += 1;
-        if stated >= three.len() {
-            break;
+            stated += 1;
+            if stated >= three.len() {
+                break;
+            }
         }
     }
     let millis: i64 = if stated == 0 {
@@ -564,7 +572,11 @@ mod venue_clock_tests {
                 "{stamped:?} names a second and should still read as one",
             );
         }
-        // What the digits do say is still read.
-        assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00.25xyz"), Some(whole * 1_000 + 250));
+        // A fraction that is not digits all the way states none this can read,
+        // and the second it follows is still stated: reading the digits before
+        // the rubbish would report a precision the venue never gave.
+        assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00.25xyz"), Some(whole * 1_000));
+        // Digits all the way are read.
+        assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00.25"), Some(whole * 1_000 + 250));
     }
 }

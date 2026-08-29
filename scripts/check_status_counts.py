@@ -273,7 +273,13 @@ def main() -> int:
     wrong = []
 
     # The prose states the same thing in a sentence.
-    offline = have["rust"] + have["python"]
+    #
+    # The Rust count is every Rust test target, the paper suite among them, and
+    # the paper suite is also the live side of this split. Counted straight, its
+    # tests are published as offline and as live at once — a total that adds up
+    # only because the same tests are in it twice. Taken out of the offline side,
+    # which is the side they are not on.
+    offline = have["rust"] - have["paper"] + have["python"]
     live = have["python_live"] + have["paper"]
     verified, total = capabilities()
     # The prose above the matrix restates what the matrix lists. Both live in
