@@ -240,10 +240,11 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
         }
     }
     out.sort_by(|a, b| a.date.cmp(&b.date));
-    // The same action stated twice moves the scale twice: a two-for-one
-    // duplicated divides an earlier price by four. Two rows identical in kind,
-    // date and value are one action said twice, not two actions on one day.
-    out.dedup_by(|a, b| a.kind == b.kind && a.date == b.date && a.value == b.value);
+    // Every row the venue stated is kept. Two that look alike are not collapsed:
+    // deciding that two actions are one needs an identity the venue does not
+    // state, and the fields that would tell a regular dividend from a special
+    // one on the same day for the same amount are exactly the fields such a
+    // reading throws away. What the venue said twice, it said twice.
     (contract, out)
 }
 
@@ -746,11 +747,11 @@ mod tests {
             date: "20240607".into(), close: 1208.88, volume: 100, ..Default::default()
         }];
 
-        // Stated twice is one action, not two: a ten-for-one, not a hundred.
+        // What the venue states twice is kept twice. Collapsing them needs an
+        // identity the venue does not state, and the fields that would tell two
+        // same-day actions apart are the ones such a reading discards.
         let (_, twice) = parse_adjustments("conc\n4815747,\nSS\n20240610,10,,20240522\nSS\n20240610,10,,20240522\n");
-        assert_eq!(twice.len(), 1, "the same split said twice is one split");
-        let out = scale_bars(bars(), &twice).expect("one split");
-        assert!((out[0].close - 120.888).abs() < 1e-9, "close {}", out[0].close);
+        assert_eq!(twice.len(), 2, "both rows are kept, because both were stated");
 
         // A kind this client cannot name stops the series.
         let (_, unknown) = parse_adjustments("conc\n4815747,\nZZ\n20240610,10,,20240522\n");

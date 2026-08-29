@@ -185,45 +185,6 @@ impl EClient {
             }
             (shared, tx)
         };
-        // One of these at a time per session. Each caller takes only the answer
-        // to its own request, so a second caller cannot be handed the first's;
-        // what serialising prevents is the two of them clearing and rewriting
-        // the contract's own record around each other, which is what
-        // `EClient::adjustments` reads.
-        //
-        // Waited for without the interpreter lock, so other threads keep
-        // running while this one waits its turn. A mutex guard cannot cross
-        // that boundary because it is not `Send`, so the turn is a flag and a
-        // guard that puts it back.
-        //
-        // The flag belongs to the session, not to the process. Two clients hold
-        // two sessions and two records, and one waiting on its own venue is no
-        // reason for the other to wait at all.
-        struct Turn(Arc<std::sync::atomic::AtomicBool>);
-        impl Drop for Turn {
-            fn drop(&mut self) {
-                self.0.store(false, std::sync::atomic::Ordering::Release);
-            }
-        }
-        let taken = Arc::clone(&shared.asking_adjustments);
-        let _turn = py.detach(move || {
-            while taken
-                .compare_exchange(
-                    false, true,
-                    std::sync::atomic::Ordering::AcqRel,
-                    std::sync::atomic::Ordering::Acquire,
-                )
-                .is_err()
-            {
-                std::thread::sleep(POLL);
-            }
-            Turn(taken)
-        });
-        // The contract's own record is what `EClient::adjustments` reads, and
-        // it is cleared here so that reader states this question's answer
-        // rather than a previous one's. What this call waits on is its own
-        // slot, which no other question can fill.
-        shared.reference.forget_adjustments(&contract.con_id.to_string());
         let asked = ask_id(&shared);
         let req_id = asked.get();
         // Said before the request goes out, so an answer that arrives has
