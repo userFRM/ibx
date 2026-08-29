@@ -36,7 +36,7 @@ Every figure above is measured on each commit, and the build fails if one moves.
 | `EClient` / `EWrapper` (TWS API shape) | ✅ Supported | `tests/ib_paper_compat`, `tests/python/test_compat_tier1..3.py` |
 | `ib_async`, unmodified | ✅ Supported | Their `IB` on this engine through `ibx.ib_async.attach` — their events, async variants and types, with no gateway. All 67 transport calls their library makes are carried and gated, and their own suite runs against it; see the note below. `tests/python/test_ib_async_transport.py`, `tests/ib_async_upstream/conftest.py` |
 | `ibx.IB` (ib_async shape) | ✅ Supported | 90/90 methods present; `tests/python/test_ib_facade.py`, `scripts/sdk_sweep.py` |
-| `ibx::Client` (Rust) | ✅ Supported | 80/80 callable; 3 return an error naming a local-process facility this client does not have |
+| `ibx::api::Client` (Rust) | ✅ Supported | 80/80 callable; 3 return an error naming a local-process facility this client does not have. Counted over the request surface the gate reads, which is the binding's — the two carry the same calls, and the row beside this one is what states that they do |
 | Gateway settings | ✅ Supported | 14 settings carried, 10 recorded as having no counterpart, both lists the same on either client; `tests/python/test_gateway_settings.py`, `tests/python/test_settings_parity.py`; session opened under a stated build and time zone |
 | Rust/Python equivalence | ✅ Supported | 4 static gates (settings, order fields, surface, error behaviour) plus `scripts/conformance.py --compare`, which compares 10 server responses across both clients |
 

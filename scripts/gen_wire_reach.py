@@ -32,6 +32,10 @@ from _paths import published
 from collections import Counter
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The binding's request surface. The two clients carry the same calls — a
+# separate gate compares them name by name — so reading one measures both; a
+# published figure has to say which one it read, because "the same calls" is a
+# claim that gate makes and not one this script checks.
 CLIENT = ROOT / "src/python/compat/client"
 OUT = ROOT / "target/gates/wire-reach.md"
 

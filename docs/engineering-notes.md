@@ -163,8 +163,8 @@ withdraw, which is the whole of what this client would have to build.
 
 ### Callbacks the reference API defines and this client does not fire
 
-The reference API names a fixed set of messages a client can be handed. This
-client answers all of them but the two below, which is worth stating plainly
+The reference API names a fixed set of messages a client can be handed. The two
+below are the ones this client cannot fire at all, which is worth stating plainly
 because a program written against that API and pointed at this one would wait
 on them forever rather than be told they are not coming.
 
@@ -183,6 +183,15 @@ fraction, so the answer is the other call's thousandfold. The call is served
 because the reference API defines it and a caller written against that API
 waits on it otherwise, not because it has been seen to carry more precision
 here.
+
+A separate list sits in the generated coverage matrix: callbacks this client
+defines and nothing reaches, each because the venue does not send that shape to
+this account or because there is no way to ask for it. An advisor's
+configuration and its replacement, a bond's own details, a delta-neutral
+validation, an order's binding, and a midpoint tick-by-tick stream — that last
+because a subscription is asked for by name and the venue names three, none of
+them midpoint. Those are counted as stubs there rather than restated here, so
+one list is generated and the other is not a copy of it going stale.
 
 ### The account decides these
 
