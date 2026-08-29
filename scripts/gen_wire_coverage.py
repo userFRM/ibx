@@ -54,6 +54,10 @@ DISPATCHERS = [
     ("trading connection", "src/engine/hot_loop/ccp", "match msg_type {", TRADING),
     ("market data connection", "src/engine/hot_loop/farm", "match msg_type", MARKET_DATA),
     ("historical connection", "src/engine/hot_loop/hmds", "match msg_type", HISTORICAL),
+    # The fourth connection. Left out, the page said a type it handles is
+    # neither sent nor handled anywhere — which is what the page tells a reader
+    # an absence means.
+    ("security definition connection", "src/engine/hot_loop/secdef", "match msg_type", SHARED),
 ]
 
 
@@ -132,9 +136,21 @@ def sent(consts: dict, srcs: dict) -> set:
 
 
 def sent_subtypes(srcs: dict) -> list:
+    """Every subtype this client writes on tag 6040.
+
+    The tag is written as its number and as the name the module that owns it
+    gives it, and reading only the number missed every request sent under the
+    name — a page saying those subtypes are neither sent nor handled.
+    """
+    named_tag = r'(?:6040|\w*TAG_SUB_PROTOCOL|\w*TAG_IB_COMM_TYPE)'
     found = set()
     for text in srcs.values():
-        found |= set(re.findall(r'\(\s*6040\s*,\s*&?"(\d+)"\s*\)', text))
+        found |= set(re.findall(rf'\(\s*{named_tag}\s*,\s*&?"(\d+)"\s*\)', text))
+        # A constant named as a sub-protocol is one: it exists to be written on
+        # that tag, and is passed as a value rather than spelled out beside it,
+        # so a reading that looked only for the literal said the subtype was
+        # neither sent nor handled anywhere.
+        found |= set(re.findall(r'const \w*SUB_PROTOCOL\w*: u32 = (\d+)\s*;', text))
     return sorted(found, key=int)
 
 
@@ -240,6 +256,13 @@ def main() -> None:
         "What this does **not** establish: a type absent here is one this client",
         "neither sends nor handles, which is not the same as one the venue never",
         "sends. Settling that needs a record of everything the venue can send.",
+        "",
+        "How it is read: the four connections' dispatch tables, the subtypes",
+        "written beside the tag that carries them under either of its names, and",
+        "the constants named as sub-protocols. A subtype reaching the wire by",
+        "some other shape would be missing from this page, and one has been:",
+        "the calendar's, passed as a named constant rather than spelled out,",
+        "which is why constants are read too.",
         "",
         "## Sent",
         "",

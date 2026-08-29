@@ -203,7 +203,7 @@ not hold. `scripts/endurance.py --minutes 175`.
 
 | Gateway | This client |
 | --- | --- |
-| Configuration file and settings window | Settings on the client, read back at runtime. 7 gateway settings have no counterpart: no window geometry, no local listening socket, no JVM heap |
+| Configuration file and settings window | Settings on the client, read back at runtime. 10 gateway settings have no counterpart: no window geometry, no local listening socket, no JVM heap, no message pacing, and a timestamp delivered as the venue states it |
 | Local socket for client programs | The client is in-process; there is no socket to connect to, authorise, or keep running |
 | Java runtime | None |
 
