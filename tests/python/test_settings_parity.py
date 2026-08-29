@@ -19,9 +19,30 @@ def _rust_settings() -> set[str]:
     return set(re.findall(r"^\s*pub (\w+):", text[at:end], re.M))
 
 
+def _rust_unavailable() -> set[str]:
+    source = pathlib.Path(__file__).resolve().parents[2] / "src/settings.rs"
+    text = source.read_text()
+    at = text.index("pub const UNAVAILABLE:")
+    end = text.index("];", at)
+    return set(re.findall(r'\(\s*"([\w.]+)"', text[at:end]))
+
+
 def test_both_clients_carry_the_same_settings():
     assert _rust_settings() == set(ibx.settings()), (
         "a setting exists on one client and not the other"
+    )
+
+
+def test_both_clients_name_the_same_settings_as_unavailable():
+    """A setting with no counterpart is a statement, and both clients make it.
+
+    Comparing only what is carried leaves the other list free to drift: three
+    names sat on the Rust list and not on this one, so a Python caller asking
+    about them was told nothing rather than why. What a caller cannot have is
+    as much a part of the surface as what they can.
+    """
+    assert _rust_unavailable() == set(ibx.UNAVAILABLE), (
+        "a setting is recorded as having no counterpart on one client and not the other"
     )
 
 

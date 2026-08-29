@@ -58,6 +58,9 @@ _SETTINGS: dict[str, tuple[str, str]] = {
 #: than dropped: a caller migrating from a gateway will look for them, and
 #: "there is no such thing here" is an answer where silence is not.
 UNAVAILABLE: dict[str, str] = {
+    "ApiMsgsPerSlice": "nothing here paces outgoing messages; the gateway ships with pacing off",
+    "ApiTimeSliceMillis": "nothing here paces outgoing messages; the gateway ships with pacing off",
+    "TimestampZone": "a timestamp is delivered as the venue states it, in the venue's terms",
     "LocalServerPort": "no local socket to listen on; this client is the client",
     "LocalApiPort": "no local socket to listen on; this client is the client",
     "TrustedIPs": "nothing connects to this client, so nothing needs trusting",
