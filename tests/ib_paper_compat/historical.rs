@@ -1662,11 +1662,8 @@ fn ends_the_session(message: &str) -> bool {
 /// entitlement changed. What it does is put the answer — including no answer —
 /// into the run's output, so the table can say which it is.
 ///
-/// Two are left out on purpose. A request for quote is a message to the people
-/// who would quote it, not a question about this account, and this suite does
-/// not send those. The transaction-reporting configuration names a firm this
-/// session has no value for, so asking would establish that a field was wrong
-/// rather than whether the request is reachable.
+/// The two requests in that table are asked by the phases after this one, which
+/// is where what they answered is recorded.
 pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
     phase!("--- Phase 188: what the gated wires answer when asked ---");
 
@@ -1765,6 +1762,7 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
 
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut answered: Vec<String> = Vec::new();
+        let mut unrelated = 0usize;
         let mut hung_up = false;
         while Instant::now() < deadline && answered.is_empty() {
             // A read that fails is the connection going, and a phase that
@@ -1783,8 +1781,14 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
                     if ends_the_session(&text) {
                         hung_up = true;
                         answered.push(text);
-                    } else if !keeps_the_session_up(&text) {
+                    } else if text.contains(scan_id) {
+                        // Correlated on the scan this phase asked about. Any
+                        // other traffic arriving here answers something else,
+                        // and counting it would publish the venue answering a
+                        // question it had not been asked.
                         answered.push(text);
+                    } else if !keeps_the_session_up(&text) {
+                        unrelated += 1;
                     }
                 };
                 match frame {
@@ -1813,8 +1817,9 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
             println!("  {subtype} ({what}): the session ended while waiting, so nothing \
                       here says what the venue makes of the request");
         } else if answered.is_empty() {
-            println!("  {subtype} ({what}): nothing in 8s — asked and unanswered, which is \
-                      not the same as never asked");
+            println!("  {subtype} ({what}): nothing naming {scan_id} in 8s, with \
+                      {unrelated} other message(s) meanwhile — asked and unanswered, \
+                      which is not the same as never asked");
         } else {
             for msg in answered.iter().take(2) {
                 let shown: String = msg.chars().take(400).collect();
@@ -1823,7 +1828,12 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
         }
     }
 
-    put_the_scan_back_down(&mut hmds, scan_id);
+    // Not sent down a connection that has already gone: there is nothing to
+    // withdraw on a session that ended, and asking is one more request into a
+    // socket that is not listening.
+    if !session_ended {
+        put_the_scan_back_down(&mut hmds, scan_id);
+    }
 
     println!();
     conns
@@ -1838,10 +1848,10 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
 /// that stays true until something asks. This asks.
 ///
 /// Nothing is asserted. What the venue makes of it is the venue's business: an
-/// answer establishes a shape nobody here has seen, a refusal names why the
-/// account cannot have it, and silence says the request as built reaches
-/// nothing. All three are worth more than the row that said it had never been
-/// tried.
+/// answer establishes a shape nobody here has seen, a refusal names what the
+/// venue wants instead, and no reply carrying the id says only that — not that
+/// the venue read it. All three are worth more than the row that said it had
+/// never been tried.
 ///
 /// The firm is left empty. This session has no value for it, and putting a made
 /// up one in would establish that a wrong field is refused rather than whether
@@ -1891,10 +1901,12 @@ pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
                 // window the first time this ran — and anything that happens to
                 // land here is not an answer to what was sent. Either the id
                 // comes back or nothing did.
-                if text.contains(ASKED_UNDER) {
-                    answered.push(text);
-                } else if ends_the_session(&text) {
+                if ends_the_session(&text) {
+                    // Checked before the id, because a logout carrying it is
+                    // still the connection going away and not an answer.
                     hung_up = true;
+                } else if text.contains(ASKED_UNDER) {
+                    answered.push(text);
                 } else if !keeps_the_session_up(&text) {
                     unrelated += 1;
                 }
@@ -1932,8 +1944,9 @@ pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
 ///
 /// Nothing is asserted. The row said instruments that accept one are not held by
 /// this account, which was a statement about the account made without asking. A
-/// reply naming the request settles that it is reachable; a rejection names what
-/// the venue wants instead; silence says the request as built reaches nothing.
+/// reply naming the request settles that it is reachable, a rejection names what
+/// the venue wants instead, and no reply carrying the id says only that — not
+/// that the venue read it.
 pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
     phase!("--- Phase 190: what a request for quote answers ---");
 
@@ -1971,10 +1984,12 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
         for frame in conns.ccp.extract_frames() {
             for m in messages_in(&mut conns.ccp, &frame) {
                 let text = String::from_utf8_lossy(&m).replace('\x01', "|");
-                if text.contains(ASKED_UNDER) {
-                    answered.push(text);
-                } else if ends_the_session(&text) {
+                if ends_the_session(&text) {
+                    // Checked before the id, because a logout carrying it is
+                    // still the connection going away and not an answer.
                     hung_up = true;
+                } else if text.contains(ASKED_UNDER) {
+                    answered.push(text);
                 } else if !keeps_the_session_up(&text) {
                     unrelated += 1;
                 }

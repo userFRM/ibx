@@ -1622,10 +1622,10 @@ fn build_tbt_query(
 
     /// Ask the historical farm for a contract's corporate actions.
     ///
-    /// The id it goes out under is kept until it is answered. The reply names
-    /// the contract it is for and echoes that id, and both are checked before
-    /// anything is filed: the contract alone cannot say which of two questions
-    /// about it an answer belongs to.
+    /// The id it goes out under is kept until it is answered, and only if it
+    /// went out. The reply names the contract it is for and echoes that id, and
+    /// both are checked before anything is filed: the contract alone cannot say
+    /// which of two questions about it an answer belongs to.
     pub(crate) fn send_adjustments_request(
         &mut self, req_id: u32, con_id: u32, sec_type: &str, exchange: &str,
         start_date: &str, end_date: &str,
@@ -1645,15 +1645,26 @@ fn build_tbt_query(
         self.next_hmds_query_id += 1;
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
+            // Registered as outstanding only if it actually went out. Recorded
+            // regardless, the caller would wait its whole deadline for an
+            // answer to a request the socket never carried, and the log would
+            // say it had been sent.
+            match conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, "U"),
                 (fix::TAG_SENDING_TIME, &ts),
                 (6040, "10020"),
                 (6118, &xml),
-            ]);
-            hb.last_hmds_sent = Instant::now();
-            log::info!("Sent corporate actions request: req_id={req_id} con_id={con_id}");
-            self.pending_adjustments.push((query_id, req_id, con_id));
+            ]) {
+                Ok(()) => {
+                    hb.last_hmds_sent = Instant::now();
+                    log::info!("Sent corporate actions request: req_id={req_id} con_id={con_id}");
+                    self.pending_adjustments.push((query_id, req_id, con_id));
+                }
+                Err(e) => log::warn!(
+                    "corporate actions request did not go out: req_id={req_id} \
+                     con_id={con_id}: {e}"
+                ),
+            }
         }
     }
 
