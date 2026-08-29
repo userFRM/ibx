@@ -2414,8 +2414,43 @@ fn what_kinds_of_action_the_venue_states_live() {
     let client = EClient::connect(&settings).expect("connect failed");
 
     println!("=== what kinds of action the venue states ===\n");
+    let mut seen: std::collections::BTreeMap<&'static str, usize> = Default::default();
     // Chosen for having separated a business out, issued shares rather than
     // cash, or offered rights, inside the window asked for.
+    // A rollover belongs to a future rather than a share, which is why no
+    // equity asked has ever stated one. A continuous future is the contract the
+    // kind exists for, so it is asked as itself rather than as a stock.
+    for (symbol, sec_type, exchange) in [
+        ("ES", "CONTFUT", "CME"),
+        ("CL", "CONTFUT", "NYMEX"),
+        ("GC", "CONTFUT", "COMEX"),
+    ] {
+        match client.qualify_contract(&ApiContract {
+            symbol: symbol.into(), sec_type: sec_type.into(), exchange: exchange.into(),
+            currency: "USD".into(), ..Default::default()
+        }) {
+            Err(e) => println!("  {symbol} ({sec_type}): not qualified ({e})"),
+            Ok(c) => match client.corporate_actions(&c, "20230101", "20251231") {
+                Err(e) => println!("  {symbol} ({sec_type}) con_id {}: {e}", c.con_id),
+                Ok(actions) => {
+                    let mut kinds: std::collections::BTreeMap<&'static str, usize> = Default::default();
+                    for a in &actions {
+                        let code = a.kind.map(|k| k.code()).unwrap_or("??");
+                        *kinds.entry(code).or_default() += 1;
+                        *seen.entry(code).or_default() += 1;
+                    }
+                    let summary: Vec<String> = kinds.iter().map(|(k, n)| format!("{k}x{n}")).collect();
+                    println!("  {symbol} ({sec_type}) con_id {}: {} action(s) — {}",
+                        c.con_id, actions.len(), summary.join(" "));
+                    for a in actions.iter().take(4) {
+                        println!("      {:<3} {} value={}",
+                            a.kind.map(|k| k.code()).unwrap_or("??"), a.date, a.value);
+                    }
+                }
+            },
+        }
+    }
+
     let candidates = [
         ("GE", "20220101", "20241231"),
         ("MMM", "20230101", "20241231"),
@@ -2424,9 +2459,14 @@ fn what_kinds_of_action_the_venue_states_live() {
         ("SNDK", "20240101", "20251231"),
         ("T", "20210101", "20221231"),
         ("XOM", "20230101", "20241231"),
+        // Names that have paid in shares or run a rights issue in the window.
+        ("BABA", "20230101", "20251231"),
+        ("VALE", "20220101", "20241231"),
+        ("LYG", "20220101", "20241231"),
+        ("PBR", "20220101", "20241231"),
+        ("NOK", "20220101", "20241231"),
     ];
 
-    let mut seen: std::collections::BTreeMap<&'static str, usize> = Default::default();
     for (symbol, from, to) in candidates {
         let contract = match client.qualify_contract(&ApiContract {
             symbol: symbol.into(), sec_type: "STK".into(), exchange: "SMART".into(),
