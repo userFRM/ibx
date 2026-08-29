@@ -6251,6 +6251,17 @@ fn a_caller_cannot_take_a_number_this_client_reserves() {
     let refused = client.req_adjustments(taken, 4815747, "STK", "SMART", "20240101", "20241231");
     assert!(refused.is_err(), "a request numbered {taken} must not be sent");
 
+    // Every request, not one of them: a number from that band collides on
+    // whichever call carries it.
+    assert!(
+        client.req_historical_data(taken, &spy, "", "1 D", "1 hour", "TRADES", true, 1, false).is_err(),
+        "bars numbered inside the band must be refused too",
+    );
+    assert!(
+        client.req_contract_details(taken, &spy).is_err(),
+        "and a contract lookup",
+    );
+
     // Refused whether or not this session happens to be holding that number.
     // Held is exactly when the collision is possible, so a check that lets a
     // held one through is open precisely when it matters.
