@@ -311,27 +311,10 @@ impl EClient {
         &self, req_id: i64, con_id: i64, sec_type: &str, exchange: &str,
         start_date: &str, end_date: &str,
     ) -> Result<(), Refusal> {
+        // The reserved band is refused where every caller's number is narrowed,
+        // which is every request rather than this one: a number taken from it
+        // collides on any of them.
         let numbered = wire_req_id(req_id)?;
-        // An answer to this request is handed to whoever is waiting under its
-        // number. The answering calls number themselves in a band of their own
-        // and hold a number while they wait, so a request numbered inside it has
-        // its answer taken by one of those calls, about a contract and a range
-        // it did not ask for.
-        //
-        // Refused for every caller, held or not. Asking whether this number is
-        // one this session is currently waiting on answers a different question:
-        // it is held precisely while the collision is possible, so a check that
-        // lets a held one through is open exactly when it matters. The answering
-        // call reaches the wire by `ask_for_adjustments` instead, which is not a
-        // caller's to reach.
-        if crate::bridge::ReferenceState::is_ask_id(numbered) {
-            return Err(Refusal::validation(format!(
-                "req_id {req_id} is inside the range this client numbers its own \
-                 answering calls in, and an answer under it would be taken for one of \
-                 theirs: number the request below {}",
-                crate::bridge::ReferenceState::ASK_ID_BASE,
-            )));
-        }
         self.ask_for_adjustments(numbered, con_id, sec_type, exchange, start_date, end_date)
     }
 
