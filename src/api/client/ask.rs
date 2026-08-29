@@ -793,6 +793,16 @@ impl EClient {
     pub fn what_if_order(
         &self, contract: &Contract, order: &crate::types::model::Order,
     ) -> Result<crate::types::model::OrderState, Refusal> {
+        // Named before the turn is taken. Placing an order names an unqualified
+        // contract by asking the venue for it, which is one of these calls and
+        // waits its own turn — asked while this one holds it, on a lock that is
+        // not re-entrant, neither ever runs again and the deadline that would
+        // have said so never starts.
+        let contract = if contract.con_id == 0 {
+            &self.qualify_contract(contract)?
+        } else {
+            contract
+        };
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         // Numbered in the band reserved for these calls, which the request
@@ -1018,6 +1028,11 @@ impl EClient {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        // Once more before answering. The loop sleeps and then tests its
+        // deadline, so a terminal status arriving in that last sleep is still
+        // queued — and a caller is handed the working one it replaced, or told
+        // the order said nothing when it had.
+        self.pump_for_ask(&mut watch);
         report.lock().unwrap().clone().ok_or_else(|| {
             Refusal::no_answer(
                 format!("order {order_id} said nothing within {}s", timeout.as_secs()))
@@ -1049,6 +1064,10 @@ impl EClient {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        // Once more before giving up, for the reason the shared waiter states:
+        // the loop sleeps and then tests its deadline, so an answer arriving in
+        // that last sleep is still queued when it ends.
+        self.pump_for_ask(&mut collector);
 
         let mut a = answer.lock().unwrap();
         if let Some(e) = a.error.take() {

@@ -54,7 +54,6 @@ A user message carries what it is for on tag 6040.
 | `91` |
 | `101` |
 | `106` |
-| `107` |
 | `112` |
 | `116` |
 | `138` |
