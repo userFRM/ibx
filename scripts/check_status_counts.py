@@ -26,7 +26,8 @@ MATRIX = ROOT / "docs/capabilities.md"
 
 #: Row label in the table, and how to count what it describes.
 ROWS = {
-    "Rust unit and integration": "rust",
+    "Rust unit and integration": "rust_offline",
+    "Rust, live": "rust_live",
     "Python": "python",
     "Python, live": "python_live",
     "Paper compatibility suite": "paper",
@@ -111,6 +112,17 @@ def counted() -> dict[str, int]:
         "python": python_all - python_live,
         "python_live": python_live,
         "paper": _cargo_count(["--test", "ib_paper_compat"]),
+        # The other Rust target that needs a session. It states so in its own
+        # first lines and reads the credentials out of the environment, and the
+        # page generator already counts it as live evidence — counted offline
+        # here, it would be published as needing no session by one script and
+        # as needing one by another.
+        "rust_live": _cargo_count(["--test", "rust_api_gt"]),
+        # What is left of the Rust targets once the two that need a session are
+        # taken out, which is what "requires credentials: no" has to mean.
+        "rust_offline": rust
+            - _cargo_count(["--test", "ib_paper_compat"])
+            - _cargo_count(["--test", "rust_api_gt"]),
         "phases": len({
             m for f in (ROOT / "tests" / "ib_paper_compat").glob("*.rs")
             for m in PHASE.findall(f.read_text())
@@ -279,8 +291,8 @@ def main() -> int:
     # tests are published as offline and as live at once — a total that adds up
     # only because the same tests are in it twice. Taken out of the offline side,
     # which is the side they are not on.
-    offline = have["rust"] - have["paper"] + have["python"]
-    live = have["python_live"] + have["paper"]
+    offline = have["rust_offline"] + have["python"]
+    live = have["python_live"] + have["paper"] + have["rust_live"]
     verified, total = capabilities()
     # The prose above the matrix restates what the matrix lists. Both live in
     # the same file now, which is not a reason to trust one against the other:
@@ -305,7 +317,12 @@ def main() -> int:
     else:
         print(f"readme: {offline:,} offline, {live:,} live")
 
+    # `rust` is every Rust target together, which no row publishes: the table
+    # names the two buckets it splits into, because "requires credentials" is
+    # not one answer for all of them.
     for key, n in have.items():
+        if key == "rust":
+            continue
         if key not in said:
             wrong.append(f"{key}: nothing published, {n} exist")
         elif said[key] != n:

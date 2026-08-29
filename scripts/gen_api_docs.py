@@ -1224,14 +1224,16 @@ def _status_icon(name: str, impl_set: set[str], stub_names: set[str]) -> str:
 
 #: Calls that return as though they acted without reaching the venue.
 #:
-#: Hand-kept, and it went stale: the corporate-events calls were listed here
-#: after they had been wired. `req_wsh_meta_data` and `req_wsh_event_data`
-#: send on the security-definition connection and their answers are dispatched
-#: to the wrapper, so a caller gets the calendar, not a warning. Anything
-#: added here has to be a call that genuinely sends nothing.
-STUB_METHODS = {
-    "request_fa", "replace_fa",
-}
+#: Hand-kept, and it has gone stale twice. The corporate-events calls were
+#: listed here after they had been wired: `req_wsh_meta_data` and
+#: `req_wsh_event_data` send on the security-definition connection and their
+#: answers are dispatched to the wrapper, so a caller gets the calendar, not a
+#: warning. The advisor calls were listed here too, and they send
+#: `AdvisorConfig` and reach the venue — what does not happen is that their
+#: replies are read, which is a callback that does not fire and is recorded as
+#: one below. Anything added here has to be a call that genuinely sends
+#: nothing, and a call whose answer goes unread is not one of them.
+STUB_METHODS: set[str] = set()
 
 #: Callbacks nothing fires. Each for its own reason, and none of them a
 #: message this client fails to read: the advisor replies are not parsed,
