@@ -412,12 +412,21 @@ impl EClient {
             ));
         }
         let con_id = contract.con_id.to_string();
-        // The actions arrive on the contract's own record rather than a
-        // callback, so the record is what is watched. A refusal does arrive on
-        // one, and without keeping it a rejected request reads as a request
-        // nothing answered — the caller waits out the whole deadline and is
-        // told no answer came, when the venue said why immediately.
+        // The actions do not arrive on a callback: the engine files them
+        // against the request that asked, and this takes its own. A refusal
+        // does arrive on a callback, and without keeping it a rejected request
+        // reads as a request nothing answered — the caller waits out the whole
+        // deadline and is told no answer came, when the venue said why
+        // immediately.
         struct Refused { req_id: i64, why: Arc<Mutex<Option<Refusal>>> }
+        /// Gives the wait up on every way out, including an early return and an
+        /// unwind, so nothing is kept for a question nobody is asking.
+        struct StopWaiting<'a> { shared: &'a Arc<crate::bridge::SharedState>, req_id: u32 }
+        impl Drop for StopWaiting<'_> {
+            fn drop(&mut self) {
+                self.shared.reference.stop_waiting_for_adjustments(self.req_id);
+            }
+        }
         impl Wrapper for Refused {
             fn error(&mut self, req_id: i64, code: i64, message: &str, _: &str) {
                 if req_id == self.req_id && !is_connection_notice(code) {
@@ -430,6 +439,11 @@ impl EClient {
         // and would be taken for this one's the moment this looked.
         self.shared.reference.forget_adjustments(&con_id);
         let asked = ask_id(&self.shared);
+        // Said before the request goes out, so an answer that arrives has
+        // somewhere to be put, and taken back on every way out of this call so
+        // nothing is kept for a question nobody is still asking.
+        self.shared.reference.expect_adjustments(asked.get() as u32);
+        let _stop = StopWaiting { shared: &self.shared, req_id: asked.get() as u32 };
         let why = Arc::new(Mutex::new(None));
         let mut refused = Refused { req_id: asked.get(), why: Arc::clone(&why) };
         self.req_adjustments(
@@ -450,9 +464,6 @@ impl EClient {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        // Given up on. Whatever arrives for it later answers nobody, and leaving
-        // it filed would keep it for as long as the session lasts.
-        self.shared.reference.take_adjustments_answering(asked.get() as u32);
         Err(Refusal::no_answer(format!(
             "no answer within {}s to the corporate actions of {}",
             ANSWER_TIMEOUT.as_secs(), contract.symbol,

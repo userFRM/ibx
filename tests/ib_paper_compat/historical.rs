@@ -1853,7 +1853,8 @@ pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
 
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut answered: Vec<String> = Vec::new();
-    while Instant::now() < deadline && answered.is_empty() {
+    let mut hung_up = false;
+    while Instant::now() < deadline && answered.is_empty() && !hung_up {
         if let Err(e) = conns.ccp.try_recv()
             && e.kind() != std::io::ErrorKind::WouldBlock
         {
@@ -1870,6 +1871,8 @@ pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
                 // comes back or nothing did.
                 if text.contains(ASKED_UNDER) {
                     answered.push(text);
+                } else if ends_the_session(&text) {
+                    hung_up = true;
                 } else if !keeps_the_session_up(&text) {
                     unrelated += 1;
                 }
@@ -1878,11 +1881,14 @@ pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    if answered.is_empty() {
+    if hung_up {
+        println!("  the session ended while waiting, so nothing here says what the \
+                  venue makes of the request\n");
+    } else if answered.is_empty() {
         println!(
             "  nothing naming {ASKED_UNDER} in 10s, with {unrelated} other message(s) \
-             arriving meanwhile. The request reaches the venue and is answered with \
-             neither a shape nor a reason, so what it would state stays unestablished\n"
+             arriving meanwhile. That says the request drew no reply carrying its id; \
+             it does not say the venue read it\n"
         );
     } else {
         for msg in answered.iter().take(3) {
@@ -1932,7 +1938,8 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut answered: Vec<String> = Vec::new();
     let mut unrelated = 0usize;
-    while Instant::now() < deadline && answered.is_empty() {
+    let mut hung_up = false;
+    while Instant::now() < deadline && answered.is_empty() && !hung_up {
         if let Err(e) = conns.ccp.try_recv()
             && e.kind() != std::io::ErrorKind::WouldBlock
         {
@@ -1944,6 +1951,8 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
                 let text = String::from_utf8_lossy(&m).replace('\x01', "|");
                 if text.contains(ASKED_UNDER) {
                     answered.push(text);
+                } else if ends_the_session(&text) {
+                    hung_up = true;
                 } else if !keeps_the_session_up(&text) {
                     unrelated += 1;
                 }
@@ -1952,10 +1961,14 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    if answered.is_empty() {
+    if hung_up {
+        println!("  the session ended while waiting, so nothing here says what the \
+                  venue makes of the request\n");
+    } else if answered.is_empty() {
         println!(
             "  nothing naming {ASKED_UNDER} in 10s, with {unrelated} other message(s) \
-             arriving meanwhile\n"
+             arriving meanwhile. That says the request drew no reply carrying its id; \
+             it does not say the venue read it\n"
         );
     } else {
         for msg in answered.iter().take(3) {
