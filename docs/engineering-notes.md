@@ -24,10 +24,10 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Measure | Count |
 | --- | --- |
 | Canonical calls | 78 |
-| Served, Rust | 76 |
-| Served, Python | 76 |
-| Accepted and not served, Rust | 2 |
-| Accepted and not served, Python | 2 |
+| Served, Rust | 78 |
+| Served, Python | 78 |
+| Accepted and not served, Rust | 0 |
+| Accepted and not served, Python | 0 |
 | Canonical callbacks | 85 |
 | Calls where the two surfaces differ | 0 |
 | Callbacks where the two surfaces differ | 0 |
@@ -68,7 +68,7 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Commodity | Verified | Verified | Verified | Available |
 | Bill | Verified | Verified | Verified | Available. A bill is named by its issuer, not by a ticker: `US-T` returns fifty-nine of them in 0.2s, and the first quotes. The venue's symbol search does not surface them, so the issuer is how one is found |
 | Fund | Verified | Verified | Blocked, quantified in cash and then refused for residency, which is a property of the account | None required |
-| Forward | Not permitted on this account | Not permitted on this account | Absent, the session states no permission for the type | None required. The venue lists twenty-one security types this account may trade and this is not among them, which settles the row: nothing to reach rather than something unreached |
+| Forward | Not permitted on this account | Not permitted on this account | Blocked: the call takes any contract, and the session states no permission for the type | None required. The venue lists twenty-one security types this account may trade and this is not among them, which settles the row: nothing to reach rather than something unreached |
 | Venues outside the United States | Verified | Verified | Verified | Available |
 
 ## Release policy
@@ -448,8 +448,9 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,824 | No |
-| Python | 470 | No |
+| Rust unit and integration | 1,784 | No |
+| Rust, live | 3 | Yes |
+| Python | 471 | No |
 | Python, live | 135 | Yes |
 | Paper compatibility suite (141 phases) | 37 tests | Yes |
 
