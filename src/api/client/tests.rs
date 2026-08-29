@@ -6225,3 +6225,29 @@ fn a_chargeable_snapshot_is_asked_for_even_where_the_contract_is_watched() {
         "the chargeable snapshot is asked for on its own",
     );
 }
+
+
+/// A caller cannot number a request the way this client numbers its own.
+///
+/// An answer finds whoever is waiting by that number. A caller using one from
+/// the band the answering calls number themselves in has its answer handed to
+/// one of those calls, which asked about something else — and the caller waits
+/// out a deadline for an answer that was given away.
+#[test]
+fn a_caller_cannot_take_a_number_this_client_reserves() {
+    use crate::bridge::ReferenceState;
+    let (client, _rx, _shared) = test_client();
+    let spy = spy();
+
+    let taken = ReferenceState::ASK_ID_BASE as i64;
+    let refused = client.req_adjustments(taken, 4815747, "STK", "SMART", "20240101", "20241231");
+    assert!(refused.is_err(), "a request numbered {taken} must not be sent");
+
+    // The number below the band is a caller's to use, and still works.
+    assert!(
+        client.req_adjustments(taken - 1, 4815747, "STK", "SMART", "20240101", "20241231").is_ok(),
+        "the band is a ceiling on caller numbers, not a ban on large ones",
+    );
+    // And an ordinary request is unaffected.
+    assert!(client.req_contract_details(1, &spy).is_ok());
+}
