@@ -66,13 +66,18 @@ pub struct ReferenceState {
     /// venue sends them: the reply names the contract it is about, and one
     /// arrives per contract rather than per question asked.
     adjustments: Mutex<std::collections::HashMap<String, StatedActions>>,
-    /// The answer to each outstanding request, until whoever asked takes it.
+    /// A slot for each request somebody is waiting on, holding its answer once
+    /// one arrives.
     ///
     /// Separate from the record above because that one holds what arrived last
     /// for a contract, and two questions about one contract would otherwise
     /// share a slot — the second answer replacing the first before the first
     /// caller had looked.
-    adjustments_by_request: Mutex<std::collections::HashMap<u32, Vec<crate::control::adjustments::Adjustment>>>,
+    ///
+    /// A slot exists only while somebody waits: whoever asks makes one and
+    /// whoever stops waiting removes it, so an answer to a request nobody is
+    /// waiting on is dropped rather than kept.
+    adjustments_by_request: Mutex<std::collections::HashMap<u32, Option<Vec<crate::control::adjustments::Adjustment>>>>,
     /// Errors surfaced by HMDS for in-flight reference queries (req_id, code, message).
     /// Drained by the dispatcher and forwarded to `Wrapper::error`.
     historical_errors: Mutex<Vec<(u32, i32, String)>>,
@@ -446,7 +451,26 @@ impl ReferenceState {
         self.adjustments.lock().unwrap().get(con_id).map(|(c, a, _)| (c.clone(), a.clone()))
     }
 
-    /// The answer to one request, taken.
+    /// Say that an answer to this request is going to be waited for.
+    ///
+    /// Nothing is filed for a request nobody said they would wait on. Without
+    /// that, every answer to every request leaves a slot behind: the requests
+    /// sent by the fire-and-forget call are never taken by anyone, and an
+    /// answer arriving after its asker gave up recreates the slot it had just
+    /// removed. Either grows for as long as the session lasts.
+    ///
+    /// Paired with [`stop_waiting_for_adjustments`](Self::stop_waiting_for_adjustments),
+    /// which every path out of a wait goes through.
+    pub fn expect_adjustments(&self, req_id: u32) {
+        self.adjustments_by_request.lock().unwrap().insert(req_id, None);
+    }
+
+    /// Give up on an answer, whether or not one arrived.
+    pub fn stop_waiting_for_adjustments(&self, req_id: u32) {
+        self.adjustments_by_request.lock().unwrap().remove(&req_id);
+    }
+
+    /// The answer to one request, if it has arrived.
     ///
     /// Kept apart from the contract's own record, which holds whatever arrived
     /// last and is what a caller reads to ask "what does this session know
@@ -455,13 +479,14 @@ impl ReferenceState {
     /// share a slot: an answer filed for one request and then overwritten by a
     /// late answer to another is an answer that arrived and was lost, and the
     /// caller waiting on it is told nothing came.
-    ///
-    /// Taken rather than read, so what nobody is waiting for does not
-    /// accumulate. A caller that gives up takes its own on the way out.
     pub fn take_adjustments_answering(&self, req_id: u32)
         -> Option<Vec<crate::control::adjustments::Adjustment>>
     {
-        self.adjustments_by_request.lock().unwrap().remove(&req_id)
+        let mut waiting = self.adjustments_by_request.lock().unwrap();
+        match waiting.get_mut(&req_id) {
+            Some(slot @ Some(_)) => slot.take(),
+            _ => None,
+        }
     }
 
     /// Forget what a contract's actions were, so the next answer is the next
@@ -487,7 +512,12 @@ impl ReferenceState {
         if contract.con_id.is_empty() {
             return;
         }
-        self.adjustments_by_request.lock().unwrap().insert(answering, actions.clone());
+        // Filed only where somebody said they would wait for it. An answer to
+        // a request nobody is waiting on has nowhere to go, and giving it one
+        // is how this map would grow for the life of the session.
+        if let Some(slot) = self.adjustments_by_request.lock().unwrap().get_mut(&answering) {
+            *slot = Some(actions.clone());
+        }
         self.adjustments.lock().unwrap()
             .insert(contract.con_id.clone(), (contract, actions, answering));
     }
@@ -1143,6 +1173,7 @@ mod adjustments_store_tests {
             ..Default::default()
         }];
         // The first question is given up on; its answer arrives anyway.
+        state.expect_adjustments(7);
         state.note_adjustments(
             AdjustedContract { con_id: "4815747".into(), ..Default::default() },
             split, 7,
@@ -1163,6 +1194,8 @@ mod adjustments_store_tests {
 
         // An answer to one question does not displace an answer to another
         // that is still waiting to be read.
+        state.expect_adjustments(9);
+        state.expect_adjustments(10);
         state.note_adjustments(
             AdjustedContract { con_id: "4815747".into(), ..Default::default() },
             Vec::new(), 9,
@@ -1174,6 +1207,28 @@ mod adjustments_store_tests {
         assert!(
             state.take_adjustments_answering(9).is_some(),
             "the first answer survives the second arriving before anyone read it",
+        );
+
+        // An answer nobody said they would wait for is dropped, so a session
+        // that keeps asking without waiting does not keep growing.
+        state.note_adjustments(
+            AdjustedContract { con_id: "4815747".into(), ..Default::default() },
+            Vec::new(), 11,
+        );
+        assert!(
+            state.take_adjustments_answering(11).is_none(),
+            "nobody waited on request 11, so its answer had nowhere to go",
+        );
+        // And one given up on leaves nothing behind for a late answer to fill.
+        state.expect_adjustments(12);
+        state.stop_waiting_for_adjustments(12);
+        state.note_adjustments(
+            AdjustedContract { con_id: "4815747".into(), ..Default::default() },
+            Vec::new(), 12,
+        );
+        assert!(
+            state.take_adjustments_answering(12).is_none(),
+            "the wait was given up, so the late answer is dropped rather than kept",
         );
         // The plain reader is unchanged: it states what is known about the
         // contract, which is a different question from whose answer it is.
