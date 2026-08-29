@@ -1599,6 +1599,30 @@ pub(super) fn phase_corporate_actions_reply(mut conns: Conns) -> Conns {
     conns
 }
 
+/// Whether the connection is still up, reading whatever is already waiting.
+///
+/// A phase that sends first and reads afterwards asks a question of a socket
+/// that may have been closed several phases ago, and then reports the silence
+/// as the venue's answer. Read first.
+fn still_connected(conn: &mut Connection) -> bool {
+    if let Err(e) = conn.try_recv()
+        && e.kind() != std::io::ErrorKind::WouldBlock
+    {
+        return false;
+    }
+    for frame in conn.extract_frames() {
+        if let ibx::protocol::connection::Frame::Fix(raw) = frame
+            && let Some(unsigned) = conn.unsign(&raw)
+        {
+            let text = String::from_utf8_lossy(&unsigned).replace('\x01', "|");
+            if ends_the_session(&text) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Withdraw the scan this phase put up, on every way out of it.
 ///
 /// A subscription left standing outlives the phase and is one more thing the
@@ -1863,6 +1887,11 @@ pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
     /// reply as answering it.
     const ASKED_UNDER: &str = "mifid_1";
 
+    if !still_connected(&mut conns.ccp) {
+        skipped!("  SKIP: the session had already ended, so nothing here says what \
+                  the venue makes of the request\n");
+        return conns;
+    }
     let account = conns.account_id.clone();
     let mut unrelated = 0usize;
     let ts = now_ib_timestamp();
@@ -1929,6 +1958,32 @@ pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
             let shown: String = msg.chars().take(500).collect();
             println!("  answered: {shown}");
         }
+        // Anything the venue is working is taken back. A quote left standing
+        // outlives the phase, and a suite that leaves orders on an account is
+        // not one anybody should run twice.
+        let working = answered.iter().find_map(|m| {
+            let alive = m.split('|').any(|f| matches!(f, "39=0" | "39=A" | "39=1"));
+            let id = m.split('|').find_map(|f| f.strip_prefix("37="))?;
+            (alive && id != "0").then(|| id.to_string())
+        });
+        if let Some(order_id) = working {
+            let ts = now_ib_timestamp();
+            let sent = conns.ccp.send_fix(&[
+                (ibx::protocol::fix::TAG_MSG_TYPE, "F"),
+                (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+                (37, &order_id),
+                (11, ASKED_UNDER),
+                (54, "1"),
+                (ibx::control::contracts::TAG_SYMBOL, "SPY"),
+            ]);
+            match sent {
+                Ok(()) => println!("  the venue is working order {order_id}; withdrawn"),
+                Err(e) => println!("  the venue is working order {order_id} and it could \
+                                    not be withdrawn: {e}"),
+            }
+        } else {
+            println!("  nothing is left working: the venue answered without one");
+        }
         println!();
     }
     conns
@@ -1954,12 +2009,28 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
     /// reply as answering it.
     const ASKED_UNDER: &str = "rfq_1";
 
+    if !still_connected(&mut conns.ccp) {
+        skipped!("  SKIP: the session had already ended, so nothing here says what \
+                  the venue makes of the request\n");
+        return conns;
+    }
     let ts = now_ib_timestamp();
     if let Err(e) = conns.ccp.send_fix(&[
         (ibx::protocol::fix::TAG_MSG_TYPE, "R"),
         (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
         // The standard field for the id a quote request is answered under.
         (131, ASKED_UNDER),
+        // The side the venue asked for. Without it the request is rejected for
+        // the field rather than answered, which establishes that it is read and
+        // not what it is answered with. This is a paper session and a quote
+        // request is not an order: what comes back is what the venue makes of a
+        // complete one.
+        (54, "1"),
+        // And the quantity it asked for after that. A complete request is a
+        // working quote rather than a question, so whatever it creates is
+        // withdrawn below: the smallest quantity there is, on a paper session,
+        // taken back as soon as the venue has said what it makes of it.
+        (38, "1"),
         (ibx::control::contracts::TAG_SYMBOL, "SPY"),
         (ibx::control::contracts::TAG_SECURITY_TYPE, "STK"),
         (ibx::control::contracts::TAG_EXCHANGE, "SMART"),
@@ -1968,7 +2039,8 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
         skipped!("  SKIP: the request could not be sent: {e}\n");
         return conns;
     }
-    println!("  asked under {ASKED_UNDER} for a stock every session here can see");
+    println!("  asked under {ASKED_UNDER} for a stock every session here can see, \
+              stating the side the venue asked for");
 
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut answered: Vec<String> = Vec::new();

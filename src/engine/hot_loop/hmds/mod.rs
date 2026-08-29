@@ -1628,7 +1628,7 @@ fn build_tbt_query(
     /// which of two questions about it an answer belongs to.
     pub(crate) fn send_adjustments_request(
         &mut self, req_id: u32, con_id: u32, sec_type: &str, exchange: &str,
-        start_date: &str, end_date: &str,
+        start_date: &str, end_date: &str, shared: &SharedState,
         hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState,
     ) {
         let query_id = format!("adj_{}", self.next_hmds_query_id);
@@ -1660,10 +1660,24 @@ fn build_tbt_query(
                     log::info!("Sent corporate actions request: req_id={req_id} con_id={con_id}");
                     self.pending_adjustments.push((query_id, req_id, con_id));
                 }
-                Err(e) => log::warn!(
-                    "corporate actions request did not go out: req_id={req_id} \
-                     con_id={con_id}: {e}"
-                ),
+                Err(e) => {
+                    // Said to the caller, not only to the log. Not registered
+                    // as outstanding, this request is on no path that later
+                    // fails it — so without this the caller waits its whole
+                    // deadline and is told nothing came, about a request that
+                    // never left.
+                    log::warn!(
+                        "corporate actions request did not go out: req_id={req_id} \
+                         con_id={con_id}: {e}"
+                    );
+                    crate::engine::hot_loop::push_hmds_error(
+                        shared,
+                        req_id,
+                        format!("the request for this contract's corporate actions could \
+                                 not be sent: {e}"),
+                        false,
+                    );
+                }
             }
         }
     }

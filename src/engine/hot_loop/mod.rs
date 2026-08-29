@@ -1192,7 +1192,7 @@ impl HotLoop {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
-                        self.hmds.send_adjustments_request(req_id, con_id, &sec_type, &exchange, &start_date, &end_date, &mut self.hmds_conn, &mut self.hb);
+                        self.hmds.send_adjustments_request(req_id, con_id, &sec_type, &exchange, &start_date, &end_date, &self.shared, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::FetchNewsArticle { req_id, provider_code, article_id } => {
