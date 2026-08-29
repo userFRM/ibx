@@ -1080,6 +1080,13 @@ IBAPI_EWRAPPER: list[tuple[str, str]] = [
     ("Other", "delta_neutral_validation"),
     ("WSH", "wsh_meta_data"),
     ("WSH", "wsh_event_data"),
+    # Defined by the reference API and not fired here, which is a difference
+    # worth counting rather than one worth leaving out of the denominator: the
+    # notes state all three and why, and a total that omitted them would say
+    # this client answers everything there is.
+    ("Market Data", "reroute_mkt_data_req"),
+    ("Market Data", "reroute_mkt_depth_req"),
+    ("Connection", "config"),
 ]
 
 

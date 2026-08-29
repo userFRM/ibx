@@ -315,11 +315,23 @@ impl Drop for EClient {
 /// hands out ids well past `u32::MAX`, so the ibapi idiom of one counter for
 /// orders and requests hit it on the first call. Refuse instead.
 pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, Refusal> {
-    u32::try_from(req_id).map_err(|_| {
+    let id = u32::try_from(req_id).map_err(|_| {
         Refusal::validation(format!(
             "req_id {req_id} is outside the range this request can carry (0..={})", u32::MAX,
         ))
-    })
+    })?;
+    // The top of the range already means something: it is what this client
+    // reports when a message names no request at all, and it reaches a caller
+    // as minus one. A request numbered with it is answered under a number that
+    // is not the one it asked under.
+    if id == crate::bridge::ReferenceState::NO_REQUEST {
+        return Err(Refusal::validation(format!(
+            "req_id {req_id} is the number this client uses for a message that names no \
+             request, and an answer under it reaches a caller as -1: number the request \
+             below it",
+        )));
+    }
+    Ok(id)
 }
 
 /// The gateway's view of an [`EClientConfig`].

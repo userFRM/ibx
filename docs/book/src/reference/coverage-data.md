@@ -23,7 +23,7 @@ that did not run.
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
 | **EClient methods** | 78 | 76 impl, 2 stub | 76 impl, 2 stub |
-| **EWrapper callbacks** | 82 | 77 impl, 5 stub | 77 impl, 5 stub |
+| **EWrapper callbacks** | 85 | 77 impl, 5 stub | 77 impl, 5 stub |
 
 ## EClient Methods
 
@@ -194,3 +194,6 @@ that did not run.
 | Other | `delta_neutral_validation` | STUB | STUB |
 | WSH | `wsh_meta_data` | Y | Y |
 |  | `wsh_event_data` | Y | Y |
+| Market Data | `reroute_mkt_data_req` | - | - |
+|  | `reroute_mkt_depth_req` | - | - |
+| Connection | `config` | - | - |
