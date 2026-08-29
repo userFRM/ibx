@@ -447,8 +447,10 @@ impl EClient {
         let _stop = StopWaiting { shared: &self.shared, req_id: asked.get() as u32 };
         let why = Arc::new(Mutex::new(None));
         let mut refused = Refused { req_id: asked.get(), why: Arc::clone(&why) };
-        self.req_adjustments(
-            asked.get(), contract.con_id, &contract.sec_type, &contract.exchange,
+        // Through the private path: the public one refuses this number, which
+        // is the point of reserving it.
+        self.ask_for_adjustments(
+            asked.get() as u32, contract.con_id, &contract.sec_type, &contract.exchange,
             start_date, end_date,
         )?;
         let _notice = LeaveTheCloseNoticeForTheCaller::new(self);

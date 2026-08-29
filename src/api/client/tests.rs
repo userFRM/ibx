@@ -6243,6 +6243,16 @@ fn a_caller_cannot_take_a_number_this_client_reserves() {
     let refused = client.req_adjustments(taken, 4815747, "STK", "SMART", "20240101", "20241231");
     assert!(refused.is_err(), "a request numbered {taken} must not be sent");
 
+    // Refused whether or not this session happens to be holding that number.
+    // Held is exactly when the collision is possible, so a check that lets a
+    // held one through is open precisely when it matters.
+    _shared.reference.note_ours(taken);
+    assert!(
+        client.req_adjustments(taken, 4815747, "STK", "SMART", "20240101", "20241231").is_err(),
+        "held or not, the band is not a caller's to number in",
+    );
+    _shared.reference.forget_ours(taken);
+
     // The number below the band is a caller's to use, and still works.
     assert!(
         client.req_adjustments(taken - 1, 4815747, "STK", "SMART", "20240101", "20241231").is_ok(),
