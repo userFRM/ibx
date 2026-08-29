@@ -1714,7 +1714,29 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
         skipped!("  SKIP: the connection went away while subscribing: {e}\n");
         return conns;
     }
-    let _ = hmds.extract_frames();
+    // What arrived while subscribing is read rather than dropped. A logout or a
+    // rejection here means there is no scan, and everything below would then be
+    // asking about one that does not exist while reporting silence as though it
+    // were the venue's answer about a live subscription.
+    for frame in hmds.extract_frames() {
+        let raw = match frame {
+            ibx::protocol::connection::Frame::Fix(raw) => hmds.unsign(&raw),
+            _ => None,
+        };
+        if let Some(unsigned) = raw {
+            let text = String::from_utf8_lossy(&unsigned).replace('\x01', "|");
+            if ends_the_session(&text) {
+                skipped!("  SKIP: the session ended while subscribing, so there is no \
+                          scan to ask about\n");
+                return conns;
+            }
+            if text.contains(scan_id) && text.contains("|35=3|") {
+                skipped!("  SKIP: the subscription was refused, so there is no scan to \
+                          ask about: {text}\n");
+                return conns;
+            }
+        }
+    }
     println!("  subscribed scan {scan_id}, so there is one to suspend");
 
     // The element each request arrives under is its own name, which is how the
