@@ -107,6 +107,18 @@ def _params(raw: str) -> list[str]:
     return out
 
 
+def written_in_tuple(written: str, group: str) -> bool:
+    """Whether a discarded tuple is names only, and this is one of them.
+
+    `let _ = (account, model_code);` throws both away. A tuple holding a call
+    is something else, and is not read as a discard of what it passes.
+    """
+    parts = [p.strip() for p in group.split(",") if p.strip()]
+    if not parts or not all(re.fullmatch(r"_?[a-z][a-z_0-9]*_?", p) for p in parts):
+        return False
+    return any(re.fullmatch(written, p) for p in parts)
+
+
 def _kind(name: str, body: str, doc: str) -> str:
     # `_override` and `override_` are one argument written two ways: the
     # leading underscore says the body ignores it, the trailing one keeps it
@@ -119,9 +131,18 @@ def _kind(name: str, body: str, doc: str) -> str:
     # `let _ = self.cancel_mkt_data(req_id)` counted as discarding the very
     # argument it hands on, and five calls that read theirs were reported as
     # dropping them.
+    # A discard is the argument thrown away on its own or among a tuple of
+    # names — `let _ = req_id;` or `let _ = (account, model_code);` — and not a
+    # call whose result is discarded while the argument is handed on: read that
+    # wider way, `let _ = self.cancel_mkt_data(req_id)` counted as discarding
+    # the very argument it passes.
     discarded = (
         name.startswith("_")
         or re.search(rf"let _ = \(?\s*{written}\s*\)?\s*;", body)
+        or any(
+            written_in_tuple(written, group)
+            for group in re.findall(r"let _ = \(([^();]*)\)\s*;", body)
+        )
     )
     if not discarded:
         # Named anywhere in the body that is not the discard itself.
