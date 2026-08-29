@@ -275,8 +275,12 @@ def api_surface() -> dict[str, int]:
         "Canonical calls": len(calls),
         "Served, Rust": sum(1 for c in calls if c[call_rust] == "Y"),
         "Served, Python": sum(1 for c in calls if c[call_py] == "Y"),
-        "Accepted and not served, Rust": sum(1 for c in calls if c[call_rust] == "STUB"),
-        "Accepted and not served, Python": sum(1 for c in calls if c[call_py] == "STUB"),
+        # What the matrix marks STUB is a call taken and not applied: it returns
+        # and reaches nothing. Counted under the status that reports on the
+        # error callback, the figure said a call answers a caller who is told
+        # nothing.
+        "Taken and not applied, Rust": sum(1 for c in calls if c[call_rust] == "STUB"),
+        "Taken and not applied, Python": sum(1 for c in calls if c[call_py] == "STUB"),
         "Canonical callbacks": len(backs),
         "Calls where the two surfaces differ":
             sum(1 for c in calls if c[call_rust] != c[call_py]),

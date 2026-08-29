@@ -142,15 +142,27 @@ def sent_subtypes(srcs: dict) -> list:
     gives it, and reading only the number missed every request sent under the
     name — a page saying those subtypes are neither sent nor handled.
     """
-    named_tag = r'(?:6040|\w*TAG_SUB_PROTOCOL|\w*TAG_IB_COMM_TYPE)'
+    # The tag under its number and under either name a module gives it, however
+    # the path to that name is spelled.
+    named_tag = r'(?:6040|(?:\w+::)*TAG_SUB_PROTOCOL|(?:\w+::)*TAG_IB_COMM_TYPE)'
     found = set()
     for text in srcs.values():
         found |= set(re.findall(rf'\(\s*{named_tag}\s*,\s*&?"(\d+)"\s*\)', text))
         # A constant named as a sub-protocol is one: it exists to be written on
         # that tag, and is passed as a value rather than spelled out beside it,
         # so a reading that looked only for the literal said the subtype was
-        # neither sent nor handled anywhere.
-        found |= set(re.findall(r'const \w*SUB_PROTOCOL\w*: u32 = (\d+)\s*;', text))
+        # neither sent nor handled anywhere. Written as a number or as text,
+        # because both spellings are in use.
+        #
+        # `TAG_` names the tag itself rather than a subtype travelling under it,
+        # and reading it as one published the tag's own number as a subtype.
+        found |= set(re.findall(
+            r'const (?!TAG_)\w*SUB_PROTOCOL\w*: (?:u32 = (\d+)|&str = "(\d+)")\s*;', text,
+        ) and [
+            g for pair in re.findall(
+                r'const (?!TAG_)\w*SUB_PROTOCOL\w*: (?:u32 = (\d+)|&str = "(\d+)")\s*;', text,
+            ) for g in pair if g
+        ])
     return sorted(found, key=int)
 
 
