@@ -165,7 +165,26 @@ impl EClient {
                 contract.con_id,
             )));
         }
-        let shared = self.connected_shared()?;
+        // The state and the sender are taken as one pair, before anything is
+        // made or sent. Taken apart, a reconnect between them puts the slot on
+        // the session this call started with and the request on the one it
+        // finished with: the answer is filed where nobody is watching, and the
+        // request runs on a session nobody is waiting on. Checking afterwards
+        // finds that out too late — the request has already gone.
+        let (shared, tx) = {
+            let shared = self.connected_shared()?;
+            let tx = self.control_tx.lock().unwrap().clone().ok_or_else(|| {
+                PyRuntimeError::new_err("not connected")
+            })?;
+            // Still the same session after both were taken, so they are a pair
+            // and not two halves of a reconnect.
+            if !std::sync::Arc::ptr_eq(&shared, &self.connected_shared()?) {
+                return Err(PyRuntimeError::new_err(
+                    "the session was replaced while asking for corporate actions: ask again",
+                ));
+            }
+            (shared, tx)
+        };
         // One of these at a time per session. Each caller takes only the answer
         // to its own request, so a second caller cannot be handed the first's;
         // what serialising prevents is the two of them clearing and rewriting
@@ -222,21 +241,21 @@ impl EClient {
         }
         shared.reference.expect_adjustments(req_id as u32);
         let _stop = StopWaiting(Arc::clone(&shared), req_id as u32);
-        self.req_adjustments(
-            py, req_id, contract.con_id, &contract.sec_type, &contract.exchange,
-            start_date, end_date,
-        )?;
-        // The slot lives on the session this call started with, and the request
-        // goes out on whatever session the client holds when it sends. A
-        // reconnect in between puts those two on different sessions: the answer
-        // is filed where nobody is watching, and this waits out its deadline
-        // for it. Told apart rather than waited out.
-        if !std::sync::Arc::ptr_eq(&shared, &self.connected_shared()?) {
-            return Err(PyRuntimeError::new_err(
-                "the session was replaced while asking for corporate actions, so the \
-                 answer would arrive on a session this call is not watching: ask again",
-            ));
-        }
+        // Sent on the sender taken beside this slot's own session.
+        let con_id = u32::try_from(contract.con_id).ok().filter(|id| *id > 0).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "corporate actions are asked for by the venue's id for the contract, \
+                 and {} is not one", contract.con_id,
+            ))
+        })?;
+        Self::send_control(py, &tx, crate::types::commands::ControlCommand::FetchAdjustments {
+            req_id: req_id as u32,
+            con_id,
+            sec_type: contract.sec_type.clone(),
+            exchange: contract.exchange.clone(),
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        })?;
         let what = format!("the corporate actions of {}", contract.symbol);
         // The answer to this request, not the last answer about this contract.
         // Reading the contract's own record here would hand a caller a late

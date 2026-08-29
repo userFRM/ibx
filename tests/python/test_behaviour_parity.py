@@ -17,7 +17,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 #: The one binding call that answers by raising rather than reporting. `connect`
 #: has no request id to report against, so a failure raises.
-_ANSWERS_BY_RAISING = {"connect"}
+#: Calls that answer a failure by raising rather than by reporting. A blocking
+#: call has a caller waiting on its return, so raising reaches them; the
+#: request surface answers on the error callback because nobody is waiting.
+#: `corporate_actions` sends its own command rather than going through the
+#: reporting request call, because taking the session and the sender apart let
+#: a reconnect put a request and its answer on two different sessions.
+_ANSWERS_BY_RAISING = {"connect", "corporate_actions"}
 
 #: Calls the request surface leaves quiet where the binding reports. Each takes
 #: a wrapper it could report on and returns after a log line. Listed as an open

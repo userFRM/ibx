@@ -124,6 +124,30 @@ one this venue does not use for this account. Each is named in the log the
 first time it arrives, so the day one does, it will say so rather than
 vanish.
 
+### Which corporate actions this venue has actually stated
+
+The protocol names six kinds and this client reads all six. Three of them have
+been seen; three have not, and the difference is worth writing down so nobody
+mistakes "handled" for "observed".
+
+| Kind | Seen | Where |
+| --- | --- | --- |
+| Cash dividend | Yes, over a hundred | Every dividend-paying contract asked |
+| Split | Yes | A ten-for-one, checked against the closes either side of it |
+| Spin-off | Yes, five | Four contracts, each stating a value below one |
+| Stock dividend | No | Not stated by any contract asked |
+| Rights offer | No | Not stated by any contract asked |
+| Future rollover | No | Belongs to a future rather than a share, and the continuous
+contract it would apply to is refused: asked for by that type, the venue answers
+"Unsupported type" |
+
+Twelve contracts were asked, across four countries and both listed shares and
+futures, over windows chosen for containing the rarer kinds. The three unseen
+ones are read from the protocol's own table rather than from an answer, and the
+arithmetic for them is the same arithmetic the three seen ones exercise — a
+spin-off is the only one of the six whose value reads as the reciprocal, and
+that branch is exercised by every spin-off above.
+
 ### Not built
 
 One, and it says what a caller loses by it.
@@ -163,11 +187,11 @@ here.
 
 Nothing here is a gap in the code. A wire the venue does not send to this account, or one an entitlement or an advisor account gates, is answered by what the account holds and not by what is written here.
 
-Whether any of them can be asked for was open for as long as this table existed, because "not sent" and "never asked" are not the same. The scanner pair has since been asked properly — a scan subscribed, then suspended and resumed by its own id — and is recorded below as what that returned. Most of the rest are subtypes the venue sends rather than requests a caller makes, so there is nothing to ask: a caller provokes them or does not. Two in the table are requests rather than subtypes the venue sends, and both have since been asked. Neither is refused for anything about this account: the venue reads both and rejects each for a field it did not carry. What stops them now is stated in their rows and is not the account — one wants a firm this session has no value for, and the other wants the field that turns a question into a live quote order.
+Whether any of them can be asked for was open for as long as this table existed, because "not sent" and "never asked" are not the same. The scanner pair has since been asked properly — a scan subscribed, then suspended and resumed by its own id — and is recorded below as what that returned. Most of the rest are subtypes the venue sends rather than requests a caller makes, so there is nothing to ask: a caller provokes them or does not. Two in the table are requests rather than subtypes the venue sends, and both have since been asked. The venue reads both. One is refused for the instrument, in the venue's own words; the other is refused for a firm this session has no value for. Neither is refused for anything else about the account, and both rows now say what the venue said rather than what this table assumed.
 
 | Wire | What it carries | Why |
 | --- | --- | --- |
-| `35=R` | Request for quote | Reachable, and answered. A session sent one and the venue replied on the execution channel, echoing the id, stating the order type it had read it as, and rejecting it for a field it did not carry — not for anything about the account. What it wants is a side, and a request carrying one is a live quote order rather than a question, which is why this client sends none and why the phase that established this stops where it does |
+| `35=R` | Request for quote | Reachable, read, and refused for the instrument. A session sent one and the venue answered on the execution channel, echoing the id and naming each field it wanted in turn — a side, then a quantity — and answered the complete request with "the order type QuoteRequest is invalid for this combination of exchange and security type". So the row's original reading was right and is now the venue's own words rather than an assumption: what refuses it is the instrument, not the account. Nothing is left working, because nothing is accepted |
 | `6040` 10006, 10007 | Suspending and resuming a scanner | Asked and unanswered. A session subscribed a scan, suspended it and resumed it by its own id, and the venue said nothing either way. That is consistent with a control message that never replies and with one this account may not send, and it does not tell those apart — but it does settle that the request reaches the venue and is not merely unsent |
 | `6040` 146, 151, 208 | Trade-report records, including per-leg fills on a combination | Not sent to this account |
 | `6040` 200 | Execution history | Not sent to this account |
@@ -423,7 +447,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,822 | No |
+| Rust unit and integration | 1,823 | No |
 | Python | 470 | No |
 | Python, live | 135 | Yes |
 | Paper compatibility suite (140 phases) | 37 tests | Yes |

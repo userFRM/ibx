@@ -212,12 +212,12 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
                 }
             }
             Some(code) => {
+                // A name this client does not know is kept with no kind rather
+                // than dropped. Dropped, it is indistinguishable from a contract
+                // that had no such action — and if the venue ever names a kind
+                // that moves the scale, a series missing it comes back looking
+                // adjusted. Kept, whoever scales can refuse to guess.
                 let kind = AdjustmentKind::from_code(code);
-                if kind.is_none() {
-                    // A name this client does not know: its rows are left
-                    // rather than read under the wrong kind.
-                    continue;
-                }
                 let mut a = Adjustment { kind, ..Default::default() };
                 // Stated in one fixed order, so a value is read by where it sits.
                 for (i, v) in values.iter().enumerate() {
@@ -240,6 +240,10 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
         }
     }
     out.sort_by(|a, b| a.date.cmp(&b.date));
+    // The same action stated twice moves the scale twice: a two-for-one
+    // duplicated divides an earlier price by four. Two rows identical in kind,
+    // date and value are one action said twice, not two actions on one day.
+    out.dedup_by(|a, b| a.kind == b.kind && a.date == b.date && a.value == b.value);
     (contract, out)
 }
 
@@ -275,7 +279,16 @@ pub fn parse_adjustments(body: &str) -> (AdjustedContract, Vec<Adjustment>) {
 pub fn scale_before(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
     let mut factor: f64 = 1.0;
     for a in actions {
-        let Some(kind) = a.kind else { continue };
+        let Some(kind) = a.kind else {
+            // An action the venue named and this client cannot classify. It
+            // may be one that moves the scale, and a series scaled without it
+            // is a raw price wearing an adjusted one's name.
+            return Err(format!(
+                "this contract states an action dated {} that this client cannot \
+                 classify, and an action it cannot name is one it cannot say moves \
+                 nothing", a.date,
+            ));
+        };
         if !kind.moves_the_scale() {
             continue;
         }
@@ -284,15 +297,18 @@ pub fn scale_before(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
         // every date there is, so the action reads as already past and is
         // skipped — leaving the price it should have moved exactly as the venue
         // served it, under the name of an adjusted one.
-        if day_of(&a.date).is_none() {
+        let Some(acted) = day_of(&a.date) else {
             return Err(format!(
                 "the {} in this contract's actions is dated {:?}, which is not a day a \
                  price can be placed before or after. Adjusting around it would hand \
                  back the price the venue served under the name of an adjusted one",
                 kind.code(), a.date,
             ));
-        }
-        if a.date.as_str() <= date {
+        };
+        // Compared as the days they are, not as the strings they arrived in. A
+        // date carrying anything after its eight digits sorts by that tail, and
+        // an action would move the bars either side of the wrong day.
+        if acted.as_str() <= date {
             continue;
         }
         let stated = a.value.parse::<f64>().ok().and_then(|v| kind.factor(v));
@@ -712,5 +728,47 @@ mod tests {
             ..Default::default()
         }];
         assert!(scale_bars(vec![bar], &dividend).is_ok(), "a dividend moves nothing, dated or not");
+    }
+
+
+    /// A hostile or sloppy answer cannot come back as a plausible wrong number.
+    ///
+    /// Three shapes, each of which used to scale a series and say nothing: the
+    /// same action stated twice, an action named by a kind this client does not
+    /// know, and a date carrying something after its eight digits. The first
+    /// moved the scale twice, the second was dropped so the series came back
+    /// missing an action that moved it, and the third sorted by its tail and
+    /// moved the bars either side of the wrong day.
+    #[test]
+    fn a_sloppy_answer_is_refused_rather_than_scaled() {
+        use crate::types::model::BarData;
+        let bars = || vec![BarData {
+            date: "20240607".into(), close: 1208.88, volume: 100, ..Default::default()
+        }];
+
+        // Stated twice is one action, not two: a ten-for-one, not a hundred.
+        let (_, twice) = parse_adjustments("conc\n4815747,\nSS\n20240610,10,,20240522\nSS\n20240610,10,,20240522\n");
+        assert_eq!(twice.len(), 1, "the same split said twice is one split");
+        let out = scale_bars(bars(), &twice).expect("one split");
+        assert!((out[0].close - 120.888).abs() < 1e-9, "close {}", out[0].close);
+
+        // A kind this client cannot name stops the series.
+        let (_, unknown) = parse_adjustments("conc\n4815747,\nZZ\n20240610,10,,20240522\n");
+        assert_eq!(unknown.len(), 1, "the row is kept, not dropped");
+        assert!(unknown[0].kind.is_none());
+        assert!(
+            scale_bars(bars(), &unknown).is_err(),
+            "an action nobody can classify is not one that can be said to move nothing",
+        );
+
+        // A date is compared as the day it is, not the string it arrived in.
+        let tailed = vec![Adjustment {
+            kind: Some(AdjustmentKind::Split),
+            date: "20240610 00:00:00".into(),
+            value: "10".into(),
+            ..Default::default()
+        }];
+        let out = scale_bars(bars(), &tailed).expect("a day with a time after it");
+        assert!((out[0].close - 120.888).abs() < 1e-9, "close {}", out[0].close);
     }
 }
