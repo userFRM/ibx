@@ -624,8 +624,12 @@ impl EClient {
         &self.shared
     }
 
-    /// Every corporate action the venue has stated for a contract this session,
-    /// and the contract as it named it.
+    /// What the venue last stated for a contract, and the contract as it named
+    /// it.
+    ///
+    /// Not every action of the contract's life: each question replaces what the
+    /// one before it left, so this states the answer to the last range asked
+    /// about.
     ///
     /// The venue serves no adjusted series of its own: asked for one by name it
     /// answers that it has no such data, and the trades it does serve are raw.
