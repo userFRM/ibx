@@ -154,11 +154,12 @@ One, and it says what a caller loses by it.
 
 | Wire | What it carries | Why |
 | --- | --- | --- |
-| `6040` 10031 | Cancelling a news subscription | Not built. Historical news is answered once, so there is nothing outstanding for a caller to withdraw |
+| `6040` 10031 | Cancelling a news subscription | Not built, and the reasoning is now tested rather than assumed. A session asked for news, was answered, and withdrew the request under the same id: the venue said nothing carrying that id. A request already answered has nothing outstanding, so a caller withdrawing one would be told nothing either — which is what not building it costs them |
 
 `6040` 10021, the cancel that pairs with the corporate-actions request, is not
 sent for the same reason: the request is answered once per contract and nothing
-stays open behind it.
+stays open behind it. Both withdrawals carry only the id of the request they
+withdraw, which is the whole of what this client would have to build.
 
 ### Callbacks the reference API defines and this client does not fire
 
@@ -450,7 +451,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 | Rust unit and integration | 1,823 | No |
 | Python | 470 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (140 phases) | 37 tests | Yes |
+| Paper compatibility suite (141 phases) | 37 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure
