@@ -314,12 +314,17 @@ impl EClient {
         let numbered = wire_req_id(req_id)?;
         // An answer to this request is handed to whoever is waiting under its
         // number. The answering calls number themselves in a band of their own
-        // and hold a number while they wait, so a request numbered the same as
-        // one of those — and not by that call — has its answer taken by it,
-        // about a contract and a range it did not ask for.
-        if crate::bridge::ReferenceState::is_ask_id(numbered)
-            && !self.shared.reference.is_ours(req_id)
-        {
+        // and hold a number while they wait, so a request numbered inside it has
+        // its answer taken by one of those calls, about a contract and a range
+        // it did not ask for.
+        //
+        // Refused for every caller, held or not. Asking whether this number is
+        // one this session is currently waiting on answers a different question:
+        // it is held precisely while the collision is possible, so a check that
+        // lets a held one through is open exactly when it matters. The answering
+        // call reaches the wire by `ask_for_adjustments` instead, which is not a
+        // caller's to reach.
+        if crate::bridge::ReferenceState::is_ask_id(numbered) {
             return Err(Refusal::validation(format!(
                 "req_id {req_id} is inside the range this client numbers its own \
                  answering calls in, and an answer under it would be taken for one of \
@@ -327,8 +332,20 @@ impl EClient {
                 crate::bridge::ReferenceState::ASK_ID_BASE,
             )));
         }
+        self.ask_for_adjustments(numbered, con_id, sec_type, exchange, start_date, end_date)
+    }
+
+    /// Send a corporate-actions request under a number already settled.
+    ///
+    /// Not public, and not a caller's to reach: it carries no check on the
+    /// number, because the only thing that reaches it with one from the
+    /// reserved band is the answering call that owns that number.
+    pub(crate) fn ask_for_adjustments(
+        &self, req_id: u32, con_id: i64, sec_type: &str, exchange: &str,
+        start_date: &str, end_date: &str,
+    ) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchAdjustments {
-            req_id: numbered,
+            req_id,
             con_id: wire_con_id(con_id, "a request for corporate actions")?,
             sec_type: sec_type.into(),
             exchange: exchange.into(),
