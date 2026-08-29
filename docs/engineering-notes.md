@@ -27,8 +27,8 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Canonical calls | 78 |
 | Served, Rust | 77 |
 | Served, Python | 77 |
-| Accepted and not served, Rust | 1 |
-| Accepted and not served, Python | 1 |
+| Taken and not applied, Rust | 1 |
+| Taken and not applied, Python | 1 |
 | Canonical callbacks | 85 |
 | Calls where the two surfaces differ | 0 |
 | Callbacks where the two surfaces differ | 0 |

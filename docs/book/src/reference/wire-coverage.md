@@ -53,6 +53,8 @@ A user message carries what it is for on tag 6040.
 | `76` |
 | `91` |
 | `101` |
+| `106` |
+| `107` |
 | `112` |
 | `116` |
 | `138` |
@@ -61,7 +63,6 @@ A user message carries what it is for on tag 6040.
 | `185` |
 | `193` |
 | `209` |
-| `6040` |
 | `10001` |
 | `10003` |
 | `10004` |
