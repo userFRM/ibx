@@ -24,10 +24,10 @@ Status is assigned from evidence. `Verified` requires a passing live session pha
 | Measure | Count |
 | --- | --- |
 | Canonical calls | 78 |
-| Served, Rust | 78 |
-| Served, Python | 78 |
-| Accepted and not served, Rust | 0 |
-| Accepted and not served, Python | 0 |
+| Served, Rust | 77 |
+| Served, Python | 77 |
+| Accepted and not served, Rust | 1 |
+| Accepted and not served, Python | 1 |
 | Canonical callbacks | 85 |
 | Calls where the two surfaces differ | 0 |
 | Callbacks where the two surfaces differ | 0 |
@@ -40,14 +40,19 @@ served says so on both rather than being absent from one.
 
 ### Calls not served
 
-Every call that exists with the expected signature and reports, through
-the error callback, that it cannot be served. Taken from the generated
-coverage matrix, which CI checks against the source.
+Every call that exists with the expected signature and reports, through the
+error callback, that it cannot be served. Taken from the generated coverage
+matrix, which CI checks against the source.
 
-| Call | Rust | Python |
-| --- | :---: | :---: |
-| `request_fa` | STUB | STUB |
-| `replace_fa` | STUB | STUB |
+One. `set_server_log_level` is taken and not applied: the session holds no log
+level of its own and the protocol carries no message asking the venue to change
+one, so what a caller states is written to this client's log and reaches nothing
+else.
+
+The two that stood here before it — the advisor configuration request and its
+replacement — are not among them: they send to the venue like every other call,
+and what does not happen is that their replies are read, which is a callback
+nothing reaches and is counted as one on the limits page.
 
 ## Asset classes
 
@@ -457,8 +462,8 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,784 | No |
-| Rust, live | 3 | Yes |
+| Rust unit and integration | 1,778 | No |
+| Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
 | Paper compatibility suite (141 phases) | 37 tests | Yes |

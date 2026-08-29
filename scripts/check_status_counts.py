@@ -37,6 +37,23 @@ ROWS = {
 PHASE = re.compile(r"Phase \d+[a-z]?\b")
 
 
+def _targets_needing_a_session() -> list[str]:
+    """Every Rust test target that reads the session credentials.
+
+    Read out of the sources rather than kept as a list here. Kept by hand it
+    named two targets while five read the credentials, and three suites that
+    cannot run without a session were published as needing none — which is the
+    kind of drift a hand-kept list is for.
+
+    The paper suite is counted on its own row and is left out of this one.
+    """
+    live = []
+    for path in sorted((ROOT / "tests").glob("*.rs")):
+        if "IB_USERNAME" in path.read_text(encoding="utf-8"):
+            live.append(path.stem)
+    return live
+
+
 def _run(args: list[str]) -> str:
     done = subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
     if done.returncode != 0:
@@ -117,12 +134,12 @@ def counted() -> dict[str, int]:
         # page generator already counts it as live evidence — counted offline
         # here, it would be published as needing no session by one script and
         # as needing one by another.
-        "rust_live": _cargo_count(["--test", "rust_api_gt"]),
-        # What is left of the Rust targets once the two that need a session are
-        # taken out, which is what "requires credentials: no" has to mean.
+        "rust_live": sum(_cargo_count(["--test", t]) for t in _targets_needing_a_session()),
+        # What is left of the Rust targets once every one that needs a session
+        # is taken out, which is what "requires credentials: no" has to mean.
         "rust_offline": rust
             - _cargo_count(["--test", "ib_paper_compat"])
-            - _cargo_count(["--test", "rust_api_gt"]),
+            - sum(_cargo_count(["--test", t]) for t in _targets_needing_a_session()),
         "phases": len({
             m for f in (ROOT / "tests" / "ib_paper_compat").glob("*.rs")
             for m in PHASE.findall(f.read_text())

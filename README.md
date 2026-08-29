@@ -247,9 +247,10 @@ share a session, and either may be used.
 ## Configuration
 
 The gateway's configuration file is replaced by settings on the client:
-announced build, time zone, message pacing, execution-report scope, and others
-— 17 in total, readable at runtime. Seven gateway settings have no counterpart
-and report why (no window geometry, no local listening socket, no JVM heap).
+announced build, time zone, execution-report scope, and others — 14 in total,
+readable at runtime. Ten gateway settings have no counterpart and report why (no
+window geometry, no local listening socket, no JVM heap, and no message pacing:
+nothing here paces outgoing messages, which the gateway ships with off).
 
 Rust: `EClientConfig.gateway`. Python: `ibx.configure()`.
 

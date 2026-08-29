@@ -39,8 +39,13 @@ SURFACES = {
     "Python": ROOT / "src/python/compat/client",
 }
 
-#: Arguments every call carries that are not the caller's data.
-NOT_DATA = {"self", "py", "wrapper", "req_id", "order_id", "contract", "order"}
+#: Arguments that are not a caller's data to carry.
+#:
+#: The receiver and the two handles a binding threads through. Everything else
+#: a caller passes is read here, including the ones this used to skip — a
+#: request id, an order id, a contract and an order are all a caller's, and a
+#: call that dropped one could not fail this gate while they were excluded.
+NOT_DATA = {"self", "py", "wrapper"}
 
 CALL = re.compile(
     r"((?:^[ \t]*///[^\n]*\n)*)"              # its doc comment, if any
@@ -109,9 +114,14 @@ def _kind(name: str, body: str, doc: str) -> str:
     bare = name.strip("_")
     # The name as written, either way round.
     written = rf"\b_?{re.escape(bare)}_?\b"
+    # Discarded means the argument itself is thrown away — `let _ = req_id;` —
+    # not that it was passed to a call whose result is. Read the wider way,
+    # `let _ = self.cancel_mkt_data(req_id)` counted as discarding the very
+    # argument it hands on, and five calls that read theirs were reported as
+    # dropping them.
     discarded = (
         name.startswith("_")
-        or re.search(rf"let _ = \(?[^;]*{written}", body)
+        or re.search(rf"let _ = \(?\s*{written}\s*\)?\s*;", body)
     )
     if not discarded:
         # Named anywhere in the body that is not the discard itself.
