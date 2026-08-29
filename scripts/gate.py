@@ -78,7 +78,10 @@ def steps(suites):
         (["cargo", "clippy", "--lib", "--all-targets", "--features", "async",
           "--", "-D", "warnings"], {}),
         (["cargo", "test", "--lib"], {}),
-        (["cargo", "test", "--lib", "--features", "python"], {}),
+        # The features CI builds these with. Run with fewer, three tests that
+        # need the helpers do not exist, and the local gate passes a tree the
+        # workflow fails.
+        (["cargo", "test", "--lib", "--features", "python,test-helpers"], {}),
         (["cargo", "test", "--lib", "--features", "async"], {}),
         # The examples in the documentation are compiled by nothing else. Two
         # of them were broken and building, because `cargo doc` renders an

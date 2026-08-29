@@ -753,7 +753,7 @@ pub fn req_account_updates_multi( &self, req_id: i64, account: &str, model_code:
 
 #### `cancel_account_updates_multi`
 
-Cancel multi-account updates.
+Cancel multi-account updates. `_req_id` reaches nothing, because there is nothing to withdraw: the request it would name is answered from what this session already holds, before a caller has this to cancel it with.
 
 ```rust
 pub fn cancel_account_updates_multi(&self, _req_id: i64)

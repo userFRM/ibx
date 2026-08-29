@@ -234,8 +234,9 @@ impl EClient {
     }
 
     /// Cancel multi-account updates.
-    // nothing to withdraw: account values arrive with the session rather than
-    // by subscription.
+    ///
+    /// `req_id` reaches nothing, because there is nothing to withdraw: account
+    /// values arrive with the session rather than by subscription.
     fn cancel_account_updates_multi(&self, req_id: i64) -> PyResult<()> {
         let _ = req_id;
         Ok(())

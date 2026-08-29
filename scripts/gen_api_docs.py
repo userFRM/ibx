@@ -1176,10 +1176,19 @@ def _evidence_index() -> tuple[str, str]:
     """
     # Both suites that need a real session: one drives the engine, the other
     # the client surface itself.
-    live_files = list(LIVE_SUITE.rglob("*.rs")) + [ROOT / "tests" / "rust_api_gt.rs"]
+    # Every target that reads the session credentials, read out of the sources:
+    # named by hand this said one file while five need a session, and the four
+    # it missed had their tests credited as evidence that needs none.
+    needs_a_session = {
+        f.stem for f in (ROOT / "tests").glob("*.rs")
+        if "IB_USERNAME" in f.read_text(encoding="utf-8")
+    }
+    live_files = list(LIVE_SUITE.rglob("*.rs")) + [
+        ROOT / "tests" / f"{stem}.rs" for stem in sorted(needs_a_session)
+    ]
     offline_files = [
         f for f in (ROOT / "tests").rglob("*.rs")
-        if "ib_paper_compat" not in f.parts and f.stem != "rust_api_gt"
+        if "ib_paper_compat" not in f.parts and f.stem not in needs_a_session
     ]
     offline_files += [
         f for f in (ROOT / "src").rglob("*.rs")
@@ -1233,7 +1242,15 @@ def _status_icon(name: str, impl_set: set[str], stub_names: set[str]) -> str:
 #: replies are read, which is a callback that does not fire and is recorded as
 #: one below. Anything added here has to be a call that genuinely sends
 #: nothing, and a call whose answer goes unread is not one of them.
-STUB_METHODS: set[str] = set()
+STUB_METHODS: set[str] = {
+    # Taken and not applied. The session holds no log level of its own and the
+    # protocol carries no message asking the venue to change one, so what a
+    # caller states is written to this client's log and reaches nothing. That
+    # is the definition on the matrix's own first page, and it was published as
+    # implemented because the gate that catches a silent request reads only
+    # names beginning `req_`, `cancel_` and their siblings.
+    "set_server_log_level",
+}
 
 #: Callbacks nothing fires. Each for its own reason, and none of them a
 #: message this client fails to read: the advisor replies are not parsed,
