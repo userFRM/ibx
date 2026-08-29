@@ -742,3 +742,40 @@ fn asking_off_the_reactor_leaves_the_runtime_free() {
     let moved = ticks.load(Ordering::Relaxed);
     assert!(moved > 20, "the runtime advanced {moved} times while asking");
 }
+
+
+/// The streams this session opens reach the wire.
+///
+/// They number themselves from the band reserved for the calls this client
+/// makes on its own account, and the request surface refuses that band to
+/// anyone else. A stream that took a number from it without saying it was one
+/// of those calls was refused by the surface it was calling — the feature was
+/// dead and every test still passed, because none of them opened one.
+#[test]
+fn the_streams_this_session_opens_reach_the_wire() {
+    let shared = Arc::new(crate::bridge::SharedState::new());
+    let (session, rx) = a_session(&shared);
+    let spy = Contract {
+        con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+        exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+    };
+
+    let bars = session.live_bar_stream(&spy);
+    assert!(bars.is_ok(), "a live bar stream must open: {:?}", bars.err());
+
+    // The tick stream waits for the engine to register the instrument, which
+    // this harness has none of, so it ends in that wait rather than opening.
+    // What it must not end in is a refusal of its own number.
+    if let Err(refused) = session.ticks(&spy) {
+        assert!(
+            !refused.message.contains("req_id"),
+            "the tick stream was refused for its number: {refused}",
+        );
+    }
+
+    let asked: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        asked.iter().any(|c| matches!(c, crate::types::ControlCommand::SubscribeRealTimeBar { .. })),
+        "the bar stream reaches the engine, not just the caller",
+    );
+}
