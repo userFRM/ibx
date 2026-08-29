@@ -434,9 +434,10 @@ impl EClient {
                 }
             }
         }
-        // Cleared before asking: the record is kept against the contract, so
-        // an answer to an earlier question about the same one is sitting there
-        // and would be taken for this one's the moment this looked.
+        // The contract's own record is what `EClient::adjustments` reads, and
+        // it is cleared here so that reader states this question's answer
+        // rather than a previous one's. What this call waits on is its own
+        // slot, which no other question can fill.
         self.shared.reference.forget_adjustments(&con_id);
         let asked = ask_id(&self.shared);
         // Said before the request goes out, so an answer that arrives has

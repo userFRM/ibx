@@ -75,8 +75,11 @@ pub struct ReferenceState {
     /// caller had looked.
     ///
     /// A slot exists only while somebody waits: whoever asks makes one and
-    /// whoever stops waiting removes it, so an answer to a request nobody is
-    /// waiting on is dropped rather than kept.
+    /// gives it up with a guard that runs on every way out of the wait, so an
+    /// answer to a request nobody is waiting on is dropped rather than kept.
+    /// The guard matters more than it looks — the request can fail to go out at
+    /// all, and a slot left by a call that never waited is one nothing
+    /// reclaims.
     adjustments_by_request: Mutex<std::collections::HashMap<u32, Option<Vec<crate::control::adjustments::Adjustment>>>>,
     /// Errors surfaced by HMDS for in-flight reference queries (req_id, code, message).
     /// Drained by the dispatcher and forwarded to `Wrapper::error`.
@@ -492,13 +495,13 @@ impl ReferenceState {
     /// Forget what a contract's actions were, so the next answer is the next
     /// answer.
     ///
-    /// The record is kept against the contract, not against the request that
-    /// asked, because the venue answers per contract. That is right for
-    /// reading it and wrong for waiting on it: a second question about the
-    /// same contract over a different range would be handed the first
-    /// question's answer the moment it looked, having asked for something else
-    /// entirely. Whoever is about to ask clears it first and then waits for an
-    /// answer that can only be theirs.
+    /// This record is what a caller reads to ask what the session knows about
+    /// a contract, and it holds whatever arrived last. Clearing it before
+    /// asking is what stops that reader stating a previous question's answer
+    /// once a newer one has been asked for.
+    ///
+    /// It is not what makes a wait its own. A caller waiting on an answer
+    /// watches the slot its request made, which no other question can fill.
     pub fn forget_adjustments(&self, con_id: &str) {
         self.adjustments.lock().unwrap().remove(con_id);
     }
@@ -1219,7 +1222,10 @@ mod adjustments_store_tests {
             state.take_adjustments_answering(11).is_none(),
             "nobody waited on request 11, so its answer had nowhere to go",
         );
-        // And one given up on leaves nothing behind for a late answer to fill.
+        // A slot made and then given up before any answer arrives leaves
+        // nothing behind — which is the case a caller whose request failed to
+        // go out at all lands in, and the reason giving up is a guard rather
+        // than a line at the end of the happy path.
         state.expect_adjustments(12);
         state.stop_waiting_for_adjustments(12);
         state.note_adjustments(
