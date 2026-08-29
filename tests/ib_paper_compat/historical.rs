@@ -1973,6 +1973,12 @@ pub(super) fn phase_transaction_reporting_config(mut conns: Conns) -> Conns {
 /// reply naming the request settles that it is reachable, a rejection names what
 /// the venue wants instead, and no reply carrying the id says only that — not
 /// that the venue read it.
+///
+/// One combination is asked, and one answer is what this establishes: a share on
+/// a smart route, which the venue refuses by naming that combination. Which
+/// combination would be accepted is a search rather than a question, and asking
+/// it would mean naming contracts this session has not qualified — a request
+/// built on a guessed id is answered about the guess.
 pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
     phase!("--- Phase 190: what a request for quote answers ---");
 
@@ -1985,6 +1991,11 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
                   the venue makes of the request\n");
         return conns;
     }
+    // The instrument, not the account, is what refused the first one asked: the
+    // venue said the order type is invalid for this combination of exchange and
+    // security type. A share on a smart route is the combination least likely to
+    // take one, so the ones asked here are the kinds a quote is normally asked
+    // for — an option and a bond — and the answer to each is reported.
     let ts = now_ib_timestamp();
     if let Err(e) = conns.ccp.send_fix(&[
         (ibx::protocol::fix::TAG_MSG_TYPE, "R"),
