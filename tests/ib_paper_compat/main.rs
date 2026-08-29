@@ -521,6 +521,11 @@ fn query_error_phase_live() {
     println!("=== QueryError live test ===\n");
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config)
         .expect("Gateway::connect() failed");
+    // Every phase below that opens a farm of its own needs the session's own
+    // credentials to reach one. Without this they all skip, saying the farm
+    // could not be reached — which reads as the venue being unavailable and is
+    // this harness never having remembered how to get there.
+    remember_recovery_auth(&gw, &config);
 
     let conns = Conns {
         farm: farm_conn,
