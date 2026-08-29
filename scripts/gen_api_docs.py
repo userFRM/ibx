@@ -1176,10 +1176,19 @@ def _evidence_index() -> tuple[str, str]:
     """
     # Both suites that need a real session: one drives the engine, the other
     # the client surface itself.
-    live_files = list(LIVE_SUITE.rglob("*.rs")) + [ROOT / "tests" / "rust_api_gt.rs"]
+    # Every target that reads the session credentials, read out of the sources:
+    # named by hand this said one file while five need a session, and the four
+    # it missed had their tests credited as evidence that needs none.
+    needs_a_session = {
+        f.stem for f in (ROOT / "tests").glob("*.rs")
+        if "IB_USERNAME" in f.read_text(encoding="utf-8")
+    }
+    live_files = list(LIVE_SUITE.rglob("*.rs")) + [
+        ROOT / "tests" / f"{stem}.rs" for stem in sorted(needs_a_session)
+    ]
     offline_files = [
         f for f in (ROOT / "tests").rglob("*.rs")
-        if "ib_paper_compat" not in f.parts and f.stem != "rust_api_gt"
+        if "ib_paper_compat" not in f.parts and f.stem not in needs_a_session
     ]
     offline_files += [
         f for f in (ROOT / "src").rglob("*.rs")

@@ -40,14 +40,14 @@ served says so on both rather than being absent from one.
 
 ### Calls not served
 
-Every call that exists with the expected signature and reports, through
-the error callback, that it cannot be served. Taken from the generated
-coverage matrix, which CI checks against the source.
+Every call that exists with the expected signature and reports, through the
+error callback, that it cannot be served. Taken from the generated coverage
+matrix, which CI checks against the source.
 
-| Call | Rust | Python |
-| --- | :---: | :---: |
-| `request_fa` | STUB | STUB |
-| `replace_fa` | STUB | STUB |
+There are none. The two that stood here — the advisor configuration request and
+its replacement — send to the venue like every other call; what does not happen
+is that their replies are read, which is a callback nothing reaches and is
+counted as one on the limits page.
 
 ## Asset classes
 
@@ -457,8 +457,8 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,784 | No |
-| Rust, live | 3 | Yes |
+| Rust unit and integration | 1,778 | No |
+| Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
 | Paper compatibility suite (141 phases) | 37 tests | Yes |
