@@ -226,6 +226,17 @@ impl EClient {
             py, req_id, contract.con_id, &contract.sec_type, &contract.exchange,
             start_date, end_date,
         )?;
+        // The slot lives on the session this call started with, and the request
+        // goes out on whatever session the client holds when it sends. A
+        // reconnect in between puts those two on different sessions: the answer
+        // is filed where nobody is watching, and this waits out its deadline
+        // for it. Told apart rather than waited out.
+        if !std::sync::Arc::ptr_eq(&shared, &self.connected_shared()?) {
+            return Err(PyRuntimeError::new_err(
+                "the session was replaced while asking for corporate actions, so the \
+                 answer would arrive on a session this call is not watching: ask again",
+            ));
+        }
         let what = format!("the corporate actions of {}", contract.symbol);
         // The answer to this request, not the last answer about this contract.
         // Reading the contract's own record here would hand a caller a late

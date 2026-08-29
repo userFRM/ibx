@@ -465,6 +465,19 @@ impl EClient {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        // Once more before giving up. The loop sleeps and then tests the
+        // deadline, so an answer arriving during that last sleep is never
+        // looked for — and the guard on the way out throws it away. A caller
+        // told nothing came, about an answer that had.
+        self.pump_for_ask(&mut refused);
+        if let Some(refusal) = why.lock().unwrap().take() {
+            return Err(refusal);
+        }
+        if let Some(actions) =
+            self.shared.reference.take_adjustments_answering(asked.get() as u32)
+        {
+            return Ok(actions);
+        }
         Err(Refusal::no_answer(format!(
             "no answer within {}s to the corporate actions of {}",
             ANSWER_TIMEOUT.as_secs(), contract.symbol,
