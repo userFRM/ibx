@@ -22,7 +22,7 @@ that did not run.
 
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
-| **EClient methods** | 78 | 76 impl, 2 stub | 76 impl, 2 stub |
+| **EClient methods** | 78 | 78 impl, 0 stub | 78 impl, 0 stub |
 | **EWrapper callbacks** | 85 | 77 impl, 5 stub | 77 impl, 5 stub |
 
 ## EClient Methods
@@ -99,8 +99,8 @@ that did not run.
 | Reference | `req_soft_dollar_tiers` | `reqSoftDollarTiers` | Y | Y | Live session |
 |  | `req_family_codes` | `reqFamilyCodes` | Y | Y | Live session |
 |  | `req_user_info` | `reqUserInfo` | Y | Y | Live session |
-| Financial Advisor | `request_fa` | `requestFA` | STUB | STUB | States why it cannot be served |
-|  | `replace_fa` | `replaceFA` | STUB | STUB | States why it cannot be served |
+| Financial Advisor | `request_fa` | `requestFA` | Y | Y | Offline suites |
+|  | `replace_fa` | `replaceFA` | Y | Y | Offline suites |
 | Display Groups | `query_display_groups` | `queryDisplayGroups` | Y | Y | Live session |
 |  | `subscribe_to_group_events` | `subscribeToGroupEvents` | Y | Y | Live session |
 |  | `unsubscribe_from_group_events` | `unsubscribeFromGroupEvents` | Y | Y | Live session |

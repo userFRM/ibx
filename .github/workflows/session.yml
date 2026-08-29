@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: 137 phases against a paper account
+      - name: the paper suite against a paper account
         env:
           IB_USERNAME: ${{ secrets.IB_USERNAME }}
           IB_PASSWORD: ${{ secrets.IB_PASSWORD }}

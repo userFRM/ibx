@@ -2073,10 +2073,38 @@ pub(super) fn phase_what_a_quote_request_answers(mut conns: Conns) -> Conns {
                 (54, "1"),
                 (ibx::control::contracts::TAG_SYMBOL, "SPY"),
             ]);
-            match sent {
-                Ok(()) => println!("  the venue is working order {order_id}; withdrawn"),
-                Err(e) => println!("  the venue is working order {order_id} and it could \
-                                    not be withdrawn: {e}"),
+            if let Err(e) = sent {
+                println!("  the venue is working order {order_id} and the withdrawal \
+                          could not be sent: {e}");
+            } else {
+                // A write that succeeded is this end saying so. The order is
+                // withdrawn when the venue says it is, and until then it is
+                // still working — reporting the send as the outcome is how a
+                // phase leaves an order standing and calls it cleaned up.
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let mut confirmed = false;
+                while Instant::now() < deadline && !confirmed {
+                    let _ = conns.ccp.try_recv();
+                    for frame in conns.ccp.extract_frames() {
+                        for m in messages_in(&mut conns.ccp, &frame) {
+                            let text = String::from_utf8_lossy(&m).replace('\x01', "|");
+                            if text.contains(&format!("|37={order_id}|"))
+                                && text.split('|').any(|f| f == "39=4")
+                            {
+                                confirmed = true;
+                            }
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                if confirmed {
+                    println!("  the venue was working order {order_id}, and says it is \
+                              cancelled");
+                } else {
+                    println!("  the venue is working order {order_id}; a withdrawal was \
+                              sent and the venue has not said it is cancelled — it may \
+                              still be standing");
+                }
             }
         } else {
             println!("  nothing is left working: the venue answered without one");
