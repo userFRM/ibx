@@ -1763,6 +1763,42 @@ mod modify_wire_tests {
         assert!(!sent.contains("|211="), "and no trail: {sent}");
     }
 
+    /// A reconnect does not cost a pegged order its peg.
+    ///
+    /// The venue names a pegged order back under `P` and the replay records
+    /// that, while the record it was placed under still holds the discriminant
+    /// this client tells the two pegs apart by. Compared as bytes those are
+    /// different types and the replace states none of the peg; compared as the
+    /// venue names them they are one, which is what they are.
+    #[test]
+    fn a_replay_does_not_cost_a_pegged_order_its_peg() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.market.set_routing(instrument, "STK", "SMART");
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: crate::types::QTY_SCALE,
+            kind: crate::types::OrderKind::PegMkt { offset: crate::types::PRICE_SCALE, price_cap: 0 },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let _ = drain(&mut context);
+
+        // The venue replays it under the name it uses on the wire.
+        context.insert_order(crate::types::Order::new(
+            7, instrument, Side::Buy, crate::types::QTY_SCALE, 0, b'P', b'0', 0,
+        ));
+
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7, ord_type: 0, tif: 0, price: 0,
+            qty: 2 * crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+        });
+        let sent = drain(&mut context);
+        assert!(sent.contains("|211="), "the peg's offset is restated: {sent}");
+    }
+
     /// A trailing stop this session did not place cannot be replaced by it.
     ///
     /// The trail rides on tag 211 and is restated from the record of the order

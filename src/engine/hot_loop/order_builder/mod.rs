@@ -550,9 +550,17 @@ pub(crate) fn drain_and_send_orders(
                 // over the one the caller asked for. A replace that changes the
                 // type states the lean message alone, which describes the type
                 // it is asking for whole.
-                let restating_the_record = spec
-                    .as_deref()
-                    .is_some_and(|spec| ord_type == tracked_shape(&spec.kind).0);
+                //
+                // Compared as the venue names the type, not as this client
+                // holds it. A reconnect replays the order and records the type
+                // the wire spelled, while the record beside it still holds the
+                // discriminant it was placed under — two names for one type,
+                // and a pegged order replaced after a reconnect lost its peg to
+                // the difference.
+                let restating_the_record = spec.as_deref().is_some_and(|spec| {
+                    crate::types::ord_type_fix_str(ord_type)
+                        == crate::types::ord_type_fix_str(tracked_shape(&spec.kind).0)
+                });
                 if let Some(spec) = spec.as_deref().filter(|_| restating_the_record) {
                     // A trailing stop carries its trail on tag 211, and a
                     // replace that left it out was refused naming the field —
