@@ -164,6 +164,41 @@ The rollover has no answer behind it and cannot get one through this request:
 the contract that would carry it is refused as a type. The arithmetic it would
 take is the arithmetic the five seen kinds exercise.
 
+### What a crypto order needs, and what it carries
+
+A crypto is the one contract quoted around the clock, and the only one an order
+phase can say anything about on a weekend. Three things a session settled about
+it, none of which a share requires.
+
+**A day order is refused by name.** The venue answers one:
+
+```
+The crypto buy order must be Minutes or IOC
+```
+
+Immediate-or-cancel is taken. So is the life measured in minutes, and named
+alone: the venue asks for no number beside it, which is the question that had
+never been put to it.
+
+**A price off the tick grid is refused as a price**, `Invalid Price`, rather
+than rounded. This client sends prices as the caller gave them, so a caller
+pricing a crypto states one the venue's grid carries.
+
+**A quantity is a fraction and stays one.** A crypto is counted in
+hundred-millionths where a share is counted in hundredths, so a quantity that
+survives every other asset class can still come back a hundred million times
+wrong here. A thousandth of a coin was bought and sold back:
+
+```
+bought 0.001 at 78807.75
+sold 0.001 at 78807.5
+```
+
+An immediate-or-cancel order takes what is at the offer and cancels the rest,
+so the fill is at most what was asked for — one run filled 0.00018171 of the
+thousandth asked for, which is the venue sizing the fill rather than anything
+here rounding.
+
 ### What a replace states, and what it still cannot
 
 A replace is a full statement of the order, not a difference against the
@@ -508,7 +543,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (143 phases) | 38 tests | Yes |
+| Paper compatibility suite (146 phases) | 39 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure
