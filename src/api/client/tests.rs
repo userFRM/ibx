@@ -3602,7 +3602,9 @@ fn quote_by_instrument_direct() {
 
     // An out-of-range id is a caller error, not a panic across
     // the language boundary.
-    assert!(client.quote_by_instrument(999).is_none());
+    assert!(client
+        .quote_by_instrument(crate::types::MAX_INSTRUMENTS as u32)
+        .is_none());
 }
 
 #[test]
