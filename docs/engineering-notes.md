@@ -158,6 +158,32 @@ arithmetic for them is the same arithmetic the three seen ones exercise — a
 spin-off is the only one of the six whose value reads as the reciprocal, and
 that branch is exercised by every spin-off above.
 
+### A refusal whose reason may have expired
+
+A modify is refused where the resting order carries an attribute the replace was
+once unable to restate — an algo, a condition, a bracket link, an OCA group, a
+hidden or all-or-none instruction, and others. The reason written beside it is
+that the replace states the type and the price and nothing else.
+
+That is no longer what the replace does. It is rebuilt from the tracked record
+by the same builder that states an order's attributes when it is placed, and
+that builder emits the algo block, the conditions, the trailing offset, the
+bracket link on 6107 and the OCA group on 583. Read against the code alone, the
+refusal blocks a request the venue was never asked about, which is what this
+client does not do.
+
+It is left standing because a code reading does not outrank a venue answer, and
+there is one on the other side: a replace of a trailing stop was observed being
+rejected with the resting order gone, which is the worst outcome either way
+round. That was under the older replace, and whether it still happens is a
+question for a session rather than for a reader.
+
+**The check that settles it.** Place a trailing stop on paper, modify its price,
+and read what the venue answers and whether the original is still working. If it
+is restated, the refusals whose premise is the old replace come out and the
+venue is left to refuse what it will. If the order is lost, the refusal keeps
+its reason and the reason gets the evidence it is missing.
+
 ### Not built
 
 One, and it says what a caller loses by it.
