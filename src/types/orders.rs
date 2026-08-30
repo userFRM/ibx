@@ -160,6 +160,87 @@ pub fn ord_type_fix_str(t: u8) -> &'static str {
     }
 }
 
+#[cfg(test)]
+mod ord_type_round_trip {
+    use super::*;
+
+    /// Every type this client sends survives being read back off the wire.
+    ///
+    /// A recovered order is described by the name the venue states, and a
+    /// replace states the type from what was recorded — so a name that does
+    /// not come back as the byte it was written from silently changes an
+    /// order's type on the next replace.
+    #[test]
+    fn every_named_type_reads_back_as_itself() {
+        let every = [
+            ORD_STP_PRT, ORD_MIDPX, ORD_SNAP_MKT, ORD_SNAP_MID, ORD_SNAP_PRI,
+            ORD_PEG_MKT, ORD_PEG_MID, ORD_PEG_BENCH, ORD_LIT, ORD_TRAIL_LIMIT,
+            b'1', b'2', b'3', b'4', b'5', b'B', b'J', b'K', b'P', b'U',
+        ];
+        // The instruction the venue states beside the name, for the kinds that
+        // share one. Everything else is named uniquely.
+        let instruction = |t: u8| match t {
+            ORD_PEG_MKT => "P",
+            ORD_PEG_MID => "M",
+            _ => "",
+        };
+        for t in every {
+            let named = ord_type_fix_str(t);
+            assert_eq!(
+                ord_type_from_fix(named, instruction(t)),
+                t,
+                "{named} must read back as the type it was written from",
+            );
+        }
+    }
+
+    /// The first byte of a name is not the name.
+    #[test]
+    fn a_multi_character_name_is_read_whole() {
+        assert_eq!(ord_type_from_fix("MIDPX", ""), ORD_MIDPX);
+        assert_eq!(ord_type_from_fix("TSL", ""), ORD_TRAIL_LIMIT);
+        assert_eq!(ord_type_from_fix("SP", ""), ORD_STP_PRT);
+        // A trailing stop and a relative order share the pegs' name and are
+        // not pegs: neither states the instruction that would make one.
+        assert_eq!(ord_type_from_fix("P", "a"), b'P');
+        assert_eq!(ord_type_from_fix("P", "R"), b'P');
+        // The two-part midpoint peg names itself, and is a midpoint peg.
+        assert_eq!(ord_type_from_fix("PMID2", ""), ORD_PEG_MID);
+    }
+}
+
+/// The type byte a venue-named order type stands for.
+///
+/// The inverse of [`ord_type_fix_str`], written beside it so the two cannot
+/// drift. Read the whole name: taking its first byte turns `MIDPX` into `M`,
+/// which names nothing, and an order recovered that way is replaced as a plain
+/// limit.
+///
+/// Several kinds travel under one name and are told apart by the execution
+/// instruction the venue states beside it, which is why that is read here too.
+pub fn ord_type_from_fix(ord_type: &str, exec_inst: &str) -> u8 {
+    match ord_type {
+        "SP" => ORD_STP_PRT,
+        "MIDPX" => ORD_MIDPX,
+        "SMKT" => ORD_SNAP_MKT,
+        "SMID" => ORD_SNAP_MID,
+        "SREL" => ORD_SNAP_PRI,
+        "PB" => ORD_PEG_BENCH,
+        "LT" => ORD_LIT,
+        "TSL" => ORD_TRAIL_LIMIT,
+        // Pegged to market, pegged to midpoint, a relative order and a
+        // trailing stop all travel as `P`. The instruction names which.
+        "P" if exec_inst.contains('P') => ORD_PEG_MKT,
+        "P" if exec_inst.contains('M') => ORD_PEG_MID,
+        // A midpoint peg that carries the two-part offset states its own name.
+        "PMID2" => ORD_PEG_MID,
+        // Anything the venue names with one byte is that byte, and an
+        // unrecognised name is a limit, which is what this client falls back to
+        // everywhere else it reads a type.
+        _ => ord_type.bytes().next().unwrap_or(b'2'),
+    }
+}
+
 /// What-If margin/commission preview response (execution report with tag 6091=1).
 /// Returned when a what-if order is submitted — the order is NOT placed.
 #[derive(Debug, Clone)]

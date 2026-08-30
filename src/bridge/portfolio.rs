@@ -37,7 +37,7 @@ pub struct PortfolioState {
     /// Account figures for the holdings the account does not hold itself,
     /// keyed by which set they describe and what they are called.
     values_elsewhere: Mutex<HashMap<(crate::types::HeldElsewhere, String), String>>,
-    positions: [AtomicU64; MAX_INSTRUMENTS],
+    positions: Box<[AtomicU64]>,
     /// Midnight seeds from 6040=143 for client-side daily P&L computation.
     midnight_seeds: Mutex<HashMap<i64, MidnightSeed>>,
     /// Correlation id the venue stamped on the seeds it last sent.
@@ -58,7 +58,7 @@ impl PortfolioState {
             position_changes: Mutex::new(std::collections::BTreeSet::new()),
             positions_elsewhere: Mutex::new(HashMap::new()),
             values_elsewhere: Mutex::new(HashMap::new()),
-            positions: std::array::from_fn(|_| AtomicU64::new(0)),
+            positions: (0..MAX_INSTRUMENTS).map(|_| AtomicU64::new(0)).collect(),
             midnight_seeds: Mutex::new(HashMap::new()),
             pnl_request_key: Mutex::new(String::new()),
             venue_prices: Mutex::new(HashMap::new()),

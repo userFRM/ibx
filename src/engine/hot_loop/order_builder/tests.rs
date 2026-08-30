@@ -1554,9 +1554,31 @@ mod modify_wire_tests {
             assert!(!sent.contains("|44="), "{name}: no limit leg to state: {sent}");
         }
 
-        // The bucket is pinned from above as well: a type that is not
-        // trigger-only must keep its limit leg.
-        for ord_type in *b"U21" {
+        // The bucket is pinned from above as well: a type with a limit leg
+        // keeps it. A market or market-to-limit order has none, and stating
+        // one is refused — "Invalid value in field # 44".
+        for ord_type in *b"UK1" {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.insert_order(crate::types::Order::new(
+                7,
+                instrument,
+                Side::Sell,
+                crate::types::QTY_SCALE,
+                100 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
+                0,
+            ));
+            context.modify(7, 610 * crate::types::PRICE_SCALE, 1, false);
+            let sent = drain(&mut context);
+            assert!(
+                !sent.contains("|44="),
+                "{ord_type} has no limit leg to state: {sent}",
+            );
+        }
+
+        for ord_type in *b"2" {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
             context.insert_order(crate::types::Order::new(
@@ -1617,12 +1639,16 @@ mod modify_wire_tests {
     /// limit and is the offset on a pegged order — neither belongs in tag 99.
     #[test]
     fn a_type_without_a_trigger_never_gains_one() {
-        for (ord_type, name) in [
-            (b'2', "LMT"),
-            (b'1', "MKT"),
-            (b'P', "TRAIL"),
-            (b'K', "MTL"),
-            (crate::types::ORD_PEG_MID, "PEG MID"),
+        // Whether the type states a limit leg at all: the venue refuses one
+        // on a type whose submit states none — "Invalid value in field # 44".
+        // No type defined by an offset is here: replacing one restates that
+        // offset from the record of the order as it was placed, and one
+        // inserted rather than placed has none — see the test below.
+        for (ord_type, name, has_a_limit_leg) in [
+            (b'2', "LMT", true),
+            (b'1', "MKT", false),
+            (b'K', "MTL", false),
+            (b'5', "MOC", false),
         ] {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
@@ -1653,8 +1679,214 @@ mod modify_wire_tests {
             let sent = drain(&mut context);
 
             assert!(!sent.contains("|99="), "{name} must not gain a trigger: {sent}");
-            assert!(sent.contains("|44=101|"), "{name} keeps its limit leg: {sent}");
+            if has_a_limit_leg {
+                assert!(sent.contains("|44=101|"), "{name} keeps its limit leg: {sent}");
+            } else {
+                assert!(!sent.contains("|44="), "{name} has no limit leg to state: {sent}");
+            }
         }
+    }
+
+    /// A converted order does not get the type it left restated onto it.
+    ///
+    /// The record is the order as it was placed and a replace never rewrites
+    /// it. Compared against the resting order rather than the record, the
+    /// second replace after a conversion looks like it keeps the type — while
+    /// the record still describes the type before the conversion, whose prices
+    /// would then go out under the new type's name.
+    #[test]
+    fn a_second_replace_after_a_conversion_states_no_stale_price() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.market.set_routing(instrument, "STK", "SMART");
+        // Placed as a limit, so the record describes a limit at 100.
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: crate::types::QTY_SCALE,
+            kind: crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let _ = drain(&mut context);
+
+        // Converted to a market order, then replaced again as a market order.
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7, ord_type: b'1', tif: 0, price: 0,
+            qty: crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+        });
+        let _ = drain(&mut context);
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7, ord_type: b'1', tif: 0, price: 0,
+            qty: 2 * crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+        });
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|40=1|"), "it is a market order: {sent}");
+        assert!(!sent.contains("|44="), "with no price the limit left behind: {sent}");
+    }
+
+    /// A conversion carries none of the old type's instructions either.
+    ///
+    /// The execution instruction, the peg offset and the attributes are the
+    /// record's as much as its prices are. A trailing stop converted to a
+    /// market order that still stated `18=a` would be asking for a trailing
+    /// market order, which is not what the caller asked for.
+    #[test]
+    fn a_conversion_states_none_of_the_old_type_s_instructions() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.market.set_routing(instrument, "STK", "SMART");
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Sell,
+            qty: crate::types::QTY_SCALE,
+            kind: crate::types::OrderKind::TrailingStop {
+                trail_stop_price: 0,
+                trail_amt: 5 * crate::types::PRICE_SCALE,
+            },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let _ = drain(&mut context);
+
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7, ord_type: b'1', tif: 0, price: 0,
+            qty: crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+        });
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|40=1|"), "it is a market order: {sent}");
+        assert!(!sent.contains("|18="), "with no trailing instruction: {sent}");
+        assert!(!sent.contains("|211="), "and no trail: {sent}");
+    }
+
+    /// A reconnect does not cost a pegged order its peg.
+    ///
+    /// The venue names a pegged order back under `P` and the replay records
+    /// that, while the record it was placed under still holds the discriminant
+    /// this client tells the two pegs apart by. Compared as bytes those are
+    /// different types and the replace states none of the peg; compared as the
+    /// venue names them they are one, which is what they are.
+    #[test]
+    fn a_replay_does_not_cost_a_pegged_order_its_peg() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.market.set_routing(instrument, "STK", "SMART");
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: crate::types::QTY_SCALE,
+            kind: crate::types::OrderKind::PegMkt { offset: crate::types::PRICE_SCALE, price_cap: 0 },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let _ = drain(&mut context);
+
+        // The venue replays it under the name it uses on the wire.
+        context.insert_order(crate::types::Order::new(
+            7, instrument, Side::Buy, crate::types::QTY_SCALE, 0, b'P', b'0', 0,
+        ));
+
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7, ord_type: 0, tif: 0, price: 0,
+            qty: 2 * crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+        });
+        let sent = drain(&mut context);
+        assert!(sent.contains("|211="), "the peg's offset is restated: {sent}");
+    }
+
+    /// No order defined by an offset is replaced without its placed record.
+    ///
+    /// A trail, a peg offset and a limit-versus-trail offset all live in the
+    /// record rather than in the replace, so an order the venue replayed at
+    /// connect has nothing to restate them from. Sent anyway the replace is
+    /// refused naming the field it left out.
+    #[test]
+    fn no_offset_order_is_replaced_without_its_record() {
+        for (name, ord_type) in [
+            ("TRAIL", b'P'),
+            ("TSL", crate::types::ORD_TRAIL_LIMIT),
+            ("PEG MKT", crate::types::ORD_PEG_MKT),
+            ("PEG MID", crate::types::ORD_PEG_MID),
+            ("PB", crate::types::ORD_PEG_BENCH),
+            ("SMKT", crate::types::ORD_SNAP_MKT),
+            ("SMID", crate::types::ORD_SNAP_MID),
+            ("SREL", crate::types::ORD_SNAP_PRI),
+        ] {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.insert_order(crate::types::Order::new(
+                7, instrument, Side::Sell, crate::types::QTY_SCALE, 0, ord_type, b'0', 0,
+            ));
+            context.modify(7, 0, 2, false);
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let client = std::net::TcpStream::connect(addr).unwrap();
+            let (mut peer, _) = listener.accept().unwrap();
+            peer.set_read_timeout(Some(std::time::Duration::from_millis(100))).unwrap();
+            let mut conn = Some(Connection::new_raw(client).unwrap());
+            let shared = std::sync::Arc::new(SharedState::new());
+            let mut hb = HeartbeatState::new();
+            drain_and_send_orders(
+                &mut conn, &mut context, "DU111111", &mut hb, false, &shared, false, &None,
+            );
+
+            let mut buf = [0u8; 4096];
+            assert!(peer.read(&mut buf).is_err(), "{name} reaches the venue");
+            let told = shared.orders.drain_order_inactive();
+            assert!(
+                told.iter().any(|(id, _, why)| *id == 7 && why.contains("cannot be restated")),
+                "{name}: the caller is told why: {told:?}",
+            );
+        }
+    }
+
+    /// A trailing stop this session did not place cannot be replaced by it.
+    ///
+    /// The trail rides on tag 211 and is restated from the record of the order
+    /// as it was placed. An order the venue replayed at connect has no such
+    /// record, so the replace would go out without the field that defines it
+    /// and be refused naming it. The caller is told here instead.
+    #[test]
+    fn a_trailing_stop_with_no_placed_record_is_not_replaced() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.insert_order(crate::types::Order::new(
+            7,
+            instrument,
+            Side::Sell,
+            crate::types::QTY_SCALE,
+            0,
+            b'P',
+            b'0',
+            0,
+        ));
+        context.modify(7, 0, 2, false);
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(addr).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
+        let mut conn = Some(Connection::new_raw(client).unwrap());
+        let shared = std::sync::Arc::new(SharedState::new());
+        let mut hb = HeartbeatState::new();
+        drain_and_send_orders(
+            &mut conn, &mut context, "DU111111", &mut hb, false, &shared, false, &None,
+        );
+
+        let mut buf = [0u8; 4096];
+        assert!(peer.read(&mut buf).is_err(), "nothing reaches the venue");
+        let told = shared.orders.drain_order_inactive();
+        assert!(
+            told.iter().any(|(id, _, why)| *id == 7 && why.contains("cannot be restated")),
+            "and the caller is told why: {told:?}",
+        );
     }
 
     /// A two-legged type can have its trigger moved when it has one.

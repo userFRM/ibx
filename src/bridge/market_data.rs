@@ -40,7 +40,7 @@ fn push_bounded<T>(queue: &Mutex<Vec<T>>, item: T, limit: usize, what: &str) {
 
 /// Lock-free quotes, TBT streams, real-time bars, depth updates, and news ticks.
 pub struct MarketDataState {
-    quotes: Box<[SeqQuote; MAX_INSTRUMENTS]>,
+    quotes: Box<[SeqQuote]>,
     /// InstrumentId counter — set by hot loop on RegisterInstrument.
     instrument_count: AtomicU64,
     tbt_trades: Mutex<Vec<TbtTrade>>,
@@ -82,7 +82,7 @@ pub struct MarketDataState {
 impl MarketDataState {
     pub(super) fn new() -> Self {
         Self {
-            quotes: Box::new(std::array::from_fn(|_| SeqQuote::new())),
+            quotes: (0..MAX_INSTRUMENTS).map(|_| SeqQuote::new()).collect(),
             instrument_count: AtomicU64::new(0),
             tbt_trades: Mutex::new(Vec::with_capacity(256)),
             tbt_quotes: Mutex::new(Vec::with_capacity(256)),

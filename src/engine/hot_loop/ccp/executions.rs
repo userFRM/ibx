@@ -490,7 +490,16 @@ impl CcpState {
             .and_then(|s| s.parse::<f64>().ok())
             .map(crate::types::price_from_f64)
             .unwrap_or_else(|| prior.map_or(0, |o| o.stop_price));
-        let ord_type_byte: u8 = parsed.get(&40).and_then(|s| s.bytes().next())
+        // The whole name, not its first byte: `MIDPX` read as `M` names no
+        // type, and the order comes back as a plain limit on the next replace.
+        let ord_type_byte: u8 = parsed
+            .get(&40)
+            .map(|named| {
+                crate::types::ord_type_from_fix(
+                    named,
+                    parsed.get(&18).map(String::as_str).unwrap_or_default(),
+                )
+            })
             .unwrap_or_else(|| prior.map_or(b'2', |o| o.ord_type));
         // A recovery record with no tag 59 states no time-in-force, and this
         // order was not placed by this session, so there is nothing to

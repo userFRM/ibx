@@ -32,7 +32,7 @@ pub struct OrderIdentity {
 }
 
 pub struct MarketState {
-    quotes: [Quote; MAX_INSTRUMENTS],
+    quotes: Box<[Quote]>,
     /// High-water mark: slots ever allocated (iteration bound). Freed slots
     /// below this mark are reused via `free_ids` before new ones are taken,
     /// so the MAX_INSTRUMENTS cap bounds CONCURRENT instruments, not the
@@ -44,7 +44,7 @@ pub struct MarketState {
     con_id_to_instrument: HashMap<i64, InstrumentId>,
     /// Reverse map: InstrumentId → conId. Flat array lookup. `FREE_SLOT`
     /// marks a reclaimed slot.
-    instrument_to_con_id: [i64; MAX_INSTRUMENTS],
+    instrument_to_con_id: Box<[i64]>,
     /// Maps an IB server_tag → InstrumentId. Keyed rather than indexed: the
     /// tag space is the gateway's to choose and a live session starts well
     /// past any fixed bound. One entry per subscription ack, so an instrument
@@ -54,29 +54,29 @@ pub struct MarketState {
     /// Numbers this session has withdrawn: see `retired_server_tags`.
     retired_server_tags: std::collections::HashSet<u32>,
     /// Per-instrument minTick (from 35=Q). Used to scale tick magnitudes to prices.
-    min_ticks: [f64; MAX_INSTRUMENTS],
+    min_ticks: Box<[f64]>,
     /// Pre-computed min_tick * PRICE_SCALE as integer for hot-path price conversion.
-    min_tick_scaled: [i64; MAX_INSTRUMENTS],
+    min_tick_scaled: Box<[i64]>,
     /// Per-instrument size increment, stated on the same acknowledgement as
     /// the price increment. A size on the wire is a count of these, whole ones
     /// for a share and hundred-millionths for a crypto, so a fixed count
     /// reports one of the two wrongly. Zero means the venue stated none, which
     /// is what counting in whole ones means.
-    size_ticks: [f64; MAX_INSTRUMENTS],
+    size_ticks: Box<[f64]>,
     /// Per-instrument symbol name. Flat array indexed by InstrumentId.
-    symbols: [Option<String>; MAX_INSTRUMENTS],
+    symbols: Box<[Option<String>]>,
     /// Per-instrument security type (API string, e.g. `STK`, `CASH`). An empty
     /// slot is unknown and treated as a stock. Carried through registration.
-    sec_types: [Option<String>; MAX_INSTRUMENTS],
+    sec_types: Box<[Option<String>]>,
     /// Per-instrument requested exchange. Empty slot = default routing.
-    exchanges: [Option<String>; MAX_INSTRUMENTS],
+    exchanges: Box<[Option<String>]>,
     /// What separates two conId-less contracts on the same underlying: expiry,
     /// strike, right, multiplier, joined. Symbol, security type and exchange
     /// are equal for an option's call and put at different strikes, so matching
     /// on those alone put both in one slot — the second contract's quotes and
     /// its minTick landed on the first, and minTick is what snaps an order's
     /// price. Empty for anything that carries no such identity.
-    option_keys: [Option<String>; MAX_INSTRUMENTS],
+    option_keys: Box<[Option<String>]>,
 }
 
 impl Default for MarketState {
@@ -88,20 +88,20 @@ impl Default for MarketState {
 impl MarketState {
     pub fn new() -> Self {
         Self {
-            quotes: [Quote::default(); MAX_INSTRUMENTS],
+            quotes: vec![Quote::default(); MAX_INSTRUMENTS].into(),
             active_count: 0,
             free_ids: Vec::new(),
             con_id_to_instrument: HashMap::new(),
-            instrument_to_con_id: [0; MAX_INSTRUMENTS],
+            instrument_to_con_id: vec![0; MAX_INSTRUMENTS].into(),
             server_tag_to_instrument: HashMap::new(),
             retired_server_tags: std::collections::HashSet::new(),
-            min_ticks: [0.0; MAX_INSTRUMENTS],
-            min_tick_scaled: [0; MAX_INSTRUMENTS],
-            size_ticks: [0.0; MAX_INSTRUMENTS],
-            symbols: std::array::from_fn(|_| None),
-            sec_types: std::array::from_fn(|_| None),
-            exchanges: std::array::from_fn(|_| None),
-            option_keys: std::array::from_fn(|_| None),
+            min_ticks: vec![0.0; MAX_INSTRUMENTS].into(),
+            min_tick_scaled: vec![0; MAX_INSTRUMENTS].into(),
+            size_ticks: vec![0.0; MAX_INSTRUMENTS].into(),
+            symbols: vec![None; MAX_INSTRUMENTS].into(),
+            sec_types: vec![None; MAX_INSTRUMENTS].into(),
+            exchanges: vec![None; MAX_INSTRUMENTS].into(),
+            option_keys: vec![None; MAX_INSTRUMENTS].into(),
         }
     }
 

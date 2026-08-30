@@ -300,6 +300,24 @@ pub(crate) fn drain_and_send_orders(
                     continue;
                 };
                 let spec = context.submitted.get(&order_id).cloned();
+                // A trail rides on tag 211, restated from the record of the
+                // order as it was placed. An order this session did not place
+                // has no such record — an order the venue replayed at connect,
+                // say — so the replace would go out without the field that
+                // defines it and be refused naming it. Said here, where the
+                // caller hears it, rather than sent and refused.
+                if spec.is_none() && replace_needs_the_placed_record(orig.ord_type) {
+                    shared.orders.push_order_inactive(
+                        order_id,
+                        ORDER_NOT_FOUND_ERROR_CODE,
+                        format!(
+                            "order {order_id} was not placed by this session, so the offset \
+                             that defines it cannot be restated; withdraw it and place a \
+                             new order",
+                        ),
+                    );
+                    continue;
+                }
                 // Whether the resting order was placed with tag 6433 set.
                 let was_outside_rth = spec.as_ref().is_some_and(|s| s.attrs.outside_rth);
                 // What the replace states. A zero field states nothing, so the
@@ -449,11 +467,13 @@ pub(crate) fn drain_and_send_orders(
                     (11, &clord_str),  // ClOrdID (versioned)
                     (41, &orig_clord), // OrigClOrdID (previous version)
                 ];
-                // Each price goes to the tag its order type uses. A
-                // trigger-only type has no limit leg, so its price is the
-                // trigger and tag 44 is left off entirely — the shape its own
-                // submit has. Anything else keeps 44 for the limit.
-                if !trigger_only {
+                // Each price goes to the tag its order type uses, which is
+                // the tag the type's own submit states it on. A type with no
+                // limit leg sends no tag 44 at all: a trigger-only type states
+                // its price on 99, and a market, trailing or on-close order
+                // states none. Stating one as zero is refused —
+                // "Invalid value in field # 44".
+                if states_a_limit_price(ord_type) {
                     fields.push((44, &price_str)); // Price
                 }
                 fields.push((1, account_id)); // Account
@@ -513,7 +533,39 @@ pub(crate) fn drain_and_send_orders(
                 // order. What the submit said is restated here.
                 let mut attr_fields: Vec<(u32, String)> = Vec::new();
                 let mut restated_type = None;
-                if let Some(spec) = spec.as_deref() {
+                // The record describes the order as it was PLACED, and a
+                // replace never rewrites it. So everything restated from it —
+                // the type's own companions, the execution instruction it
+                // carries, the attributes it was placed with — belongs to that
+                // type and to no other, and is restated only where the replace
+                // states that type. Compared against the record rather than
+                // against the resting order: an order converted once and
+                // replaced again matches the resting type while the record
+                // still describes the type before the conversion.
+                //
+                // Restated onto the wrong type it states the old type's prices
+                // and instructions under the new type's name — a limit replaced
+                // as a market keeping tag 44, a trailing stop replaced as a
+                // market keeping 18=a, a midpoint peg writing its own tag 40
+                // over the one the caller asked for. A replace that changes the
+                // type states the lean message alone, which describes the type
+                // it is asking for whole.
+                //
+                // Compared as the venue names the type, not as this client
+                // holds it. A reconnect replays the order and records the type
+                // the wire spelled, while the record beside it still holds the
+                // discriminant it was placed under — two names for one type,
+                // and a pegged order replaced after a reconnect lost its peg to
+                // the difference.
+                let restating_the_record = spec.as_deref().is_some_and(|spec| {
+                    crate::types::ord_type_fix_str(ord_type)
+                        == crate::types::ord_type_fix_str(tracked_shape(&spec.kind).0)
+                });
+                if let Some(spec) = spec.as_deref().filter(|_| restating_the_record) {
+                    // A trailing stop carries its trail on tag 211, and a
+                    // replace that left it out was refused naming the field —
+                    // "Message must contain field # 211".
+                    push_type_and_prices(&mut attr_fields, &spec.kind);
                     restated_type = push_order_attrs(
                         &mut attr_fields,
                         &spec.attrs,
@@ -818,6 +870,16 @@ fn is_trigger_only(ord_type: u8) -> bool {
     matches!(ord_type, b'3' | b'J') || ord_type == crate::types::ORD_STP_PRT
 }
 
+/// The order types whose own submit states a limit price on tag 44.
+///
+/// Read off the submit encoder: every other type either states its price on
+/// tag 99 as a trigger, or has no price to state.
+fn states_a_limit_price(ord_type: u8) -> bool {
+    matches!(ord_type, b'2' | b'4' | b'B')
+        || ord_type == crate::types::ORD_LIT
+        || ord_type == crate::types::ORD_PEG_BENCH
+}
+
 /// The currency an order states for a contract (tag 15).
 ///
 /// The caller's own, where they registered one. Otherwise the currency on the
@@ -958,42 +1020,7 @@ fn send_order_ex(
     tif: u8,
     attrs: &crate::types::OrderAttrs,
 ) -> std::io::Result<()> {
-    use crate::types::OrderKind as K;
-
-    // Engine-state entry: ord_type byte, tracked price, and tracked stop
-    // price per kind — mirrors the corresponding plain variants exactly.
-    let (ord_type_byte, track_price, track_stop) = match kind {
-        K::Market => (b'1', 0, 0),
-        K::Limit { price } => (b'2', price, 0),
-        K::Stop { stop_price } => (b'3', stop_price, stop_price),
-        K::StopLimit { price, stop_price } => (b'4', price, stop_price),
-        K::TrailingStop { .. } => (b'P', 0, 0),
-        // Each kind is tracked under the discriminant whose tag 40 the encoder
-        // below writes, so a replace restates the type the submit sent. Tag 40
-        // has no value `R`: a relative order is `P` with `18=R`.
-        K::TrailingStopLimit { lmt_offset, .. } => (crate::types::ORD_TRAIL_LIMIT, lmt_offset, 0),
-        K::TrailPct { .. } => (b'P', 0, 0),
-        K::Moc => (b'5', 0, 0),
-        K::Loc { price } => (b'B', price, 0),
-        K::Mit { stop_price } => (b'J', stop_price, stop_price),
-        K::Lit { price, stop_price } => (crate::types::ORD_LIT, price, stop_price),
-        K::PegBench { price, .. } => (crate::types::ORD_PEG_BENCH, price, 0),
-        K::Mtl => (b'K', 0, 0),
-        K::MktPrt => (b'U', 0, 0),
-        K::StpPrt { stop_price } => (crate::types::ORD_STP_PRT, 0, stop_price),
-        K::MidPrice { price_cap } => (crate::types::ORD_MIDPX, price_cap, 0),
-        K::SnapMkt { offset } => (crate::types::ORD_SNAP_MKT, 0, offset),
-        K::SnapMid { offset } => (crate::types::ORD_SNAP_MID, 0, offset),
-        K::SnapPri { offset } => (crate::types::ORD_SNAP_PRI, 0, offset),
-        K::PegMkt { offset, .. } => (crate::types::ORD_PEG_MKT, 0, offset),
-        K::PegMid { offset, .. } => (crate::types::ORD_PEG_MID, 0, offset),
-        K::Rel { offset } => (b'P', 0, offset),
-        K::AdjustableStop { stop_price, .. } => (b'3', 0, stop_price),
-        K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', price, 0),
-        // Tracked under the what-if marker so the response is recognised as a
-        // preview; it never becomes a live order.
-        K::WhatIf { price, aux, .. } => (crate::types::ORD_WHAT_IF, price, aux),
-    };
+    let (ord_type_byte, track_price, track_stop) = tracked_shape(&kind);
     context.insert_order(crate::types::Order::new(
         order_id,
         instrument,
@@ -1036,190 +1063,8 @@ fn send_order_ex(
         (38, format_qty(qty).to_string()),
     ];
 
-    // Order type (40) plus its price tags and type-specific companions —
-    // identical values to the corresponding plain variants. Kinds that put
-    // an instruction in tag 18 (TrailingStop/TrailPct = a, Rel = R) cannot
-    // also carry all_or_none (18=G); validate_order rejects that
-    // combination up front, and the emission below skips 18=G as a second
-    // line of defense.
-    // ExecInst is one field with the instructions concatenated, not one field
-    // per instruction. The terminal builds it as the order type's own character
-    // followed by "G" for all-or-none, and an order that had a character of its
-    // own therefore lost its all-or-none entirely — silently, on every
-    // trailing, relative, pegged and algo order.
     let exec_inst = exec_inst_for(&kind);
-    match kind {
-        K::Market => fields.push((40, "1".to_string())),
-        K::Limit { price } => {
-            fields.push((40, "2".to_string()));
-            fields.push((44, format_price(price).to_string()));
-        }
-        K::Stop { stop_price } => {
-            fields.push((40, "3".to_string()));
-            fields.push((99, format_price(stop_price).to_string()));
-        }
-        K::StopLimit { price, stop_price } => {
-            fields.push((40, "4".to_string()));
-            fields.push((44, format_price(price).to_string()));
-            fields.push((99, format_price(stop_price).to_string()));
-        }
-        K::AdjustableStop { stop_price, .. } => {
-            // Base order type only. The 6257+ adjustable tags are appended after
-            // the attribute block below, where the dedicated encoder this path
-            // replaced put them.
-            fields.push((40, "3".to_string())); // OrdType = Stop
-            fields.push((99, format_price(stop_price).to_string())); // StopPx
-        }
-        K::TrailingStop { trail_amt, .. } => {
-            // capture: amount-based trailing stop carries
-            // the trail amount in both 99 and 211 and requires 18=a.
-            let t = format_price(trail_amt).to_string();
-            fields.push((40, "P".to_string()));
-            fields.push((99, t.clone()));
-            fields.push((211, t));
-        }
-        K::TrailingStopLimit { lmt_offset, trail_amt, .. } => {
-            // capture: TRAIL LIMIT uses OrdType=TSL, no
-            // tag 44, no tag 18; trail amount in both 99 and 211; 6370 is
-            // the limit-vs-trail offset.
-            let t = format_price(trail_amt).to_string();
-            fields.push((40, "TSL".to_string()));
-            fields.push((99, t.clone()));
-            fields.push((6370, format_price(lmt_offset).to_string()));
-            fields.push((211, t));
-        }
-        K::TrailPct { trail_pct, .. } => {
-            // The percent itself goes on 99 and 211 in decimal form (1.00 for
-            // 1%). Tag 6268 is not the amount but the unit the trail is
-            // expressed in — 100 for percent, 0 for an amount, 1 for ticks —
-            // and it was being filled with the percent in basis points. A one
-            // percent trail is 100 basis points, which is also the code for
-            // percent, so the one case anybody tried was right by coincidence
-            // and every other percentage sent a unit that is not a unit.
-            let pct_decimal = format!("{:.2}", trail_pct as f64 / 100.0);
-            fields.push((40, "P".to_string()));
-            fields.push((99, pct_decimal.clone()));
-            fields.push((211, pct_decimal));
-            fields.push((6268, TRAIL_UNIT_PERCENT.to_string()));
-        }
-        K::Moc => fields.push((40, "5".to_string())),
-        K::Loc { price } => {
-            fields.push((40, "B".to_string()));
-            fields.push((44, format_price(price).to_string()));
-        }
-        K::Mit { stop_price } => {
-            fields.push((40, "J".to_string()));
-            fields.push((99, format_price(stop_price).to_string()));
-        }
-        K::Lit { price, stop_price } => {
-            fields.push((40, "LT".to_string()));
-            fields.push((44, format_price(price).to_string()));
-            fields.push((99, format_price(stop_price).to_string()));
-        }
-        K::Mtl => fields.push((40, "K".to_string())),
-        K::MktPrt => fields.push((40, "U".to_string())),
-        K::StpPrt { stop_price } => {
-            fields.push((40, "SP".to_string()));
-            fields.push((99, format_price(stop_price).to_string()));
-        }
-        K::MidPrice { .. } => fields.push((40, "MIDPX".to_string())),
-        // Tag 211 carries the offset and is required: without it the order is
-        // rejected with "Message must contain field # 211". Confirmed against a
-        // paper account for all three snap types.
-        K::SnapMkt { offset } => {
-            fields.push((40, "SMKT".to_string()));
-            fields.push((211, format_price(offset).to_string()));
-        }
-        K::SnapMid { offset } => {
-            fields.push((40, "SMID".to_string()));
-            fields.push((211, format_price(offset).to_string()));
-        }
-        K::SnapPri { offset } => {
-            fields.push((40, "SREL".to_string()));
-            fields.push((211, format_price(offset).to_string()));
-        }
-        // Both are OrdType "E" and are separated by ExecInst, which is what
-        // ORD_PEG_MKT and ORD_PEG_MID state in types.rs. Emitting only the
-        // OrdType sent the two as the same message, saying which peg neither.
-        K::PegBench {
-            price,
-            ref_con_id,
-            is_peg_decrease,
-            pegged_change_amount,
-            ref_change_amount,
-            starting_price,
-            stock_ref_price,
-            ref ref_exchange,
-            ..
-        } => {
-            fields.push((40, "PB".to_string()));
-            fields.push((6941, ref_con_id.to_string()));
-            // The change amount carries its own direction: there is no separate
-            // field saying which way it moves, so a decrease is a negative one.
-            let signed = if is_peg_decrease { -pegged_change_amount } else { pegged_change_amount };
-            fields.push((6938, format_price(signed).to_string()));
-            fields.push((6939, format_price(ref_change_amount).to_string()));
-            fields.push((6942, ref_exchange.clone()));
-            fields.push((6580, format_price(stock_ref_price).to_string()));
-            fields.push((99, format_price(starting_price).to_string()));
-            // Tag 44 bounds the peg. 0 = no bound, so the tag is omitted.
-            if price != 0 {
-                fields.push((44, format_price(price).to_string()));
-            }
-        }
-        // The venue names these back as PegToMkt and PegToMid under "P", and
-        // named them something else entirely under "E" — so an order a caller
-        // asked to peg was read as another type. The offset rides 211, which
-        // the shared attrs block already writes for the pegged kinds.
-        K::PegMkt { .. } => {
-            fields.push((40, "P".to_string()));
-        }
-        K::PegMid { .. } => {
-            fields.push((40, "P".to_string()));
-        }
-        K::Rel { offset } => {
-            // capture: Relative shares OrdType=P and is
-            // disambiguated by 18=R; peg offset on 211, no tag 44.
-            fields.push((40, "P".to_string()));
-            fields.push((211, format_price(offset).to_string()));
-        }
-        K::Adaptive { price, .. } => {
-            // Adaptive requires `18=e`. Without it the order is rejected with
-            // "Invalid value in field # 18"; confirmed against a live session.
-            // The strategy and its parameter are appended after the attribute
-            // block.
-            fields.push((40, "2".to_string()));
-            fields.push((44, format_price(price).to_string()));
-        }
-        K::Algo { price, .. } => {
-            fields.push((40, "2".to_string()));
-            fields.push((44, format_price(price).to_string()));
-            // Same `18=e` marker the adaptive wrapper carries. An algo order
-            // without it is rejected with "Invalid value in field # 18", which
-            // is also the answer to a wrong value, so the six algo types
-            // were refused identically whether the field was absent or wrong.
-        }
-        K::WhatIf { price, aux, ord_type } => {
-            // Tag 40 as the order itself would state it. Multi-character types
-            // are held as discriminants below the printable range, so the byte
-            // cannot be written out as a character.
-            let ord_type_str = crate::types::ord_type_fix_str(ord_type);
-            fields.push((40, ord_type_str.to_string()));
-            // A market preview has no price to state, and stating one is how a
-            // market-only security came to be refused as a limit.
-            //
-            // Each price on the tag its type carries it on. A trigger-only
-            // type states tag 99 and no tag 44; a stop limit states both.
-            if is_trigger_only(ord_type) {
-                fields.push((99, format_price(aux).to_string()));
-            } else if ord_type == b'4' {
-                fields.push((44, format_price(price).to_string()));
-                fields.push((99, format_price(aux).to_string()));
-            } else if ord_type_str != "1" {
-                fields.push((44, format_price(price).to_string()));
-            }
-        }
-    }
+    push_type_and_prices(&mut fields, &kind);
 
     fields.push((59, tif_str.to_string()));
     fields.push((60, now));
@@ -1283,6 +1128,263 @@ fn exec_inst_for(kind: &crate::types::OrderKind) -> String {
         _ => "",
     }
     .to_string()
+}
+
+/// Whether replacing this type needs the record of the order as it was placed.
+///
+/// Read off `push_type_and_prices`: these are the types that state a companion
+/// beyond the type and the price the lean replace already carries — a trail on
+/// 211, a peg offset, a limit-versus-trail offset. Everything else the lean
+/// replace states whole.
+fn replace_needs_the_placed_record(ord_type: u8) -> bool {
+    // Trailing, relative and both pegs travel as `P`.
+    ord_type == b'P'
+        || matches!(
+            ord_type,
+            crate::types::ORD_TRAIL_LIMIT
+                | crate::types::ORD_PEG_MKT
+                | crate::types::ORD_PEG_MID
+                | crate::types::ORD_PEG_BENCH
+                | crate::types::ORD_SNAP_MKT
+                | crate::types::ORD_SNAP_MID
+                | crate::types::ORD_SNAP_PRI
+        )
+}
+
+/// The order type byte, tracked price and tracked trigger a kind is held as.
+///
+/// One statement of it: the submit records the order this way and a replace
+/// asks it which type the record describes, so the two cannot disagree about
+/// what a tracked order is.
+fn tracked_shape(kind: &crate::types::OrderKind) -> (u8, i64, i64) {
+    use crate::types::OrderKind as K;
+    match kind {
+        K::Market => (b'1', 0, 0),
+        K::Limit { price } => (b'2', *price, 0),
+        K::Stop { stop_price } => (b'3', *stop_price, *stop_price),
+        K::StopLimit { price, stop_price } => (b'4', *price, *stop_price),
+        K::TrailingStop { .. } => (b'P', 0, 0),
+            // Each kind is tracked under the discriminant whose tag 40 the encoder
+            // below writes, so a replace restates the type the submit sent. Tag 40
+            // has no value `R`: a relative order is `P` with `18=R`.
+        K::TrailingStopLimit { lmt_offset, .. } => (crate::types::ORD_TRAIL_LIMIT, *lmt_offset, 0),
+        K::TrailPct { .. } => (b'P', 0, 0),
+        K::Moc => (b'5', 0, 0),
+        K::Loc { price } => (b'B', *price, 0),
+        K::Mit { stop_price } => (b'J', *stop_price, *stop_price),
+        K::Lit { price, stop_price } => (crate::types::ORD_LIT, *price, *stop_price),
+        K::PegBench { price, .. } => (crate::types::ORD_PEG_BENCH, *price, 0),
+        K::Mtl => (b'K', 0, 0),
+        K::MktPrt => (b'U', 0, 0),
+        K::StpPrt { stop_price } => (crate::types::ORD_STP_PRT, 0, *stop_price),
+        K::MidPrice { price_cap } => (crate::types::ORD_MIDPX, *price_cap, 0),
+        K::SnapMkt { offset } => (crate::types::ORD_SNAP_MKT, 0, *offset),
+        K::SnapMid { offset } => (crate::types::ORD_SNAP_MID, 0, *offset),
+        K::SnapPri { offset } => (crate::types::ORD_SNAP_PRI, 0, *offset),
+        K::PegMkt { offset, .. } => (crate::types::ORD_PEG_MKT, 0, *offset),
+        K::PegMid { offset, .. } => (crate::types::ORD_PEG_MID, 0, *offset),
+        K::Rel { offset } => (b'P', 0, *offset),
+        K::AdjustableStop { stop_price, .. } => (b'3', 0, *stop_price),
+        K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', *price, 0),
+            // Tracked under the what-if marker so the response is recognised as a
+            // preview; it never becomes a live order.
+        K::WhatIf { price, aux, .. } => (crate::types::ORD_WHAT_IF, *price, *aux),
+    }
+}
+
+/// The order type on tag 40, its price tags and the companions that type
+/// needs — the shape the venue is asked for one.
+///
+/// One statement of it, because a replace is a full statement of the order
+/// and has to reach the venue in the same shape its submit did. Written
+/// only here, the two cannot drift: a replace that left out what the type
+/// needs was refused naming the field — "Message must contain field # 211".
+///
+/// Order type (40) plus its price tags and type-specific companions —
+/// identical values to the corresponding plain variants. Kinds that put
+/// an instruction in tag 18 (TrailingStop/TrailPct = a, Rel = R) cannot
+/// also carry all_or_none (18=G); validate_order rejects that
+/// combination up front, and the emission below skips 18=G as a second
+/// line of defense.
+/// ExecInst is one field with the instructions concatenated, not one field
+/// per instruction. The terminal builds it as the order type's own character
+/// followed by "G" for all-or-none, and an order that had a character of its
+/// own therefore lost its all-or-none entirely — silently, on every
+/// trailing, relative, pegged and algo order.
+fn push_type_and_prices(fields: &mut Vec<(u32, String)>, kind: &crate::types::OrderKind) {
+    use crate::types::OrderKind as K;
+    match kind {
+        K::Market => fields.push((40, "1".to_string())),
+        K::Limit { price } => {
+            fields.push((40, "2".to_string()));
+            fields.push((44, format_price(*price).to_string()));
+        }
+        K::Stop { stop_price } => {
+            fields.push((40, "3".to_string()));
+            fields.push((99, format_price(*stop_price).to_string()));
+        }
+        K::StopLimit { price, stop_price } => {
+            fields.push((40, "4".to_string()));
+            fields.push((44, format_price(*price).to_string()));
+            fields.push((99, format_price(*stop_price).to_string()));
+        }
+        K::AdjustableStop { stop_price, .. } => {
+            // Base order type only. The 6257+ adjustable tags are appended after
+            // the attribute block below, where the dedicated encoder this path
+            // replaced put them.
+            fields.push((40, "3".to_string())); // OrdType = Stop
+            fields.push((99, format_price(*stop_price).to_string())); // StopPx
+        }
+        K::TrailingStop { trail_amt, .. } => {
+            // capture: amount-based trailing stop carries
+            // the trail amount in both 99 and 211 and requires 18=a.
+            let t = format_price(*trail_amt).to_string();
+            fields.push((40, "P".to_string()));
+            fields.push((99, t.clone()));
+            fields.push((211, t));
+        }
+        K::TrailingStopLimit { lmt_offset, trail_amt, .. } => {
+            // capture: TRAIL LIMIT uses OrdType=TSL, no
+            // tag 44, no tag 18; trail amount in both 99 and 211; 6370 is
+            // the limit-vs-trail offset.
+            let t = format_price(*trail_amt).to_string();
+            fields.push((40, "TSL".to_string()));
+            fields.push((99, t.clone()));
+            fields.push((6370, format_price(*lmt_offset).to_string()));
+            fields.push((211, t));
+        }
+        K::TrailPct { trail_pct, .. } => {
+            // The percent itself goes on 99 and 211 in decimal form (1.00 for
+            // 1%). Tag 6268 is not the amount but the unit the trail is
+            // expressed in — 100 for percent, 0 for an amount, 1 for ticks —
+            // and it was being filled with the percent in basis points. A one
+            // percent trail is 100 basis points, which is also the code for
+            // percent, so the one case anybody tried was right by coincidence
+            // and every other percentage sent a unit that is not a unit.
+            let pct_decimal = format!("{:.2}", *trail_pct as f64 / 100.0);
+            fields.push((40, "P".to_string()));
+            fields.push((99, pct_decimal.clone()));
+            fields.push((211, pct_decimal));
+            fields.push((6268, TRAIL_UNIT_PERCENT.to_string()));
+        }
+        K::Moc => fields.push((40, "5".to_string())),
+        K::Loc { price } => {
+            fields.push((40, "B".to_string()));
+            fields.push((44, format_price(*price).to_string()));
+        }
+        K::Mit { stop_price } => {
+            fields.push((40, "J".to_string()));
+            fields.push((99, format_price(*stop_price).to_string()));
+        }
+        K::Lit { price, stop_price } => {
+            fields.push((40, "LT".to_string()));
+            fields.push((44, format_price(*price).to_string()));
+            fields.push((99, format_price(*stop_price).to_string()));
+        }
+        K::Mtl => fields.push((40, "K".to_string())),
+        K::MktPrt => fields.push((40, "U".to_string())),
+        K::StpPrt { stop_price } => {
+            fields.push((40, "SP".to_string()));
+            fields.push((99, format_price(*stop_price).to_string()));
+        }
+        K::MidPrice { .. } => fields.push((40, "MIDPX".to_string())),
+        // Tag 211 carries the offset and is required: without it the order is
+        // rejected with "Message must contain field # 211". Confirmed against a
+        // paper account for all three snap types.
+        K::SnapMkt { offset } => {
+            fields.push((40, "SMKT".to_string()));
+            fields.push((211, format_price(*offset).to_string()));
+        }
+        K::SnapMid { offset } => {
+            fields.push((40, "SMID".to_string()));
+            fields.push((211, format_price(*offset).to_string()));
+        }
+        K::SnapPri { offset } => {
+            fields.push((40, "SREL".to_string()));
+            fields.push((211, format_price(*offset).to_string()));
+        }
+        // Both are OrdType "E" and are separated by ExecInst, which is what
+        // ORD_PEG_MKT and ORD_PEG_MID state in types.rs. Emitting only the
+        // OrdType sent the two as the same message, saying which peg neither.
+        K::PegBench {
+            price,
+            ref_con_id,
+            is_peg_decrease,
+            pegged_change_amount,
+            ref_change_amount,
+            starting_price,
+            stock_ref_price,
+            ref_exchange,
+            ..
+        } => {
+            fields.push((40, "PB".to_string()));
+            fields.push((6941, ref_con_id.to_string()));
+            // The change amount carries its own direction: there is no separate
+            // field saying which way it moves, so a decrease is a negative one.
+            let signed = if *is_peg_decrease { -*pegged_change_amount } else { *pegged_change_amount };
+            fields.push((6938, format_price(signed).to_string()));
+            fields.push((6939, format_price(*ref_change_amount).to_string()));
+            fields.push((6942, ref_exchange.clone()));
+            fields.push((6580, format_price(*stock_ref_price).to_string()));
+            fields.push((99, format_price(*starting_price).to_string()));
+            // Tag 44 bounds the peg. 0 = no bound, so the tag is omitted.
+            if *price != 0 {
+                fields.push((44, format_price(*price).to_string()));
+            }
+        }
+        // The venue names these back as PegToMkt and PegToMid under "P", and
+        // named them something else entirely under "E" — so an order a caller
+        // asked to peg was read as another type. The offset rides 211, which
+        // the shared attrs block already writes for the pegged kinds.
+        K::PegMkt { .. } => {
+            fields.push((40, "P".to_string()));
+        }
+        K::PegMid { .. } => {
+            fields.push((40, "P".to_string()));
+        }
+        K::Rel { offset } => {
+            // capture: Relative shares OrdType=P and is
+            // disambiguated by 18=R; peg offset on 211, no tag 44.
+            fields.push((40, "P".to_string()));
+            fields.push((211, format_price(*offset).to_string()));
+        }
+        K::Adaptive { price, .. } => {
+            // Adaptive requires `18=e`. Without it the order is rejected with
+            // "Invalid value in field # 18"; confirmed against a live session.
+            // The strategy and its parameter are appended after the attribute
+            // block.
+            fields.push((40, "2".to_string()));
+            fields.push((44, format_price(*price).to_string()));
+        }
+        K::Algo { price, .. } => {
+            fields.push((40, "2".to_string()));
+            fields.push((44, format_price(*price).to_string()));
+            // Same `18=e` marker the adaptive wrapper carries. An algo order
+            // without it is rejected with "Invalid value in field # 18", which
+            // is also the answer to a wrong value, so the six algo types
+            // were refused identically whether the field was absent or wrong.
+        }
+        K::WhatIf { price, aux, ord_type } => {
+            // Tag 40 as the order itself would state it. Multi-character types
+            // are held as discriminants below the printable range, so the byte
+            // cannot be written out as a character.
+            let ord_type_str = crate::types::ord_type_fix_str(*ord_type);
+            fields.push((40, ord_type_str.to_string()));
+            // A market preview has no price to state, and stating one is how a
+            // market-only security came to be refused as a limit.
+            //
+            // Each price on the tag its type carries it on. A trigger-only
+            // type states tag 99 and no tag 44; a stop limit states both.
+            if is_trigger_only(*ord_type) {
+                fields.push((99, format_price(*aux).to_string()));
+            } else if *ord_type == b'4' {
+                fields.push((44, format_price(*price).to_string()));
+                fields.push((99, format_price(*aux).to_string()));
+            } else if ord_type_str != "1" {
+                fields.push((44, format_price(*price).to_string()));
+            }
+        }
+    }
 }
 
 fn push_order_attrs(

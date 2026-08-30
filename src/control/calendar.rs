@@ -9,10 +9,9 @@
 //! that envelope too, with the answer under one number and a refusal under
 //! another.
 //!
-//! The event request is refused here when no metadata has been asked for
-//! first. The metadata is a prerequisite of the event request, not a local
-//! rule: an event request built without it is not a request the venue is
-//! asked in normal operation.
+//! Neither depends on the other. An event request that no metadata request
+//! preceded is answered — measured on a session, which is why nothing here
+//! stands in front of one.
 
 // The query a request is built from sits beside the command that carries
 // it. Reachable here because that is the path a program written against this

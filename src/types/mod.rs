@@ -157,8 +157,15 @@ pub fn qty_from_counted(counted: i64, size_tick: f64) -> Qty {
     (counted as f64 * size_tick * QTY_SCALE as f64).round() as Qty
 }
 
-/// Maximum number of concurrently tracked instruments.
-pub const MAX_INSTRUMENTS: usize = 256;
+/// How many contracts this client holds a slot for at once.
+///
+/// The tables are allocated once at this size and never move, so a slot's
+/// address is stable while a reader holds it. It is this client's own
+/// allocation and not a limit the venue states: what an account may watch at
+/// once is the venue's to say, and it says so in its own words when a
+/// subscription goes past it. Slots are reused, so a contract withdrawn stops
+/// counting.
+pub const MAX_INSTRUMENTS: usize = 4096;
 
 /// How deep a healthy backlog of order requests goes, which is what the
 /// buffer is built to hold without asking for more room. Not a limit: it

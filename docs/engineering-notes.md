@@ -136,53 +136,64 @@ vanish.
 
 ### Which corporate actions this venue has actually stated
 
-The protocol names six kinds and this client reads all six. Three of them have
-been seen; three have not, and the difference is worth writing down so nobody
-mistakes "handled" for "observed".
+The protocol names six kinds and this client reads all six. Five have been
+seen; one has not, and the difference is worth writing down so nobody mistakes
+"handled" for "observed".
 
 | Kind | Seen | Where |
 | --- | --- | --- |
-| Cash dividend | Yes, over a hundred | Every dividend-paying contract asked |
-| Split | Yes | A ten-for-one, checked against the closes either side of it |
-| Spin-off | Yes, five | Four contracts, each stating a value below one |
-| Stock dividend | No | Not stated by any contract asked |
-| Rights offer | No | Not stated by any contract asked |
+| Cash dividend | Yes, 716 | Every dividend-paying contract asked |
+| Split | Yes, 2 | A ten-for-one and a two-for-one, checked against the closes either side |
+| Spin-off | Yes, 7 | Six contracts, each stating a value below one |
+| Stock dividend | Yes, 9 | Four Brazilian and Indian listings, values 1.03 to 1.3 |
+| Rights offer | Yes, 13 | Four closed-end funds that run one as a matter of routine |
 | Future rollover | No | Belongs to a future rather than a share, and the continuous
 contract it would apply to is refused: asked for by that type, the venue answers
 "Unsupported type" |
 
-Twelve contracts were asked, across four countries and both listed shares and
-futures, over windows chosen for containing the rarer kinds. The three unseen
-ones are read from the protocol's own table rather than from an answer, and the
-arithmetic for them is the same arithmetic the three seen ones exercise — a
-spin-off is the only one of the six whose value reads as the reciprocal, and
-that branch is exercised by every spin-off above.
+Thirty-two contracts were asked, across seven countries and both listed shares
+and futures, over windows chosen for containing the rarer kinds. Each kind is
+read against a value the venue stated rather than a made-up one: the spin-off
+is the only one of the six whose value reads as the reciprocal, and a stock
+dividend stating the same number the plain way round is what tells that branch
+from its neighbour — 1.05 scales an earlier price by 0.9524, where a spin-off
+stating 1.05 would scale it by 1.05. A rights offer states values on both sides
+of one and moves the scale by neither.
 
-### A refusal whose reason may have expired
+The rollover has no answer behind it and cannot get one through this request:
+the contract that would carry it is refused as a type. The arithmetic it would
+take is the arithmetic the five seen kinds exercise.
 
-A modify is refused where the resting order carries an attribute the replace was
-once unable to restate — an algo, a condition, a bracket link, an OCA group, a
-hidden or all-or-none instruction, and others. The reason written beside it is
-that the replace states the type and the price and nothing else.
+### What a replace states, and what it still cannot
 
-That is no longer what the replace does. It is rebuilt from the tracked record
-by the same builder that states an order's attributes when it is placed, and
-that builder emits the algo block, the conditions, the trailing offset, the
-bracket link on 6107 and the OCA group on 583. Read against the code alone, the
-refusal blocks a request the venue was never asked about, which is what this
-client does not do.
+A replace is a full statement of the order, not a difference against the
+resting one. It states the order type on tag 40, the prices that type carries,
+and the companions the type needs — restated from the record of the order as it
+was placed, by the one function the submit uses. Two things a session settled:
 
-It is left standing because a code reading does not outrank a venue answer, and
-there is one on the other side: a replace of a trailing stop was observed being
-rejected with the resting order gone, which is the worst outcome either way
-round. That was under the older replace, and whether it still happens is a
-question for a session rather than for a reader.
+**A type with no limit leg states no tag 44.** The replace stated one for every
+type, so a market, on-close, market-to-limit or trailing order was replaced
+with a price of zero and refused: `Invalid value in field # 44`. The tag is
+stated now only where the type's own submit states one.
 
-**The check that settles it.** Place a trailing stop on paper, modify its price,
-and read what the venue answers and whether the original is still working. If it
-is restated, the refusals whose premise is the old replace come out and the
-venue is left to refuse what it will. If the order is lost, the refusal keeps
-its reason and the reason gets the evidence it is missing.
+**A trailing stop restates its trail.** With tag 44 gone the venue read the
+replace as the trailing stop it is and asked for the field that defines it:
+`Message must contain field # 211`. Stating the type's companions from the
+submitted record answers it, and the venue takes the replace:
+
+```
+--- Phase 193: what a replace does to a trailing stop ---
+  the replace was taken and the order is still working
+```
+
+So the refusal in front of a trailing-stop modify is gone, on that answer
+rather than on a reading. It is gone only for a trailing stop replaced **as
+itself**: a conversion into one has no record to restate a trail from, and is
+still refused.
+
+The rest of the refusal stands, and each entry is one session away from the
+same treatment: place the order, replace it, read whether the venue takes it
+and whether the original is still working.
 
 ### Not built
 
@@ -493,11 +504,11 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,780 | No |
+| Rust unit and integration | 1,786 | No |
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (142 phases) | 37 tests | Yes |
+| Paper compatibility suite (143 phases) | 38 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

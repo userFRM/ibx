@@ -64,7 +64,38 @@ fn main() {
 
     let mut heard = Heard::default();
 
-    // The event types first. An event request is not accepted without them.
+    // Events before the event types, which is the ordering nothing requires:
+    // the venue answers an event request that no metadata request preceded.
+    let apple = Contract {
+        symbol: "AAPL".to_string(),
+        sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(),
+        currency: "USD".to_string(),
+        ..Default::default()
+    };
+    if let Ok(resolved) = client.qualify_contract(&apple) {
+        println!("  events asked for first, conId={}", resolved.con_id);
+        let query = ibx::types::CalendarQuery {
+            con_id: Some(resolved.con_id),
+            total_limit: Some(20),
+            ..Default::default()
+        };
+        if let Err(e) = client.req_wsh_event_data(9, query) {
+            println!("  the events could not be asked for: {e}");
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        client.process_msgs(&mut heard);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    println!(
+        "  with no event types asked for: {} answer(s), {} refusal(s)",
+        heard.events.len(),
+        heard.refusals.len(),
+    );
+
+    // Then the event types.
     if let Err(e) = client.req_wsh_meta_data(1) {
         println!("  the event types could not be asked for: {e}");
     }
@@ -74,14 +105,7 @@ fn main() {
         std::thread::sleep(Duration::from_millis(200));
     }
 
-    // Then one contract's events.
-    let apple = Contract {
-        symbol: "AAPL".to_string(),
-        sec_type: "STK".to_string(),
-        exchange: "SMART".to_string(),
-        currency: "USD".to_string(),
-        ..Default::default()
-    };
+    // Then the same events again, now that they have been named.
     match client.qualify_contract(&apple) {
         Ok(resolved) => {
             println!("  asking for events on conId={}", resolved.con_id);

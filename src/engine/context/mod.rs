@@ -53,7 +53,7 @@ impl Clock {
 /// order management. All hot-path data is pre-allocated.
 pub struct Context {
     pub(crate) market: MarketState,
-    positions: [f64; MAX_INSTRUMENTS],
+    positions: Box<[f64]>,
     open_orders: HashMap<OrderId, Order>,
     pub(crate) pending_orders: OrderBuffer,
     pub(crate) account: AccountState,
@@ -92,7 +92,7 @@ impl Context {
     pub fn new() -> Self {
         Self {
             market: MarketState::new(),
-            positions: [0.0f64; MAX_INSTRUMENTS],
+            positions: vec![0.0f64; MAX_INSTRUMENTS].into(),
             open_orders: HashMap::with_capacity(128),
             pending_orders: OrderBuffer::new(),
             modify_versions: HashMap::new(),

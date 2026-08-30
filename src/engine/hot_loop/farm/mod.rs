@@ -173,6 +173,13 @@ pub(crate) struct FarmState {
     unread_types: std::collections::HashSet<String>,
     pub(crate) disconnected: bool,
     pub(crate) tick_buf: Vec<tick_decoder::RawTick>,
+    /// Which instruments a batch of ticks has already published, so one that
+    /// several ticks moved is published once. Kept between batches and cleared
+    /// bit by bit as each is published, so the cost is the batch rather than
+    /// the size of the table.
+    notified: Box<[u64]>,
+    /// The instruments those bits stand for, in the order they were touched.
+    notified_ids: Vec<crate::types::InstrumentId>,
     pub(crate) farm_msg_buf: Vec<Vec<u8>>,
 }
 
@@ -613,6 +620,8 @@ impl FarmState {
             unread_types: std::collections::HashSet::new(),
             disconnected: false,
             tick_buf: Vec::with_capacity(16),
+            notified: vec![0u64; crate::types::MAX_INSTRUMENTS / 64].into(),
+            notified_ids: Vec::with_capacity(16),
             farm_msg_buf: Vec::with_capacity(32),
         }
     }
@@ -812,7 +821,13 @@ impl FarmState {
 
         let mut ticks = std::mem::take(&mut self.tick_buf);
         tick_decoder::decode_ticks_35p_into(body, &mut ticks);
-        let mut notified = [0u64; crate::types::MAX_INSTRUMENTS / 64];
+        // Which instruments this batch touched, and each of them once. The
+        // membership set is kept rather than rebuilt so nothing is zeroed per
+        // batch, and the list beside it is what the publish loop walks — so
+        // the work is the number of instruments in the batch rather than the
+        // size of the table.
+        let mut notified = std::mem::take(&mut self.notified);
+        let mut notified_ids = std::mem::take(&mut self.notified_ids);
 
         // Every entry as decoded, before the apply loop below drops the types it
         // does not map. A field that arrives but is unmapped otherwise leaves no
@@ -991,20 +1006,24 @@ impl FarmState {
             }
 
             if applied {
-                notified[(instrument >> 6) as usize] |= 1u64 << (instrument & 63);
+                let word = &mut notified[(instrument >> 6) as usize];
+                let bit = 1u64 << (instrument & 63);
+                if *word & bit == 0 {
+                    *word |= bit;
+                    notified_ids.push(instrument);
+                }
             }
         }
 
         // Phase 2: Publish complete quotes after all ticks in the batch are applied.
-        for (word_idx, &word) in notified.iter().enumerate() {
-            let mut remaining = word;
-            while remaining != 0 {
-                let instrument = (word_idx as u32) * 64 + remaining.trailing_zeros();
-                remaining &= remaining - 1;
-                shared.market.push_quote(instrument, context.quote(instrument));
-                emit(event_tx, Event::Tick(instrument));
-            }
+        for &instrument in &notified_ids {
+            shared.market.push_quote(instrument, context.quote(instrument));
+            emit(event_tx, Event::Tick(instrument));
+            notified[(instrument >> 6) as usize] &= !(1u64 << (instrument & 63));
         }
+        notified_ids.clear();
+        self.notified = notified;
+        self.notified_ids = notified_ids;
         self.tick_buf = ticks;
     }
 

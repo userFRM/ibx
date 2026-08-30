@@ -123,8 +123,8 @@ impl EClient {
 
     /// Ask what event types the corporate-events calendar carries.
     ///
-    /// Must be asked before events can be requested: an event request cannot
-    /// be built until the event types are known.
+    /// Independent of the events themselves: neither request needs the other,
+    /// and either may be asked first.
     pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), Refusal> {
         self.send(ControlCommand::FetchCalendarMetaData { req_id: wire_req_id(req_id)? })
     }

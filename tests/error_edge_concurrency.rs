@@ -274,14 +274,14 @@ fn fill_dedup_different_exec_ids_both_count() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  EDGE CASES — 256-instrument boundary
+//  EDGE CASES — the instrument table's edge
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn register_255_instruments_succeeds() {
+fn every_slot_in_the_table_can_be_taken() {
     let shared = Arc::new(SharedState::new());
     let mut engine = HotLoop::new(shared.clone(), None, None);
-    for i in 0..256 {
+    for i in 0..ibx::types::MAX_INSTRUMENTS {
         let id = engine.context_mut().register_instrument(i as i64 + 1000);
         assert_eq!(id, i as u32);
     }
@@ -289,10 +289,10 @@ fn register_255_instruments_succeeds() {
 
 #[test]
 #[should_panic(expected = "too many instruments")]
-fn register_257th_instrument_panics() {
+fn one_past_the_table_is_refused() {
     let shared = Arc::new(SharedState::new());
     let mut engine = HotLoop::new(shared.clone(), None, None);
-    for i in 0..257 {
+    for i in 0..ibx::types::MAX_INSTRUMENTS + 1 {
         engine.context_mut().register_instrument(i as i64 + 1000);
     }
 }
