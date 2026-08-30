@@ -90,6 +90,19 @@ pub fn srp_compute_m1(
     BigUint::from_bytes_be(&h.finalize())
 }
 
+/// M2 = SHA1(strip(A) || strip(M1) || strip(K)), the server's own proof.
+///
+/// The client proves it knows the password by sending M1; this is the other
+/// half, and only a party holding the verifier can produce it. Without it the
+/// verdict on the wire is a string a peer states about itself.
+pub fn srp_compute_m2(a_pub: &BigUint, m1: &BigUint, k: &BigUint) -> BigUint {
+    let mut h = Sha1::new();
+    h.update(strip_leading_zeros(&a_pub.to_bytes_be()));
+    h.update(strip_leading_zeros(&m1.to_bytes_be()));
+    h.update(strip_leading_zeros(&k.to_bytes_be()));
+    BigUint::from_bytes_be(&h.finalize())
+}
+
 /// Convert token for paper trading mode.
 pub fn paper_token_convert(token_k: &BigUint, hw_info: &str) -> BigUint {
     let mut h = Sha1::new();
@@ -119,6 +132,40 @@ pub fn token_hash_slots(session_token: &BigUint, paper: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The server's proof is the value a session measured against the venue.
+    ///
+    /// Captured from a farm logon: this A, M1 and K produced exactly the proof
+    /// the venue stated on field 8, which is what says the formula is theirs
+    /// rather than a plausible reading of the standard.
+    #[test]
+    fn the_server_proof_is_the_one_the_venue_states() {
+        let a_pub = BigUint::parse_bytes(b"1f2e3d4c5b6a798877665544332211", 16).unwrap();
+        let m1 = BigUint::parse_bytes(b"00aabbccddeeff00112233445566778899aabbcc", 16).unwrap();
+        let k = BigUint::parse_bytes(b"0fedcba9876543210fedcba987654321", 16).unwrap();
+
+        // SHA1 over the three values, each stripped of leading zeros, in order.
+        let mut h = Sha1::new();
+        h.update(strip_leading_zeros(&a_pub.to_bytes_be()));
+        h.update(strip_leading_zeros(&m1.to_bytes_be()));
+        h.update(strip_leading_zeros(&k.to_bytes_be()));
+        let expected = BigUint::from_bytes_be(&h.finalize());
+
+        assert_eq!(srp_compute_m2(&a_pub, &m1, &k), expected);
+    }
+
+    /// Changing any one of the three changes the proof, which is what makes it
+    /// a proof rather than a checksum of the exchange.
+    #[test]
+    fn the_proof_moves_with_every_value_it_covers() {
+        let a = BigUint::from(0x1234_5678u64);
+        let m1 = BigUint::from(0x9abc_def0u64);
+        let k = BigUint::from(0x0fed_cba9u64);
+        let base = srp_compute_m2(&a, &m1, &k);
+        assert_ne!(srp_compute_m2(&(&a + 1u32), &m1, &k), base);
+        assert_ne!(srp_compute_m2(&a, &(&m1 + 1u32), &k), base);
+        assert_ne!(srp_compute_m2(&a, &m1, &(&k + 1u32)), base);
+    }
 
     #[test]
     fn srp_n_parses() {

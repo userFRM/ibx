@@ -306,6 +306,51 @@ pub fn recv_secure<R: Read>(
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// The field the server states its own proof on.
+const SRP_SERVER_PROOF_FIELD: usize = 8;
+
+/// Check the server's proof before its verdict is believed.
+///
+/// The verdict is a word the peer states about itself; the proof is
+/// `SHA1(A || M1 || K)`, which only a party holding the verifier can produce.
+/// Read without it, a logon succeeds against whoever answered the connect —
+/// which on a farm connection is the whole of the peer authentication, there
+/// being no transport underneath that has already done it.
+fn check_server_proof(
+    fields: &[String],
+    a_pub: &BigUint,
+    m1: &BigUint,
+    k: &BigUint,
+    what: &str,
+) -> io::Result<()> {
+    let stated = fields
+        .get(SRP_SERVER_PROOF_FIELD)
+        .map(String::as_str)
+        .filter(|proof| !proof.is_empty())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{what}: the venue stated no proof of its own, so its verdict is unchecked"),
+            )
+        })?;
+    let ours = format!("{:040x}", srp::srp_compute_m2(a_pub, m1, k));
+    // Compared as the fixed-width hex both sides write, so a value that is
+    // merely shorter cannot pass by being a prefix. An ordinary comparison:
+    // the proof is public, the venue sends it in the clear, and it is derived
+    // from a key that is new every handshake — so there is no repeated secret
+    // for a timing difference to leak.
+    if ours != stated {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{what}: the venue's proof does not match the session key, so the peer \
+                 does not hold this account's verifier",
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Read on until the venue states an SRP verdict, and answer with its fields.
 ///
 /// A message carrying an id this exchange does not use is passed over rather
@@ -557,6 +602,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     // Bounded so a venue that never states a result ends the attempt rather
     // than reading forever.
     let fields6 = srp_result_fields(stream)?;
+    check_server_proof(&fields6, &a_pub, &m1, &k, "SRP")?;
 
     let result = fields6
         .get(9)
@@ -1609,6 +1655,7 @@ pub fn do_srp_farm(
         }
         log::info!("received unknown msg id {state} while awaiting the farm SRP result");
     };
+    check_server_proof(&fields6, &a_pub, &m1, &k, "farm SRP")?;
 
     let result = fields6
         .get(9)

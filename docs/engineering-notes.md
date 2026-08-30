@@ -164,6 +164,32 @@ The rollover has no answer behind it and cannot get one through this request:
 the contract that would carry it is refused as a type. The arithmetic it would
 take is the arithmetic the five seen kinds exercise.
 
+### The peer on a farm connection is authenticated
+
+A farm connection carries no transport underneath it — the socket is plain and
+the key exchange that follows reads only the two public values, so nothing in
+it establishes who answered the connect. The logon that runs over it ends with
+a word, `PASSED`, which is a claim the peer makes about itself.
+
+Beside that word the venue states a proof, and it had never been read. Field 8
+of the result is twenty bytes: `SHA1(A || M1 || K)`, each value stripped of its
+leading zeros, which is the other half of the exchange the client's own M1
+opens. Only a party holding this account's verifier can produce it, because K
+is derived from the password.
+
+Measured rather than assumed: a session computed it and compared against what
+the venue sent on the same handshake.
+
+```
+field[8]      b2d6ed0bc2855a34c77482507ecb8254d89e8ebe
+computed M2   b2d6ed0bc2855a34c77482507ecb8254d89e8ebe
+```
+
+It is checked now before the verdict is believed, on the session's own logon
+and on every farm's, and a logon whose proof does not match is refused rather
+than completed. A result stating no proof is refused too: the check is not one
+a peer can skip by leaving the field out.
+
 ### What a replace does to each order this client refuses one for
 
 A modify is refused in front of an order defined by more than its type and
@@ -578,7 +604,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,786 | No |
+| Rust unit and integration | 1,788 | No |
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |

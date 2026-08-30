@@ -148,10 +148,13 @@ impl SecureChannel {
     /// detectable downstream.
     ///
     /// The range check on the public value below is the only check made here.
-    /// The farm connections have no outer TLS, so on those this is the whole
-    /// of the peer authentication. The primary connection is carried inside
-    /// TLS, which is verified against the system trust store, so there the
-    /// peer is authenticated before any of this runs.
+    /// The primary connection is carried inside TLS, verified against the
+    /// system trust store, so there the peer is authenticated before any of
+    /// this runs. A farm connection has no such transport, and what
+    /// authenticates its peer is the logon that follows: the venue states a
+    /// proof of the session key it could only compute holding this account's
+    /// verifier, and a logon whose proof does not match is refused. So a
+    /// substituted peer completes this exchange and fails the next one.
     ///
     /// ## What the hello carries
     ///
