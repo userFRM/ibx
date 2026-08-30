@@ -27,7 +27,7 @@ target
 # Test data captures (ground truth from official API)
 test_data/
 
-# Claude Code
+# Local working notes and editor state
 .claude/
 DEVLOG.md
 
