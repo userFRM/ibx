@@ -208,10 +208,17 @@ about who answered — so a peer that asks for no credentials was a peer this
 client went on to read as the venue. An acknowledgement with no authentication
 behind it is refused.
 
-The one path left is the reconnect. A connection that offers a cached token
-runs a challenge the client answers and the peer then rates `PASSED`, and there
-is no value in that exchange only the venue could produce. It is not weaker
-than it was, and it is weaker than the logon beside it.
+**A cached token proves the session, not the peer.** A farm may offer one: it
+sends a challenge, the client answers it from the token, and the peer rates the
+answer. Nothing in that exchange is a value only the venue could produce — the
+challenge is the peer's to choose and the verdict is a word it states about
+itself.
+
+Measured against this venue, a farm answers `UNKNOWN` to the token and
+authenticates in full every time, including on a reconnect: five farm logons in
+one recovery run, five full exchanges. So a bare acceptance is not a shape this
+venue produces, and it is not one a connection is treated as authenticated by.
+The full exchange that follows is, because the venue proves itself inside it.
 
 ### What a replace does to each order this client refuses one for
 

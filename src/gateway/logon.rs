@@ -826,7 +826,6 @@ pub fn farm_logon_exchange(
                 //             must drop this socket and retry from scratch with a
                 //             fresh soft-token (NOT SRP — captured behavior).
                 if decrypted.windows(5).any(|w| w == b"35=S\x01") {
-                    authenticated = true;
                     // Pass the farm read buffer as the auth carry buffer: the
                     // auth exchange reads on the same socket, and a high-latency
                     // gateway can coalesce its final response with the farm logon
@@ -834,6 +833,14 @@ pub fn farm_logon_exchange(
                     // so the loop below re-frames them instead of stalling on a
                     // read for bytes already consumed.
                     match do_soft_token(stream, session_token, &mut buf)? {
+                        // The exchange proves this session holds the token and
+                        // proves nothing about the peer: the challenge is the
+                        // peer's to choose and the verdict is a word it states
+                        // about itself. Measured against this venue, a farm
+                        // answers UNKNOWN and authenticates in full every time,
+                        // including on a reconnect — so a bare acceptance here
+                        // is not a shape the venue produces, and a connection
+                        // is not treated as authenticated by it.
                         session::SoftTokenOutcome::Passed => {}
                         session::SoftTokenOutcome::Unknown => {
                             // Expected, and handled: the venue holds no token
@@ -843,6 +850,8 @@ pub fn farm_logon_exchange(
                             log::info!("Soft token not held by the farm — authenticating in full");
                             stream.set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
                             session::do_srp_farm(stream, username, password, &mut buf)?;
+                            // The venue proved itself inside that exchange.
+                            authenticated = true;
                         }
                     }
                 }
