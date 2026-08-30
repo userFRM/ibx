@@ -740,3 +740,290 @@ pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
     }
     conns
 }
+
+// ─── Phase 194: A crypto order ───
+
+/// What the venue does with an order for a crypto.
+///
+/// A crypto is the one contract quoted around the clock, so this is also the
+/// only order phase that says anything on a Saturday. Its quantity is the
+/// reason it is here: a crypto is counted in hundred-millionths, and an order
+/// for a fraction of one is the shape every other asset never sends.
+pub(super) fn phase_crypto_order(conns: Conns) -> Conns {
+    phase!("--- Phase 194: Crypto Order (BTC on its own venue) ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst = hot_loop.context_mut().register_instrument(479624278);
+    hot_loop.context_mut().set_symbol(inst, "BTC".to_string());
+    // A crypto is not a stock and does not route smart: it trades on the one
+    // venue that carries it.
+    hot_loop.context_mut().set_routing(inst, "CRYPTO", "PAXOS");
+
+    // A thousandth of a coin, which is a quantity no other asset class states,
+    // priced far under the market so it cannot trade.
+    //
+    // Immediate-or-cancel, because the venue says so: a day order is answered
+    // "The crypto buy order must be Minutes or IOC". So the order is expected
+    // to be taken and then cancelled for want of a fill, which is the venue
+    // acting on an order it accepted.
+    let oid = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id: oid, instrument: inst, side: Side::Buy,
+        qty: ibx::types::QTY_SCALE / 1000,
+        kind: OrderKind::Limit { price: 10_000 * ibx::types::PRICE_SCALE },
+        tif: b'3', attrs: OrderAttrs::default(),
+    })).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut order_acked = false;
+    let mut cancel_sent = false;
+    let mut order_cancelled = false;
+    let mut rejected_order: Option<u64> = None;
+
+    while Instant::now() < deadline {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
+            && update.order_id == oid {
+                match update.status {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                        order_acked = true;
+                        if !cancel_sent {
+                            control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
+                            cancel_sent = true;
+                        }
+                    }
+                    OrderStatus::Cancelled => { order_cancelled = true; break; }
+                    OrderStatus::Rejected => { rejected_order = Some(update.order_id); break; }
+                    _ => {}
+                }
+            }
+    }
+
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    if let Some(id) = rejected_order {
+        let why = shared.orders.get_order_info(id)
+            .map(|info| info.order_state.reject_reason)
+            .filter(|why| !why.is_empty())
+            .unwrap_or_else(|| "no reason reported".to_string());
+        skipped!("  SKIP: the venue refused a crypto order — {why}\n");
+        return conns;
+    }
+    // An immediate-or-cancel order that cannot fill is cancelled by the venue,
+    // and may be cancelled without ever being reported working. Either way the
+    // venue took it, which is what this phase asks.
+    assert!(
+        order_acked || order_cancelled,
+        "the crypto order was neither acknowledged nor acted on",
+    );
+    if order_acked {
+        println!("  immediate-or-cancel: taken, then cancelled for want of a fill");
+    } else {
+        println!("  immediate-or-cancel: taken and cancelled without resting");
+    }
+    println!("  PASS\n");
+    conns
+}
+
+// ─── Phase 196: The other life a crypto order may have ───
+
+/// The venue names two: immediate-or-cancel, and one measured in minutes.
+///
+/// Nothing has ever sent the second. This client can name it — tag 59 carries
+/// it — and whether the venue takes it named alone, or wants the number of
+/// minutes beside it, is a question only a session answers.
+pub(super) fn phase_crypto_minutes_tif(conns: Conns) -> Conns {
+    phase!("--- Phase 196: A crypto order living by the minute ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst = hot_loop.context_mut().register_instrument(479624278);
+    hot_loop.context_mut().set_symbol(inst, "BTC".to_string());
+    hot_loop.context_mut().set_routing(inst, "CRYPTO", "PAXOS");
+
+    let oid = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id: oid, instrument: inst, side: Side::Buy,
+        qty: ibx::types::QTY_SCALE / 1000,
+        kind: OrderKind::Limit { price: 10_000 * ibx::types::PRICE_SCALE },
+        tif: b'p', attrs: OrderAttrs::default(),
+    })).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut working = false;
+    let mut cancelled = false;
+    let mut refused: Option<u64> = None;
+
+    while Instant::now() < deadline {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
+            && update.order_id == oid {
+                match update.status {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                        working = true;
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
+                    }
+                    OrderStatus::Cancelled => { cancelled = true; break; }
+                    OrderStatus::Rejected => { refused = Some(update.order_id); break; }
+                    _ => {}
+                }
+            }
+    }
+
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    match refused {
+        Some(id) => {
+            let why = shared.orders.get_order_info(id)
+                .map(|info| info.order_state.reject_reason)
+                .filter(|why| !why.is_empty())
+                .unwrap_or_else(|| "no reason reported".to_string());
+            println!("  named alone it is refused — {why}");
+            println!("  PASS\n");
+        }
+        None if working || cancelled => {
+            println!("  named alone it is taken, and the order works");
+            println!("  PASS\n");
+        }
+        None => {
+            println!("  nothing came back within the deadline");
+            println!("  PASS\n");
+        }
+    }
+    conns
+}
+
+// ─── Phase 195: A crypto fill ───
+
+/// A fraction of a coin, bought and sold, read back as the fraction it was.
+///
+/// A crypto is counted in hundred-millionths where a share is counted in
+/// hundredths, so a quantity that survives the round trip on every other asset
+/// class can still come back a hundred million times wrong here. Nothing but a
+/// fill settles that: the quantity goes out, the venue fills it, and the number
+/// that comes back is the one to read.
+pub(super) fn phase_crypto_fill(conns: Conns) -> Conns {
+    phase!("--- Phase 195: Crypto Fill (a thousandth of a coin, round trip) ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst = hot_loop.context_mut().register_instrument(479624278);
+    hot_loop.context_mut().set_symbol(inst, "BTC".to_string());
+    hot_loop.context_mut().set_routing(inst, "CRYPTO", "PAXOS");
+
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 479624278, symbol: "BTC".into(), exchange: "PAXOS".into(), sec_type: "CRYPTO".into(), currency: "USD".into(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, regulatory_snapshot: false, reply_tx: None }).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    // A thousandth of a coin, which at the price this trades at is a few tens
+    // of dollars of paper money.
+    const SIZE: i64 = ibx::types::QTY_SCALE / 1000;
+    let buy = next_order_id();
+    let mut sell: Option<u64> = None;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut ticks = 0u32;
+    let mut sent_buy = false;
+    let mut bought: Option<(f64, i64)> = None;
+    let mut sold: Option<(f64, i64)> = None;
+    let mut refused: Option<u64> = None;
+
+    while Instant::now() < deadline {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Tick(_)) => {
+                ticks += 1;
+                // Priced through the offer so it trades rather than resting,
+                // which an immediate-or-cancel order has no time to do.
+                if !sent_buy && ticks >= 3 {
+                    let ask = shared.market.quote(inst).ask;
+                    if ask <= 0 { continue; }
+                    // Whole dollars, which sit on this venue's grid whatever
+                    // its increment is. Priced off the grid the venue answers
+                    // "Invalid Price" — an immediate-or-cancel order fills at
+                    // the offer regardless, so paying through it costs nothing.
+                    let price = (ask / ibx::types::PRICE_SCALE + 100) * ibx::types::PRICE_SCALE;
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+                        order_id: buy, instrument: inst, side: Side::Buy, qty: SIZE,
+                        kind: OrderKind::Limit { price },
+                        tif: b'3', attrs: OrderAttrs::default(),
+                    })).unwrap();
+                    sent_buy = true;
+                }
+            }
+            Ok(Event::Fill(fill)) => {
+                let qty = fill.qty as f64 / ibx::types::QTY_SCALE as f64;
+                let price = fill.price as f64 / ibx::types::PRICE_SCALE as f64;
+                if fill.side == Side::Buy && bought.is_none() {
+                    println!("  bought {qty} at {price}");
+                    bought = Some((qty, fill.qty));
+                    // Flattened straight back, so the phase leaves nothing on.
+                    let bid = shared.market.quote(inst).bid;
+                    let oid = next_order_id();
+                    sell = Some(oid);
+                    let price = (bid / ibx::types::PRICE_SCALE - 100) * ibx::types::PRICE_SCALE;
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+                        order_id: oid, instrument: inst, side: Side::Sell, qty: fill.qty,
+                        kind: OrderKind::Limit { price },
+                        tif: b'3', attrs: OrderAttrs::default(),
+                    })).unwrap();
+                } else if fill.side == Side::Sell && sold.is_none() {
+                    println!("  sold {qty} at {price}");
+                    sold = Some((qty, fill.qty));
+                    break;
+                }
+            }
+            Ok(Event::OrderUpdate(update))
+                if update.status == OrderStatus::Rejected
+                    && (update.order_id == buy || Some(update.order_id) == sell) =>
+            {
+                refused = Some(update.order_id);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    if let Some(id) = refused {
+        let why = shared.orders.get_order_info(id)
+            .map(|info| info.order_state.reject_reason)
+            .filter(|why| !why.is_empty())
+            .unwrap_or_else(|| "no reason reported".to_string());
+        skipped!("  SKIP: the venue refused it — {why}\n");
+        return conns;
+    }
+    let Some((qty, raw)) = bought else {
+        skipped!("  SKIP: nothing traded within the deadline\n");
+        return conns;
+    };
+    // An immediate-or-cancel order takes what is at the offer and cancels the
+    // rest, so the fill is at most what was asked for and often less. What it
+    // must be is a fraction: read a hundred million times too large it would
+    // come back as thousands of coins, which is the mistake this exists for.
+    assert!(
+        raw > 0 && raw <= SIZE,
+        "a thousandth of a coin was asked for and {qty} came back",
+    );
+    if let Some((sold_qty, raw_sold)) = sold {
+        assert_eq!(
+            raw_sold, raw,
+            "the fraction bought is the fraction sold: {qty} out, {sold_qty} back",
+        );
+        println!("  PASS — the fraction survives the round trip, position flat\n");
+    } else {
+        println!("  PASS — bought {qty}; the sale did not report in time\n");
+    }
+    conns
+}

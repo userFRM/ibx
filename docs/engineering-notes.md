@@ -164,6 +164,150 @@ The rollover has no answer behind it and cannot get one through this request:
 the contract that would carry it is refused as a type. The arithmetic it would
 take is the arithmetic the five seen kinds exercise.
 
+### The peer on a farm connection is authenticated
+
+A farm connection carries no transport underneath it — the socket is plain and
+the key exchange that follows reads only the two public values, so nothing in
+it establishes who answered the connect. The logon that runs over it ends with
+a word, `PASSED`, which is a claim the peer makes about itself.
+
+Beside that word the venue states a proof, and it had never been read. Field 8
+of the result is twenty bytes: `SHA1(A || M1 || K)`, each value stripped of its
+leading zeros, which is the other half of the exchange the client's own M1
+opens. Only a party holding this account's verifier can produce it, because K
+is derived from the password.
+
+Measured rather than assumed: a session computed it and compared against what
+the venue sent on the same handshake.
+
+```
+field[8]      b2d6ed0bc2855a34c77482507ecb8254d89e8ebe
+computed M2   b2d6ed0bc2855a34c77482507ecb8254d89e8ebe
+```
+
+It is checked now before the verdict is believed, on the session's own logon
+and on every farm's, and a logon whose proof does not match is refused rather
+than completed. A result stating no proof is refused too: the check is not one
+a peer can skip by leaving the field out.
+
+Two things had to hold for that check to mean anything.
+
+**The group is the venue's, not the peer's.** The modulus and generator are
+named by whoever answered, before it has proved anything, and every value after
+that is arithmetic in the group it named. Name a small modulus and the shared
+secret collapses to something anybody can compute, so the proof becomes one a
+peer without the verifier can produce. This venue states a 512-bit modulus with
+a generator of two; that group is what a logon proceeds on, and any other stops
+it — including none at all, since a peer that states no group leaves the client
+to pick one, which is the same choice made by omission.
+
+**A logon that authenticated nothing is not a logon.** A farm may ask the
+session to authenticate, or acknowledge the logon without asking. The second
+was accepted, and the key exchange that opened the socket establishes nothing
+about who answered — so a peer that asks for no credentials was a peer this
+client went on to read as the venue. An acknowledgement with no authentication
+behind it is refused.
+
+**A cached token proves the session, not the peer.** A farm may offer one: it
+sends a challenge, the client answers it from the token, and the peer rates the
+answer. Nothing in that exchange is a value only the venue could produce — the
+challenge is the peer's to choose and the verdict is a word it states about
+itself.
+
+Measured against this venue, a farm answers `UNKNOWN` to the token and
+authenticates in full every time, including on a reconnect: five farm logons in
+one recovery run, five full exchanges. So a bare acceptance is not a shape this
+venue produces, and it is not one a connection is treated as authenticated by.
+The full exchange that follows is, because the venue proves itself inside it.
+
+**What the proof does not cover.** The logon runs beside the channel rather
+than inside it: the exchange is plain FIX on the socket, and the keys that
+protect everything afterwards come from the key agreement that opened it. The
+proof therefore says the party answering the logon holds the account's
+verifier; it does not say that party is the one holding the channel keys.
+
+A peer that terminates the key agreement and relays the logon to the venue in
+real time collects a proof it did not compute, and the check passes. Closing
+that needs the venue to state something over both the logon and the channel,
+and nothing on this wire does. So the check moves the bar from any peer that
+answers the connect to one that can also reach the venue while the logon is in
+flight, and no further. Stated here rather than implied by its absence: a
+binding this client invented would be one the venue does not read.
+
+### What a replace does to each order this client refuses one for
+
+A modify is refused in front of an order defined by more than its type and
+price, on the reading that the replace cannot restate what defines it and that
+sending one would destroy the order. A session put that to the venue, one order
+at a time: place it, replace it, read whether the venue takes the replace and
+whether the order is still working afterwards.
+
+| Order | What the venue did |
+| --- | --- |
+| Hidden | The replace is taken, the order still works |
+| All-or-none | The replace is taken, the order still works |
+| Discretionary | The replace is taken, the order still works |
+| Sweep to fill | The replace is taken, the order still works |
+| In an OCA group | The replace is taken, the order still works |
+| With a good-till date | The replace is taken, the order still works |
+| Trailing stop limit | The replace is taken, the order still works |
+| Pegged to midpoint | The replace is taken, the order still works |
+| Limit if touched | The replace is taken, the order still works |
+| An iceberg | The replace is refused: `Display size should be a multiple of lot size` |
+| With a minimum quantity | Not placed: `Partial AON orders not supported for this combination of exchange and security type` |
+| Relative | Never reported working, so no replace was sent |
+| Midpoint | Never reported working, so no replace was sent |
+| Snap to midpoint | Never reported working, so no replace was sent |
+
+Nine of the fourteen are answered, and answered the same way: the venue takes
+the replace and the order goes on working. The reason written beside those
+refusals — that a replace would destroy the order — is not what this venue
+does.
+
+The iceberg's refusal is about the quantity a replace states rather than about
+the order it replaces: a display size stays a multiple of the lot size, and a
+replace that moves the quantity off that grid is refused for that. The minimum
+quantity is refused as an order, not as a replace, on this venue and security
+type.
+
+The last three were placed and never reported working, which a closed market
+explains and does not establish. They are the three left to ask in an open one.
+
+### What a crypto order needs, and what it carries
+
+A crypto is the one contract quoted around the clock, and the only one an order
+phase can say anything about on a weekend. Three things a session settled about
+it, none of which a share requires.
+
+**A day order is refused by name.** The venue answers one:
+
+```
+The crypto buy order must be Minutes or IOC
+```
+
+Immediate-or-cancel is taken. So is the life measured in minutes, and named
+alone: the venue asks for no number beside it, which is the question that had
+never been put to it.
+
+**A price off the tick grid is refused as a price**, `Invalid Price`, rather
+than rounded. This client sends prices as the caller gave them, so a caller
+pricing a crypto states one the venue's grid carries.
+
+**A quantity is a fraction and stays one.** A crypto is counted in
+hundred-millionths where a share is counted in hundredths, so a quantity that
+survives every other asset class can still come back a hundred million times
+wrong here. A thousandth of a coin was bought and sold back:
+
+```
+bought 0.001 at 78807.75
+sold 0.001 at 78807.5
+```
+
+An immediate-or-cancel order takes what is at the offer and cancels the rest,
+so the fill is at most what was asked for — one run filled 0.00018171 of the
+thousandth asked for, which is the venue sizing the fill rather than anything
+here rounding.
+
 ### What a replace states, and what it still cannot
 
 A replace is a full statement of the order, not a difference against the
@@ -504,11 +648,11 @@ Nothing skips for contract data or account state. The venue answers for a contra
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,786 | No |
+| Rust unit and integration | 1,788 | No |
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (143 phases) | 38 tests | Yes |
+| Paper compatibility suite (147 phases) | 40 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

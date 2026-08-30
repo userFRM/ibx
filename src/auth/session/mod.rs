@@ -306,6 +306,59 @@ pub fn recv_secure<R: Read>(
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// The field the server states its own proof on.
+const SRP_SERVER_PROOF_FIELD: usize = 8;
+
+/// Check the server's proof before its verdict is believed.
+///
+/// The verdict is a word the peer states about itself; the proof is
+/// `SHA1(A || M1 || K)`, which only a party holding the verifier can produce.
+/// Read without it, a logon succeeds against whoever answered the connect —
+/// which on a farm connection is the whole of the peer authentication, there
+/// being no transport underneath that has already done it.
+fn check_server_proof(
+    fields: &[String],
+    a_pub: &BigUint,
+    m1: &BigUint,
+    k: &BigUint,
+    what: &str,
+) -> io::Result<()> {
+    let stated = fields
+        .get(SRP_SERVER_PROOF_FIELD)
+        .map(String::as_str)
+        .filter(|proof| !proof.is_empty())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{what}: the venue stated no proof of its own, so its verdict is unchecked"),
+            )
+        })?;
+    // Compared as numbers rather than as text. This client writes its own
+    // proof as unpadded hex and the venue writes back the same way, so one in
+    // every two hundred and fifty-six proofs is a digit shorter than the rest
+    // — and a comparison of the strings would refuse those logons.
+    //
+    // An ordinary comparison: the proof is public, the venue sends it in the
+    // clear, and it is derived from a key that is new every handshake, so
+    // there is no repeated secret for a timing difference to leak.
+    let stated_int = BigUint::parse_bytes(stated.as_bytes(), 16).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{what}: the venue's proof is not a number"),
+        )
+    })?;
+    if srp::srp_compute_m2(a_pub, m1, k) != stated_int {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{what}: the venue's proof does not match the session key, so the peer \
+                 does not hold this account's verifier",
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Read on until the venue states an SRP verdict, and answer with its fields.
 ///
 /// A message carrying an id this exchange does not use is passed over rather
@@ -411,18 +464,15 @@ fn extract_srp_data(fields: &[String], username: &str) -> Vec<String> {
         .collect()
 }
 
-/// The group a peer states, where it states one this arithmetic can use.
+/// The group a peer states, where it states the one this venue uses.
 ///
-/// A modulus of zero makes `modpow` panic and a modulus of one makes every
-/// power zero; a generator outside `2..n` is not a generator. The defaults are
-/// what this client would have used anyway, so an unusable pair falls back to
-/// them rather than taking the login down or continuing on a group that proves
-/// nothing.
-fn stated_group(
-    stated: &[String],
-    default_n: BigUint,
-    default_g: BigUint,
-) -> (BigUint, BigUint) {
+/// A peer names the modulus and generator before it has proved anything, and
+/// every value after that is arithmetic in the group it named. A small modulus
+/// collapses the shared secret to something anybody can compute, and the proof
+/// that would catch a substituted peer is then one it can produce itself — so
+/// the group is checked before it is used, and a logon on any other stops
+/// here.
+fn stated_group(stated: &[String]) -> io::Result<(BigUint, BigUint)> {
     let parsed = stated.first().zip(stated.get(1)).and_then(|(n, g)| {
         Some((
             BigUint::parse_bytes(n.as_bytes(), 16)?,
@@ -430,12 +480,24 @@ fn stated_group(
         ))
     });
     match parsed {
-        Some((n, g)) if n > BigUint::from(1u32) && g > BigUint::from(1u32) && g < n => (n, g),
-        Some(_) => {
-            log::warn!("the venue stated an SRP group this client cannot use; keeping its own");
-            (default_n, default_g)
+        Some((n, g)) if n == srp::srp_venue_n() && g == BigUint::from(srp::SRP_VENUE_G) => {
+            Ok((n, g))
         }
-        None => (default_n, default_g),
+        Some((n, _)) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "the peer stated an SRP group this venue does not use ({} bits), so the \
+                 logon would be checked on ground the peer chose",
+                n.bits(),
+            ),
+        )),
+        // The venue states its group on every logon. A peer that states none
+        // leaves the client to pick one, which is the same choice by omission:
+        // whatever it fell back to would not be the group that was checked.
+        None => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the peer stated no SRP group, so there is none to check it on",
+        )),
     }
 }
 
@@ -443,8 +505,6 @@ fn stated_group(
 ///
 /// Returns the session key K as BigUint.
 pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -> io::Result<BigUint> {
-    let n = srp::srp_n();
-    let g = BigUint::from(srp::SRP_G);
 
     // State 1: Send AUTH_QUERY
     let msg1 = xyz::xyz_build_srp_v20(1, &[]);
@@ -472,7 +532,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
 
     let data_fields = extract_srp_data(&fields2, username);
     // The venue may state its own group; otherwise this client's applies.
-    let (n, g) = stated_group(&data_fields, n, g);
+    let (n, g) = stated_group(&data_fields)?;
 
     // Generate client keys: a (private), A = g^a mod N
     let mut a_bytes = [0u8; 32];
@@ -557,6 +617,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     // Bounded so a venue that never states a result ends the attempt rather
     // than reading forever.
     let fields6 = srp_result_fields(stream)?;
+    check_server_proof(&fields6, &a_pub, &m1, &k, "SRP")?;
 
     let result = fields6
         .get(9)
@@ -1501,8 +1562,6 @@ pub fn do_srp_farm(
     password: &str,
     carry: &mut Vec<u8>,
 ) -> io::Result<()> {
-    let n = srp::srp_n();
-    let g = BigUint::from(srp::SRP_G);
 
     // State 1: Send AUTH_QUERY (FIX-framed)
     let msg1 = xyz::xyz_build_srp_v20(1, &[]);
@@ -1523,7 +1582,7 @@ pub fn do_srp_farm(
 
     let data_fields = extract_srp_data(&fields2, username);
     // The venue may state its own group; otherwise this client's applies.
-    let (n, g) = stated_group(&data_fields, n, g);
+    let (n, g) = stated_group(&data_fields)?;
 
     // Generate client keys with 32-byte private key
     let mut a_bytes = [0u8; 32];
@@ -1609,6 +1668,7 @@ pub fn do_srp_farm(
         }
         log::info!("received unknown msg id {state} while awaiting the farm SRP result");
     };
+    check_server_proof(&fields6, &a_pub, &m1, &k, "farm SRP")?;
 
     let result = fields6
         .get(9)
