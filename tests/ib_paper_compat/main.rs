@@ -2489,6 +2489,29 @@ fn what_kinds_of_action_the_venue_states_live() {
         ("LYG", "20220101", "20241231"),
         ("PBR", "20220101", "20241231"),
         ("NOK", "20220101", "20241231"),
+        // Issuers that pay in shares rather than cash, mostly Brazilian and
+        // Asian listings, plus the closed-end funds that run a rights offer
+        // as a matter of routine.
+        ("SID", "20210101", "20251231"),
+        ("GGB", "20210101", "20251231"),
+        ("BRFS", "20210101", "20251231"),
+        ("CIG", "20210101", "20251231"),
+        ("ELP", "20210101", "20251231"),
+        ("ABEV", "20210101", "20251231"),
+        ("ITUB", "20210101", "20251231"),
+        ("BBD", "20210101", "20251231"),
+        ("BSBR", "20210101", "20251231"),
+        ("TEVA", "20210101", "20251231"),
+        ("SAN", "20210101", "20251231"),
+        ("ING", "20210101", "20251231"),
+        ("LFC", "20210101", "20251231"),
+        ("HDB", "20210101", "20251231"),
+        ("IBN", "20210101", "20251231"),
+        ("CLM", "20210101", "20251231"),
+        ("CRF", "20210101", "20251231"),
+        ("OPP", "20210101", "20251231"),
+        ("RIV", "20210101", "20251231"),
+        ("GOF", "20210101", "20251231"),
     ];
 
     for (symbol, from, to) in candidates {
@@ -2532,6 +2555,37 @@ fn what_kinds_of_action_the_venue_states_live() {
                             "a spin-off stating {v} must scale an earlier price by {v}, not {before}",
                         );
                         println!("      ^ the reciprocal branch: an earlier price scales by {v}");
+                    }
+                    // A stock dividend states its factor the plain way round,
+                    // and prices are divided by it — so a 5% dividend scales an
+                    // earlier price by 1/1.05. The spin-off above is the
+                    // reciprocal of exactly this, which is what tells the two
+                    // branches apart on real numbers rather than made-up ones.
+                    if a.kind == Some(ibx::AdjustmentKind::StockDividend)
+                        && let Ok(v) = a.value.parse::<f64>()
+                        && v > 0.0
+                    {
+                        let before = ibx::scale_before("19000101", std::slice::from_ref(a))
+                            .expect("the venue stated this factor");
+                        assert!(
+                            (before - 1.0 / v).abs() < 1e-9,
+                            "a stock dividend stating {v} must scale an earlier price by \
+                             {}, not {before}",
+                            1.0 / v,
+                        );
+                        println!("      ^ the plain branch: an earlier price scales by {}", 1.0 / v);
+                    }
+                    // A rights offer is not one of the three kinds that move a
+                    // bar, whatever it states. A session states values on both
+                    // sides of one, so this is the branch being read rather
+                    // than the number.
+                    if a.kind == Some(ibx::AdjustmentKind::RightsOffer) {
+                        let before = ibx::scale_before("19000101", std::slice::from_ref(a))
+                            .expect("a rights offer is read, not refused");
+                        assert!(
+                            (before - 1.0).abs() < 1e-9,
+                            "a rights offer must leave the scale alone, not move it by {before}",
+                        );
                     }
                 }
             }
@@ -2580,10 +2634,17 @@ fn what_kinds_of_action_the_venue_states_live() {
     for (code, n) in &seen {
         println!("    {code}: {n}");
     }
-    for unseen in ["SD", "SO", "RO", "FR"] {
+    for unseen in ["SD", "SS", "SO", "RO", "FR"] {
         if !seen.contains_key(unseen) {
             println!("    {unseen}: none stated by any contract asked");
         }
     }
+    // A rollover belongs to a continuous future, and the contract this client
+    // has to name to ask about one is refused as a type: whatever is above,
+    // that kind has no answer behind it.
+    assert!(
+        !seen.contains_key("FR"),
+        "a rollover was stated after all — the note saying otherwise is stale",
+    );
     println!("\n=== done ===");
 }

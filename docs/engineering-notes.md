@@ -136,27 +136,33 @@ vanish.
 
 ### Which corporate actions this venue has actually stated
 
-The protocol names six kinds and this client reads all six. Three of them have
-been seen; three have not, and the difference is worth writing down so nobody
-mistakes "handled" for "observed".
+The protocol names six kinds and this client reads all six. Five have been
+seen; one has not, and the difference is worth writing down so nobody mistakes
+"handled" for "observed".
 
 | Kind | Seen | Where |
 | --- | --- | --- |
-| Cash dividend | Yes, over a hundred | Every dividend-paying contract asked |
-| Split | Yes | A ten-for-one, checked against the closes either side of it |
-| Spin-off | Yes, five | Four contracts, each stating a value below one |
-| Stock dividend | No | Not stated by any contract asked |
-| Rights offer | No | Not stated by any contract asked |
+| Cash dividend | Yes, 716 | Every dividend-paying contract asked |
+| Split | Yes, 2 | A ten-for-one and a two-for-one, checked against the closes either side |
+| Spin-off | Yes, 7 | Six contracts, each stating a value below one |
+| Stock dividend | Yes, 9 | Four Brazilian and Indian listings, values 1.03 to 1.3 |
+| Rights offer | Yes, 13 | Four closed-end funds that run one as a matter of routine |
 | Future rollover | No | Belongs to a future rather than a share, and the continuous
 contract it would apply to is refused: asked for by that type, the venue answers
 "Unsupported type" |
 
-Twelve contracts were asked, across four countries and both listed shares and
-futures, over windows chosen for containing the rarer kinds. The three unseen
-ones are read from the protocol's own table rather than from an answer, and the
-arithmetic for them is the same arithmetic the three seen ones exercise — a
-spin-off is the only one of the six whose value reads as the reciprocal, and
-that branch is exercised by every spin-off above.
+Thirty-two contracts were asked, across seven countries and both listed shares
+and futures, over windows chosen for containing the rarer kinds. Each kind is
+read against a value the venue stated rather than a made-up one: the spin-off
+is the only one of the six whose value reads as the reciprocal, and a stock
+dividend stating the same number the plain way round is what tells that branch
+from its neighbour — 1.05 scales an earlier price by 0.9524, where a spin-off
+stating 1.05 would scale it by 1.05. A rights offer states values on both sides
+of one and moves the scale by neither.
+
+The rollover has no answer behind it and cannot get one through this request:
+the contract that would carry it is refused as a type. The arithmetic it would
+take is the arithmetic the five seen kinds exercise.
 
 ### What a replace states, and what it still cannot
 
