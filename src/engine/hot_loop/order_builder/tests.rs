@@ -1641,10 +1641,12 @@ mod modify_wire_tests {
     fn a_type_without_a_trigger_never_gains_one() {
         // Whether the type states a limit leg at all: the venue refuses one
         // on a type whose submit states none — "Invalid value in field # 44".
+        // A trailing stop is not here: replacing one restates the trail from
+        // the record of the order as it was placed, and one inserted rather
+        // than placed has none — see the test below.
         for (ord_type, name, has_a_limit_leg) in [
             (b'2', "LMT", true),
             (b'1', "MKT", false),
-            (b'P', "TRAIL", false),
             (b'K', "MTL", false),
             (crate::types::ORD_PEG_MID, "PEG MID", false),
         ] {
@@ -1683,6 +1685,49 @@ mod modify_wire_tests {
                 assert!(!sent.contains("|44="), "{name} has no limit leg to state: {sent}");
             }
         }
+    }
+
+    /// A trailing stop this session did not place cannot be replaced by it.
+    ///
+    /// The trail rides on tag 211 and is restated from the record of the order
+    /// as it was placed. An order the venue replayed at connect has no such
+    /// record, so the replace would go out without the field that defines it
+    /// and be refused naming it. The caller is told here instead.
+    #[test]
+    fn a_trailing_stop_with_no_placed_record_is_not_replaced() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.insert_order(crate::types::Order::new(
+            7,
+            instrument,
+            Side::Sell,
+            crate::types::QTY_SCALE,
+            0,
+            b'P',
+            b'0',
+            0,
+        ));
+        context.modify(7, 0, 2, false);
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(addr).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
+        let mut conn = Some(Connection::new_raw(client).unwrap());
+        let shared = std::sync::Arc::new(SharedState::new());
+        let mut hb = HeartbeatState::new();
+        drain_and_send_orders(
+            &mut conn, &mut context, "DU111111", &mut hb, false, &shared, false, &None,
+        );
+
+        let mut buf = [0u8; 4096];
+        assert!(peer.read(&mut buf).is_err(), "nothing reaches the venue");
+        let told = shared.orders.drain_order_inactive();
+        assert!(
+            told.iter().any(|(id, _, why)| *id == 7 && why.contains("cannot be restated")),
+            "and the caller is told why: {told:?}",
+        );
     }
 
     /// A two-legged type can have its trigger moved when it has one.

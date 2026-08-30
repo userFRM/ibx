@@ -300,6 +300,24 @@ pub(crate) fn drain_and_send_orders(
                     continue;
                 };
                 let spec = context.submitted.get(&order_id).cloned();
+                // A trail rides on tag 211, restated from the record of the
+                // order as it was placed. An order this session did not place
+                // has no such record — an order the venue replayed at connect,
+                // say — so the replace would go out without the field that
+                // defines it and be refused naming it. Said here, where the
+                // caller hears it, rather than sent and refused.
+                if spec.is_none() && orig.ord_type == b'P' {
+                    shared.orders.push_order_inactive(
+                        order_id,
+                        ORDER_NOT_FOUND_ERROR_CODE,
+                        format!(
+                            "order {order_id} was not placed by this session, so the trail \
+                             that defines it cannot be restated; withdraw it and place a \
+                             new order",
+                        ),
+                    );
+                    continue;
+                }
                 // Whether the resting order was placed with tag 6433 set.
                 let was_outside_rth = spec.as_ref().is_some_and(|s| s.attrs.outside_rth);
                 // What the replace states. A zero field states nothing, so the
@@ -520,7 +538,15 @@ pub(crate) fn drain_and_send_orders(
                     // that states them. A trailing stop carries its trail on
                     // tag 211 and a replace that left it out was refused —
                     // "Message must contain field # 211".
-                    push_type_and_prices(&mut attr_fields, &spec.kind);
+                    //
+                    // Only where the replace keeps the order's type. The record
+                    // describes the type the order is leaving, so restating it
+                    // onto a new one states the old type's prices under the new
+                    // type's name: a limit replaced as a market kept tag 44,
+                    // and a stop replaced as a limit kept its trigger.
+                    if !type_changed {
+                        push_type_and_prices(&mut attr_fields, &spec.kind);
+                    }
                     restated_type = push_order_attrs(
                         &mut attr_fields,
                         &spec.attrs,
