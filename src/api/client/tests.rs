@@ -274,13 +274,13 @@ fn a_whole_quantity_still_places() {
     client.place_order(9103, &spy(), &order).expect("a whole quantity places");
     assert!(rx.try_recv().is_ok(), "and reaches the wire");
 }
-/// A replace carries the order type, the limit price and the trigger — not the
-/// peg offset, the trailing amount or the execution instruction. Sent for a
-/// trailing stop it describes a pegged order with no offset, which the venue
-/// rejects, leaving the caller with no stop. Refusing keeps the resting order.
+/// A replace states the order type and the prices its type carries. What it
+/// does not state is the peg offset or the execution instruction, so sent for
+/// a pegged order it describes one with no offset, which the venue rejects —
+/// leaving the caller with nothing resting. Refusing keeps the order.
 #[test]
 fn a_type_the_replace_cannot_restate_is_not_modified() {
-    for order_type in ["TRAIL", "TRAIL LIMIT", "REL", "PEG MID", "MIDPX", "SNAP MID"] {
+    for order_type in ["TRAIL LIMIT", "REL", "PEG MID", "MIDPX", "SNAP MID"] {
         let (client, rx, _shared) = test_client();
         let submit = Order {
             action: "SELL".into(), total_quantity: 1.0, order_type: order_type.into(),
@@ -484,6 +484,9 @@ fn every_restatable_type_still_modifies() {
         ("MTL", 0.0, 0.0),
         ("BOX TOP", 0.0, 0.0),
         ("MKT PRT", 0.0, 0.0),
+        // The replace states the trail on 99 and 211 as the submit does, and a
+        // session answered it: the venue takes it and the order keeps working.
+        ("TRAIL", 0.0, 1.0),
     ] {
         let (client, rx, _shared) = test_client();
         let order = Order {
@@ -504,16 +507,16 @@ fn every_restatable_type_still_modifies() {
 }
 
 /// The decision is read from the order as it was submitted, not from the one
-/// handed to the modify — a caller cannot make a trailing stop modifiable by
-/// describing it as a limit on the way in.
+/// handed to the modify — a caller cannot make an unrestatable order
+/// modifiable by describing it as a limit on the way in.
 #[test]
 fn the_refusal_reads_the_tracked_order_not_the_incoming_one() {
     let (client, rx, _shared) = test_client();
     let trail = Order {
-        action: "SELL".into(), total_quantity: 1.0, order_type: "TRAIL".into(),
+        action: "SELL".into(), total_quantity: 1.0, order_type: "TRAIL LIMIT".into(),
         aux_price: 1.0, tif: "DAY".into(), ..Default::default()
     };
-    client.place_order(9702, &spy(), &trail).expect("the trailing stop submits");
+    client.place_order(9702, &spy(), &trail).expect("the trailing stop limit submits");
     while rx.try_recv().is_ok() {}
 
     let disguised = Order {

@@ -2253,3 +2253,102 @@ pub(super) fn phase_cancel_filled_order(conns: Conns) -> Conns {
     }
     conns
 }
+
+// ─── Phase 193: A trailing stop under a replace ───
+
+/// What a replace does to a trailing stop, and what it leaves behind.
+///
+/// A modify is refused in front of this on the reading that a replace cannot
+/// restate what defines the order, and that sending one would cancel it. The
+/// first half is the venue's to answer and the second decides whether the
+/// refusal is protecting anything: a replace that is refused outright leaves
+/// the caller exactly where they started.
+pub(super) fn phase_replace_a_trailing_stop(conns: Conns) -> Conns {
+    phase!("--- Phase 193: what a replace does to a trailing stop ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+
+    let order_id = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Sell, qty: ibx::types::QTY_SCALE,
+        kind: OrderKind::TrailingStop { trail_stop_price: 0, trail_amt: 5_00_000_000 },
+        tif: b'0', attrs: OrderAttrs::default(),
+    })).unwrap();
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, regulatory_snapshot: false, reply_tx: None }).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut working = false;
+    let mut replace_sent = false;
+    let mut replace_refused: Option<String> = None;
+    let mut working_after_the_replace = false;
+    let mut cancelled = false;
+
+    while Instant::now() < deadline {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if update.order_id != order_id { continue; }
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    if replace_sent {
+                        // The order is working after the replace was refused,
+                        // which is the whole question. Take it down.
+                        working_after_the_replace = true;
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+                    } else {
+                        working = true;
+                        // The quantity moves, which every replace carries. The
+                        // type, the trail and everything else are the
+                        // builder's to restate from the record.
+                        control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                            order_id, price: 0, qty: 2 * ibx::types::QTY_SCALE, outside_rth: false,
+                            ord_type: 0, tif: 0, stop_price: 0,
+                        })).unwrap();
+                        replace_sent = true;
+                    }
+                }
+                OrderStatus::Rejected if replace_sent => {
+                    // Read rather than judged: this phase exists to hear what
+                    // the venue says about the replace, and `reject_reason`
+                    // fails closed on anything that is not the market talking.
+                    replace_refused = Some(
+                        shared.orders.get_order_info(update.order_id)
+                            .map(|info| info.order_state.reject_reason)
+                            .filter(|why| !why.is_empty())
+                            .unwrap_or_else(|| "no reason reported".to_string()),
+                    );
+                    // Not the end of the phase: whether the resting order went
+                    // with it is what is being asked.
+                    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+                }
+                OrderStatus::Cancelled => { cancelled = true; break; }
+                OrderStatus::Rejected => break,
+                _ => {}
+            }
+        }
+    }
+
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    if skip_unacked_if_closed(working) { return conns; }
+    assert!(working, "the trailing stop was never acknowledged");
+    assert!(replace_sent, "the replace was never sent");
+    match (&replace_refused, working_after_the_replace || cancelled) {
+        (Some(why), true) => println!(
+            "  the replace was refused — {why}\n  and the order was still working after it\n"
+        ),
+        (Some(why), false) => println!(
+            "  the replace was refused — {why}\n  and the order did not answer afterwards\n"
+        ),
+        (None, true) => println!("  the replace was taken and the order is still working\n"),
+        (None, false) => println!("  the venue said nothing either way within the deadline\n"),
+    }
+    conns
+}

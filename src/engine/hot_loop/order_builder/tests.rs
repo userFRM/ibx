@@ -1554,9 +1554,31 @@ mod modify_wire_tests {
             assert!(!sent.contains("|44="), "{name}: no limit leg to state: {sent}");
         }
 
-        // The bucket is pinned from above as well: a type that is not
-        // trigger-only must keep its limit leg.
-        for ord_type in *b"U21" {
+        // The bucket is pinned from above as well: a type with a limit leg
+        // keeps it. A market or market-to-limit order has none, and stating
+        // one is refused — "Invalid value in field # 44".
+        for ord_type in *b"UK1" {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.insert_order(crate::types::Order::new(
+                7,
+                instrument,
+                Side::Sell,
+                crate::types::QTY_SCALE,
+                100 * crate::types::PRICE_SCALE,
+                ord_type,
+                b'0',
+                0,
+            ));
+            context.modify(7, 610 * crate::types::PRICE_SCALE, 1, false);
+            let sent = drain(&mut context);
+            assert!(
+                !sent.contains("|44="),
+                "{ord_type} has no limit leg to state: {sent}",
+            );
+        }
+
+        for ord_type in *b"2" {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
             context.insert_order(crate::types::Order::new(
@@ -1617,12 +1639,14 @@ mod modify_wire_tests {
     /// limit and is the offset on a pegged order — neither belongs in tag 99.
     #[test]
     fn a_type_without_a_trigger_never_gains_one() {
-        for (ord_type, name) in [
-            (b'2', "LMT"),
-            (b'1', "MKT"),
-            (b'P', "TRAIL"),
-            (b'K', "MTL"),
-            (crate::types::ORD_PEG_MID, "PEG MID"),
+        // Whether the type states a limit leg at all: the venue refuses one
+        // on a type whose submit states none — "Invalid value in field # 44".
+        for (ord_type, name, has_a_limit_leg) in [
+            (b'2', "LMT", true),
+            (b'1', "MKT", false),
+            (b'P', "TRAIL", false),
+            (b'K', "MTL", false),
+            (crate::types::ORD_PEG_MID, "PEG MID", false),
         ] {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
@@ -1653,7 +1677,11 @@ mod modify_wire_tests {
             let sent = drain(&mut context);
 
             assert!(!sent.contains("|99="), "{name} must not gain a trigger: {sent}");
-            assert!(sent.contains("|44=101|"), "{name} keeps its limit leg: {sent}");
+            if has_a_limit_leg {
+                assert!(sent.contains("|44=101|"), "{name} keeps its limit leg: {sent}");
+            } else {
+                assert!(!sent.contains("|44="), "{name} has no limit leg to state: {sent}");
+            }
         }
     }
 

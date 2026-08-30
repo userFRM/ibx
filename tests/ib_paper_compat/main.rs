@@ -282,6 +282,7 @@ fn compat_suite() {
     conns = orders::phase_modify_order(conns);
     conns = orders::phase_modify_qty(conns);
     conns = orders::phase_trailing_stop(conns);
+    conns = orders::phase_replace_a_trailing_stop(conns);
     conns = orders::phase_trailing_stop_limit(conns);
     conns = orders::phase_limit_ioc(conns);
     conns = orders::phase_limit_fok(conns);
@@ -664,6 +665,20 @@ fn iceberg_phase_live() {
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
     let conns = orders::phase_iceberg_order(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
+/// Whether a replace leaves a trailing stop working, which decides whether the
+/// refusal in front of it keeps its reason.
+#[test]
+fn replace_a_trailing_stop_phase_live() {
+    start_logging();
+    let config = match get_config() { Some(c) => c, None => return };
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
+    let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    let conns = orders::phase_replace_a_trailing_stop(conns);
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
 }

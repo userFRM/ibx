@@ -158,31 +158,36 @@ arithmetic for them is the same arithmetic the three seen ones exercise — a
 spin-off is the only one of the six whose value reads as the reciprocal, and
 that branch is exercised by every spin-off above.
 
-### A refusal whose reason may have expired
+### What a replace states, and what it still cannot
 
-A modify is refused where the resting order carries an attribute the replace was
-once unable to restate — an algo, a condition, a bracket link, an OCA group, a
-hidden or all-or-none instruction, and others. The reason written beside it is
-that the replace states the type and the price and nothing else.
+A replace is a full statement of the order, not a difference against the
+resting one. It states the order type on tag 40, the prices that type carries,
+and the companions the type needs — restated from the record of the order as it
+was placed, by the one function the submit uses. Two things a session settled:
 
-That is no longer what the replace does. It is rebuilt from the tracked record
-by the same builder that states an order's attributes when it is placed, and
-that builder emits the algo block, the conditions, the trailing offset, the
-bracket link on 6107 and the OCA group on 583. Read against the code alone, the
-refusal blocks a request the venue was never asked about, which is what this
-client does not do.
+**A type with no limit leg states no tag 44.** The replace stated one for every
+type, so a market, on-close, market-to-limit or trailing order was replaced
+with a price of zero and refused: `Invalid value in field # 44`. The tag is
+stated now only where the type's own submit states one.
 
-It is left standing because a code reading does not outrank a venue answer, and
-there is one on the other side: a replace of a trailing stop was observed being
-rejected with the resting order gone, which is the worst outcome either way
-round. That was under the older replace, and whether it still happens is a
-question for a session rather than for a reader.
+**A trailing stop restates its trail.** With tag 44 gone the venue read the
+replace as the trailing stop it is and asked for the field that defines it:
+`Message must contain field # 211`. Stating the type's companions from the
+submitted record answers it, and the venue takes the replace:
 
-**The check that settles it.** Place a trailing stop on paper, modify its price,
-and read what the venue answers and whether the original is still working. If it
-is restated, the refusals whose premise is the old replace come out and the
-venue is left to refuse what it will. If the order is lost, the refusal keeps
-its reason and the reason gets the evidence it is missing.
+```
+--- Phase 193: what a replace does to a trailing stop ---
+  the replace was taken and the order is still working
+```
+
+So the refusal in front of a trailing-stop modify is gone, on that answer
+rather than on a reading. It is gone only for a trailing stop replaced **as
+itself**: a conversion into one has no record to restate a trail from, and is
+still refused.
+
+The rest of the refusal stands, and each entry is one session away from the
+same treatment: place the order, replace it, read whether the venue takes it
+and whether the original is still working.
 
 ### Not built
 
@@ -497,7 +502,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (142 phases) | 37 tests | Yes |
+| Paper compatibility suite (143 phases) | 38 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

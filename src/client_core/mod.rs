@@ -1710,18 +1710,23 @@ impl ClientCore {
 
     /// Why a replace cannot restate this order, or `None` if it can.
     ///
-    /// The replace message carries the order type, the limit price and the
-    /// trigger, and nothing else — no peg offset, no trailing amount, no
-    /// execution instruction, no algo block. For an order defined by any of
-    /// those, the replace describes something other than the order being
-    /// replaced: a trailing stop arrives as a pegged order with no offset, and
-    /// the venue rejects it, leaving the caller with no stop at all.
+    /// The replace states the order type and the prices that type carries, plus
+    /// the companions the type needs, restated from the record of the order as
+    /// it was placed. What it does not state is the peg offset, the execution
+    /// instruction or the algo block. For an order defined by any of those, the
+    /// replace describes something other than the order being replaced, and the
+    /// venue rejects it — leaving the caller with nothing resting.
+    ///
+    /// `restating_itself` says the replace keeps the order's type. Only then
+    /// can a type be restated from the record of the order that was placed: a
+    /// conversion into a trailing stop has no such record, so its trail goes
+    /// unstated and the venue refuses the replace naming tag 211.
     ///
     /// The order type alone does not decide this. An adaptive or algo order is
     /// an ordinary `LMT` that is defined by its algo tags, and an adjustable
     /// stop is an ordinary `STP` that is defined by its conversion — both are
     /// destroyed by a replace that states only the type.
-    pub fn replace_cannot_restate(order: &ApiOrder) -> Option<String> {
+    pub fn replace_cannot_restate(order: &ApiOrder, restating_itself: bool) -> Option<String> {
         if !order.algo_strategy.is_empty() {
             return Some(format!("an order running the {} algo", order.algo_strategy));
         }
@@ -1795,11 +1800,16 @@ impl ClientCore {
         // `MTL`, `BOX TOP` and `MKT PRT` are here because the replace renders
         // the same byte they were submitted under, so it restates them as
         // themselves — which is the whole test for membership.
+        //
+        // `TRAIL` restates itself on a session's answer rather than a reading:
+        // the replace states the trail on tags 99 and 211 as the submit does,
+        // the venue takes it, and the order goes on working.
         if matches!(
             ty.as_str(),
             "MKT" | "LMT" | "STP" | "STP LMT" | "MOC" | "LOC" | "MIT" | "STP PRT"
                 | "MTL" | "BOX TOP" | "MKT PRT"
-        ) {
+        ) || (restating_itself && ty == "TRAIL")
+        {
             return None;
         }
         Some(format!("a {ty} order"))
@@ -1816,9 +1826,14 @@ impl ClientCore {
     /// One place, so the two bindings cannot diverge on either the rule or the
     /// wording.
     pub fn modify_refusal(&self, order_id: u64, incoming: &ApiOrder) -> Option<String> {
-        let why = self.tracked_order(order_id)
-            .and_then(|tracked| Self::replace_cannot_restate(&tracked))
-            .or_else(|| Self::replace_cannot_restate(incoming))?;
+        let tracked = self.tracked_order(order_id);
+        // Whether the replace leaves the order the type it already is.
+        let restating_itself = tracked
+            .as_ref()
+            .is_some_and(|t| t.order_type.eq_ignore_ascii_case(&incoming.order_type));
+        let why = tracked
+            .and_then(|tracked| Self::replace_cannot_restate(&tracked, restating_itself))
+            .or_else(|| Self::replace_cannot_restate(incoming, restating_itself))?;
         Some(format!(
             "{why} cannot be modified: the replace does not carry the fields that \
              define it, and sending one would cancel the order"
