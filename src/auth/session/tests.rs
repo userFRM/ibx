@@ -1730,16 +1730,12 @@ fn ib_key_2fa_rejections_do_not_echo_server_supplied_text() {
 /// it — so the ground the logon is checked on is not the peer's to choose.
 #[test]
 fn an_srp_group_that_is_not_this_venue_s_stops_the_logon() {
-    let default_n = BigUint::from(0xFFFF_FFFB_u32);
-    let default_g = BigUint::from(2u32);
-
     // What the venue states, which is what this client holds.
     let venue = vec![
         crate::auth::srp::SRP_VENUE_N_STR.to_string(),
         format!("{:x}", crate::auth::srp::SRP_VENUE_G),
     ];
-    let (n, g) = stated_group(&venue, default_n.clone(), default_g.clone())
-        .expect("the venue's own group is the one to use");
+    let (n, g) = stated_group(&venue).expect("the venue's own group is the one to use");
     assert_eq!(n, crate::auth::srp::srp_venue_n());
     assert_eq!(g, BigUint::from(crate::auth::srp::SRP_VENUE_G));
 
@@ -1752,19 +1748,16 @@ fn an_srp_group_that_is_not_this_venue_s_stops_the_logon() {
             "this venue's modulus under another generator",
             vec![crate::auth::srp::SRP_VENUE_N_STR.to_string(), "5".to_string()],
         ),
+        // Stating none is the same choice made by omission: whatever this
+        // client fell back to would not be the group that was checked.
+        ("nothing parseable", vec!["zz".to_string(), "2".to_string()]),
+        ("only one field", vec!["1FFFF".to_string()]),
+        ("no fields at all", vec![]),
     ] {
         assert!(
-            stated_group(&stated, default_n.clone(), default_g.clone()).is_err(),
+            stated_group(&stated).is_err(),
             "{why} is not ground to be checked on",
         );
-    }
-
-    // A peer that states no group at all leaves this client on its own, which
-    // is what it would have used.
-    for stated in [vec!["zz".to_string(), "2".to_string()], vec!["1FFFF".to_string()], vec![]] {
-        let (n, g) = stated_group(&stated, default_n.clone(), default_g.clone())
-            .expect("nothing stated is not a group a peer chose");
-        assert_eq!((n, g), (default_n.clone(), default_g.clone()));
     }
 }
 

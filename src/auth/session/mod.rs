@@ -472,11 +472,7 @@ fn extract_srp_data(fields: &[String], username: &str) -> Vec<String> {
 /// that would catch a substituted peer is then one it can produce itself — so
 /// the group is checked before it is used, and a logon on any other stops
 /// here.
-fn stated_group(
-    stated: &[String],
-    default_n: BigUint,
-    default_g: BigUint,
-) -> io::Result<(BigUint, BigUint)> {
+fn stated_group(stated: &[String]) -> io::Result<(BigUint, BigUint)> {
     let parsed = stated.first().zip(stated.get(1)).and_then(|(n, g)| {
         Some((
             BigUint::parse_bytes(n.as_bytes(), 16)?,
@@ -495,8 +491,13 @@ fn stated_group(
                 n.bits(),
             ),
         )),
-        // Nothing stated: this client's own, which is what it would have used.
-        None => Ok((default_n, default_g)),
+        // The venue states its group on every logon. A peer that states none
+        // leaves the client to pick one, which is the same choice by omission:
+        // whatever it fell back to would not be the group that was checked.
+        None => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the peer stated no SRP group, so there is none to check it on",
+        )),
     }
 }
 
@@ -504,8 +505,6 @@ fn stated_group(
 ///
 /// Returns the session key K as BigUint.
 pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -> io::Result<BigUint> {
-    let n = srp::srp_n();
-    let g = BigUint::from(srp::SRP_G);
 
     // State 1: Send AUTH_QUERY
     let msg1 = xyz::xyz_build_srp_v20(1, &[]);
@@ -533,7 +532,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
 
     let data_fields = extract_srp_data(&fields2, username);
     // The venue may state its own group; otherwise this client's applies.
-    let (n, g) = stated_group(&data_fields, n, g)?;
+    let (n, g) = stated_group(&data_fields)?;
 
     // Generate client keys: a (private), A = g^a mod N
     let mut a_bytes = [0u8; 32];
@@ -1563,8 +1562,6 @@ pub fn do_srp_farm(
     password: &str,
     carry: &mut Vec<u8>,
 ) -> io::Result<()> {
-    let n = srp::srp_n();
-    let g = BigUint::from(srp::SRP_G);
 
     // State 1: Send AUTH_QUERY (FIX-framed)
     let msg1 = xyz::xyz_build_srp_v20(1, &[]);
@@ -1585,7 +1582,7 @@ pub fn do_srp_farm(
 
     let data_fields = extract_srp_data(&fields2, username);
     // The venue may state its own group; otherwise this client's applies.
-    let (n, g) = stated_group(&data_fields, n, g)?;
+    let (n, g) = stated_group(&data_fields)?;
 
     // Generate client keys with 32-byte private key
     let mut a_bytes = [0u8; 32];

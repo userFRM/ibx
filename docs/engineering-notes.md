@@ -198,7 +198,8 @@ that is arithmetic in the group it named. Name a small modulus and the shared
 secret collapses to something anybody can compute, so the proof becomes one a
 peer without the verifier can produce. This venue states a 512-bit modulus with
 a generator of two; that group is what a logon proceeds on, and any other stops
-it.
+it — including none at all, since a peer that states no group leaves the client
+to pick one, which is the same choice made by omission.
 
 **A logon that authenticated nothing is not a logon.** A farm may ask the
 session to authenticate, or acknowledge the logon without asking. The second
