@@ -1687,6 +1687,46 @@ mod modify_wire_tests {
         }
     }
 
+    /// A converted order does not get the type it left restated onto it.
+    ///
+    /// The record is the order as it was placed and a replace never rewrites
+    /// it. Compared against the resting order rather than the record, the
+    /// second replace after a conversion looks like it keeps the type — while
+    /// the record still describes the type before the conversion, whose prices
+    /// would then go out under the new type's name.
+    #[test]
+    fn a_second_replace_after_a_conversion_states_no_stale_price() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.market.set_routing(instrument, "STK", "SMART");
+        // Placed as a limit, so the record describes a limit at 100.
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: crate::types::QTY_SCALE,
+            kind: crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let _ = drain(&mut context);
+
+        // Converted to a market order, then replaced again as a market order.
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7, ord_type: b'1', tif: 0, price: 0,
+            qty: crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+        });
+        let _ = drain(&mut context);
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7, ord_type: b'1', tif: 0, price: 0,
+            qty: 2 * crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+        });
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|40=1|"), "it is a market order: {sent}");
+        assert!(!sent.contains("|44="), "with no price the limit left behind: {sent}");
+    }
+
     /// A trailing stop this session did not place cannot be replaced by it.
     ///
     /// The trail rides on tag 211 and is restated from the record of the order

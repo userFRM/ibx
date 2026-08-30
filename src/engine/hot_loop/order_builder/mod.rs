@@ -539,12 +539,17 @@ pub(crate) fn drain_and_send_orders(
                     // tag 211 and a replace that left it out was refused —
                     // "Message must contain field # 211".
                     //
-                    // Only where the replace keeps the order's type. The record
-                    // describes the type the order is leaving, so restating it
-                    // onto a new one states the old type's prices under the new
-                    // type's name: a limit replaced as a market kept tag 44,
-                    // and a stop replaced as a limit kept its trigger.
-                    if !type_changed {
+                    // Only where the replace states the type the record
+                    // describes. The record is the order as it was PLACED and a
+                    // replace never rewrites it, so a type asked for now is
+                    // compared against the record rather than against the
+                    // resting order: an order converted once and replaced again
+                    // matches the resting type while the record still describes
+                    // the type before the conversion. Restated onto the wrong
+                    // type it states the old type's prices under the new type's
+                    // name — a limit replaced as a market keeping tag 44, a stop
+                    // replaced as a limit keeping its trigger.
+                    if ord_type == tracked_shape(&spec.kind).0 {
                         push_type_and_prices(&mut attr_fields, &spec.kind);
                     }
                     restated_type = push_order_attrs(
@@ -1001,42 +1006,7 @@ fn send_order_ex(
     tif: u8,
     attrs: &crate::types::OrderAttrs,
 ) -> std::io::Result<()> {
-    use crate::types::OrderKind as K;
-
-    // Engine-state entry: ord_type byte, tracked price, and tracked stop
-    // price per kind — mirrors the corresponding plain variants exactly.
-    let (ord_type_byte, track_price, track_stop) = match kind {
-        K::Market => (b'1', 0, 0),
-        K::Limit { price } => (b'2', price, 0),
-        K::Stop { stop_price } => (b'3', stop_price, stop_price),
-        K::StopLimit { price, stop_price } => (b'4', price, stop_price),
-        K::TrailingStop { .. } => (b'P', 0, 0),
-        // Each kind is tracked under the discriminant whose tag 40 the encoder
-        // below writes, so a replace restates the type the submit sent. Tag 40
-        // has no value `R`: a relative order is `P` with `18=R`.
-        K::TrailingStopLimit { lmt_offset, .. } => (crate::types::ORD_TRAIL_LIMIT, lmt_offset, 0),
-        K::TrailPct { .. } => (b'P', 0, 0),
-        K::Moc => (b'5', 0, 0),
-        K::Loc { price } => (b'B', price, 0),
-        K::Mit { stop_price } => (b'J', stop_price, stop_price),
-        K::Lit { price, stop_price } => (crate::types::ORD_LIT, price, stop_price),
-        K::PegBench { price, .. } => (crate::types::ORD_PEG_BENCH, price, 0),
-        K::Mtl => (b'K', 0, 0),
-        K::MktPrt => (b'U', 0, 0),
-        K::StpPrt { stop_price } => (crate::types::ORD_STP_PRT, 0, stop_price),
-        K::MidPrice { price_cap } => (crate::types::ORD_MIDPX, price_cap, 0),
-        K::SnapMkt { offset } => (crate::types::ORD_SNAP_MKT, 0, offset),
-        K::SnapMid { offset } => (crate::types::ORD_SNAP_MID, 0, offset),
-        K::SnapPri { offset } => (crate::types::ORD_SNAP_PRI, 0, offset),
-        K::PegMkt { offset, .. } => (crate::types::ORD_PEG_MKT, 0, offset),
-        K::PegMid { offset, .. } => (crate::types::ORD_PEG_MID, 0, offset),
-        K::Rel { offset } => (b'P', 0, offset),
-        K::AdjustableStop { stop_price, .. } => (b'3', 0, stop_price),
-        K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', price, 0),
-        // Tracked under the what-if marker so the response is recognised as a
-        // preview; it never becomes a live order.
-        K::WhatIf { price, aux, .. } => (crate::types::ORD_WHAT_IF, price, aux),
-    };
+    let (ord_type_byte, track_price, track_stop) = tracked_shape(&kind);
     context.insert_order(crate::types::Order::new(
         order_id,
         instrument,
@@ -1144,6 +1114,47 @@ fn exec_inst_for(kind: &crate::types::OrderKind) -> String {
         _ => "",
     }
     .to_string()
+}
+
+/// The order type byte, tracked price and tracked trigger a kind is held as.
+///
+/// One statement of it: the submit records the order this way and a replace
+/// asks it which type the record describes, so the two cannot disagree about
+/// what a tracked order is.
+fn tracked_shape(kind: &crate::types::OrderKind) -> (u8, i64, i64) {
+    use crate::types::OrderKind as K;
+    match kind {
+        K::Market => (b'1', 0, 0),
+        K::Limit { price } => (b'2', *price, 0),
+        K::Stop { stop_price } => (b'3', *stop_price, *stop_price),
+        K::StopLimit { price, stop_price } => (b'4', *price, *stop_price),
+        K::TrailingStop { .. } => (b'P', 0, 0),
+            // Each kind is tracked under the discriminant whose tag 40 the encoder
+            // below writes, so a replace restates the type the submit sent. Tag 40
+            // has no value `R`: a relative order is `P` with `18=R`.
+        K::TrailingStopLimit { lmt_offset, .. } => (crate::types::ORD_TRAIL_LIMIT, *lmt_offset, 0),
+        K::TrailPct { .. } => (b'P', 0, 0),
+        K::Moc => (b'5', 0, 0),
+        K::Loc { price } => (b'B', *price, 0),
+        K::Mit { stop_price } => (b'J', *stop_price, *stop_price),
+        K::Lit { price, stop_price } => (crate::types::ORD_LIT, *price, *stop_price),
+        K::PegBench { price, .. } => (crate::types::ORD_PEG_BENCH, *price, 0),
+        K::Mtl => (b'K', 0, 0),
+        K::MktPrt => (b'U', 0, 0),
+        K::StpPrt { stop_price } => (crate::types::ORD_STP_PRT, 0, *stop_price),
+        K::MidPrice { price_cap } => (crate::types::ORD_MIDPX, *price_cap, 0),
+        K::SnapMkt { offset } => (crate::types::ORD_SNAP_MKT, 0, *offset),
+        K::SnapMid { offset } => (crate::types::ORD_SNAP_MID, 0, *offset),
+        K::SnapPri { offset } => (crate::types::ORD_SNAP_PRI, 0, *offset),
+        K::PegMkt { offset, .. } => (crate::types::ORD_PEG_MKT, 0, *offset),
+        K::PegMid { offset, .. } => (crate::types::ORD_PEG_MID, 0, *offset),
+        K::Rel { offset } => (b'P', 0, *offset),
+        K::AdjustableStop { stop_price, .. } => (b'3', 0, *stop_price),
+        K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', *price, 0),
+            // Tracked under the what-if marker so the response is recognised as a
+            // preview; it never becomes a live order.
+        K::WhatIf { price, aux, .. } => (crate::types::ORD_WHAT_IF, *price, *aux),
+    }
 }
 
 /// The order type on tag 40, its price tags and the companions that type
