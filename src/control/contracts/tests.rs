@@ -1465,3 +1465,23 @@ fn an_option_definition_keeps_what_identifies_it() {
     }
 
 }
+
+
+/// A chain reply states which underlying it is about.
+///
+/// It echoes no request id, so the underlying's own id is the only thing
+/// telling two chains for one ticker apart — a share and the future on it,
+/// asked for at once, are answered by two replies naming one symbol. Read off
+/// a reply a session was answered with.
+#[test]
+fn a_chain_reply_states_the_underlying_it_is_about() {
+    let reply = "8=FIX.4.1\x0135=U\x016040=139\x0155=SPY\x01310=STK\x016346=756733\x01                 6058=SPY\x01231=100\x016971=20260904;20260911\x016997=668;672\x01";
+    let scopes = parse_option_chain_response(reply.as_bytes())
+        .expect("a reply this client is answered with");
+    assert!(!scopes.is_empty(), "the reply states a chain");
+    assert!(
+        scopes.iter().any(|s| s.underlying_con_id == 756733),
+        "and which underlying it is about: {:?}",
+        scopes.iter().map(|s| s.underlying_con_id).collect::<Vec<_>>(),
+    );
+}

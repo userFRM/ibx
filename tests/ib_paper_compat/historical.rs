@@ -2263,3 +2263,79 @@ pub(super) fn phase_what_withdrawing_news_answers(conns: Conns) -> Conns {
     }
     conns
 }
+
+/// Ask for an option chain and report the tags its reply carries.
+///
+/// This client matches a chain reply to a request by the underlying's symbol,
+/// because the reply is said to echo no request id. That is a statement about
+/// the wire, and the wire can be asked: two requests for one symbol are told
+/// apart by whatever the reply carries, so what it carries decides whether
+/// they can be told apart at all.
+///
+/// Nothing is asserted. The reply's own tags are printed, and the row that
+/// describes the matching is settled by what they say.
+pub(super) fn phase_what_a_chain_reply_carries(mut conns: Conns) -> Conns {
+    phase!("--- Phase 192: what tags an option chain reply carries ---");
+
+    if !still_connected(&mut conns.ccp) {
+        skipped!("  SKIP: the session had already ended\n");
+        return conns;
+    }
+
+    let ts = now_ib_timestamp();
+    if let Err(e) = conns.ccp.send_fix(&[
+        (ibx::protocol::fix::TAG_MSG_TYPE, "U"),
+        (ibx::protocol::fix::TAG_SENDING_TIME, &ts),
+        (6040, "138"),
+        (ibx::control::contracts::TAG_SYMBOL, "SPY"),
+        // The underlying's own type, which the request that this client sends
+        // carries and the first version of this did not. Asked without it the
+        // venue answered nothing, which was this phase asking wrongly.
+        (310, "STK"),
+        (6346, "756733"),
+        (6320, "1"),
+    ]) {
+        skipped!("  SKIP: the request could not be sent: {e}\n");
+        return conns;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut seen: Option<String> = None;
+    while Instant::now() < deadline && seen.is_none() {
+        if let Err(e) = conns.ccp.try_recv()
+            && e.kind() != std::io::ErrorKind::WouldBlock
+        {
+            skipped!("  SKIP: the connection went away: {e}\n");
+            return conns;
+        }
+        for frame in conns.ccp.extract_frames() {
+            for m in messages_in(&mut conns.ccp, &frame) {
+                let text = String::from_utf8_lossy(&m).replace('\x01', "|");
+                // The subtype the reply arrives under, which is the one this
+                // client's own dispatch reads it on.
+                if text.contains("|6040=139|") {
+                    seen = Some(text);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    match seen {
+        None => println!("  nothing carrying a chain subtype in 15s\n"),
+        Some(text) => {
+            // The tags it carries, once each, so a request id would be visible
+            // as a tag rather than buried in a long reply.
+            let mut tags: Vec<&str> = text
+                .split('|')
+                .filter_map(|f| f.split_once('=').map(|(t, _)| t))
+                .collect();
+            tags.sort_by_key(|t| t.parse::<u32>().unwrap_or(u32::MAX));
+            tags.dedup();
+            println!("  the reply carries tags: {}", tags.join(" "));
+            let shown: String = text.chars().take(400).collect();
+            println!("  first 400: {shown}\n");
+        }
+    }
+    conns
+}
