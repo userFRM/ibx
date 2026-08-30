@@ -64,6 +64,15 @@ pub(crate) struct HmdsState {
     pub(crate) pending_news: Vec<(String, u32)>,
     pub(crate) pending_articles: Vec<(String, u32)>,
     pub(crate) pending_fundamental: Vec<(String, u32)>,
+    /// Fundamentals requests the venue has answered once, by the name they went
+    /// out under.
+    ///
+    /// An answer is not the venue saying it has stopped serving the request, so
+    /// a caller withdrawing one after the first reply still has something to
+    /// withdraw — and the withdrawal has to name the request, which the answer
+    /// used to take away with it. Emptied when the withdrawal is sent and when
+    /// the connection goes.
+    pub(crate) answered_fundamental: Vec<(String, u32)>,
     pub(crate) pending_histogram: Vec<(String, u32)>,
     /// In-flight corporate-action queries: the id the request went out under,
     /// the request it answers, and the contract it asked about.
@@ -244,6 +253,7 @@ impl HmdsState {
             pending_news: Vec::new(),
             pending_articles: Vec::new(),
             pending_fundamental: Vec::new(),
+            answered_fundamental: Vec::new(),
             pending_histogram: Vec::new(),
             pending_schedule: Vec::new(),
             pending_ticks: Vec::new(),
@@ -293,6 +303,9 @@ impl HmdsState {
         stranded.extend(self.pending_news.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_articles.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_fundamental.drain(..).map(|(_, rid)| (rid, false)));
+        // Answered already, so nobody is waiting on them: forgotten rather
+        // than reported as failed.
+        self.answered_fundamental.clear();
         stranded.extend(self.pending_histogram.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_adjustments.drain(..).map(|(_, rid, _)| (rid, false)));
         stranded.extend(self.pending_schedule.drain(..).map(|(_, rid, _)| (rid, false)));
@@ -917,7 +930,12 @@ impl HmdsState {
                                 let at = self.pending_fundamental.iter()
                                     .position(|(qid, _)| *qid == echoed);
                                 if let Some(at) = at {
-                                    let (_, req_id) = self.pending_fundamental.remove(at);
+                                    let named = self.pending_fundamental.remove(at);
+                                    let req_id = named.1;
+                                    // Kept by name: the answer is not the venue
+                                    // saying it has stopped, so a withdrawal
+                                    // after it still has something to withdraw.
+                                    self.answered_fundamental.push(named);
                                     shared.reference.push_fundamental_data(req_id, data);
                                 } else {
                                     shared.market.note_unread_wire(
@@ -1790,7 +1808,12 @@ fn build_tbt_query(
         // Withdrawn under the name it went out with, which is its own.
         let named = self.pending_fundamental.iter()
             .position(|(_, rid)| *rid == req_id)
-            .map(|pos| self.pending_fundamental.remove(pos).0);
+            .map(|pos| self.pending_fundamental.remove(pos).0)
+            .or_else(|| {
+                self.answered_fundamental.iter()
+                    .position(|(_, rid)| *rid == req_id)
+                    .map(|pos| self.answered_fundamental.remove(pos).0)
+            });
         let Some(conn) = hmds_conn.as_mut() else { return };
         let Some(query_id) = named else {
             log::debug!("fundamentals withdrawal for req_id={req_id}, which is not waiting");
