@@ -4331,12 +4331,12 @@ fn process_msgs_dispatches_option_chain_parameters() {
         OptionChainScope {
             symbol: "AAPL".into(), exchange: "SMART".into(), trading_class: "AAPL".into(),
             multiplier: "100".into(), expirations: vec!["20260116".into(), "20260320".into()],
-            strikes: vec![140.0, 145.0],
+            strikes: vec![140.0, 145.0], underlying_con_id: 265598,
         },
         OptionChainScope {
             symbol: "AAPL".into(), exchange: "CBOE".into(), trading_class: "AAPL1".into(),
             multiplier: "100".into(), expirations: vec!["20260116".into()],
-            strikes: vec![145.0],
+            strikes: vec![145.0], underlying_con_id: 265598,
         },
     ]);
     let mut w = RecordingWrapper::default();

@@ -1659,6 +1659,12 @@ pub struct OptionChainScope {
     pub expirations: Vec<String>,
     /// Every strike it lists.
     pub strikes: Vec<f64>,
+    /// The venue's id for the underlying this chain belongs to.
+    ///
+    /// The reply echoes no request id, so this is what tells two chains apart
+    /// when both name the same ticker — a stock and the future on it, asked for
+    /// at once, are answered by two replies naming one symbol.
+    pub underlying_con_id: i64,
 }
 
 /// Parse an option chain reply.
@@ -1697,6 +1703,9 @@ fn parse_chain_record(symbol: &str, tags: &[(u32, String)], out: &mut Vec<Option
 
     for (tag, val) in tags {
         match *tag {
+            TAG_UNDERLYING_CON_ID => {
+                scope.underlying_con_id = val.parse().unwrap_or_default();
+            }
             TAG_EXCHANGE => scope.exchange = val.clone(),
             TAG_IB_TRADING_CLASS => scope.trading_class = val.clone(),
             TAG_MULTIPLIER => scope.multiplier = val.clone(),
