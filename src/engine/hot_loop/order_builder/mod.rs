@@ -533,25 +533,31 @@ pub(crate) fn drain_and_send_orders(
                 // order. What the submit said is restated here.
                 let mut attr_fields: Vec<(u32, String)> = Vec::new();
                 let mut restated_type = None;
-                if let Some(spec) = spec.as_deref() {
-                    // The companions the type itself needs, from the one place
-                    // that states them. A trailing stop carries its trail on
-                    // tag 211 and a replace that left it out was refused —
+                // The record describes the order as it was PLACED, and a
+                // replace never rewrites it. So everything restated from it —
+                // the type's own companions, the execution instruction it
+                // carries, the attributes it was placed with — belongs to that
+                // type and to no other, and is restated only where the replace
+                // states that type. Compared against the record rather than
+                // against the resting order: an order converted once and
+                // replaced again matches the resting type while the record
+                // still describes the type before the conversion.
+                //
+                // Restated onto the wrong type it states the old type's prices
+                // and instructions under the new type's name — a limit replaced
+                // as a market keeping tag 44, a trailing stop replaced as a
+                // market keeping 18=a, a midpoint peg writing its own tag 40
+                // over the one the caller asked for. A replace that changes the
+                // type states the lean message alone, which describes the type
+                // it is asking for whole.
+                let restating_the_record = spec
+                    .as_deref()
+                    .is_some_and(|spec| ord_type == tracked_shape(&spec.kind).0);
+                if let Some(spec) = spec.as_deref().filter(|_| restating_the_record) {
+                    // A trailing stop carries its trail on tag 211, and a
+                    // replace that left it out was refused naming the field —
                     // "Message must contain field # 211".
-                    //
-                    // Only where the replace states the type the record
-                    // describes. The record is the order as it was PLACED and a
-                    // replace never rewrites it, so a type asked for now is
-                    // compared against the record rather than against the
-                    // resting order: an order converted once and replaced again
-                    // matches the resting type while the record still describes
-                    // the type before the conversion. Restated onto the wrong
-                    // type it states the old type's prices under the new type's
-                    // name — a limit replaced as a market keeping tag 44, a stop
-                    // replaced as a limit keeping its trigger.
-                    if ord_type == tracked_shape(&spec.kind).0 {
-                        push_type_and_prices(&mut attr_fields, &spec.kind);
-                    }
+                    push_type_and_prices(&mut attr_fields, &spec.kind);
                     restated_type = push_order_attrs(
                         &mut attr_fields,
                         &spec.attrs,

@@ -1727,6 +1727,42 @@ mod modify_wire_tests {
         assert!(!sent.contains("|44="), "with no price the limit left behind: {sent}");
     }
 
+    /// A conversion carries none of the old type's instructions either.
+    ///
+    /// The execution instruction, the peg offset and the attributes are the
+    /// record's as much as its prices are. A trailing stop converted to a
+    /// market order that still stated `18=a` would be asking for a trailing
+    /// market order, which is not what the caller asked for.
+    #[test]
+    fn a_conversion_states_none_of_the_old_type_s_instructions() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.market.set_routing(instrument, "STK", "SMART");
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Sell,
+            qty: crate::types::QTY_SCALE,
+            kind: crate::types::OrderKind::TrailingStop {
+                trail_stop_price: 0,
+                trail_amt: 5 * crate::types::PRICE_SCALE,
+            },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let _ = drain(&mut context);
+
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7, ord_type: b'1', tif: 0, price: 0,
+            qty: crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+        });
+        let sent = drain(&mut context);
+
+        assert!(sent.contains("|40=1|"), "it is a market order: {sent}");
+        assert!(!sent.contains("|18="), "with no trailing instruction: {sent}");
+        assert!(!sent.contains("|211="), "and no trail: {sent}");
+    }
+
     /// A trailing stop this session did not place cannot be replaced by it.
     ///
     /// The trail rides on tag 211 and is restated from the record of the order
