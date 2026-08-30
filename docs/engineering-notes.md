@@ -220,6 +220,20 @@ one recovery run, five full exchanges. So a bare acceptance is not a shape this
 venue produces, and it is not one a connection is treated as authenticated by.
 The full exchange that follows is, because the venue proves itself inside it.
 
+**What the proof does not cover.** The logon runs beside the channel rather
+than inside it: the exchange is plain FIX on the socket, and the keys that
+protect everything afterwards come from the key agreement that opened it. The
+proof therefore says the party answering the logon holds the account's
+verifier; it does not say that party is the one holding the channel keys.
+
+A peer that terminates the key agreement and relays the logon to the venue in
+real time collects a proof it did not compute, and the check passes. Closing
+that needs the venue to state something over both the logon and the channel,
+and nothing on this wire does. So the check moves the bar from any peer that
+answers the connect to one that can also reach the venue while the logon is in
+flight, and no further. Stated here rather than implied by its absence: a
+binding this client invented would be one the venue does not read.
+
 ### What a replace does to each order this client refuses one for
 
 A modify is refused in front of an order defined by more than its type and
