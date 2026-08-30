@@ -846,9 +846,15 @@ impl HmdsState {
                             if let Some(xml) = parsed.get(&6118) {
                                 let is_article = xml.contains("article_file");
                                 if is_article {
+                                    // Matched on the id the venue echoes, and on
+                                    // nothing else. Falling back to whoever asked
+                                    // first, a late or duplicate reply consumed
+                                    // somebody else's request and published its
+                                    // article under that request's number, while
+                                    // the request it belonged to waited out its
+                                    // deadline for an answer that had arrived.
                                     if let Some(pos) = self.pending_articles.iter()
                                         .position(|(qid, _)| answers(xml, qid))
-                                        .or_else(|| (!self.pending_articles.is_empty()).then_some(0))
                                     {
                                         let (_, req_id) = self.pending_articles.remove(pos);
                                         match raw_bytes.as_deref()
@@ -874,9 +880,10 @@ impl HmdsState {
                                 // bar response is. Falls back to the oldest
                                 // pending request only when the response names
                                 // none.
+                                // Matched on the id the venue echoes, as the
+                                // article above it is and for the same reason.
                                 } else if let Some(pos) = self.pending_news.iter()
                                     .position(|(qid, _)| answers(xml, qid))
-                                    .or_else(|| (!self.pending_news.is_empty()).then_some(0))
                                 {
                                     let (_, req_id) = self.pending_news.remove(pos);
                                     if let Some(raw) = &raw_bytes {

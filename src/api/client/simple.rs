@@ -154,6 +154,12 @@ impl EClient {
     /// The contract must carry the venue's id, which
     /// [`qualify`](EClient::qualify) supplies.
     pub fn watch(&self, contract: &Contract) -> Result<i64, Refusal> {
+        // Numbered in the band reserved for the calls this client makes on its
+        // own account, which the request surface refuses to anyone else. True
+        // today only because the request this reaches does not narrow its
+        // number, which is not a reason to be the one allocator that does not
+        // say so.
+        let _answering = super::Answering::begin();
         // Kept rather than released at the end of this call: the stream lives
         // until the caller withdraws it, and until then the id is this
         // session's own. `cancel_mkt_data` releases it.

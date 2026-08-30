@@ -136,35 +136,39 @@ def sent(consts: dict, srcs: dict) -> set:
 
 
 def sent_subtypes(srcs: dict) -> list:
-    """Every subtype this client writes on tag 6040.
+    """Every subtype this client writes on the tag that carries them.
 
-    The tag is written as its number and as the name the module that owns it
-    gives it, and reading only the number missed every request sent under the
-    name — a page saying those subtypes are neither sent nor handled.
+    Read from what is written, not from what things are called. The value beside
+    the tag is sometimes the number itself and sometimes a constant holding it,
+    so the constants are resolved and then the writes are read — a constant that
+    nothing writes is not sent, whatever it is named.
+
+    Naming was tried and was wrong twice in one change: reading every constant
+    with `SUB_PROTOCOL` in its name published the tag's own constant as a
+    subtype, and excluding the ones named for a reply removed a subtype on the
+    strength of its name rather than on whether anything sends it.
     """
-    # The tag under its number and under either name a module gives it, however
-    # the path to that name is spelled.
-    named_tag = r'(?:6040|(?:\w+::)*TAG_SUB_PROTOCOL|(?:\w+::)*TAG_IB_COMM_TYPE)'
+    tag = r'(?:6040|(?:\w+::)*TAG_SUB_PROTOCOL|(?:\w+::)*TAG_IB_COMM_TYPE)'
+    # What each constant holds, however it is spelled.
+    holds = {}
+    for text in srcs.values():
+        for name, num, txt in re.findall(
+            r'const (\w+): (?:u32 = (\d+)|&str = "(\d+)")\s*;', text,
+        ):
+            holds[name] = num or txt
     found = set()
     for text in srcs.values():
-        found |= set(re.findall(rf'\(\s*{named_tag}\s*,\s*&?"(\d+)"\s*\)', text))
-        # A constant named as a sub-protocol is one: it exists to be written on
-        # that tag, and is passed as a value rather than spelled out beside it,
-        # so a reading that looked only for the literal said the subtype was
-        # neither sent nor handled anywhere. Written as a number or as text,
-        # because both spellings are in use.
-        #
-        # `TAG_` names the tag itself rather than a subtype travelling under it,
-        # and reading it as one published the tag's own number as a subtype.
-        found |= set(re.findall(
-            r'const (?!TAG_)(?!\w*(?:REPLY|ANSWER|RESPONSE))\w*SUB_PROTOCOL\w*: (?:u32 = (\d+)|&str = "(\d+)")\s*;', text,
-        ) and [
-            g for pair in re.findall(
-                r'const (?!TAG_)(?!\w*(?:REPLY|ANSWER|RESPONSE))\w*SUB_PROTOCOL\w*: (?:u32 = (\d+)|&str = "(\d+)")\s*;', text,
-            ) for g in pair if g
-        ])
+        # The value is written as the number, as a constant, or as a constant
+        # turned into text where the field wants text.
+        for value in re.findall(
+            rf'\(\s*{tag}\s*,\s*&?"?([\w:]+)"?(?:\.to_string\(\))?\s*\)', text,
+        ):
+            bare = value.rsplit("::", 1)[-1]
+            if value.isdigit():
+                found.add(value)
+            elif bare in holds:
+                found.add(holds[bare])
     return sorted(found, key=int)
-
 
 def dispatch_block(path: str, start: str) -> str:
     text = without_tests(

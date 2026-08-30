@@ -2041,8 +2041,18 @@ impl CcpState {
         }
 
         for (symbol, scopes) in by_underlying {
+            // Matched on the underlying the reply names, not on its ticker
+            // alone: the reply echoes no request id and does carry the
+            // underlying's own id, so two chains for one ticker — a share and
+            // the future on it, asked for at once — are told apart by the only
+            // thing that distinguishes them. Where the reply states none, the
+            // ticker is all there is.
+            let stated = scopes.iter().map(|s| s.underlying_con_id).find(|id| *id != 0);
             let Some(pos) = self.pending_option_params.iter()
-                .position(|(_, pending, _, _)| pending.eq_ignore_ascii_case(&symbol))
+                .position(|(_, pending, con_id, _)| {
+                    pending.eq_ignore_ascii_case(&symbol)
+                        && stated.is_none_or(|named| named == *con_id)
+                })
             else {
                 log::warn!("Option chain reply for '{symbol}' matches no request");
                 continue;
