@@ -204,6 +204,8 @@ mod ord_type_round_trip {
         // not pegs: neither states the instruction that would make one.
         assert_eq!(ord_type_from_fix("P", "a"), b'P');
         assert_eq!(ord_type_from_fix("P", "R"), b'P');
+        // The two-part midpoint peg names itself, and is a midpoint peg.
+        assert_eq!(ord_type_from_fix("PMID2", ""), ORD_PEG_MID);
     }
 }
 
@@ -230,6 +232,8 @@ pub fn ord_type_from_fix(ord_type: &str, exec_inst: &str) -> u8 {
         // trailing stop all travel as `P`. The instruction names which.
         "P" if exec_inst.contains('P') => ORD_PEG_MKT,
         "P" if exec_inst.contains('M') => ORD_PEG_MID,
+        // A midpoint peg that carries the two-part offset states its own name.
+        "PMID2" => ORD_PEG_MID,
         // Anything the venue names with one byte is that byte, and an
         // unrecognised name is a limit, which is what this client falls back to
         // everywhere else it reads a type.

@@ -306,12 +306,12 @@ pub(crate) fn drain_and_send_orders(
                 // say — so the replace would go out without the field that
                 // defines it and be refused naming it. Said here, where the
                 // caller hears it, rather than sent and refused.
-                if spec.is_none() && orig.ord_type == b'P' {
+                if spec.is_none() && replace_needs_the_placed_record(orig.ord_type) {
                     shared.orders.push_order_inactive(
                         order_id,
                         ORDER_NOT_FOUND_ERROR_CODE,
                         format!(
-                            "order {order_id} was not placed by this session, so the trail \
+                            "order {order_id} was not placed by this session, so the offset \
                              that defines it cannot be restated; withdraw it and place a \
                              new order",
                         ),
@@ -1128,6 +1128,27 @@ fn exec_inst_for(kind: &crate::types::OrderKind) -> String {
         _ => "",
     }
     .to_string()
+}
+
+/// Whether replacing this type needs the record of the order as it was placed.
+///
+/// Read off `push_type_and_prices`: these are the types that state a companion
+/// beyond the type and the price the lean replace already carries — a trail on
+/// 211, a peg offset, a limit-versus-trail offset. Everything else the lean
+/// replace states whole.
+fn replace_needs_the_placed_record(ord_type: u8) -> bool {
+    // Trailing, relative and both pegs travel as `P`.
+    ord_type == b'P'
+        || matches!(
+            ord_type,
+            crate::types::ORD_TRAIL_LIMIT
+                | crate::types::ORD_PEG_MKT
+                | crate::types::ORD_PEG_MID
+                | crate::types::ORD_PEG_BENCH
+                | crate::types::ORD_SNAP_MKT
+                | crate::types::ORD_SNAP_MID
+                | crate::types::ORD_SNAP_PRI
+        )
 }
 
 /// The order type byte, tracked price and tracked trigger a kind is held as.

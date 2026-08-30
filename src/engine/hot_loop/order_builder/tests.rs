@@ -1641,14 +1641,14 @@ mod modify_wire_tests {
     fn a_type_without_a_trigger_never_gains_one() {
         // Whether the type states a limit leg at all: the venue refuses one
         // on a type whose submit states none — "Invalid value in field # 44".
-        // A trailing stop is not here: replacing one restates the trail from
-        // the record of the order as it was placed, and one inserted rather
-        // than placed has none — see the test below.
+        // No type defined by an offset is here: replacing one restates that
+        // offset from the record of the order as it was placed, and one
+        // inserted rather than placed has none — see the test below.
         for (ord_type, name, has_a_limit_leg) in [
             (b'2', "LMT", true),
             (b'1', "MKT", false),
             (b'K', "MTL", false),
-            (crate::types::ORD_PEG_MID, "PEG MID", false),
+            (b'5', "MOC", false),
         ] {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
@@ -1797,6 +1797,53 @@ mod modify_wire_tests {
         });
         let sent = drain(&mut context);
         assert!(sent.contains("|211="), "the peg's offset is restated: {sent}");
+    }
+
+    /// No order defined by an offset is replaced without its placed record.
+    ///
+    /// A trail, a peg offset and a limit-versus-trail offset all live in the
+    /// record rather than in the replace, so an order the venue replayed at
+    /// connect has nothing to restate them from. Sent anyway the replace is
+    /// refused naming the field it left out.
+    #[test]
+    fn no_offset_order_is_replaced_without_its_record() {
+        for (name, ord_type) in [
+            ("TRAIL", b'P'),
+            ("TSL", crate::types::ORD_TRAIL_LIMIT),
+            ("PEG MKT", crate::types::ORD_PEG_MKT),
+            ("PEG MID", crate::types::ORD_PEG_MID),
+            ("PB", crate::types::ORD_PEG_BENCH),
+            ("SMKT", crate::types::ORD_SNAP_MKT),
+            ("SMID", crate::types::ORD_SNAP_MID),
+            ("SREL", crate::types::ORD_SNAP_PRI),
+        ] {
+            let mut context = Context::new();
+            let instrument = context.register_instrument(756733);
+            context.insert_order(crate::types::Order::new(
+                7, instrument, Side::Sell, crate::types::QTY_SCALE, 0, ord_type, b'0', 0,
+            ));
+            context.modify(7, 0, 2, false);
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let client = std::net::TcpStream::connect(addr).unwrap();
+            let (mut peer, _) = listener.accept().unwrap();
+            peer.set_read_timeout(Some(std::time::Duration::from_millis(100))).unwrap();
+            let mut conn = Some(Connection::new_raw(client).unwrap());
+            let shared = std::sync::Arc::new(SharedState::new());
+            let mut hb = HeartbeatState::new();
+            drain_and_send_orders(
+                &mut conn, &mut context, "DU111111", &mut hb, false, &shared, false, &None,
+            );
+
+            let mut buf = [0u8; 4096];
+            assert!(peer.read(&mut buf).is_err(), "{name} reaches the venue");
+            let told = shared.orders.drain_order_inactive();
+            assert!(
+                told.iter().any(|(id, _, why)| *id == 7 && why.contains("cannot be restated")),
+                "{name}: the caller is told why: {told:?}",
+            );
+        }
     }
 
     /// A trailing stop this session did not place cannot be replaced by it.
