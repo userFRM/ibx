@@ -738,6 +738,9 @@ pub fn farm_logon_exchange(
     let mut read_iv = initial_read_iv.to_vec();
     // What the farm says it expects, where it says anything at all.
     let mut heartbeat_secs: Option<u64> = None;
+    // Whether this connection has asked the session for anything only the
+    // account holder can give. Read where the logon is acknowledged.
+    let mut authenticated = false;
 
     for _msg_num in 0..20 {
         // Read until a frame is complete
@@ -823,6 +826,7 @@ pub fn farm_logon_exchange(
                 //             must drop this socket and retry from scratch with a
                 //             fresh soft-token (NOT SRP — captured behavior).
                 if decrypted.windows(5).any(|w| w == b"35=S\x01") {
+                    authenticated = true;
                     // Pass the farm read buffer as the auth carry buffer: the
                     // auth exchange reads on the same socket, and a high-latency
                     // gateway can coalesce its final response with the farm logon
@@ -843,6 +847,18 @@ pub fn farm_logon_exchange(
                     }
                 }
             } else if fields.get(&35).map(|s| s.as_str()) == Some("A") {
+                // A logon this connection never authenticated. The key exchange
+                // that opened it establishes nothing about who answered, so a
+                // peer that asks for no credentials and acknowledges the logon
+                // is a peer that has proved nothing — and every message after
+                // this one would be read as the venue's.
+                if !authenticated {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "the farm acknowledged the logon without asking this session to \
+                         authenticate, so nothing establishes who answered",
+                    ));
+                }
                 // Logon ACK — sign_iv is the current write_iv (mutated by encrypt)
                 let sign_iv = channel
                     .write_iv()

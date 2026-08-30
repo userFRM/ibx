@@ -13,6 +13,29 @@ pub const SRP_G: u32 = 2;
 pub const SRP_K: u32 = 3;
 
 /// Parse the SRP prime.
+/// The group this venue states, and the only one a logon proceeds on.
+///
+/// A peer names the modulus and generator before it has proved anything, and
+/// the whole exchange is arithmetic in that group: name a small modulus and
+/// the shared secret collapses to a value anybody can compute, which lets a
+/// peer that holds no verifier produce the proof that would otherwise catch
+/// it. Checked against what the venue actually states, so a substituted peer
+/// cannot choose the ground it is checked on.
+///
+/// If the venue ever moves to another group a logon stops here and says so,
+/// which is the failure worth having: the alternative is a logon that
+/// continues on whatever it was handed.
+pub const SRP_VENUE_N_STR: &str =
+    "d4c7f8a2b32c11b8fba9581ec4ba4f1b04215642ef7355e37c0fc0443ef756ea2c6b8eeb755a1c723027663caa265ef785b8ff6a9b35227a52d86633dbdfca43";
+
+/// The generator that goes with it.
+pub const SRP_VENUE_G: u32 = 2;
+
+/// The venue's own modulus, parsed.
+pub fn srp_venue_n() -> BigUint {
+    BigUint::parse_bytes(SRP_VENUE_N_STR.as_bytes(), 16).expect("the venue's modulus is hex")
+}
+
 pub fn srp_n() -> BigUint {
     SRP_N_STR.parse().unwrap()
 }

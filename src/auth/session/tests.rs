@@ -1722,34 +1722,49 @@ fn ib_key_2fa_rejections_do_not_echo_server_supplied_text() {
 }
 
 /// A group the venue states has to be one this arithmetic can use.
+/// The group is the venue's own, or the logon does not happen.
 ///
-/// `modpow` panics on a zero modulus, so a peer stating `N=0` takes the
-/// login thread down rather than failing the login. One and a generator
-/// outside `2..N` prove nothing about the peer either.
+/// A peer names the modulus and generator before it has proved anything. Name
+/// a small one and the shared secret collapses to a value anybody can compute,
+/// which lets a peer holding no verifier produce the proof that would catch
+/// it — so the ground the logon is checked on is not the peer's to choose.
 #[test]
-fn an_unusable_srp_group_falls_back_to_this_clients_own() {
+fn an_srp_group_that_is_not_this_venue_s_stops_the_logon() {
     let default_n = BigUint::from(0xFFFF_FFFB_u32);
     let default_g = BigUint::from(2u32);
-    let mine = || (default_n.clone(), default_g.clone());
 
-    // What the venue normally states: a modulus and a generator inside it.
-    let (n, g) = stated_group(
-        &["1FFFF".to_string(), "5".to_string()],
-        default_n.clone(), default_g.clone(),
-    );
-    assert_eq!((n, g), (BigUint::from(0x1FFFFu32), BigUint::from(5u32)));
+    // What the venue states, which is what this client holds.
+    let venue = vec![
+        crate::auth::srp::SRP_VENUE_N_STR.to_string(),
+        format!("{:x}", crate::auth::srp::SRP_VENUE_G),
+    ];
+    let (n, g) = stated_group(&venue, default_n.clone(), default_g.clone())
+        .expect("the venue's own group is the one to use");
+    assert_eq!(n, crate::auth::srp::srp_venue_n());
+    assert_eq!(g, BigUint::from(crate::auth::srp::SRP_VENUE_G));
 
     for (why, stated) in [
+        ("a modulus of three", vec!["3".to_string(), "2".to_string()]),
         ("a zero modulus", vec!["0".to_string(), "2".to_string()]),
         ("a modulus of one", vec!["1".to_string(), "2".to_string()]),
-        ("a generator of one", vec!["1FFFF".to_string(), "1".to_string()]),
-        ("a generator past the modulus", vec!["5".to_string(), "1FFFF".to_string()]),
-        ("nothing parseable", vec!["zz".to_string(), "2".to_string()]),
-        ("only one field", vec!["1FFFF".to_string()]),
-        ("no fields at all", vec![]),
+        ("another group entirely", vec!["1FFFF".to_string(), "5".to_string()]),
+        (
+            "this venue's modulus under another generator",
+            vec![crate::auth::srp::SRP_VENUE_N_STR.to_string(), "5".to_string()],
+        ),
     ] {
-        let (n, g) = stated_group(&stated, default_n.clone(), default_g.clone());
-        assert_eq!((n, g), mine(), "{why} is not a group to use");
+        assert!(
+            stated_group(&stated, default_n.clone(), default_g.clone()).is_err(),
+            "{why} is not ground to be checked on",
+        );
+    }
+
+    // A peer that states no group at all leaves this client on its own, which
+    // is what it would have used.
+    for stated in [vec!["zz".to_string(), "2".to_string()], vec!["1FFFF".to_string()], vec![]] {
+        let (n, g) = stated_group(&stated, default_n.clone(), default_g.clone())
+            .expect("nothing stated is not a group a peer chose");
+        assert_eq!((n, g), (default_n.clone(), default_g.clone()));
     }
 }
 

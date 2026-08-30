@@ -333,13 +333,21 @@ fn check_server_proof(
                 format!("{what}: the venue stated no proof of its own, so its verdict is unchecked"),
             )
         })?;
-    let ours = format!("{:040x}", srp::srp_compute_m2(a_pub, m1, k));
-    // Compared as the fixed-width hex both sides write, so a value that is
-    // merely shorter cannot pass by being a prefix. An ordinary comparison:
-    // the proof is public, the venue sends it in the clear, and it is derived
-    // from a key that is new every handshake — so there is no repeated secret
-    // for a timing difference to leak.
-    if ours != stated {
+    // Compared as numbers rather than as text. This client writes its own
+    // proof as unpadded hex and the venue writes back the same way, so one in
+    // every two hundred and fifty-six proofs is a digit shorter than the rest
+    // — and a comparison of the strings would refuse those logons.
+    //
+    // An ordinary comparison: the proof is public, the venue sends it in the
+    // clear, and it is derived from a key that is new every handshake, so
+    // there is no repeated secret for a timing difference to leak.
+    let stated_int = BigUint::parse_bytes(stated.as_bytes(), 16).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{what}: the venue's proof is not a number"),
+        )
+    })?;
+    if srp::srp_compute_m2(a_pub, m1, k) != stated_int {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
@@ -456,18 +464,19 @@ fn extract_srp_data(fields: &[String], username: &str) -> Vec<String> {
         .collect()
 }
 
-/// The group a peer states, where it states one this arithmetic can use.
+/// The group a peer states, where it states the one this venue uses.
 ///
-/// A modulus of zero makes `modpow` panic and a modulus of one makes every
-/// power zero; a generator outside `2..n` is not a generator. The defaults are
-/// what this client would have used anyway, so an unusable pair falls back to
-/// them rather than taking the login down or continuing on a group that proves
-/// nothing.
+/// A peer names the modulus and generator before it has proved anything, and
+/// every value after that is arithmetic in the group it named. A small modulus
+/// collapses the shared secret to something anybody can compute, and the proof
+/// that would catch a substituted peer is then one it can produce itself — so
+/// the group is checked before it is used, and a logon on any other stops
+/// here.
 fn stated_group(
     stated: &[String],
     default_n: BigUint,
     default_g: BigUint,
-) -> (BigUint, BigUint) {
+) -> io::Result<(BigUint, BigUint)> {
     let parsed = stated.first().zip(stated.get(1)).and_then(|(n, g)| {
         Some((
             BigUint::parse_bytes(n.as_bytes(), 16)?,
@@ -475,12 +484,19 @@ fn stated_group(
         ))
     });
     match parsed {
-        Some((n, g)) if n > BigUint::from(1u32) && g > BigUint::from(1u32) && g < n => (n, g),
-        Some(_) => {
-            log::warn!("the venue stated an SRP group this client cannot use; keeping its own");
-            (default_n, default_g)
+        Some((n, g)) if n == srp::srp_venue_n() && g == BigUint::from(srp::SRP_VENUE_G) => {
+            Ok((n, g))
         }
-        None => (default_n, default_g),
+        Some((n, _)) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "the peer stated an SRP group this venue does not use ({} bits), so the \
+                 logon would be checked on ground the peer chose",
+                n.bits(),
+            ),
+        )),
+        // Nothing stated: this client's own, which is what it would have used.
+        None => Ok((default_n, default_g)),
     }
 }
 
@@ -517,7 +533,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
 
     let data_fields = extract_srp_data(&fields2, username);
     // The venue may state its own group; otherwise this client's applies.
-    let (n, g) = stated_group(&data_fields, n, g);
+    let (n, g) = stated_group(&data_fields, n, g)?;
 
     // Generate client keys: a (private), A = g^a mod N
     let mut a_bytes = [0u8; 32];
@@ -1569,7 +1585,7 @@ pub fn do_srp_farm(
 
     let data_fields = extract_srp_data(&fields2, username);
     // The venue may state its own group; otherwise this client's applies.
-    let (n, g) = stated_group(&data_fields, n, g);
+    let (n, g) = stated_group(&data_fields, n, g)?;
 
     // Generate client keys with 32-byte private key
     let mut a_bytes = [0u8; 32];

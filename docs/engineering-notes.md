@@ -190,6 +190,28 @@ and on every farm's, and a logon whose proof does not match is refused rather
 than completed. A result stating no proof is refused too: the check is not one
 a peer can skip by leaving the field out.
 
+Two things had to hold for that check to mean anything.
+
+**The group is the venue's, not the peer's.** The modulus and generator are
+named by whoever answered, before it has proved anything, and every value after
+that is arithmetic in the group it named. Name a small modulus and the shared
+secret collapses to something anybody can compute, so the proof becomes one a
+peer without the verifier can produce. This venue states a 512-bit modulus with
+a generator of two; that group is what a logon proceeds on, and any other stops
+it.
+
+**A logon that authenticated nothing is not a logon.** A farm may ask the
+session to authenticate, or acknowledge the logon without asking. The second
+was accepted, and the key exchange that opened the socket establishes nothing
+about who answered — so a peer that asks for no credentials was a peer this
+client went on to read as the venue. An acknowledgement with no authentication
+behind it is refused.
+
+The one path left is the reconnect. A connection that offers a cached token
+runs a challenge the client answers and the peer then rates `PASSED`, and there
+is no value in that exchange only the venue could produce. It is not weaker
+than it was, and it is weaker than the logon beside it.
+
 ### What a replace does to each order this client refuses one for
 
 A modify is refused in front of an order defined by more than its type and
