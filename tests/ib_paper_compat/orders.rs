@@ -2352,3 +2352,136 @@ pub(super) fn phase_replace_a_trailing_stop(conns: Conns) -> Conns {
     }
     conns
 }
+
+// ─── Phase 197: What the venue does with a replace of each refused order ───
+
+/// What a replace does to an order defined by more than its type and price.
+///
+/// A modify is refused in front of each of these on one reading: that the
+/// replace cannot restate what defines the order, and that sending one would
+/// destroy it. The trailing stop was taken off that list when a session
+/// answered otherwise. This asks the same question of the rest, one at a time:
+/// place it, replace it, and read whether the venue takes the replace and
+/// whether the order is still working afterwards.
+///
+/// Nothing here decides anything on its own. It is the evidence the refusals
+/// are missing, and each line of its output is one refusal's answer.
+pub(super) fn phase_replace_each_refused_order(conns: Conns) -> Conns {
+    phase!("--- Phase 197: what a replace does to each order this client refuses ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst, "STK", "SMART");
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, regulatory_snapshot: false, reply_tx: None }).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    // Far under the market, so every one of these rests rather than trading.
+    const RESTING: i64 = 100_000_000;
+    let lmt = || OrderKind::Limit { price: RESTING };
+
+    let each: Vec<(&str, OrderKind, OrderAttrs)> = vec![
+        ("hidden", lmt(), OrderAttrs { hidden: true, ..Default::default() }),
+        ("all-or-none", lmt(), OrderAttrs { all_or_none: true, ..Default::default() }),
+        // Shown in round lots: a display of one is refused, "Display size
+        // should be a multiple of lot size".
+        ("an iceberg", lmt(), OrderAttrs { display_size: 100, ..Default::default() }),
+        ("a minimum quantity", lmt(), OrderAttrs { min_qty: 100, ..Default::default() }),
+        ("discretionary", lmt(), OrderAttrs { discretionary_amt: 1_000_000, ..Default::default() }),
+        ("sweep to fill", lmt(), OrderAttrs { sweep_to_fill: true, ..Default::default() }),
+        ("an OCA group", lmt(), OrderAttrs { oca_group_str: "ibx-197".into(), ..Default::default() }),
+        ("a good-till date", lmt(), OrderAttrs { good_till_date_ymd: 20261231, ..Default::default() }),
+        ("a trailing stop limit", OrderKind::TrailingStopLimit { trail_stop_price: 0, lmt_offset: 1_00_000_000, trail_amt: 5_00_000_000 }, OrderAttrs::default()),
+        ("a relative order", OrderKind::Rel { offset: 1_00_000_000 }, OrderAttrs::default()),
+        // The offset is refused on this one: "Peg diff offset is not allowed
+        // for PegToMid".
+        ("pegged to midpoint", OrderKind::PegMid { offset: 0, price_cap: 0 }, OrderAttrs::default()),
+        ("a midpoint order", OrderKind::MidPrice { price_cap: RESTING }, OrderAttrs::default()),
+        ("a snap to midpoint", OrderKind::SnapMid { offset: 0 }, OrderAttrs::default()),
+        ("a limit if touched", OrderKind::Lit { price: RESTING, stop_price: RESTING }, OrderAttrs::default()),
+    ];
+
+    let mut told: Vec<(String, String)> = Vec::new();
+
+    for (name, kind, attrs) in each {
+        let oid = next_order_id();
+        // A round lot, so a display size can be a multiple of one. The
+        // good-till date states the life that carries it: named with a plain
+        // day order the venue answers "Invalid value in field # 432".
+        let tif = if attrs.good_till_date_ymd != 0 { b'6' } else { b'0' };
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+            order_id: oid, instrument: inst, side: Side::Buy,
+            qty: 200 * ibx::types::QTY_SCALE, kind, tif, attrs,
+        })).unwrap();
+
+        // Working, refused, or nothing — then the replace, then the answer.
+        let mut replaced = false;
+        let mut outcome: Option<String> = None;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline && outcome.is_none() {
+            let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
+            else { continue };
+            if update.order_id != oid { continue; }
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                    if replaced {
+                        outcome = Some("the replace is taken, the order still works".into());
+                    } else {
+                        // A round lot again: a display size has to stay a
+                        // multiple of one, and a replace that moved the
+                        // quantity off the grid was refused for that rather
+                        // than for anything about the order it replaced.
+                        control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                            order_id: oid, price: RESTING, qty: 300 * ibx::types::QTY_SCALE,
+                            outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                        })).unwrap();
+                        replaced = true;
+                    }
+                }
+                OrderStatus::Cancelled if replaced => {
+                    outcome = Some("the order went with the replace".into());
+                }
+                OrderStatus::Rejected => {
+                    let why = shared.orders.get_order_info(oid)
+                        .map(|info| info.order_state.reject_reason)
+                        .filter(|why| !why.is_empty())
+                        .unwrap_or_else(|| "no reason given".to_string());
+                    outcome = Some(if replaced {
+                        format!("the replace is refused — {why}")
+                    } else {
+                        format!("not placed — {why}")
+                    });
+                }
+                _ => {}
+            }
+        }
+        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
+        let said = outcome.unwrap_or_else(|| {
+            if replaced {
+                "the replace drew no answer".into()
+            } else {
+                "the venue never reported it working, so no replace was sent".into()
+            }
+        });
+        println!("  {name:<24} {said}");
+        told.push((name.to_string(), said));
+    }
+
+    // Give the cancels somewhere to land before the engine goes.
+    let quiet = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < quiet {
+        let _ = event_rx.recv_timeout(Duration::from_millis(100));
+    }
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    let answered = told.iter().filter(|(_, said)| !said.contains("no answer") && !said.contains("never acknowledged")).count();
+    println!("\n  {answered} of {} answered\n", told.len());
+    assert!(answered > 0, "the venue answered none of them, so this phase establishes nothing");
+    println!("  PASS\n");
+    conns
+}

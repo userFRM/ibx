@@ -164,6 +164,45 @@ The rollover has no answer behind it and cannot get one through this request:
 the contract that would carry it is refused as a type. The arithmetic it would
 take is the arithmetic the five seen kinds exercise.
 
+### What a replace does to each order this client refuses one for
+
+A modify is refused in front of an order defined by more than its type and
+price, on the reading that the replace cannot restate what defines it and that
+sending one would destroy the order. A session put that to the venue, one order
+at a time: place it, replace it, read whether the venue takes the replace and
+whether the order is still working afterwards.
+
+| Order | What the venue did |
+| --- | --- |
+| Hidden | The replace is taken, the order still works |
+| All-or-none | The replace is taken, the order still works |
+| Discretionary | The replace is taken, the order still works |
+| Sweep to fill | The replace is taken, the order still works |
+| In an OCA group | The replace is taken, the order still works |
+| With a good-till date | The replace is taken, the order still works |
+| Trailing stop limit | The replace is taken, the order still works |
+| Pegged to midpoint | The replace is taken, the order still works |
+| Limit if touched | The replace is taken, the order still works |
+| An iceberg | The replace is refused: `Display size should be a multiple of lot size` |
+| With a minimum quantity | Not placed: `Partial AON orders not supported for this combination of exchange and security type` |
+| Relative | Never reported working, so no replace was sent |
+| Midpoint | Never reported working, so no replace was sent |
+| Snap to midpoint | Never reported working, so no replace was sent |
+
+Nine of the fourteen are answered, and answered the same way: the venue takes
+the replace and the order goes on working. The reason written beside those
+refusals — that a replace would destroy the order — is not what this venue
+does.
+
+The iceberg's refusal is about the quantity a replace states rather than about
+the order it replaces: a display size stays a multiple of the lot size, and a
+replace that moves the quantity off that grid is refused for that. The minimum
+quantity is refused as an order, not as a replace, on this venue and security
+type.
+
+The last three were placed and never reported working, which a closed market
+explains and does not establish. They are the three left to ask in an open one.
+
 ### What a crypto order needs, and what it carries
 
 A crypto is the one contract quoted around the clock, and the only one an order
@@ -543,7 +582,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (146 phases) | 39 tests | Yes |
+| Paper compatibility suite (147 phases) | 40 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure
