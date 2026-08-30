@@ -1464,7 +1464,7 @@ pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Ref
 
 #### `req_wsh_meta_data`
 
-Ask what event types the corporate-events calendar carries. Must be asked before events can be requested: an event request cannot be built until the event types are known.
+Ask what event types the corporate-events calendar carries. Independent of the events themselves: neither request needs the other, and either may be asked first.
 
 ```rust
 pub fn req_wsh_meta_data(&self, req_id: i64) -> Result<(), Refusal>
