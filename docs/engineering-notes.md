@@ -70,7 +70,7 @@ The contract layer names 24 security types. Coverage is stated per path.
 | Forex | Verified | Verified | Verified | Available |
 | Future | Verified | Verified | Verified | Available |
 | Futures option | Verified | Verified | Verified | Available. A lookup must name an expiry: one expiry on the index future returns ten thousand eight hundred and fifty contracts in 11.5s, and every expiry at once does not answer inside the deadline a request is given. An order must state the security type: sent under an id alone the venue answers `Unsupported type` |
-| Index | Verified | Verified | Blocked, the venue supports no order on the contract type | None required |
+| Index | Verified | Verified | Blocked by the venue, in its own words: an order on `SPX` and on `VIX` is answered `201 Orders not supported for this contract type` | None required |
 | Bond | Verified | Verified | Verified, quantified in face value | Available |
 | Warrant | Verified | Accepted, and answered with nothing | Permitted, sixty-three order types stated. Refused on the exchange and security type one attempt named, which is that pairing and not the type | Named on the venue they list on rather than a routed one: `SWB` returns four thousand four hundred and sixty-nine against a single underlying in 5.5s, where every other venue asked either ran past the deadline or held none. A quote on three of them is accepted and answered with nothing, and no reason is stated, which is the shape an account without the data for that venue is answered with. Silence is not a pass, so this stays short of verified |
 | Combination | Verified | Not applicable | Verified | Available |
@@ -697,7 +697,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (148 phases) | 40 tests | Yes |
+| Paper compatibility suite (148 phases) | 41 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

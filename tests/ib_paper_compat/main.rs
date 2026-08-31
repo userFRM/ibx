@@ -684,6 +684,74 @@ fn replace_each_refused_order_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// What the venue answers an order on an index, which the notes had asserted
+/// without ever asking.
+///
+/// Run: cargo test --test ib_paper_compat an_order_on_an_index_live -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of; run it with --ignored"]
+fn an_order_on_an_index_live() {
+    start_logging();
+    let config = match get_config() { Some(c) => c, None => return };
+    let settings = ibx::EClientConfig {
+        username: config.username.clone(),
+        password: config.password.to_string(),
+        paper: config.paper,
+        ..Default::default()
+    };
+    let client = EClient::connect(&settings).expect("connect failed");
+
+    #[derive(Default)]
+    struct Heard {
+        said: Vec<(i64, String)>,
+    }
+    impl ibx::api::wrapper::Wrapper for Heard {
+        fn error(&mut self, _req_id: i64, code: i64, message: &str, _advanced: &str) {
+            if !(2100..=2200).contains(&code) {
+                self.said.push((code, message.to_string()));
+            }
+        }
+    }
+
+    println!("=== what the venue answers an order on an index ===\n");
+    for (symbol, exchange) in [("SPX", "CBOE"), ("VIX", "CBOE")] {
+        let contract = ApiContract {
+            symbol: symbol.into(), sec_type: "IND".into(), exchange: exchange.into(),
+            currency: "USD".into(), ..Default::default()
+        };
+        let resolved = match client.qualify_contract(&contract) {
+            Ok(c) => c,
+            Err(e) => { println!("  {symbol}: not qualified ({e})"); continue; }
+        };
+        let order = ibx::types::model::Order {
+            action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+            lmt_price: 1.0, tif: "DAY".into(), ..Default::default()
+        };
+        let id = next_order_id() as i64;
+        let mut heard = Heard::default();
+        match client.place_order(id, &resolved, &order) {
+            Err(refusal) => println!("  {symbol}: this client refused it — {refusal}"),
+            Ok(()) => {
+                let deadline = std::time::Instant::now() + Duration::from_secs(15);
+                while std::time::Instant::now() < deadline && heard.said.is_empty() {
+                    client.process_msgs(&mut heard);
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                if heard.said.is_empty() {
+                    println!("  {symbol} (conId {}): nothing came back in 15s", resolved.con_id);
+                } else {
+                    for (code, message) in &heard.said {
+                        println!("  {symbol} (conId {}): {code} {message}", resolved.con_id);
+                    }
+                }
+                let _ = client.cancel_order(id, "");
+            }
+        }
+    }
+    println!("\n=== done ===");
+    client.disconnect();
+}
+
 /// The one contract quoted around the clock, so the only order phase that says
 /// anything on a Saturday.
 #[test]

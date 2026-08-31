@@ -309,10 +309,11 @@ fn recv_msg_ns_variant() {
 /// A message the venue states between the client's proof and the verdict is
 /// passed over, not taken for the verdict.
 ///
-/// This refused a logon on the nightly session: the venue put an id of its own
-/// on the wire, the read took it for the answer, and the field it found there
-/// said `UNKNOWN`. An id this exchange does not use is now logged and read
-/// past, and the read goes on to the verdict.
+/// The frames here are constructed: what they pin is that an id this exchange
+/// does not use is read past rather than taken for the answer. The reason that
+/// behaviour is wanted came from a session — a logon was refused because a
+/// message arriving before the verdict was read as one, and the field taken
+/// from it said `UNKNOWN` — and the session is what that says, not this.
 #[test]
 fn a_message_that_is_not_the_srp_verdict_is_read_past() {
     let mut wire = Vec::new();
