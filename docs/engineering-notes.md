@@ -681,13 +681,32 @@ the one being used. Read from the definition now.
 
 Asked the venue about a share, a share listed outside the United States, an
 index, a bond, a fund, an option and a future, and kept every field each reply
-carried. What the reference client publishes and this does not:
+carried. One is left that the reference client publishes and this does not
+establish:
 
 | Field | State |
 | --- | --- |
-| `evMultiplier` | Unsettled. The number carrying it on an execution report is a different field on a definition, so the pair is not evidence |
-| `sizeIncrement`, `suggestedSizeIncrement` | A rule states an increment per price band and again per size band under the same numbers, and the size bands are not read |
-| `marketRuleIds` | The per-venue list is not stated as a list; whether it can be assembled from the rules is not settled |
+| `evMultiplier` | Unsettled. The reference client holds the rule and the multiplier as one value, split on a colon, and this client reads two tags — the second of which was taken from an execution report rather than from a definition. No definition asked for here has carried either, so which is right has not been put to the venue |
+
+Settling it needs a contract that carries an economic-value rule at all: they
+belong to exchange-for-physical contracts and to a few bonds, and none of the
+seven kinds asked so far states one. Until one is asked the two tags stay as
+they are, which costs nothing while the venue states neither.
+
+The two rows that stood beside it are gone. The size increments are read: the
+smallest across every band of the rule's own size table, taken from the table
+the venue sends rather than assumed, because a contract dealt in whole units
+and one dealt in fractions state different tables. What is not done is the
+reference client's own arithmetic for the *suggested* increment, which stands
+on the actual one instead — its own record does the same where nothing separate
+was stated, and the field says so.
+
+The per-venue rule list is carried and is usually empty, which is the venue's
+doing: it sends the increment tables themselves with the definition, the price
+steps and the size steps, instead of naming rules to go and fetch. The
+reference client assembles its list from a store of rules it keeps, which is
+why it has one where this has none — and `req_market_rule` answers from the
+tables that did arrive.
 
 Everything else the reference client publishes is carried. The rest of what a
 definition states — fifty-one stated fields on a share, forty-six on a bond — is
