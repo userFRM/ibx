@@ -238,10 +238,13 @@ pub(crate) fn handle_position_update(
     // 6101 = averageCost, 6065 = marketPrice (per share), 6067 = marketValue,
     // 6100 = unrealizedPNL, 6099 = realizedPNL. Earlier code read 6065 as the
     // average cost, which is actually the market price.
+    // What the frame states, and nothing where it states nothing: an absent
+    // tag written as nought overwrites a real figure with zero, which the
+    // caller reads as a holding worth nothing.
     let price_tag = |tag: u32| parsed.get(&tag)
         .and_then(|s| s.parse::<f64>().ok())
-        .map(crate::types::price_from_f64)
-        .unwrap_or(0);
+        .filter(|v| v.is_finite())
+        .map(crate::types::price_from_f64);
     // The average cost is written into a row that persists, so an absent tag
     // must not overwrite a real one with zero — the same rule the quantity
     // above follows. Marks are refreshed every frame and are handled apart.
@@ -249,10 +252,10 @@ pub(crate) fn handle_position_update(
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|v| v.is_finite())
         .map(crate::types::price_from_f64);
-    let market_price: Price = price_tag(6065);
-    let market_value: Price = price_tag(6067);
-    let unrealized_pnl: Price = price_tag(6100);
-    let realized_pnl: Price = price_tag(6099);
+    let market_price = price_tag(6065);
+    let market_value = price_tag(6067);
+    let unrealized_pnl = price_tag(6100);
+    let realized_pnl = price_tag(6099);
     // Symbol arrives space-padded; trim trailing whitespace.
     let symbol = parsed.get(&6068).map(|s| s.trim_end().to_string()).unwrap_or_default();
     let sec_type = parsed.get(&167).cloned().unwrap_or_default();

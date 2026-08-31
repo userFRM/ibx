@@ -2123,7 +2123,7 @@ fn lean_position_feed_does_not_clobber_marks() {
     shared.portfolio.set_position_info(PositionInfo {
         con_id: 1, position: 10.0, avg_cost: 100 * PRICE_SCALE, ..Default::default()
     });
-    shared.portfolio.set_position_marks(1, 110 * PRICE_SCALE, 1100 * PRICE_SCALE, 100 * PRICE_SCALE, 5 * PRICE_SCALE);
+    shared.portfolio.set_position_marks(1, Some(110 * PRICE_SCALE), Some(1100 * PRICE_SCALE), Some(100 * PRICE_SCALE), Some(5 * PRICE_SCALE));
     // Lean feed updates position + avg_cost only.
     shared.portfolio.set_position_info(PositionInfo {
         con_id: 1, position: 12.0, avg_cost: 101 * PRICE_SCALE, ..Default::default()

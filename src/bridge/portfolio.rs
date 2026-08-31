@@ -200,13 +200,19 @@ impl PortfolioState {
     /// Update the per-position marks (from the account-updates portfolio message).
     /// Kept separate from set_position_info so the lean position feed, which has
     /// no marks, does not overwrite them.
-    #[doc(hidden)] pub fn set_position_marks(&self, con_id: i64, market_price: Price, market_value: Price, unrealized_pnl: Price, realized_pnl: Price) {
+    /// Apply the marks a frame states, and only those.
+    ///
+    /// A frame that states none of a figure is not a frame stating nought for
+    /// it: written that way an absent tag overwrites a real profit with zero
+    /// and the caller reads a holding as flat. The same rule the average cost
+    /// beside them follows.
+    #[doc(hidden)] pub fn set_position_marks(&self, con_id: i64, market_price: Option<Price>, market_value: Option<Price>, unrealized_pnl: Option<Price>, realized_pnl: Option<Price>) {
         let mut map = self.position_infos.lock().unwrap();
         let entry = map.entry(con_id).or_insert_with(|| PositionInfo { con_id, ..Default::default() });
-        entry.market_price = market_price;
-        entry.market_value = market_value;
-        entry.unrealized_pnl = unrealized_pnl;
-        entry.realized_pnl = realized_pnl;
+        if let Some(v) = market_price { entry.market_price = v; }
+        if let Some(v) = market_value { entry.market_value = v; }
+        if let Some(v) = unrealized_pnl { entry.unrealized_pnl = v; }
+        if let Some(v) = realized_pnl { entry.realized_pnl = v; }
     }
 
     #[doc(hidden)] pub fn set_position(&self, id: InstrumentId, pos: f64) {
