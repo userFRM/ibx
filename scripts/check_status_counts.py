@@ -21,7 +21,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The inventory sits with the engineering notes: it is a fact about this
 # repository rather than about what the client can do, and the compatibility
 # matrix is the latter.
-STATUS = ROOT / "docs" / "engineering-notes.md"
+STATUS = ROOT / "docs" / "capabilities.md"
 MATRIX = ROOT / "docs/capabilities.md"
 
 #: Row label in the table, and how to count what it describes.
@@ -347,16 +347,16 @@ def main() -> int:
         if key not in said:
             wrong.append(f"{key}: nothing published, {n} exist")
         elif said[key] != n:
-            wrong.append(f"{key}: docs/engineering-notes.md says {said[key]:,}, {n:,} exist")
+            wrong.append(f"{key}: docs/capabilities.md says {said[key]:,}, {n:,} exist")
         else:
             print(f"{key}: {n:,}")
     surface, surface_said = api_surface(), api_surface_published()
     for key, n in surface.items():
         if key not in surface_said:
-            wrong.append(f"docs/engineering-notes.md publishes no {key!r}")
+            wrong.append(f"docs/capabilities.md publishes no {key!r}")
         elif surface_said[key] != n:
             wrong.append(
-                f"{key}: docs/engineering-notes.md says {surface_said[key]}, "
+                f"{key}: docs/capabilities.md says {surface_said[key]}, "
                 f"the generated matrix lists {n}"
             )
     if not any("surfaces differ" in w or "Served" in w or "Canonical" in w for w in wrong):

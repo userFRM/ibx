@@ -258,7 +258,6 @@ Rust: `EClientConfig.gateway`. Python: `ibx.configure()`.
 
 * [The book](https://userfrm.github.io/ibx/) — guides, recipes and the generated API reference
 * [Capabilities](docs/capabilities.md) — what is supported, and what each claim rests on
-* [Engineering notes](docs/engineering-notes.md) — architecture, performance, protocol coverage
 * [Notebooks](notebooks/) — the seven ib_async subjects, in the TWS API shape and in [ib_async's own](notebooks/ib_async_nogateway/)
 * [Examples](examples/) — runnable single-file programs in Rust and Python
 

@@ -20,6 +20,60 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Rust and Python | the same request produces the same call on both, compared against live responses |
 | Tests | 2,260 offline, and 187 more that live in the suites run against a broker session |
 
+## API surface
+
+| Measure | Count |
+| --- | --- |
+| Canonical calls | 78 |
+| Served, Rust | 77 |
+| Served, Python | 77 |
+| Taken and not applied, Rust | 1 |
+| Taken and not applied, Python | 1 |
+| Canonical callbacks | 85 |
+| Calls where the two surfaces differ | 0 |
+| Callbacks where the two surfaces differ | 0 |
+
+Counted from the source by `scripts/gen_api_docs.py` and checked against this
+table by `scripts/check_status_counts.py`, both of which CI runs. A figure
+here that the source stops supporting fails the build rather than standing. The two surfaces carry the same calls and the same callbacks: a
+program written against either finds the same thing, and a call that cannot be
+served says so on both rather than being absent from one.
+
+### Calls not served
+
+Every call that exists with the expected signature and reports, through the
+error callback, that it cannot be served. Taken from the generated coverage
+matrix, which CI checks against the source.
+
+None report through the error callback. One is taken and not applied:
+`set_server_log_level`. The session holds no log level of its own and the
+protocol carries no message asking the venue to change one, so what a caller
+states is written to this client's log and reaches nothing else. It is counted
+with the calls that are not served, because a caller who set one and expected
+the venue to act on it got neither — and it says so in its own documentation
+rather than on the error callback, which a program calling it as a matter of
+course would hear on every call.
+
+The two that stood here before it — the advisor configuration request and its
+replacement — are not among them: they send to the venue like every other call,
+and what does not happen is that their replies are read, which is a callback
+nothing reaches and is counted as one on the limits page.
+
+## Test inventory
+
+| Suite | Count | Requires credentials |
+| --- | ---: | :---: |
+| Rust unit and integration | 1,789 | No |
+| Rust, live | 9 | Yes |
+| Python | 471 | No |
+| Python, live | 135 | Yes |
+| Paper compatibility suite (151 phases) | 43 tests | Yes |
+
+Counted rather than stated: `scripts/check_status_counts.py` names every test
+in each suite and fails the gate when this table disagrees with it, so a figure
+here cannot go quietly out of date as the suites grow.
+
+
 45 of the 47 capabilities are verified against IBKR production servers. Of the
 other two, advisor configuration reaches the server and needs an advisor
 account to see what it answers, and session lifetime is a property of the venue

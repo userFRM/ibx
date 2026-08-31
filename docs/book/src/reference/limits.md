@@ -60,14 +60,49 @@ from. Which venues answer is the account's entitlement, not this client's:
 Check what came back rather than assuming a subscription that was accepted is a
 subscription that will deliver.
 
-## 256 instruments at a time
+## 4,096 instruments at a time
 
-The engine tracks 256 distinct contracts concurrently. The 257th registration is
-refused with a message naming the cap.
+The engine holds a slot for 4,096 distinct contracts concurrently. Registering
+one past that is refused with a message naming the limit.
 
 Concurrent, not cumulative: cancelling a market-data subscription frees its slot
 and the slot is reused. A long-running process that subscribes and never cancels
 will reach it; one that cancels what it is done with will not.
+
+The number is this client's own allocation, not a limit the venue states. One
+option chain asked for at once is 282 live subscriptions on a single
+underlying, and the venue served all of them.
+
+## Two orders a modify cannot restate
+
+A modify is a full statement of the order, rebuilt from what was placed. Two
+kinds cannot be stated that way and the call is refused rather than sent:
+
+| Order | Why |
+| --- | --- |
+| An adjustable stop | It is an ordinary stop defined by the conversion it carries, and no session has established that a replace keeps it |
+| A what-if preview | It is a margin preview, not a resting order, so there is nothing on the book for a replace to act on |
+
+Everything else is replaced as itself, including the ones that carry more than
+a type and a price: hidden, all-or-none, iceberg, discretionary, sweep-to-fill,
+an OCA group, a good-till date, a bracket child, an algo, a conditional order,
+and the trailing, pegged, midpoint and limit-if-touched types.
+
+A relative order is refused a modify as well. It answers both ways: sometimes
+the venue takes the replace and the order goes on working, and sometimes
+neither the replace nor a withdrawal after it draws any answer at all. A modify
+that strands the order some of the time is worse than one that is refused.
+
+## What a crypto order needs
+
+A crypto is quoted around the clock and priced and sized differently from a
+share.
+
+| | |
+| --- | --- |
+| Time in force | Immediate-or-cancel, or the one measured in minutes. A day order is refused: *"The crypto buy order must be Minutes or IOC"* |
+| Price | On the venue's grid. One that is not is refused as a price, *"Invalid Price"*, rather than rounded — this client sends prices as they were given |
+| Quantity | A fraction, counted in hundred-millionths. A thousandth of a coin is an ordinary size |
 
 ## Order fields the protocol has nowhere to put
 
