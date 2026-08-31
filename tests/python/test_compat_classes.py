@@ -147,7 +147,12 @@ def test_contract_details_contract_is_mutable_in_place():
 def test_order_state_defaults():
     os = OrderState()
     assert os.status == ""
-    assert os.commission_and_fees == 0.0
+    # An order the venue has not priced is not one that costs nothing. The
+    # commission figures carry the same marker the margin figures beside them
+    # do, which is what every unstated number on this surface reads as.
+    assert os.commission_and_fees == float("1.7976931348623157e+308")
+    assert os.min_commission_and_fees == float("1.7976931348623157e+308")
+    assert os.max_commission_and_fees == float("1.7976931348623157e+308")
 
 
 # ── TagValue ──

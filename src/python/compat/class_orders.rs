@@ -1320,8 +1320,8 @@ impl Default for OrderState {
     /// unset — which is what happened to every open order reported through a
     /// path that states the status and leaves the rest to this.
     ///
-    /// Only the ones carried as text. The figures already carried as numbers
-    /// are read as numbers and default as they did.
+    /// The three commission figures carry the marker as a number rather than
+    /// as text, which is how every other unstated number on this surface reads.
     fn default() -> Self {
         let unstated = || f64::MAX.to_string();
         Self {
@@ -1335,9 +1335,14 @@ impl Default for OrderState {
             init_margin_after: unstated(),
             maint_margin_after: unstated(),
             equity_with_loan_after: unstated(),
-            commission_and_fees: 0.0,
-            min_commission_and_fees: 0.0,
-            max_commission_and_fees: 0.0,
+            // The same marker the figures above carry, for the same reason:
+            // an order the venue has not priced is not an order that costs
+            // nothing, and nought says the second where the venue said the
+            // first. Every other unstated number on this surface reads this
+            // way already.
+            commission_and_fees: f64::MAX,
+            min_commission_and_fees: f64::MAX,
+            max_commission_and_fees: f64::MAX,
             commission_and_fees_currency: String::new(),
             warning_text: String::new(),
             completed_time: String::new(),

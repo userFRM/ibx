@@ -613,7 +613,8 @@ class TestReqOpenOrdersOrderState:
         # empty: empty raises inside the callback and the whole report is lost,
         # which is what a caller of their library saw on every open order.
         assert float(state["init_margin_after"]) == float("1.7976931348623157e+308")
-        assert state["commission_and_fees"] == 0.0
+        # And the commission beside it, which the venue has not stated either.
+        assert state["commission_and_fees"] == float("1.7976931348623157e+308")
 
 
 class TestReqCompletedOrdersOrderState:
