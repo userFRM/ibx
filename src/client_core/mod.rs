@@ -1742,15 +1742,10 @@ impl ClientCore {
         if !order.conditions.is_empty() {
             return Some("a conditional order".to_string());
         }
-        // These ride tags the replace does not carry either — hidden on 6135,
-        // all-or-none as an execution instruction, and the cash quantity on
-        // 5920 — so a replace states an order without them.
-        if order.hidden {
-            return Some("a hidden order".to_string());
-        }
-        if order.all_or_none {
-            return Some("an all-or-none order".to_string());
-        }
+        // The cash quantity rides tag 5920, which the replace does not carry,
+        // and no session has placed one to ask what happens. Hidden and
+        // all-or-none were refused here on the same reading until a session
+        // replaced each of them and the venue took it.
         if order.cash_qty > 0.0 {
             return Some("a cash-quantity order".to_string());
         }
@@ -1771,29 +1766,22 @@ impl ClientCore {
         // 6107 as unchanged or as cleared is not established here, and the
         // difference between "latent" and "detached" is the whole risk — so
         // the modify is refused rather than sent and hoped for.
-        if !order.oca_group.is_empty() {
-            return Some("an order in an OCA group".to_string());
-        }
+        // A bracket child is the costly one and the only link left here: a
+        // replace that omitted the parent link would leave a child resting
+        // alone, a fill on one leg no longer cancelling the other. No session
+        // has replaced one, so it stays refused until one has.
         if order.parent_id != 0 {
             return Some("a bracket child".to_string());
-        }
-        if !order.good_till_date.is_empty() {
-            return Some("an order with a good-till expiry".to_string());
         }
         if !order.good_after_time.is_empty() {
             return Some("an order with a good-after time".to_string());
         }
-        if order.display_size > 0 {
-            return Some("an iceberg order".to_string());
-        }
+        // The venue refuses the order itself on the venue and security type a
+        // session asked on — "Partial AON orders not supported for this
+        // combination of exchange and security type" — so what a replace would
+        // do to one is a question it has not been possible to put.
         if order.min_qty > 0 {
             return Some("an order with a minimum quantity".to_string());
-        }
-        if order.discretionary_amt > 0.0 {
-            return Some("a discretionary order".to_string());
-        }
-        if order.sweep_to_fill {
-            return Some("a sweep-to-fill order".to_string());
         }
         if order.trigger_method != 0 {
             return Some("an order with a non-default trigger method".to_string());
@@ -1807,14 +1795,24 @@ impl ClientCore {
         // the same byte they were submitted under, so it restates them as
         // themselves — which is the whole test for membership.
         //
-        // `TRAIL` restates itself on a session's answer rather than a reading:
-        // the replace states the trail on tags 99 and 211 as the submit does,
-        // the venue takes it, and the order goes on working.
+        // The types below it restate themselves on a session's answer rather
+        // than on a reading. Each was placed with the market open, replaced,
+        // and found still working afterwards.
+        //
+        // `REL` is the one that was not. Its replace drew no answer at all, and
+        // neither did the withdrawal that followed — the order stopped
+        // answering for anything, which is the outcome the refusals here were
+        // written to prevent. It keeps its reason, and now has the session
+        // behind it.
         if matches!(
             ty.as_str(),
             "MKT" | "LMT" | "STP" | "STP LMT" | "MOC" | "LOC" | "MIT" | "STP PRT"
                 | "MTL" | "BOX TOP" | "MKT PRT"
-        ) || (restating_itself && ty == "TRAIL")
+        ) || (restating_itself
+            && matches!(
+                ty.as_str(),
+                "TRAIL" | "TRAIL LIMIT" | "PEG MID" | "MIDPX" | "SNAP MID" | "LIT"
+            ))
         {
             return None;
         }

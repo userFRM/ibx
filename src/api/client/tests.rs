@@ -280,7 +280,7 @@ fn a_whole_quantity_still_places() {
 /// leaving the caller with nothing resting. Refusing keeps the order.
 #[test]
 fn a_type_the_replace_cannot_restate_is_not_modified() {
-    for order_type in ["TRAIL LIMIT", "REL", "PEG MID", "MIDPX", "SNAP MID"] {
+    for order_type in ["REL"] {
         let (client, rx, _shared) = test_client();
         let submit = Order {
             action: "SELL".into(), total_quantity: 1.0, order_type: order_type.into(),
@@ -318,17 +318,13 @@ fn an_order_defined_by_more_than_its_type_is_not_modified() {
         ("conditional", |o| o.conditions.push(
             crate::types::OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true },
         )),
-        // Every attribute below rides a tag the replace does not carry, so a
-        // modify would state the order without it. The bracket links
-        // are the costly pair: a child sent without its parent or OCA group
-        // rests alone, and a fill on the sibling no longer cancels it.
+        // What is left of the attributes. A bracket child is the costly one:
+        // sent without its parent it rests alone, and a fill on the sibling no
+        // longer cancels it. The minimum quantity is one the venue refuses as
+        // an order on the venue and security type asked. The rest came off this
+        // list when a session replaced each and the venue took it.
         ("bracket child", |o| o.parent_id = 4242),
-        ("OCA member", |o| o.oca_group = "bracket_1".into()),
-        ("good-till expiry", |o| o.good_till_date = "20260311 16:00:00".into()),
-        ("iceberg", |o| o.display_size = 100),
         ("minimum quantity", |o| o.min_qty = 50),
-        ("discretionary", |o| o.discretionary_amt = 0.05),
-        ("sweep to fill", |o| o.sweep_to_fill = true),
         ("trigger method", |o| o.trigger_method = 2),
     ];
     for (name, set) in cases {
@@ -414,26 +410,29 @@ fn an_order_that_cannot_be_placed_as_asked_is_refused() {
     }
 }
 
-/// Limit-if-touched is submitted as `LT` but tracked under a byte the replace
-/// renders as `K`, which is market-to-limit here — so a replace would describe
-/// a different order type entirely.
+/// Limit-if-touched is replaced as itself.
+///
+/// It was refused here on the reading that it is tracked under a byte the
+/// replace renders as market-to-limit. It is rendered by the same table that
+/// wrote it, `LT` either way, and a session placed one with the market open
+/// and replaced it: the venue took it and the order went on working.
 #[test]
-fn a_limit_if_touched_is_not_modified() {
+fn a_limit_if_touched_is_replaced_as_itself() {
     let (client, rx, _shared) = test_client();
     let order = Order {
         action: "SELL".into(), total_quantity: 1.0, order_type: "LIT".into(),
         lmt_price: 100.0, aux_price: 101.0, tif: "DAY".into(), ..Default::default()
     };
-    let _ = client.place_order(9302, &spy(), &order);
+    client.place_order(9302, &spy(), &order).expect("the limit-if-touched submits");
     while rx.try_recv().is_ok() {}
 
-    assert!(
-        client.core.is_order_tracked(9302),
-        "the LIT must submit and be tracked, or the refusal below proves nothing",
-    );
-    let err = client.place_order(9302, &spy(), &order)
-        .expect_err("a LIT modify must be refused");
-    assert!(err.message.contains("cannot be modified"), "{err}");
+    client.place_order(9302, &spy(), &order).expect("and is replaced as itself");
+    match rx.try_recv().expect("the replace reaches the wire") {
+        ControlCommand::Order(OrderRequest::Modify { order_id, .. }) => {
+            assert_eq!(order_id, 9302);
+        }
+        cmd => panic!("expected a replace, got {cmd:?}"),
+    }
 }
 
 /// The refusal has to read the order the caller is asking for, not only the one
@@ -444,9 +443,7 @@ fn a_limit_if_touched_is_not_modified() {
 fn an_attribute_added_by_the_modify_is_refused_too() {
     let cases: Vec<OrderCase> = vec![
         ("bracket child", |o| o.parent_id = 4242),
-        ("OCA member", |o| o.oca_group = "bracket_1".into()),
-        ("iceberg", |o| o.display_size = 100),
-        ("all-or-none", |o| o.all_or_none = true),
+        ("minimum quantity", |o| o.min_qty = 50),
     ];
     for (name, set) in cases {
         let (client, rx, _shared) = test_client();

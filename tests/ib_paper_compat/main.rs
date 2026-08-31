@@ -669,6 +669,25 @@ fn iceberg_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// The two the shared-engine walk answered differently between runs, asked
+/// alone so the answer is the venue's rather than the harness's.
+#[test]
+fn replace_one_refused_order_phase_live() {
+    start_logging();
+    let config = match get_config() { Some(c) => c, None => return };
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
+    let mut conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    for (name, kind) in [
+        ("a relative order", OrderKind::Rel { offset: 1_00_000_000 }),
+        ("a snap to midpoint", OrderKind::SnapMid { offset: 0 }),
+    ] {
+        conns = orders::phase_replace_one_refused_order(conns, name, kind);
+    }
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// What the venue does with a replace of each order this client refuses one
 /// for. The evidence those refusals are missing.
 #[test]

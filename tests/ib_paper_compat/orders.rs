@@ -2456,8 +2456,10 @@ pub(super) fn phase_replace_each_refused_order(conns: Conns) -> Conns {
         ("hidden", lmt(), OrderAttrs { hidden: true, ..Default::default() }),
         ("all-or-none", lmt(), OrderAttrs { all_or_none: true, ..Default::default() }),
         // Shown in round lots: a display of one is refused, "Display size
-        // should be a multiple of lot size".
-        ("an iceberg", lmt(), OrderAttrs { display_size: 100, ..Default::default() }),
+        // should be a multiple of lot size". The quantity below is 200, so a
+        // display of the whole of it is a multiple of any lot size the venue
+        // uses for this listing.
+        ("an iceberg", lmt(), OrderAttrs { display_size: 200, ..Default::default() }),
         ("a minimum quantity", lmt(), OrderAttrs { min_qty: 100, ..Default::default() }),
         ("discretionary", lmt(), OrderAttrs { discretionary_amt: 1_000_000, ..Default::default() }),
         ("sweep to fill", lmt(), OrderAttrs { sweep_to_fill: true, ..Default::default() }),
@@ -2489,7 +2491,7 @@ pub(super) fn phase_replace_each_refused_order(conns: Conns) -> Conns {
         // Working, refused, or nothing — then the replace, then the answer.
         let mut replaced = false;
         let mut outcome: Option<String> = None;
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline && outcome.is_none() {
             let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
             else { continue };
@@ -2528,12 +2530,28 @@ pub(super) fn phase_replace_each_refused_order(conns: Conns) -> Conns {
             }
         }
         control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
-        let said = outcome.unwrap_or_else(|| {
-            if replaced {
-                "the replace drew no answer".into()
-            } else {
-                "the venue never reported it working, so no replace was sent".into()
+        // Silence is not an answer on its own. Withdraw the order and watch:
+        // an order the venue still holds answers a withdrawal, and one it does
+        // not says the replace took it.
+        if outcome.is_none() && replaced {
+            let until = Instant::now() + Duration::from_secs(10);
+            let mut answered_the_cancel = false;
+            while Instant::now() < until && !answered_the_cancel {
+                if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100))
+                    && u.order_id == oid
+                    && matches!(u.status, OrderStatus::Cancelled | OrderStatus::Rejected)
+                {
+                    answered_the_cancel = true;
+                }
             }
+            outcome = Some(if answered_the_cancel {
+                "the replace drew no answer, and the order was still there to withdraw".into()
+            } else {
+                "the replace drew no answer, and neither did the withdrawal".into()
+            });
+        }
+        let said = outcome.unwrap_or_else(|| {
+            "the venue never reported it working, so no replace was sent".into()
         });
         println!("  {name:<24} {said}");
         told.push((name.to_string(), said));
@@ -2549,6 +2567,109 @@ pub(super) fn phase_replace_each_refused_order(conns: Conns) -> Conns {
     let answered = told.iter().filter(|(_, said)| !said.contains("no answer") && !said.contains("never acknowledged")).count();
     println!("\n  {answered} of {} answered\n", told.len());
     assert!(answered > 0, "the venue answered none of them, so this phase establishes nothing");
+    println!("  PASS\n");
+    conns
+}
+
+// ─── Phase 199: One refused order at a time, on an engine of its own ───
+
+/// The same question as the phase above, asked of one order with nothing else
+/// on the connection.
+///
+/// Two kinds answered differently between runs there, which is what a shared
+/// engine running fourteen orders in sequence does to the slowest of them: a
+/// late answer for one entry is read past while the next is waiting. Asked
+/// alone, with its own engine and its own deadline, the answer is the venue's
+/// rather than the harness's.
+pub(super) fn phase_replace_one_refused_order(
+    conns: Conns,
+    name: &str,
+    kind: OrderKind,
+) -> Conns {
+    phase!("--- Phase 199: what a replace does to {name}, asked alone ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst, "STK", "SMART");
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, regulatory_snapshot: false, reply_tx: None }).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    const RESTING: i64 = 100_000_000;
+    let oid = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id: oid, instrument: inst, side: Side::Buy,
+        qty: 200 * ibx::types::QTY_SCALE, kind, tif: b'0', attrs: OrderAttrs::default(),
+    })).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut working = false;
+    let mut replaced = false;
+    let mut outcome: Option<String> = None;
+    while Instant::now() < deadline && outcome.is_none() {
+        let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100))
+        else { continue };
+        if u.order_id != oid { continue; }
+        match u.status {
+            OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                if replaced {
+                    outcome = Some("the replace is taken, the order still works".into());
+                } else {
+                    working = true;
+                    control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                        order_id: oid, price: RESTING, qty: 300 * ibx::types::QTY_SCALE,
+                        outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                    })).unwrap();
+                    replaced = true;
+                }
+            }
+            OrderStatus::Cancelled if replaced => {
+                outcome = Some("the order went with the replace".into());
+            }
+            OrderStatus::Rejected => {
+                let why = shared.orders.get_order_info(oid)
+                    .map(|i| i.order_state.reject_reason)
+                    .filter(|w| !w.is_empty())
+                    .unwrap_or_else(|| "no reason given".to_string());
+                outcome = Some(if replaced {
+                    format!("the replace is refused — {why}")
+                } else {
+                    format!("not placed — {why}")
+                });
+            }
+            _ => {}
+        }
+    }
+
+    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
+    if outcome.is_none() && replaced {
+        let until = Instant::now() + Duration::from_secs(20);
+        let mut answered = false;
+        while Instant::now() < until && !answered {
+            if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100))
+                && u.order_id == oid
+                && matches!(u.status, OrderStatus::Cancelled | OrderStatus::Rejected)
+            {
+                answered = true;
+            }
+        }
+        outcome = Some(if answered {
+            "the replace drew no answer, and the order was still there to withdraw".into()
+        } else {
+            "the replace drew no answer, and neither did the withdrawal".into()
+        });
+    }
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    println!("  {name}: {}", outcome.unwrap_or_else(|| {
+        "the venue never reported it working, so no replace was sent".into()
+    }));
+    assert!(working, "{name} was never acknowledged, so nothing was asked");
     println!("  PASS\n");
     conns
 }
