@@ -1753,17 +1753,26 @@ fn place_order_unknown_tif_is_rejected() {
     assert!(rx.try_recv().is_err());
 }
 
+/// A trailing stop may be all-or-none.
+///
+/// Both instructions travel on one field, concatenated — `18=aG` — and this
+/// client refused the pair on a reading that they share a slot. A session
+/// placed it: the venue takes it and the order works.
 #[test]
-fn place_order_all_or_none_trail_is_rejected() {
+fn place_order_all_or_none_trail_reaches_the_wire() {
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
     let order = Order {
         action: "SELL".into(), total_quantity: 1.0, order_type: "TRAIL".into(),
         aux_price: 2.0, all_or_none: true, ..Default::default()
     };
-    let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.to_string().contains("all_or_none"), "got: {err}");
-    assert!(rx.try_recv().is_err());
+    client.place_order(1, &spy(), &order).expect("the pair is the venue's to refuse");
+    match rx.try_recv().expect("it reaches the wire") {
+        ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::TrailingStop { .. }, attrs, .. }) => {
+            assert!(attrs.all_or_none, "carrying the instruction it was given");
+        }
+        cmd => panic!("expected a trailing stop, got {cmd:?}"),
+    }
 }
 
 // ── oca_type carried and coerced ──

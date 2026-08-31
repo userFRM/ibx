@@ -3013,15 +3013,6 @@ impl ClientCore {
 
         let order_type = order.order_type.to_uppercase();
 
-        // These order types carry a type-specific instruction in the same
-        // slot all-or-none uses, so the two cannot be combined.
-        if order.all_or_none && matches!(order_type.as_str(), "TRAIL" | "REL") {
-            return Err(format!(
-                "all_or_none is not supported with {} orders",
-                order.order_type
-            ));
-        }
-
         // An order carrying an algorithm is encoded as a limit and nothing
         // else: the strategy rides on an order whose type byte is written
         // once, as `2`. The caller's own type must therefore be a limit.

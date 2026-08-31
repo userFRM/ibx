@@ -257,6 +257,28 @@ answers the connect to one that can also reach the venue while the logon is in
 flight, and no further. Stated here rather than implied by its absence: a
 binding this client invented would be one the venue does not read.
 
+### An order may carry its type's instruction and all-or-none
+
+Both travel on one field, concatenated, and the encoder writes them that way: a
+trailing stop that is all-or-none states `18=aG`. This client refused that pair
+before it was sent, on a reading that the two share a slot and cannot both be
+stated, and the refusal said it was not supported — which reads as the venue's
+answer rather than as this client's decision.
+
+The encoder had never been the problem. A session placed the pair:
+
+```
+--- Phase 198: a trailing stop that is all-or-none ---
+  the venue takes the pair, and the order works
+```
+
+So the refusal is gone. It covered relative orders on the same reading; that
+reading is what was disproved, and the instruction is joined by the same line
+of code for both. A relative order carrying all-or-none has not been placed
+against a session of its own — one has never reported working here with the
+market shut, which is the same thing standing in the way of three other
+questions.
+
 ### What a replace does to each order this client refuses one for
 
 A modify is refused in front of an order defined by more than its type and
@@ -675,7 +697,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (147 phases) | 40 tests | Yes |
+| Paper compatibility suite (148 phases) | 40 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

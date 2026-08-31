@@ -2353,6 +2353,73 @@ pub(super) fn phase_replace_a_trailing_stop(conns: Conns) -> Conns {
     conns
 }
 
+// ─── Phase 198: A trailing stop that is all-or-none ───
+
+/// Whether an order may carry both a type's own instruction and all-or-none.
+///
+/// They travel on one field, concatenated, and the encoder writes them that
+/// way — a trailing stop that is all-or-none states `18=aG`. This client
+/// refused the pair before it, on a reading that they share a slot and cannot
+/// both be stated. That is a message it can build, so the venue is the one to
+/// answer it.
+pub(super) fn phase_all_or_none_trailing_stop(conns: Conns) -> Conns {
+    phase!("--- Phase 198: a trailing stop that is all-or-none ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst, "STK", "SMART");
+
+    let oid = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id: oid, instrument: inst, side: Side::Sell,
+        qty: 200 * ibx::types::QTY_SCALE,
+        kind: OrderKind::TrailingStop { trail_stop_price: 0, trail_amt: 5_00_000_000 },
+        tif: b'0', attrs: OrderAttrs { all_or_none: true, ..Default::default() },
+    })).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut working = false;
+    let mut cancelled = false;
+    let mut refused: Option<u64> = None;
+    while Instant::now() < deadline {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100))
+            && update.order_id == oid {
+                match update.status {
+                    OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                        working = true;
+                        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: oid })).unwrap();
+                    }
+                    OrderStatus::Cancelled => { cancelled = true; break; }
+                    OrderStatus::Rejected => { refused = Some(update.order_id); break; }
+                    _ => {}
+                }
+            }
+    }
+
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    match refused {
+        Some(id) => {
+            let why = shared.orders.get_order_info(id)
+                .map(|info| info.order_state.reject_reason)
+                .filter(|w| !w.is_empty())
+                .unwrap_or_else(|| "no reason given".to_string());
+            println!("  the venue refused the pair — {why}");
+        }
+        None if working || cancelled => println!("  the venue takes the pair, and the order works"),
+        None => println!("  nothing came back within the deadline"),
+    }
+    println!("  PASS\n");
+    conns
+}
+
 // ─── Phase 197: What the venue does with a replace of each refused order ───
 
 /// What a replace does to an order defined by more than its type and price.

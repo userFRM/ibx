@@ -678,6 +678,7 @@ fn replace_each_refused_order_phase_live() {
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
+    let conns = orders::phase_all_or_none_trailing_stop(conns);
     let conns = orders::phase_replace_each_refused_order(conns);
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
