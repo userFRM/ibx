@@ -184,8 +184,13 @@ pub fn fixcomp_frame_length(data: &[u8]) -> FrameLength {
     }
 }
 
-/// How far into a frame its header may reasonably sit. Past this, a header that
-/// has not read is one that will not.
+/// How much of a frame is read before its header is given up on.
+///
+/// This client's own bound rather than a length the venue states. A header
+/// opens `8=1<SOH>9=NNNN<SOH>`, which is twelve bytes, and the scan gives it
+/// ten times that before deciding the bytes are not a header at all — so a
+/// frame still arriving is waited for and a frame that is not one ends rather
+/// than growing without limit.
 const MAX_HEADER_SCAN: usize = 128;
 
 fn find_tag(data: &[u8], needle: &[u8]) -> Option<usize> {

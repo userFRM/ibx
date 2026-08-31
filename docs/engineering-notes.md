@@ -164,6 +164,19 @@ The rollover has no answer behind it and cannot get one through this request:
 the contract that would carry it is refused as a type. The arithmetic it would
 take is the arithmetic the five seen kinds exercise.
 
+### What the venue counts a size in
+
+A size on the wire is a count of an increment, and the increment is named on
+the subscription acknowledgement. Counted as whole ones a crypto's size reads a
+hundred million times over, so the number matters as much as the price beside
+it.
+
+The venue names one on every subscription a session has made: a share
+acknowledged `1`, a crypto `1e-8`, and no subscription answered without one.
+So the client's fallback to whole ones covers a shape the venue has not been
+seen to send, and is a defence rather than a reading of what stating none
+would mean.
+
 ### How many contracts can be watched at once
 
 The number of slots this client holds is its own and is not stated anywhere on

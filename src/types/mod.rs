@@ -143,8 +143,13 @@ pub fn qty_from_f64(shares: f64) -> Qty {
 /// A size on the wire is a count of the increment the venue named on the
 /// subscription acknowledgement: whole ones for a share, hundred-millionths
 /// for a crypto. Counting every one as whole ones reports a crypto's size a
-/// hundred million times over. An instrument the venue stated no increment
-/// for is counted in whole ones, which is what stating none means.
+/// hundred million times over.
+///
+/// The venue names one on every subscription a session has made — a share
+/// acknowledged `1`, a crypto `1e-8`, never nothing. Nought here is therefore
+/// a shape it has not been seen to send, and the whole ones it falls to are a
+/// defence rather than a reading: what stating none would mean is not
+/// something this client has been told.
 #[inline]
 pub fn qty_from_counted(counted: i64, size_tick: f64) -> Qty {
     if size_tick <= 0.0 || size_tick == 1.0 {
