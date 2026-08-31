@@ -657,7 +657,11 @@ impl PlacedOrder {
         self.session.trade(self.order_id)
     }
 
-    /// Status as the venue reports it, as of now.
+    /// Status as of now: the venue's word once it has said one, and until
+    /// then `PendingSubmit`, which is this session recording that it sent the
+    /// order rather than the venue answering. A caller reading it back before
+    /// the venue has spoken is told the order is pending rather than told
+    /// there is no such order.
     pub fn status(&self) -> String {
         self.trade().map(|t| t.status.status).unwrap_or_default()
     }

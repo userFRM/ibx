@@ -2015,6 +2015,10 @@ fn scaled_size(counted: u64, size_tick: f64) -> i64 {
     // way out keeps every size a quantity can hold, and holds the rest at the
     // ceiling rather than wrapping to a negative — a negative size is a sell
     // where there was a buy.
+    // Whole ones where the reply stated no increment. A defence rather than a
+    // reading: every acknowledgement a session has had names one, so nought is
+    // a shape this venue has not been seen to send, and what stating none
+    // would mean is not something it has said.
     let per_unit = if size_tick > 0.0 { size_tick } else { 1.0 };
     (counted as f64 * per_unit * crate::types::QTY_SCALE as f64).round() as i64
 }
