@@ -312,12 +312,7 @@ fn a_type_the_replace_cannot_restate_is_not_modified() {
 #[test]
 fn an_order_defined_by_more_than_its_type_is_not_modified() {
     let cases: Vec<OrderCase> = vec![
-        ("adaptive", |o| o.algo_strategy = "Adaptive".into()),
-        ("algo", |o| o.algo_strategy = "Vwap".into()),
         ("adjustable stop", |o| o.adjusted_order_type = "TRAIL".into()),
-        ("conditional", |o| o.conditions.push(
-            crate::types::OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true },
-        )),
         // What is left of the attributes: the minimum quantity, which this
         // venue refuses as an order on the security type asked, so what a
         // replace would do to one cannot be put to it. Everything else came off

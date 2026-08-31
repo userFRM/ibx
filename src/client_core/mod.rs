@@ -1728,19 +1728,15 @@ impl ClientCore {
     /// conversion into a trailing stop has no such record, so its trail goes
     /// unstated and the venue refuses the replace naming tag 211.
     ///
-    /// The order type alone does not decide this. An adaptive or algo order is
-    /// an ordinary `LMT` that is defined by its algo tags, and an adjustable
-    /// stop is an ordinary `STP` that is defined by its conversion — both are
-    /// destroyed by a replace that states only the type.
+    /// The order type alone does not decide this: an adjustable stop is an
+    /// ordinary `STP` defined by its conversion, which a replace stating only
+    /// the type would leave behind. An algo order and a conditional one were
+    /// refused on the same reading until a session placed each and the venue
+    /// took the replace — the strategy asked was the adaptive one, and the
+    /// block that carries it is restated by the same path for every strategy.
     pub fn replace_cannot_restate(order: &ApiOrder, restating_itself: bool) -> Option<String> {
-        if !order.algo_strategy.is_empty() {
-            return Some(format!("an order running the {} algo", order.algo_strategy));
-        }
         if !order.adjusted_order_type.is_empty() {
             return Some(format!("an order that adjusts to {}", order.adjusted_order_type));
-        }
-        if !order.conditions.is_empty() {
-            return Some("a conditional order".to_string());
         }
 
         // A what-if is a margin preview, not a resting order, so there is

@@ -315,6 +315,8 @@ takes the replace and whether the order is still working afterwards.
 | Midpoint | The replace is taken, the order still works |
 | Snap to midpoint | The replace is taken, the order still works |
 | Limit if touched | The replace is taken, the order still works |
+| An adaptive order | The replace is taken, the order still works |
+| A conditional order | The replace is taken, the order still works |
 | A bracket child | The replace is taken, the child still works |
 | Cash quantity | The replace is taken, the order still works |
 | With a good-after time | The replace is taken, the order still works |
@@ -322,7 +324,7 @@ takes the replace and whether the order is still working afterwards.
 | **Relative** | **Taken four times; three times the replace drew no answer, and neither did the withdrawal after it** |
 | With a minimum quantity | Not placed: `Partial AON orders not supported for this combination of exchange and security type` |
 
-Seventeen take the replace and go on working, so the reason written beside those
+Nineteen take the replace and go on working, so the reason written beside those
 refusals is not what this venue does, and they are gone. A good-after time
 needs an hour that has not passed: one already gone is refused as the order,
 `Invalid effective time`, rather than as the replace.
@@ -348,6 +350,16 @@ survives one.
 The minimum quantity is refused as an order rather than as a replace, on the
 venue and security type asked, so what a replace would do to one is a question
 it has not been possible to put.
+
+Two are refused still and neither has been asked. An adjustable stop is an
+ordinary stop defined by the conversion it carries, and no session has placed
+one and replaced it. A preview is refused because it is not a resting order at
+all: there is nothing on the book for a replace to act on.
+
+The algo order asked was the adaptive one. The block that carries a strategy is
+written by the same path for every strategy, so the answer covers the mechanism
+rather than that one name — which is a reading, and the only one left in this
+table.
 
 The two the shared walk answered differently between runs were asked again on
 an engine of their own. A shared engine running fourteen orders in sequence

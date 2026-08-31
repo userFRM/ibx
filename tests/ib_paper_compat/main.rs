@@ -689,6 +689,15 @@ fn replace_one_refused_order_phase_live() {
         // than as the replace — "Invalid effective time".
         ("a good-after time", lmt(), OrderAttrs { good_after: 1788201210, ..Default::default() }),
         ("a non-default trigger method", lmt(), OrderAttrs { trigger_method: 2, ..Default::default() }),
+        // The three left, each refused on a reading that the replace states
+        // only the type and the price.
+        ("an adaptive order", OrderKind::Adaptive { price: 100_000_000, priority: ibx::types::AdaptivePriority::Normal }, OrderAttrs::default()),
+        ("a conditional order", lmt(), OrderAttrs {
+            conditions: vec![ibx::types::OrderCondition::Price {
+                con_id: 756733, exchange: "SMART".into(), price: 1_000_000_000, is_more: true, trigger_method: 0,
+            }],
+            ..Default::default()
+        }),
     ] {
         conns = orders::phase_replace_one_refused_order(conns, name, kind, attrs);
     }
