@@ -91,6 +91,11 @@ path = "src/bin/capture_combo.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "capture_line_limit"
+path = "src/bin/capture_line_limit.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "capture_conformance"
 path = "src/bin/capture_conformance.rs"
 required-features = ["dev-tools"]

@@ -164,6 +164,29 @@ The rollover has no answer behind it and cannot get one through this request:
 the contract that would carry it is refused as a type. The arithmetic it would
 take is the arithmetic the five seen kinds exercise.
 
+### How many contracts can be watched at once
+
+The number of slots this client holds is its own and is not stated anywhere on
+the wire: the tables are allocated once and never move, so the size is chosen
+before any slot is taken. What a session can say is where it has to be.
+
+One option chain asked for at once — every strike on one underlying for one
+expiry, both rights — is 282 live subscriptions, and the venue served all of
+them without refusing one. It refused 320 more for naming strikes that do not
+exist, which names the contract rather than the allowance.
+
+```
+asked for 602 subscriptions
+320 named a contract that does not exist
+282 of them ticked
+the venue refused none of them
+```
+
+So the old size of 256 was met before the venue's own allowance was: this
+client refused the two hundred and fifty-seventh subscription while the venue
+was still serving. Where the venue's allowance actually ends is not
+established, because nothing asked for so far has reached it.
+
 ### The peer on a farm connection is authenticated
 
 A farm connection carries no transport underneath it — the socket is plain and

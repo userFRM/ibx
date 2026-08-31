@@ -159,12 +159,21 @@ pub fn qty_from_counted(counted: i64, size_tick: f64) -> Qty {
 
 /// How many contracts this client holds a slot for at once.
 ///
+/// This number is this client's own and is not stated anywhere on the wire.
 /// The tables are allocated once at this size and never move, so a slot's
-/// address is stable while a reader holds it. It is this client's own
-/// allocation and not a limit the venue states: what an account may watch at
-/// once is the venue's to say, and it says so in its own words when a
-/// subscription goes past it. Slots are reused, so a contract withdrawn stops
-/// counting.
+/// address is stable while a reader holds it, and the size has to be chosen
+/// before any of them is taken.
+///
+/// What is measured is that it has to be well above the two hundred and
+/// fifty-six it used to be: one option chain asked for at once is 282 live
+/// subscriptions on a single underlying, and the venue served all of them
+/// without refusing one (`src/bin/capture_line_limit.rs`). At the old size
+/// this client refused the two hundred and fifty-seventh while the venue was
+/// still serving.
+///
+/// Where the venue's own allowance ends is not established: nothing this
+/// client has asked for has reached it. Slots are reused, so a contract
+/// withdrawn stops counting against this one.
 pub const MAX_INSTRUMENTS: usize = 4096;
 
 /// How deep a healthy backlog of order requests goes, which is what the
