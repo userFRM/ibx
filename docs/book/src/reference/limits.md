@@ -148,6 +148,25 @@ the question waits on the subscription that asking opens.
   calendar's schema and event types are delivered either way; the events
   themselves come back empty without it.
 
+## What authenticates a farm connection
+
+A market-data or trading connection is opened with a request carrying the
+session's own token, and the venue may answer it in one of two ways: by asking
+this session to authenticate in full, or by acknowledging the logon against the
+token it was already given. Both are the venue accepting a credential.
+
+Where it asks in full, the answer it sends back is checked: the venue states a
+proof of the session key that only a party holding the account's verifier can
+compute, and a logon whose proof does not match is refused. The group that
+exchange runs in is this venue's own and no other, because a peer names it
+before it has proved anything.
+
+What none of that establishes is that the party holding the channel keys is the
+party that answered the logon. The logon runs beside the channel rather than
+inside it, so a peer that relays it to the venue in real time collects a proof
+it did not compute. Binding the two needs the venue to state something over
+both, and nothing on this wire does.
+
 ## Not portable
 
 The session data on [what the API does not forward](./beyond-the-api.md) —

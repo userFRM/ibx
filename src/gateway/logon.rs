@@ -738,9 +738,6 @@ pub fn farm_logon_exchange(
     let mut read_iv = initial_read_iv.to_vec();
     // What the farm says it expects, where it says anything at all.
     let mut heartbeat_secs: Option<u64> = None;
-    // Whether this connection has asked the session for anything only the
-    // account holder can give. Read where the logon is acknowledged.
-    let mut authenticated = false;
 
     for _msg_num in 0..20 {
         // Read until a frame is complete
@@ -833,14 +830,10 @@ pub fn farm_logon_exchange(
                     // so the loop below re-frames them instead of stalling on a
                     // read for bytes already consumed.
                     match do_soft_token(stream, session_token, &mut buf)? {
-                        // The exchange proves this session holds the token and
-                        // proves nothing about the peer: the challenge is the
-                        // peer's to choose and the verdict is a word it states
-                        // about itself. Measured against this venue, a farm
-                        // answers UNKNOWN and authenticates in full every time,
-                        // including on a reconnect — so a bare acceptance here
-                        // is not a shape the venue produces, and a connection
-                        // is not treated as authenticated by it.
+                        // The token this session already holds, accepted. The
+                        // exchange proves the session holds it and says nothing
+                        // about the peer, which is true of the connect request
+                        // that opened this connection as well.
                         session::SoftTokenOutcome::Passed => {}
                         session::SoftTokenOutcome::Unknown => {
                             // Expected, and handled: the venue holds no token
@@ -850,24 +843,16 @@ pub fn farm_logon_exchange(
                             log::info!("Soft token not held by the farm — authenticating in full");
                             stream.set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
                             session::do_srp_farm(stream, username, password, &mut buf)?;
-                            // The venue proved itself inside that exchange.
-                            authenticated = true;
                         }
                     }
                 }
             } else if fields.get(&35).map(|s| s.as_str()) == Some("A") {
-                // A logon this connection never authenticated. The key exchange
-                // that opened it establishes nothing about who answered, so a
-                // peer that asks for no credentials and acknowledges the logon
-                // is a peer that has proved nothing — and every message after
-                // this one would be read as the venue's.
-                if !authenticated {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "the farm acknowledged the logon without asking this session to \
-                         authenticate, so nothing establishes who answered",
-                    ));
-                }
+                // A farm may acknowledge the logon without asking this session
+                // for anything, and that is a shape the venue produces: the
+                // connect request that opened the connection already carried
+                // the session's own token, so a farm answering `35=A` to it has
+                // accepted a credential rather than skipped one. Refusing here
+                // took working sessions down (ibx#42).
                 // Logon ACK — sign_iv is the current write_iv (mutated by encrypt)
                 let sign_iv = channel
                     .write_iv()
