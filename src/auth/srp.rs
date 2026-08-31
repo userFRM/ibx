@@ -156,13 +156,15 @@ pub fn token_hash_slots(session_token: &BigUint, paper: bool) -> String {
 mod tests {
     use super::*;
 
-    /// The server's proof is the value a session measured against the venue.
+    /// The proof is SHA1 over the three values, each stripped of leading zeros.
     ///
-    /// Captured from a farm logon: this A, M1 and K produced exactly the proof
-    /// the venue stated on field 8, which is what says the formula is theirs
-    /// rather than a plausible reading of the standard.
+    /// The operands here are chosen, not captured: what they pin is the shape
+    /// of the formula and the order of its parts. That the formula is this
+    /// venue's own was settled on a session, whose figures are in the
+    /// engineering notes rather than here — a value taken off a live logon
+    /// would state a session's own key in the source.
     #[test]
-    fn the_server_proof_is_the_one_the_venue_states() {
+    fn the_proof_is_a_hash_of_the_three_values_in_order() {
         let a_pub = BigUint::parse_bytes(b"1f2e3d4c5b6a798877665544332211", 16).unwrap();
         let m1 = BigUint::parse_bytes(b"00aabbccddeeff00112233445566778899aabbcc", 16).unwrap();
         let k = BigUint::parse_bytes(b"0fedcba9876543210fedcba987654321", 16).unwrap();

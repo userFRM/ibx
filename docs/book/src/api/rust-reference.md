@@ -1870,7 +1870,7 @@ pub fn req_current_time(&self, wrapper: &mut impl Wrapper)
 
 #### `req_current_time_in_millis`
 
-The venue's clock in milliseconds, as `reqCurrentTimeInMillis` reports it. The same clock `req_current_time` reports and read the same way — the venue's own last stamp, falling back to this machine only before the session has been stamped at all. What differs is the precision kept: the venue sometimes stamps a fraction of a second, and asking in seconds throws it away. A stamp with no fraction lands on a whole second. That is the precision the venue stated, not a rounding of something finer — and it is what a session measured against this venue actually gets, because the stamps seen here carried no fraction at all. The call reads one where the venue states one; it does not manufacture precision where it does not.
+The venue's clock in milliseconds, as `reqCurrentTimeInMillis` reports it. The same clock `req_current_time` reports and read the same way — the venue's own last stamp, falling back to this machine only before the session has been stamped at all. What differs is the precision kept: asking in seconds throws away a fraction where the stamp carries one. Every stamp a session has seen from this venue carried no fraction, and each lands on a whole second. So this call reads the precision the stamp states and no more; whether the venue ever states a finer one is not something a session here has answered.
 
 ```rust
 pub fn req_current_time_in_millis(&self, wrapper: &mut impl Wrapper)
