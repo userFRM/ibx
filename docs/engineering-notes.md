@@ -315,25 +315,35 @@ takes the replace and whether the order is still working afterwards.
 | Midpoint | The replace is taken, the order still works |
 | Snap to midpoint | The replace is taken, the order still works |
 | Limit if touched | The replace is taken, the order still works |
-| **Relative** | **The replace drew no answer, and neither did the withdrawal that followed** |
+| Cash quantity | The replace is taken, the order still works |
+| With a good-after time | The replace is taken, the order still works |
+| Non-default trigger method | The replace is taken, the order still works |
+| **Relative** | **Taken four times; three times the replace drew no answer, and neither did the withdrawal after it** |
 | With a minimum quantity | Not placed: `Partial AON orders not supported for this combination of exchange and security type` |
 
-Thirteen take the replace and go on working, so the reason written beside those
-refusals is not what this venue does, and they are gone.
+Sixteen take the replace and go on working, so the reason written beside those
+refusals is not what this venue does, and they are gone. A good-after time
+needs an hour that has not passed: one already gone is refused as the order,
+`Invalid effective time`, rather than as the replace.
 
-The relative order is the one that keeps its reason, and now has a session
-behind it rather than a reading. Its replace drew no answer at all, and neither
-did the withdrawal sent after it: the order stopped answering for anything,
-which is exactly the outcome these refusals were written to prevent. Asked
-alone on an engine of its own, twice, with a minute to answer in.
+The relative order is the one that answers both ways. Asked seven times on an
+engine of its own, it took the replace four times and answered nothing three —
+and on those three the withdrawal sent after it drew nothing either, which is
+an order that has stopped answering for anything. A modify that works two times
+in three and strands the order the third is worse for a caller than one that is
+refused, so it stays refused.
+
+What has not been separated is the venue from the harness: a connection that
+had stopped delivering would look exactly the same from here. The check that
+would settle it is a second session asking for the open orders after a silent
+replace — the order being there says the replace was ignored, and the order
+being gone says it was taken with the order.
 
 The minimum quantity is refused as an order rather than as a replace, on the
 venue and security type asked, so what a replace would do to one is a question
-it has not been possible to put. A bracket child, a cash-quantity order, a
-good-after time and a non-default trigger method are still refused: no session
-has placed one and replaced it, and the bracket link is the costly one — a
-child sent without its parent rests alone, and a fill on the sibling no longer
-cancels it.
+it has not been possible to put. A bracket child is still refused and is the
+costly one: a child sent without its parent rests alone, a fill on the sibling
+no longer cancels it, and no session has placed one and replaced it.
 
 The two the shared walk answered differently between runs were asked again on
 an engine of their own. A shared engine running fourteen orders in sequence

@@ -320,12 +320,12 @@ fn an_order_defined_by_more_than_its_type_is_not_modified() {
         )),
         // What is left of the attributes. A bracket child is the costly one:
         // sent without its parent it rests alone, and a fill on the sibling no
-        // longer cancels it. The minimum quantity is one the venue refuses as
-        // an order on the venue and security type asked. The rest came off this
-        // list when a session replaced each and the venue took it.
+        // longer cancels it, and no session has placed one and replaced it. The
+        // minimum quantity is one the venue refuses as an order on the security
+        // type asked. Everything else came off this list when a session
+        // replaced it and the venue took it.
         ("bracket child", |o| o.parent_id = 4242),
         ("minimum quantity", |o| o.min_qty = 50),
-        ("trigger method", |o| o.trigger_method = 2),
     ];
     for (name, set) in cases {
         let (client, rx, _shared) = test_client();

@@ -1742,13 +1742,7 @@ impl ClientCore {
         if !order.conditions.is_empty() {
             return Some("a conditional order".to_string());
         }
-        // The cash quantity rides tag 5920, which the replace does not carry,
-        // and no session has placed one to ask what happens. Hidden and
-        // all-or-none were refused here on the same reading until a session
-        // replaced each of them and the venue took it.
-        if order.cash_qty > 0.0 {
-            return Some("a cash-quantity order".to_string());
-        }
+
         // A what-if is a margin preview, not a resting order, so there is
         // nothing on the book for a replace to act on.
         if order.what_if {
@@ -1773,18 +1767,12 @@ impl ClientCore {
         if order.parent_id != 0 {
             return Some("a bracket child".to_string());
         }
-        if !order.good_after_time.is_empty() {
-            return Some("an order with a good-after time".to_string());
-        }
         // The venue refuses the order itself on the venue and security type a
         // session asked on — "Partial AON orders not supported for this
         // combination of exchange and security type" — so what a replace would
         // do to one is a question it has not been possible to put.
         if order.min_qty > 0 {
             return Some("an order with a minimum quantity".to_string());
-        }
-        if order.trigger_method != 0 {
-            return Some("an order with a non-default trigger method".to_string());
         }
         let ty = order.order_type.to_uppercase();
         // `LIT` is submitted as `LT` but tracked under a byte the replace

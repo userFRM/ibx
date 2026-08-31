@@ -678,11 +678,19 @@ fn replace_one_refused_order_phase_live() {
     let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
     let mut conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
         account_id: gw.account_id.clone() };
-    for (name, kind) in [
-        ("a relative order", OrderKind::Rel { offset: 1_00_000_000 }),
-        ("a snap to midpoint", OrderKind::SnapMid { offset: 0 }),
+    let lmt = || OrderKind::Limit { price: 100_000_000 };
+    for (name, kind, attrs) in [
+        ("a relative order", OrderKind::Rel { offset: 1_00_000_000 }, OrderAttrs::default()),
+        ("a snap to midpoint", OrderKind::SnapMid { offset: 0 }, OrderAttrs::default()),
+        // The four the walk never asked, each refused a modify here on a
+        // reading rather than on an answer.
+        ("a cash-quantity order", lmt(), OrderAttrs { cash_qty: 5_000 * ibx::types::PRICE_SCALE, ..Default::default() }),
+        // Two hours out: a time already past is refused as the order rather
+        // than as the replace — "Invalid effective time".
+        ("a good-after time", lmt(), OrderAttrs { good_after: 1788201210, ..Default::default() }),
+        ("a non-default trigger method", lmt(), OrderAttrs { trigger_method: 2, ..Default::default() }),
     ] {
-        conns = orders::phase_replace_one_refused_order(conns, name, kind);
+        conns = orders::phase_replace_one_refused_order(conns, name, kind, attrs);
     }
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
