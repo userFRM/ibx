@@ -68,7 +68,9 @@ A user message carries what it is for on tag 6040.
 | `10010` |
 | `10011` |
 | `10020` |
+| `10021` |
 | `10030` |
+| `10031` |
 
 ## Handled
 

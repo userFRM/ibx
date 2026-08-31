@@ -491,6 +491,12 @@ impl EClient {
         {
             return Ok(actions);
         }
+        // Given up on here, so the venue is told: it serves the query until it
+        // is withdrawn, and a caller that has stopped waiting leaves one
+        // running otherwise.
+        let _ = self.send(crate::types::ControlCommand::CancelCorporateActions {
+            req_id: asked.get() as u32,
+        });
         Err(Refusal::no_answer(format!(
             "no answer within {}s to the corporate actions of {}",
             ANSWER_TIMEOUT.as_secs(), contract.symbol,

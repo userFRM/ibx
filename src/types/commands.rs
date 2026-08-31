@@ -408,6 +408,16 @@ pub enum ControlCommand {
         /// The caller's number for the request.
         req_id: u32,
     },
+    /// Withdraw a historical news query the venue is still serving.
+    CancelHistoricalNews {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
+    /// Withdraw a corporate-actions query the venue is still serving.
+    CancelCorporateActions {
+        /// The caller's number for the request.
+        req_id: u32,
+    },
     /// Request histogram data via historical data connection.
     FetchHistogramData {
         /// The caller's number for the request this answers.

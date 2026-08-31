@@ -433,18 +433,24 @@ The rest of the refusal stands, and each entry is one session away from the
 same treatment: place the order, replace it, read whether the venue takes it
 and whether the original is still working.
 
-### Not built
+### Withdrawing a query the venue is still serving
 
-One, and it says what a caller loses by it.
+Every withdrawal on the historical connection is one message: the envelope, the
+subtype that names which withdrawal it is, and a document carrying the id the
+query went out under. The same document for all of them, because what is
+withdrawn is the query rather than its subject.
 
-| Wire | What it carries | Why |
-| --- | --- | --- |
-| `6040` 10031 | Cancelling a news subscription | Not built. A session asked for news, was answered, and withdrew the request under the same id: nothing carrying that id came back. That is consistent with a request already answered having nothing outstanding, and it does not prove it — silence is what the venue did not say. What it does settle is that a caller building this would have the same silence to work with |
+Two were missing and are built now — a news query and a corporate-actions one.
+A session withdrew a news query after it had been answered and the venue said
+nothing, which is what a query it has finished with has to say: there is
+nothing left outstanding to stop. The value of sending it is the other case,
+where a caller stops waiting before the answer arrives and the query would
+otherwise go on being served.
 
-`6040` 10021, the cancel that pairs with the corporate-actions request, is not
-sent for the same reason: the request is answered once per contract and nothing
-stays open behind it. Both withdrawals carry only the id of the request they
-withdraw, which is the whole of what this client would have to build.
+The corporate-actions withdrawal goes out where a caller gives up on the
+answer. No phase waits that deadline out: the query is answered in well under
+it, and a phase that sat through one to reach the withdrawal would spend its
+whole run doing so.
 
 ### Callbacks the reference API defines and this client does not fire
 
@@ -760,7 +766,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (150 phases) | 42 tests | Yes |
+| Paper compatibility suite (151 phases) | 43 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

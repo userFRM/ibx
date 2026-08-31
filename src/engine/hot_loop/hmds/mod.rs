@@ -73,6 +73,12 @@ pub(crate) struct HmdsState {
     /// used to take away with it. Emptied when the withdrawal is sent and when
     /// the connection goes.
     pub(crate) answered_fundamental: Vec<(String, u32)>,
+    /// The name a news request went out under, kept after its answer.
+    ///
+    /// The venue serves a news query past the reply that answers it, and the
+    /// withdrawal has to name the query. Held for the same reason the
+    /// fundamentals one is, and dropped with the connection.
+    pub(crate) answered_news: Vec<(String, u32)>,
     pub(crate) pending_histogram: Vec<(String, u32)>,
     /// In-flight corporate-action queries: the id the request went out under,
     /// the request it answers, and the contract it asked about.
@@ -254,6 +260,7 @@ impl HmdsState {
             pending_articles: Vec::new(),
             pending_fundamental: Vec::new(),
             answered_fundamental: Vec::new(),
+            answered_news: Vec::new(),
             pending_histogram: Vec::new(),
             pending_schedule: Vec::new(),
             pending_ticks: Vec::new(),
@@ -306,6 +313,7 @@ impl HmdsState {
         // Answered already, so nobody is waiting on them: forgotten rather
         // than reported as failed.
         self.answered_fundamental.clear();
+        self.answered_news.clear();
         stranded.extend(self.pending_histogram.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_adjustments.drain(..).map(|(_, rid, _)| (rid, false)));
         stranded.extend(self.pending_schedule.drain(..).map(|(_, rid, _)| (rid, false)));
@@ -898,7 +906,12 @@ impl HmdsState {
                                 } else if let Some(pos) = self.pending_news.iter()
                                     .position(|(qid, _)| answers(xml, qid))
                                 {
-                                    let (_, req_id) = self.pending_news.remove(pos);
+                                    let named = self.pending_news.remove(pos);
+                                    let req_id = named.1;
+                                    // The name outlives the answer: the venue
+                                    // serves the query past it, and a
+                                    // withdrawal has to say which query.
+                                    self.answered_news.push(named);
                                     if let Some(raw) = &raw_bytes {
                                         let (headlines, has_more) = crate::control::news::parse_news_payload(raw);
                                         shared.reference.push_historical_news(req_id, headlines, has_more);
@@ -1829,6 +1842,75 @@ fn build_tbt_query(
         ]);
         hb.last_hmds_sent = Instant::now();
         log::info!("Sent fundamental data cancel: req_id={req_id}");
+    }
+
+    /// Withdraw a corporate-actions query the venue is still serving.
+    ///
+    /// The same one message as the news withdrawal beside it: the historical
+    /// envelope, the subtype that names this withdrawal, and the id the query
+    /// went out under.
+    pub(crate) fn send_adjustments_cancel(
+        &mut self,
+        req_id: u32,
+        hmds_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        let named = self.pending_adjustments.iter()
+            .position(|(_, rid, _)| *rid == req_id)
+            .map(|pos| self.pending_adjustments.remove(pos).0);
+        let Some(conn) = hmds_conn.as_mut() else { return };
+        let Some(query_id) = named else {
+            log::debug!("corporate-actions withdrawal for req_id={req_id}, which is not waiting");
+            return;
+        };
+        let xml = crate::control::xml::cancel_query(&query_id);
+        let ts = chrono_free_timestamp();
+        let _ = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, "10021"),
+            (6118, &xml),
+        ]);
+        hb.last_hmds_sent = Instant::now();
+        log::info!("Sent corporate actions cancel: req_id={req_id}");
+    }
+
+    /// Withdraw a news query the venue is still serving.
+    ///
+    /// One message: the historical envelope, the subtype that names a news
+    /// withdrawal, and the same document every other withdrawal carries — the
+    /// id the query went out under. Sent whether or not this client still has
+    /// the request on its pending list, because that list is emptied by the
+    /// first response and the venue serves the query past it.
+    pub(crate) fn send_news_cancel(
+        &mut self,
+        req_id: u32,
+        hmds_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        let named = self.pending_news.iter()
+            .position(|(_, rid)| *rid == req_id)
+            .map(|pos| self.pending_news.remove(pos).0)
+            .or_else(|| {
+                self.answered_news.iter()
+                    .position(|(_, rid)| *rid == req_id)
+                    .map(|pos| self.answered_news.remove(pos).0)
+            });
+        let Some(conn) = hmds_conn.as_mut() else { return };
+        let Some(query_id) = named else {
+            log::debug!("news withdrawal for req_id={req_id}, which is not waiting");
+            return;
+        };
+        let xml = crate::control::xml::cancel_query(&query_id);
+        let ts = chrono_free_timestamp();
+        let _ = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, "10031"),
+            (6118, &xml),
+        ]);
+        hb.last_hmds_sent = Instant::now();
+        log::info!("Sent historical news cancel: req_id={req_id}");
     }
 
     pub(crate) fn send_histogram_request(&mut self, req_id: u32, con_id: u32, sec_type: &str, exchange: &str, use_rth: bool, period: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {

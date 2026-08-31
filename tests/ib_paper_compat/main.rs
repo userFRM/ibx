@@ -255,6 +255,7 @@ fn compat_suite() {
     conns = historical::phase_head_timestamp(conns);
     conns = historical::phase_scanner_subscription(conns);
     conns = historical::phase_historical_news(conns);
+    conns = historical::phase_withdraw_a_news_query(conns);
     conns = historical::phase_fundamental_data(conns);
 
     // Fourteen phases have run since the last revival, and the venue closes an
@@ -787,6 +788,20 @@ fn an_order_on_an_index_live() {
     }
     println!("\n=== done ===");
     client.disconnect();
+}
+
+/// What the venue does with a news query withdrawn under the document a
+/// withdrawal carries.
+#[test]
+fn withdraw_a_news_query_phase_live() {
+    start_logging();
+    let config = match get_config() { Some(c) => c, None => return };
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
+    let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    let conns = historical::phase_withdraw_a_news_query(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
 }
 
 /// The one contract quoted around the clock, so the only order phase that says

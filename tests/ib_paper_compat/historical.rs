@@ -2339,3 +2339,71 @@ pub(super) fn phase_what_a_chain_reply_carries(mut conns: Conns) -> Conns {
     }
     conns
 }
+
+// ─── Phase 201: Withdrawing a news query ───
+
+/// What the venue does with a news query withdrawn under the document a
+/// withdrawal carries.
+///
+/// The withdrawal was not built here, on the reading that it carries only the
+/// id and that a query already answered has nothing outstanding. It carries the
+/// same document every other withdrawal on this connection does — the id the
+/// query went out under — and this asks the venue with it.
+pub(super) fn phase_withdraw_a_news_query(conns: Conns) -> Conns {
+    phase!("--- Phase 201: withdrawing a news query ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(),
+        conns.farm, conns.ccp, conns.hmds, None,
+    );
+
+    const REQ: i64 = 8601;
+    control_tx.send(ControlCommand::FetchHistoricalNews {
+        req_id: REQ as u32,
+        con_id: 265598,
+        provider_codes: "BRFG+BRFUPDN+DJ-N+DJ-RTA+DJ-RTE+DJ-RTG+DJ-RTPRO+DJNL".into(),
+        start_time: String::new(),
+        end_time: String::new(),
+        max_results: 5,
+    }).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    // Answered first, so the withdrawal is the one that leaves a query running
+    // rather than one racing the reply.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut answered = false;
+    while Instant::now() < deadline && !answered {
+        if !shared.reference.drain_historical_news().is_empty() {
+            answered = true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    control_tx.send(ControlCommand::CancelHistoricalNews { req_id: REQ as u32 }).unwrap();
+
+    // What the venue says to it, if anything.
+    let until = Instant::now() + Duration::from_secs(15);
+    let mut said: Vec<String> = Vec::new();
+    while Instant::now() < until {
+        for (id, code, message) in shared.reference.drain_historical_errors() {
+            said.push(format!("req {id}: {code} {message}"));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    println!("  the query was {}", if answered { "answered" } else { "not answered in time" });
+    if said.is_empty() {
+        println!("  the withdrawal drew nothing, which is what a request the venue has finished with says");
+    } else {
+        for line in &said {
+            println!("  {line}");
+        }
+    }
+    println!("  PASS\n");
+    conns
+}

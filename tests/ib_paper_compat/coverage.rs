@@ -32,6 +32,7 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
     "FetchAdjustments",
     "FetchFundamentalData",
     "CancelFundamentalData",
+    "CancelHistoricalNews",
     "FetchHistogramData",
     "CancelHistogramData",
     "FetchHistoricalTicks",
@@ -53,6 +54,13 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
 ];
 
 const KNOWN_CONTROL_COMMAND_GAPS: &[(&str, &str)] = &[
+    (
+        "CancelCorporateActions",
+        "Sent where a caller stops waiting for corporate actions, which is a \
+         deadline no phase waits out: the query is answered in well under it, \
+         and a phase that sat through one to reach the withdrawal would spend \
+         its whole run doing so",
+    ),
     (
         "AdvisorConfig",
         "Not verifiable here: an \

@@ -363,6 +363,17 @@ impl EClient {
         self.send(ControlCommand::CancelFundamentalData { req_id: wire_req_id(req_id)? })
     }
 
+    /// Withdraw a historical news query. Matches `cancelHistoricalNews` in C++.
+    ///
+    /// One message carrying the id the query went out under, which is the whole
+    /// of what a withdrawal states. Sent whether or not the query has been
+    /// answered: the venue serves it past the reply, so a withdrawal gated on
+    /// this client's own pending list would send nothing in the case that
+    /// leaves one running.
+    pub fn cancel_historical_news(&self, req_id: i64) -> Result<(), Refusal> {
+        self.send(ControlCommand::CancelHistoricalNews { req_id: wire_req_id(req_id)? })
+    }
+
     // ── Histogram ──
 
     /// Request price histogram data. Matches `reqHistogramData` in C++.

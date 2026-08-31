@@ -1236,6 +1236,12 @@ impl HotLoop {
                     self.shared.reference.purge_fundamental_for(req_id);
                     self.hmds.send_fundamental_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
                 }
+                ControlCommand::CancelHistoricalNews { req_id } => {
+                    self.hmds.send_news_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
+                }
+                ControlCommand::CancelCorporateActions { req_id } => {
+                    self.hmds.send_adjustments_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
+                }
                 ControlCommand::FetchHistogramData { req_id, con_id, sec_type, exchange, use_rth, period } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);

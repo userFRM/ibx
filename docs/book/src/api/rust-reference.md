@@ -1733,6 +1733,22 @@ pub fn cancel_fundamental_data(&self, req_id: i64) -> Result<(), Refusal>
 
 ---
 
+#### `cancel_historical_news`
+
+Withdraw a historical news query. One message carrying the id the query went out under, which is the whole of what a withdrawal states. Sent whether or not the query has been answered: the venue serves it past the reply, so a withdrawal gated on this client's own pending list would send nothing in the case that leaves one running.
+
+```rust
+pub fn cancel_historical_news(&self, req_id: i64) -> Result<(), Refusal>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
+
+**Returns:** `Result<(), Refusal>`
+
+---
+
 #### `req_histogram_data`
 
 Request price histogram data. Named by its venue id, as `req_fundamental_data` is.
