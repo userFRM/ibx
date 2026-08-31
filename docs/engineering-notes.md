@@ -602,6 +602,7 @@ the fifty-one, and the twenty-eight beside it.
 | What | Why it is written here | What depends on it |
 | --- | --- | --- |
 | The single letter each venue is known by on a quote | The venue names venues in full and states no abbreviation | Which venue a quote's exchange letter refers to |
+| A commission of zero on an order state the venue has not priced | The margin and equity figures beside it carry the reference client's unstated marker; the three commission figures are numbers and carry nought | A caller telling an order that cost nothing from one whose cost the venue has not stated |
 
 A contract's own description was on this list until it came off: a subscription
 that named a contract by id alone was sent as a smart-routed US stock, on the
