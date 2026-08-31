@@ -603,6 +603,15 @@ the fifty-one, and the twenty-eight beside it.
 | --- | --- | --- |
 | The single letter each venue is known by on a quote | The venue names venues in full and states no abbreviation | Which venue a quote's exchange letter refers to |
 
+A contract's own description was on this list until it came off: a subscription
+that named a contract by id alone was sent as a smart-routed US stock, on the
+reading that callers naming one that way expect a share. A future asked for
+that way was asked for as a share. The engine fills a caller's blanks from the
+venue's own definition of the contract, and where neither the caller nor the
+venue says what it is, the subscription is reported rather than sent — the
+venue answers one stating no security type and no venue with nothing at all, so
+there was never anything to send.
+
 The venues SMART routes to, and the order whose positions a quote's exchange
 bitmask refers to, were on this list until the venue was asked: it states them
 on the contract's own definition, and the order it states bore no resemblance to

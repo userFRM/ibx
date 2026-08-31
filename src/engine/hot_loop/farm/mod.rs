@@ -37,18 +37,15 @@ fn build_conid_subscribe_tags(
     // 207 must both be present. Confirmed against a live session: the same
     // contract is answered with them and silent without them.
     //
-    // The last resort, and a guess: they describe a US stock, so anything else
-    // reaching here is subscribed as one. Every caller that names a contract by
-    // id alone is answered by the venue before it gets this far, so what
-    // arrives undescribed came in through the engine's own subscribe.
-    if exchange.is_empty() || sec_type.is_empty() {
-        log::warn!(
-            "contract {con_id} was subscribed without a security type or an exchange, \
-             and is being asked for as a smart-routed US stock",
-        );
-    }
-    let exchange = if exchange.is_empty() { "SMART" } else { exchange };
-    let sec_type = if sec_type.is_empty() { "STK" } else { sec_type };
+    // What arrives here is described: the engine fills a caller's blanks from
+    // the venue's own definition of the contract, and reports the subscription
+    // rather than sending one where neither says what the contract is. A
+    // description invented here would subscribe to some other instrument under
+    // this one's id, and the caller would read its prices as this one's.
+    debug_assert!(
+        !exchange.is_empty() && !sec_type.is_empty(),
+        "contract {con_id} reached the wire undescribed",
+    );
     let fix_exchange = crate::control::contracts::exchange_to_fix(exchange);
     let fix_sec_type = crate::control::contracts::sec_type_to_fix(sec_type);
 

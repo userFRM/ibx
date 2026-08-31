@@ -794,18 +794,23 @@ fn conid_subscribe_is_unchanged_for_stocks() {
     );
 }
 
-/// Subscribing by conId alone is a supported shape: `Contract` defaults
-/// both descriptive fields to empty and the in-tree benchmark relies on it.
-/// Those callers receive a smart-routed stock from the two literals;
-/// sending an empty SecurityType and Exchange would draw a partial ack.
+/// A contract reaches the wire described, or it does not reach it.
+///
+/// The engine fills a caller's blanks from the venue's own definition and
+/// reports the subscription where neither says what the contract is, so this
+/// builder is only ever handed a description. Both fields go on the wire as
+/// given: a subscription that states neither is answered with nothing, and one
+/// that states a guess subscribes to some other instrument under this id.
 #[test]
-fn conid_subscribe_falls_back_when_the_contract_is_not_described() {
-    let bare = build_conid_subscribe_tags(true, false, 1, 2, 265598, "", "", 0, "T");
-    assert_eq!(tag_values(&bare, 167), ["CS", "CS"]);
-    assert_eq!(tag_values(&bare, 207), ["BEST", "BEST"]);
+fn conid_subscribe_states_the_description_it_is_given() {
+    let fut = build_conid_subscribe_tags(true, false, 1, 2, 793356225, "CME", "FUT", 0, "T");
+    assert_eq!(tag_values(&fut, 167), ["FUT", "FUT"]);
+    assert_eq!(tag_values(&fut, 207), ["CME", "CME"]);
 
-    let described = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T");
-    assert_eq!(bare, described, "an undescribed conId keeps the smart-routed stock shape");
+    let stk = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T");
+    assert_eq!(tag_values(&stk, 167), ["CS", "CS"]);
+    assert_eq!(tag_values(&stk, 207), ["BEST", "BEST"]);
+    assert_ne!(fut, stk, "a future is not sent as a stock");
 }
 
 /// Non-realtime modes collapse to a single TOP subscription carrying 9887.

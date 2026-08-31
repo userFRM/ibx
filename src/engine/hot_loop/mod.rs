@@ -912,6 +912,26 @@ impl HotLoop {
                             } else {
                                 let (sec_type, exchange) =
                                     self.described_as(con_id, &sec_type, &exchange);
+                                // Neither the caller nor the venue's own
+                                // definition says what this contract is. The
+                                // venue answers a subscription that states no
+                                // security type and no venue with nothing at
+                                // all, so there is nothing to send and nothing
+                                // to guess: a description invented here would
+                                // subscribe to some other instrument under
+                                // this one's id.
+                                if sec_type.is_empty() || exchange.is_empty() {
+                                    self.shared.market.push_subscription_failure(
+                                        id,
+                                        format!(
+                                            "contract {con_id} is not described by this \
+                                             session or by the venue, and a subscription \
+                                             states its security type and its venue: name \
+                                             them on the contract",
+                                        ),
+                                    );
+                                    continue;
+                                }
                                 self.farm.send_mktdata_subscribe(
                                     con_id, &symbol, &exchange, &sec_type,
                                     &last_trade_date, strike, &right, &multiplier,
