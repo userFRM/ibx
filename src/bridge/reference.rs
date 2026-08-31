@@ -98,6 +98,8 @@ pub struct ReferenceState {
     competing_session: Mutex<Option<(String, String, bool)>>,
     /// Why this session ended, once it has ended for good.
     session_over: Mutex<Option<&'static str>>,
+    /// Why the trading connection stopped for good, where it has.
+    trading_over: Mutex<Option<&'static str>>,
     /// Security type → the order types the venue permits for it, from logon tag 6652.
     order_permissions: Mutex<HashMap<String, Vec<String>>>,
     /// Feature tokens the venue enables for this account, from logon tag 6542
@@ -148,6 +150,7 @@ impl ReferenceState {
             misc_urls: Mutex::new(HashMap::new()),
             competing_session: Mutex::new(None),
             session_over: Mutex::new(None),
+            trading_over: Mutex::new(None),
             order_permissions: Mutex::new(HashMap::new()),
             enabled_features: Mutex::new(Vec::new()),
             island_granted: AtomicBool::new(false),
@@ -984,6 +987,29 @@ impl ReferenceState {
     /// per call for an answer that cannot arrive.
     pub fn session_over(&self) -> Option<&'static str> {
         *self.session_over.lock().unwrap()
+    }
+
+    /// Why the trading connection is gone for good, where it is.
+    ///
+    /// Its own, apart from the session's: one flag for every transport says a
+    /// quote feed the venue will not serve again has ended the trading
+    /// connection too, and an order refused on that reading is an order the
+    /// venue would have taken. This is set only where the trading connection
+    /// itself has stopped being retried.
+    pub fn trading_over(&self) -> Option<&'static str> {
+        *self.trading_over.lock().unwrap()
+    }
+
+    /// Record why the trading connection stopped for good. The first stands.
+    #[doc(hidden)] pub fn set_trading_over(&self, why: &'static str) {
+        let mut over = self.trading_over.lock().unwrap();
+        if over.is_none() {
+            *over = Some(why);
+        }
+    }
+
+    #[doc(hidden)] pub fn clear_trading_over(&self) {
+        *self.trading_over.lock().unwrap() = None;
     }
 
     /// Record why this session ended. The first reason stands.

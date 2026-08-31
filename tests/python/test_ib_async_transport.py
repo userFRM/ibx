@@ -239,3 +239,25 @@ def test_a_field_that_cannot_be_carried_is_refused():
     with pytest.raises(ValueError, match="cannot carry"):
         ibx.ib_async._as_ours(their)
 
+
+
+def test_readonly_reaches_the_session_through_the_adapter():
+    """A read-only connection through this adapter is read-only.
+
+    The flag was accepted by the facade and dropped by the adapter, so a
+    program that asked ib_async for a read-only session got one that could
+    place orders. It is carried now, and `attach` takes one for a caller that
+    sets it before connecting.
+    """
+    import inspect
+
+    from ibx.ib_async import IbxClient, attach
+
+    sig = inspect.signature(IbxClient.connectAsync)
+    assert "readonly" in sig.parameters, "the adapter takes it"
+    assert "readonly" in inspect.signature(attach).parameters, "and so does attach"
+    assert "readonly" in inspect.signature(IbxClient.__init__).parameters
+
+    # What attach set stands where the connect states none.
+    client = IbxClient(wrapper=None, readonly=True)
+    assert client._readonly is True

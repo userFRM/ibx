@@ -61,6 +61,24 @@ impl EClient {
         self.shared.reference.algorithms_for(sec_type)
     }
 
+    /// Refuse where the trading connection has stopped being retried.
+    ///
+    /// Gated on that connection's own state rather than the session's: the
+    /// session flag is set by any transport ending, the market-data farm
+    /// included, and refusing on it would refuse what a live trading
+    /// connection would have carried. Where the trading connection itself has
+    /// stopped, anything given here is recorded and buffered and never sent,
+    /// and the caller is told it did something the venue never saw.
+    fn refuse_if_trading_is_over(&self, what: &str) -> Result<(), Refusal> {
+        match self.shared.reference.trading_over() {
+            Some(why) => Err(Refusal::validation(format!(
+                "the trading connection has ended and is not being retried ({why}), so \
+                 {what} given here would be recorded and never sent: open a session again",
+            ))),
+            None => Ok(()),
+        }
+    }
+
     /// Place an order. Matches `placeOrder` in C++.
     ///
     /// An order names its contract by the venue's id. A caller who states
@@ -82,15 +100,15 @@ impl EClient {
     /// — from `qualify_contract`, or from any contract-details answer — and
     /// nothing is resolved and nothing waits.
     pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> Result<(), Refusal> {
-        // Not gated on the session being over, though an order accepted after
-        // the engine gives up reconnecting does join a buffer nothing drains.
-        // That flag is one flag for every transport, and the market-data
-        // farm's own terminal reasons set it — so refusing here takes the
-        // trading connection down with the quote feed, permanently, on a
-        // connection that would have accepted the order. Rejecting an order
-        // that would have worked is the worse of the two failures. What this
-        // needs is the trading transport's own state, which nothing here
-        // publishes yet.
+        // Gated on the trading connection's own state rather than the
+        // session's. The session flag is set by any transport ending, the
+        // market-data farm included, and refusing an order on that takes the
+        // trading connection down with the quote feed — on a connection that
+        // would have carried it. This one is set only where the trading
+        // connection itself has stopped being retried, which is where an order
+        // accepted here would join a buffer nothing drains and be reported as
+        // sent while never reaching the venue.
+        self.refuse_if_trading_is_over("an order")?;
         self.core.refuse_if_readonly("an order").map_err(Refusal::validation)?;
         ClientCore::validate_order_destination(&contract.exchange)?;
 
@@ -255,6 +273,7 @@ impl EClient {
     /// fields on this wire and no time among them, as the protocol's
     /// cancel does.
     pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), Refusal> {
+        self.refuse_if_trading_is_over("a withdrawal")?;
         self.core.refuse_if_readonly("a cancel").map_err(Refusal::validation)?;
         // Tag 11 order ids start at 1. A negative id cast unchecked becomes a
         // large unsigned one, which the venue answers "no such order".
@@ -277,6 +296,7 @@ impl EClient {
     /// `place_order` callbacks or by the CCP session-recovery push hydrated in
     /// `handle_exec_report`). Fails if `perm_id` is not currently tracked.
     pub fn cancel_order_by_perm_id(&self, perm_id: i64) -> Result<(), Refusal> {
+        self.refuse_if_trading_is_over("a withdrawal")?;
         self.core.refuse_if_readonly("a cancel").map_err(Refusal::validation)?;
         if perm_id == 0 {
             return Err("cancel_order_by_perm_id: perm_id must be non-zero".into());
@@ -291,6 +311,7 @@ impl EClient {
 
     /// Cancel all orders. Matches `reqGlobalCancel` in C++.
     pub fn req_global_cancel(&self) -> Result<(), Refusal> {
+        self.refuse_if_trading_is_over("a withdrawal of every order")?;
         self.core.refuse_if_readonly("a global cancel").map_err(Refusal::validation)?;
         // Use global instrument count (not just locally-tracked ones)
         let count = self.shared.market.instrument_count();

@@ -1753,6 +1753,7 @@ impl HotLoop {
         }
         self.reconnect_halted = None;
         self.shared.reference.clear_session_over();
+        self.shared.reference.clear_trading_over();
     }
 
     /// Replace the auth connection (after reconnection) and reconcile order state.
@@ -2149,6 +2150,11 @@ impl HotLoop {
                     );
                     self.reconnect_halted = Some(reason);
                     self.shared.reference.set_session_over(reason.as_str());
+                    // And the trading connection's own, which is what an order
+                    // asks about. The session flag is set by any transport
+                    // ending, a quote feed included, and an order refused on
+                    // that reading is one this connection would have carried.
+                    self.shared.reference.set_trading_over(reason.as_str());
                     self.pending_ccp_reconnect = None;
                     self.shared.set_connection_lost();
                     emit(&self.event_tx, Event::Disconnected);

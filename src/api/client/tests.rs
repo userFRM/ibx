@@ -1332,6 +1332,34 @@ fn place_order_carries_a_fractional_quantity() {
     }
 }
 
+/// An order is refused once the trading connection has stopped being retried.
+///
+/// Accepted there it is recorded and buffered and never sent, and the caller
+/// is told it placed an order the venue never saw. Gated on the trading
+/// connection's own state rather than the session's: the session flag is set
+/// by any transport ending, and refusing on that would refuse orders a live
+/// trading connection would have carried.
+#[test]
+fn an_order_is_refused_once_the_trading_connection_has_stopped() {
+    let (client, rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "MKT".into(),
+        tif: "DAY".into(), ..Default::default()
+    };
+
+    // A quote feed ending is not the trading connection ending.
+    shared.reference.set_session_over("the market data farm");
+    client.place_order(1, &spy(), &order).expect("the trading connection still carries it");
+    while rx.try_recv().is_ok() {}
+
+    shared.reference.set_trading_over("the trading connection");
+    let err = client.place_order(2, &spy(), &order)
+        .expect_err("and is refused once that has stopped");
+    assert!(err.message.contains("never sent"), "{err}");
+    assert!(rx.try_recv().is_err(), "nothing reaches the wire");
+}
+
 #[test]
 fn place_order_market() {
     let (client, rx, shared) = test_client();

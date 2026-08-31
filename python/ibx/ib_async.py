@@ -47,11 +47,14 @@ class IbxClient:
     MaxClientVersion = 178
 
     def __init__(self, wrapper, username="", password="", paper=True,
-                 session_file=None, client_id=None):
+                 session_file=None, client_id=None, readonly=False):
         self.wrapper = wrapper
         self._username = username or os.environ.get("IB_USERNAME", "")
         self._password = password or os.environ.get("IB_PASSWORD", "")
         self._paper = paper
+        # Where a caller said so before connecting. `connectAsync` takes one of
+        # its own; unstated there, this is what stands.
+        self._readonly = bool(readonly)
         self.apiStart = Event("apiStart")
         self.apiEnd = Event("apiEnd")
         self.apiError = Event("apiError")
@@ -92,8 +95,15 @@ class IbxClient:
 
     # ── connection ──
 
-    async def connectAsync(self, host, port, clientId, timeout=2.0):
-        """Open the session. Host and port name a gateway; there is none."""
+    async def connectAsync(self, host, port, clientId, timeout=2.0, readonly=None,
+                           account=""):
+        """Open the session. Host and port name a gateway; there is none.
+
+        ``readonly`` is carried to the session, which refuses to send anything
+        that places, changes or withdraws an order. Accepted and dropped, a
+        program that asked for a read-only connection got one that could trade.
+        """
+        readonly = self._readonly if readonly is None else bool(readonly)
         self.host, self.port, self.clientId = host, int(port), int(clientId)
         self._callbacks._client_id = self.clientId
         self.connState = IbxClient.CONNECTING
@@ -109,6 +119,7 @@ class IbxClient:
                 password=self._password,
                 paper=self._paper,
                 client_id=self.clientId,
+                readonly=readonly,
                 session_file=self._session_file,
             ),
         )
@@ -661,7 +672,7 @@ def _as_ours(value):
 
 
 def attach(ib, username="", password="", paper=True, session_file=None,
-           client_id=None):
+           client_id=None, readonly=False):
     """Point an `ib_async.IB` at this engine, and hand it back.
 
     The credentials are this session's; left out, `IB_USERNAME` and
@@ -684,7 +695,7 @@ def attach(ib, username="", password="", paper=True, session_file=None,
     elif session_file is False:
         session_file = None
     ib.client = IbxClient(ib.wrapper, username, password, paper, session_file,
-                          client_id)
+                          client_id, readonly)
     ib.wrapper.client = ib.client
 
     # An order they leave unnumbered is numbered from what the account has
