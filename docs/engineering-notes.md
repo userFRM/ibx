@@ -461,8 +461,14 @@ on them forever rather than be told they are not coming.
 
 | Callback | What it carries | Why not |
 | --- | --- | --- |
-| `rerouteMktDataReq`, `rerouteMktDepthReq` | A request id, a contract id and a venue: the answer to a market data request is "ask again, for this contract, over there" | The redirection is decided from contract data rather than stated on the wire, and this client has not established what decides it. Sending one on a rule of this client's own invention would send a caller to a contract the venue never named |
+| `rerouteMktDataReq`, `rerouteMktDepthReq` | A request id, a contract id and a venue: the answer to a market data request is "ask again, for this contract, over there" | The venue states it: a redirection arrives on the market data connection as a message type of its own. What that message carries is not established — nothing has read one, and no session here has been sent one. Firing the callback from a rule of this client's own would send a caller to a contract the venue never named, so it waits for one to arrive: an unread type is named where somebody looks, with its size, the first time it does |
 | `config` | A configuration exchange between a front end and its own process | There is no such process here. This client is the thing a front end would have been talking to |
+
+The redirection is the one of the two that could arrive. It is carried on the
+connection this client already reports every unread type on, so a session that
+is sent one names it rather than dropping it — which is what the layout would
+be read from. Until then the callback is not fired, because what it would carry
+is not known.
 
 `currentTimeInMillis` was on this list and is not any more: it reads the same
 clock `currentTime` does, at whatever precision the venue stamped.
