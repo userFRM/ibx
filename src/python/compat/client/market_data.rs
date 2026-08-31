@@ -41,11 +41,16 @@ impl EClient {
         self.req_mkt_data_ex(py, req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, mode)
     }
 
-    /// Like `req_mkt_data`, but encodes the market-data mode per request
-    /// (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen), so several
-    /// subscriptions on the same contract can run in parallel and the caller
-    /// picks whichever feed has data. The frozen one keeps thinly-traded names
-    /// streaming after hours when the realtime feed is silent.
+    /// Like `req_mkt_data`, but names the market-data mode on the request
+    /// itself (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen) rather than
+    /// taking the one the session is set to. The frozen one keeps thinly-traded
+    /// names quoting after hours, when the realtime feed is silent.
+    ///
+    /// A contract holds one subscription at a time, so this states the mode for
+    /// that subscription rather than adding a second alongside it: a later
+    /// request for a contract already subscribed follows the one that is up and
+    /// is handed its quotes. To compare two modes on one contract, withdraw
+    /// between them.
     ///
     /// `regulatory_snapshot` asks for the venue's own chargeable one-shot
     /// snapshot: a request type of its own rather than a mode on an ordinary

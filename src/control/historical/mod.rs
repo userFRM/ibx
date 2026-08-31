@@ -499,20 +499,25 @@ pub fn parse_bar_response(xml: &str) -> Option<HistoricalResponse> {
         };
         let bar_xml = &xml[abs_start..bar_end];
 
+        // A price the bar does not state is not nought. Read that way a bar
+        // whose close went missing is a crash to zero on a caller's chart, and
+        // nothing in it says the number was never sent — which is the same
+        // reason a bar whose unit nobody stated is not read either.
+        let priced = |name: &str| -> Option<f64> {
+            tag(bar_xml, name).and_then(|s| s.parse().ok())
+        };
+        let (Some(open), Some(high), Some(low), Some(close)) =
+            (priced("open"), priced("high"), priced("low"), priced("close"))
+        else {
+            log::warn!("a bar states no open, high, low or close, so the series is not read");
+            return None;
+        };
         let bar = HistoricalBar {
             time: tag(bar_xml, "time").unwrap_or("").to_string(),
-            open: tag(bar_xml, "open")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0),
-            high: tag(bar_xml, "high")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0),
-            low: tag(bar_xml, "low")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0),
-            close: tag(bar_xml, "close")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0),
+            open,
+            high,
+            low,
+            close,
             volume: tag(bar_xml, "volume")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
