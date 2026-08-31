@@ -652,10 +652,13 @@ fn auth_with(host: &str, trading_host: &str, trading_farm: &str) -> ReconnectAut
     }
 }
 
-/// The trading reconnect announces the farm and dials the host the auth
-/// server gave for the account, rather than a literal `usfarm` and the
-/// configured host. The historical-data reconnect beside it carries both
-/// the same way.
+/// The trading reconnect announces the farm the venue named for the account
+/// and dials the host it gave, rather than a literal and the configured host.
+///
+/// The host still falls back to the session's own, because a redirect moves it
+/// after connect and the reconnect has to follow. The farm does not: a session
+/// exists only where the venue named one, and the name a guess would reach
+/// serves other accounts than this.
 #[test]
 fn a_reconnect_uses_the_route_the_auth_server_gave() {
     assert_eq!(
@@ -663,32 +666,25 @@ fn a_reconnect_uses_the_route_the_auth_server_gave() {
         ("cdc2.ibllc.com".to_string(), "euhard".to_string()),
     );
 
-    // No route parsed: the literals it fell back to are still the answer,
-    // so an account that reconnected correctly before still does.
-    assert_eq!(
-        reconnect_trading_route(&auth_with("cdc1.ibllc.com", "", "")),
-        ("cdc1.ibllc.com".to_string(), "usfarm".to_string()),
-    );
-
-    // And each half falls back independently.
+    // The host falls back on its own, and carries the farm it was given.
     assert_eq!(
         reconnect_trading_route(&auth_with("cdc1.ibllc.com", "", "euhard")),
         ("cdc1.ibllc.com".to_string(), "euhard".to_string()),
     );
-    assert_eq!(
-        reconnect_trading_route(&auth_with("cdc1.ibllc.com", "cdc2.ibllc.com", "")),
-        ("cdc2.ibllc.com".to_string(), "usfarm".to_string()),
-    );
 
     // The reason the parsed route is stored raw rather than after the
-    // initial connect's fallback: with no route stated, the reconnect has
-    // to use whatever host the session holds now. Storing the materialized
-    // pair would pin the host as it was at connect time and ignore a
-    // redirect that has moved it since.
+    // initial connect: with the host moved by a redirect since, the
+    // reconnect has to use whatever the session holds now.
     assert_eq!(
-        reconnect_trading_route(&auth_with("cdc3.ibllc.com", "", "")),
-        ("cdc3.ibllc.com".to_string(), "usfarm".to_string()),
-        "an updated host wins when the server stated no route",
+        reconnect_trading_route(&auth_with("cdc3.ibllc.com", "cdc2.ibllc.com", "eufarm")),
+        ("cdc2.ibllc.com".to_string(), "eufarm".to_string()),
+    );
+
+    // A farm this client no longer holds is not replaced by one it made up:
+    // the reconnect carries nothing rather than dialling somewhere else.
+    assert_eq!(
+        reconnect_trading_route(&auth_with("cdc1.ibllc.com", "", "")),
+        ("cdc1.ibllc.com".to_string(), String::new()),
     );
 }
 

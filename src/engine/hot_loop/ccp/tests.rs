@@ -2279,6 +2279,7 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
 fn a_subscription_the_venue_never_names_is_reported() {
     let (mut ccp, _context, shared) = u186_test_state();
     let parked = PendingSubscribe {
+        con_id: 0,
         instrument: 4,
         symbol: "NOSUCH".into(),
         exchange: "SMART".into(),
@@ -2316,6 +2317,7 @@ fn a_subscription_the_venue_never_names_is_reported() {
 fn a_subscription_waits_for_the_lookup_that_names_its_contract() {
     let (mut ccp, mut context, shared) = u186_test_state();
     let parked = PendingSubscribe {
+        con_id: 0,
         instrument: 3,
         symbol: "SPY".into(),
         exchange: "SMART".into(),

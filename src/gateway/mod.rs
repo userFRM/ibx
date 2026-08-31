@@ -26,7 +26,6 @@ use crate::protocol::fix::{self, fix_build, fix_parse};
 use crate::protocol::fixcomp;
 use crate::protocol::ns;
 
-pub(crate) const DEFAULT_TRADING_FARM: &str = "usfarm";
 
 /// The trading route a reconnect should use.
 ///
@@ -41,12 +40,12 @@ pub(crate) fn reconnect_trading_route(auth: &ReconnectAuth) -> (String, String) 
     } else {
         auth.trading_host.clone()
     };
-    let farm = if auth.trading_farm.is_empty() {
-        DEFAULT_TRADING_FARM.to_string()
-    } else {
-        auth.trading_farm.clone()
-    };
-    (host, farm)
+    // The farm the venue named for this account, and no literal behind it: a
+    // session exists only where the venue named one, and the name a guess would
+    // reach serves other accounts than this. Empty here would be this client
+    // having lost what it was told, which a reconnect to somewhere else does
+    // not repair.
+    (host, auth.trading_farm.clone())
 }
 
 /// The connect-time credentials a reconnect needs, supplied by whichever
@@ -1749,22 +1748,25 @@ impl Gateway {
         // as missing data rather than as a wrong name. Said out loud for that
         // reason: every session in this codebase's logs is named both, so if
         // this is ever read in one, it is the interesting part of it.
-        let parsed_trading = parse_farm_route(&trading_route);
-        let invented = |what: &str, farm: &str| {
-            log::warn!(
-                "the venue named no {what} route, so this session will try {farm} \
-                 on {host} — a guess at both, and wrong for any account this \
-                 venue does not serve from there",
-            );
-            (host.to_string(), farm.to_string(), None)
+        // The venue names where this account is served, and the name is not
+        // this client's to supply: it serves accounts from farms of its own
+        // naming, and the one a guess would reach is wrong for every account it
+        // does not serve from there. Named or there is no connection, which is
+        // how the definitions route below is already handled.
+        let named = |what: &str, route: &str| {
+            parse_farm_route(route).ok_or_else(|| {
+                io::Error::other(format!(
+                    "the venue named no {what} route for this account, so there is \
+                     nowhere to open it: it states one at logon and this session \
+                     was given none",
+                ))
+            })
         };
-        let (trading_host, trading_farm, trading_route_port) = parsed_trading.clone()
-            .unwrap_or_else(|| invented("trading", DEFAULT_TRADING_FARM));
+        let (trading_host, trading_farm, trading_route_port) = named("trading", &trading_route)?;
         // Tag first, then the route, then the configured port: the order the
         // protocol resolves them in.
         let trading_port = trading_port.or(trading_route_port);
-        let (mktdata_host, mktdata_farm, mktdata_port) = parse_farm_route(&mktdata_route)
-            .unwrap_or_else(|| invented("market data", "ushmds"));
+        let (mktdata_host, mktdata_farm, mktdata_port) = named("market data", &mktdata_route)?;
         // Contract definitions and the calendar that rides with them. Stated
         // by the venue at logon like the other two; where it states none, this
         // client simply has no such connection rather than guessing a name.
@@ -1775,8 +1777,8 @@ impl Gateway {
         // below are moved into the thread::scope closures.
         let hmds_host_for_gw = mktdata_host.clone();
         let hmds_farm_for_gw = mktdata_farm.clone();
-        let (trading_host_for_gw, trading_farm_for_gw, _) =
-            parsed_trading.unwrap_or_default();
+        let trading_host_for_gw = trading_host.clone();
+        let trading_farm_for_gw = trading_farm.clone();
 
         let (farm_conn, hmds_conn, secdef_conn) = connect_farms(
             config,

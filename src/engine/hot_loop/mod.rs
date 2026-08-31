@@ -887,6 +887,27 @@ impl HotLoop {
                             if let Some(tx) = &reply_tx {
                                 let _ = tx.try_send(Ok(id));
                             }
+                            // What the contract is, as the caller stated it
+                            // or as the venue's own definition has it.
+                            let (known_sec_type, _) =
+                                self.described_as(con_id, &sec_type, &exchange);
+                            if con_id != 0 && known_sec_type.is_empty() {
+                                // Neither says. A security type invented here
+                                // subscribes to some other kind of instrument
+                                // under this contract's id, and the caller
+                                // reads its prices as this one's — which is
+                                // what a future asked for by id alone used to
+                                // get, as a share.
+                                self.shared.market.push_subscription_failure(
+                                    id,
+                                    format!(
+                                        "contract {con_id} states no security type, here \
+                                         or on the venue's own definition of it, and a \
+                                         subscription states one: name it on the contract",
+                                    ),
+                                );
+                                continue;
+                            }
                             if con_id == 0 {
                                 // The venue answers a subscription only when it
                                 // is named by contract id, and says nothing at
@@ -895,6 +916,7 @@ impl HotLoop {
                                 self.ccp.resolve_for_subscribe(
                                     crate::engine::hot_loop::ccp::PendingSubscribe {
                                         instrument: id,
+                                        con_id,
                                         symbol: symbol.clone(),
                                         exchange: exchange.clone(),
                                         sec_type: sec_type.clone(),
@@ -912,26 +934,6 @@ impl HotLoop {
                             } else {
                                 let (sec_type, exchange) =
                                     self.described_as(con_id, &sec_type, &exchange);
-                                // Neither the caller nor the venue's own
-                                // definition says what this contract is. The
-                                // venue answers a subscription that states no
-                                // security type and no venue with nothing at
-                                // all, so there is nothing to send and nothing
-                                // to guess: a description invented here would
-                                // subscribe to some other instrument under
-                                // this one's id.
-                                if sec_type.is_empty() || exchange.is_empty() {
-                                    self.shared.market.push_subscription_failure(
-                                        id,
-                                        format!(
-                                            "contract {con_id} is not described by this \
-                                             session or by the venue, and a subscription \
-                                             states its security type and its venue: name \
-                                             them on the contract",
-                                        ),
-                                    );
-                                    continue;
-                                }
                                 self.farm.send_mktdata_subscribe(
                                     con_id, &symbol, &exchange, &sec_type,
                                     &last_trade_date, strike, &right, &multiplier,
@@ -3262,6 +3264,7 @@ mod tests {
             let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
             let instrument = hl.context.market.register(0);
             let pending = crate::engine::hot_loop::ccp::PendingSubscribe {
+                con_id: 0,
                 instrument,
                 symbol: "SPY".into(),
                 exchange: "SMART".into(),

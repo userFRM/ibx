@@ -37,15 +37,18 @@ fn build_conid_subscribe_tags(
     // 207 must both be present. Confirmed against a live session: the same
     // contract is answered with them and silent without them.
     //
-    // What arrives here is described: the engine fills a caller's blanks from
-    // the venue's own definition of the contract, and reports the subscription
-    // rather than sending one where neither says what the contract is. A
-    // description invented here would subscribe to some other instrument under
-    // this one's id, and the caller would read its prices as this one's.
-    debug_assert!(
-        !exchange.is_empty() && !sec_type.is_empty(),
-        "contract {con_id} reached the wire undescribed",
-    );
+    // What the contract IS arrives stated: the engine fills a caller's blanks
+    // from the venue's own definition and reports the subscription where
+    // neither says, because a security type invented here subscribes to some
+    // other kind of instrument under this contract's id.
+    //
+    // Where it is ROUTED is a different question and has a default. The venue
+    // requires tag 207 — a subscription omitting it is answered with nothing,
+    // measured — and a caller who states a type and no venue means the smart
+    // route, which is what every example written against the reference client
+    // states for one.
+    debug_assert!(!sec_type.is_empty(), "contract {con_id} reached the wire untyped");
+    let exchange = if exchange.is_empty() { "SMART" } else { exchange };
     let fix_exchange = crate::control::contracts::exchange_to_fix(exchange);
     let fix_sec_type = crate::control::contracts::sec_type_to_fix(sec_type);
 

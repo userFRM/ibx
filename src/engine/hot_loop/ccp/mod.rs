@@ -185,6 +185,11 @@ fn handle_account_config(parsed: &std::collections::HashMap<u32, String>, shared
 #[derive(Debug, Clone)]
 pub(crate) struct PendingSubscribe {
     pub(crate) instrument: crate::types::InstrumentId,
+    /// The contract's own id, where the caller gave one. A lookup by id names
+    /// the contract whatever else the caller left out; a lookup by symbol
+    /// needs the venue to be told where it is listed, which is one of the
+    /// things a caller who left it out does not have.
+    pub(crate) con_id: i64,
     pub(crate) symbol: String,
     pub(crate) exchange: String,
     pub(crate) sec_type: String,
@@ -1692,10 +1697,15 @@ impl CcpState {
             pending.symbol.clone(), pending.sec_type.clone(),
             pending.exchange.clone(), pending.currency.clone(),
         );
+        let con_id = pending.con_id;
         self.pending_md_subscribe.push((req_id, pending, Instant::now()));
-        self.send_secdef_request_by_symbol(
-            req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb,
-        );
+        if con_id != 0 {
+            self.send_secdef_request(req_id, con_id, ccp_conn, hb);
+        } else {
+            self.send_secdef_request_by_symbol(
+                req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb,
+            );
+        }
     }
 
     /// Ask the venue to name the contract a request wants, and hold the

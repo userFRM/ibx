@@ -603,14 +603,19 @@ the fifty-one, and the twenty-eight beside it.
 | --- | --- | --- |
 | The single letter each venue is known by on a quote | The venue names venues in full and states no abbreviation | Which venue a quote's exchange letter refers to |
 
-A contract's own description was on this list until it came off: a subscription
-that named a contract by id alone was sent as a smart-routed US stock, on the
-reading that callers naming one that way expect a share. A future asked for
-that way was asked for as a share. The engine fills a caller's blanks from the
-venue's own definition of the contract, and where neither the caller nor the
-venue says what it is, the subscription is reported rather than sent — the
-venue answers one stating no security type and no venue with nothing at all, so
-there was never anything to send.
+What a contract IS came off this list. A subscription naming a contract by id
+alone was sent as a smart-routed US stock, on the reading that callers naming
+one that way expect a share — so a future asked for that way was asked for as a
+share, and its prices came back under that id. The engine fills a caller's
+blanks from the venue's own definition, and where neither the caller nor the
+venue states a security type the subscription is reported rather than sent.
+
+Where a contract is ROUTED is a different question and keeps its default. The
+venue requires the field — a subscription omitting it is answered with nothing,
+measured — and a caller who states a type and no venue means the smart route,
+which is what every example written against the reference client states for
+one. The type is the venue's to state and the route is the caller's, so only
+the first is refused.
 
 The venues SMART routes to, and the order whose positions a quote's exchange
 bitmask refers to, were on this list until the venue was asked: it states them
