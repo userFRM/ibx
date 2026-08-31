@@ -255,18 +255,6 @@ pub fn session(&self) -> &crate::auth::resume::ResumableSession
 
 ---
 
-#### `token_type`
-
-`stoken_type` discriminator captured at connect (`"st"`, `"tst"`, `"zenith"`, or empty for the SRP-only path). Sent verbatim in SSO authenticator bodies.
-
-```rust
-pub fn token_type(&self) -> &str
-```
-
-**Returns:** `&str`
-
----
-
 ## Calls That Answer
 
 #### `historical_data`

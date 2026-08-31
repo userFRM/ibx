@@ -9,6 +9,22 @@ use crate::types::SmartComponent;
 use crate::bridge::RichOrderInfo;
 use crate::types::model::OrderState as ApiOrderState;
 
+/// A market-data type nobody recognises does not become the venue's word.
+///
+/// Subscriptions stay realtime whatever it names, and the callback that
+/// reports a subscription's type reads what was stored — so storing the number
+/// would tell a caller their data is of a type the venue never stated and
+/// their subscription is not on.
+#[test]
+fn an_unknown_market_data_type_is_not_kept() {
+    let core = ClientCore::new();
+    core.set_market_data_type(MDT_DELAYED);
+    assert_eq!(core.subscription_mode(), 1);
+
+    core.set_market_data_type(99);
+    assert_eq!(core.subscription_mode(), 1, "the last known type still stands");
+}
+
 /// An account holding nothing still has a P&L, and a P&L of zero is an
 /// answer. Neither an empty position list nor a zero value withholds it.
 #[test]

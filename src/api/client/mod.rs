@@ -289,7 +289,6 @@ pub struct EClient {
     pub(crate) core: ClientCore,
     pub(crate) session_token_bytes: Vec<u8>,
     pub(crate) session: crate::auth::resume::ResumableSession,
-    pub(crate) token_type: String,
 }
 
 impl Drop for EClient {
@@ -496,7 +495,6 @@ impl EClient {
         let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = Gateway::connect(&gw_config)?;
         let account_id = gw.account_id.clone();
         let accounts = gw.accounts.clone();
-        let token_type = String::new();
         let session = crate::client_core::remember_session(
             config.session_file.as_deref(),
             &config.password,
@@ -550,7 +548,6 @@ impl EClient {
             core,
             session_token_bytes,
             session,
-            token_type,
         })
     }
 
@@ -595,7 +592,6 @@ impl EClient {
             },
             session_token_bytes: Vec::new(),
             session: Default::default(),
-            token_type: String::new(),
         }
     }
 
@@ -747,11 +743,6 @@ impl EClient {
         &self.session
     }
 
-    /// `stoken_type` discriminator captured at connect (`"st"`, `"tst"`, `"zenith"`,
-    /// or empty for the SRP-only path). Sent verbatim in SSO authenticator bodies.
-    pub fn token_type(&self) -> &str {
-        &self.token_type
-    }
 }
 
 #[cfg(test)]

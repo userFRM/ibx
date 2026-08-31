@@ -5004,12 +5004,6 @@ fn session_token_bytes_roundtrip_through_biguint() {
     assert_eq!(BigUint::from_bytes_be(client.session_token_bytes()), session_token);
 }
 
-#[test]
-fn token_type_default_is_empty() {
-    let (client, _rx, _shared) = test_client();
-    assert_eq!(client.token_type(), "");
-}
-
 // ═══════════════════════════════════════════════════════════════════
 // Connection loss
 // ═══════════════════════════════════════════════════════════════════

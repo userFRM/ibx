@@ -1596,7 +1596,13 @@ impl ClientCore {
     /// a client that asks for delayed data receives delayed data.
     pub fn set_market_data_type(&self, mdt: i32) {
         if !matches!(mdt, MDT_REALTIME | MDT_FROZEN | MDT_DELAYED | MDT_DELAYED_FROZEN) {
+            // Kept out rather than kept: subscriptions stay realtime whatever
+            // this names, and the callback that reports a subscription's type
+            // reads what is stored — so a number nobody recognises, stored,
+            // reaches the caller as the venue's word for data that is not on
+            // it.
             log::warn!("req_market_data_type({mdt}) names no known type; subscriptions stay realtime");
+            return;
         }
         self.market_data_type.store(mdt, Ordering::Relaxed);
     }
