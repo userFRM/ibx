@@ -176,7 +176,10 @@ pub fn ib_datetime_to_unix_millis(stamped: &str) -> Option<i64> {
     let mut parts = time.split(':');
     let hours: i64 = parts.next()?.parse().ok()?;
     let minutes: i64 = parts.next()?.parse().ok()?;
-    let seconds: i64 = parts.next().unwrap_or("0").parse().ok()?;
+    // Stated, not assumed. A stamp that names no second is not a shape this
+    // venue has been seen to send, and reading one as the top of a minute
+    // would turn a stamp that lost its tail into a time this client made up.
+    let seconds: i64 = parts.next()?.parse().ok()?;
     if !(0..24).contains(&hours) || !(0..60).contains(&minutes) || !(0..=60).contains(&seconds) {
         return None;
     }
@@ -578,5 +581,18 @@ mod venue_clock_tests {
         assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00.25xyz"), Some(whole * 1_000));
         // Digits all the way are read.
         assert_eq!(ib_datetime_to_unix_millis("20260815-12:00:00.25"), Some(whole * 1_000 + 250));
+    }
+
+    /// A stamp that names no second is not read as the top of a minute.
+    ///
+    /// Every stamp this venue has been seen to send names one. Filling it in
+    /// would turn a stamp that lost its tail into a time this client made up,
+    /// which the caller could not tell from one the venue stated.
+    #[test]
+    fn a_stamp_with_no_second_is_not_read() {
+        assert!(ib_datetime_to_unix("20260830-14:30").is_none());
+        assert!(ib_datetime_to_unix_millis("20260830-14:30").is_none());
+        // The same stamp naming one is read.
+        assert!(ib_datetime_to_unix("20260830-14:30:00").is_some());
     }
 }
