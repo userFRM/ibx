@@ -1760,13 +1760,6 @@ impl ClientCore {
         // 6107 as unchanged or as cleared is not established here, and the
         // difference between "latent" and "detached" is the whole risk — so
         // the modify is refused rather than sent and hoped for.
-        // A bracket child is the costly one and the only link left here: a
-        // replace that omitted the parent link would leave a child resting
-        // alone, a fill on one leg no longer cancelling the other. No session
-        // has replaced one, so it stays refused until one has.
-        if order.parent_id != 0 {
-            return Some("a bracket child".to_string());
-        }
         // The venue refuses the order itself on the venue and security type a
         // session asked on — "Partial AON orders not supported for this
         // combination of exchange and security type" — so what a replace would

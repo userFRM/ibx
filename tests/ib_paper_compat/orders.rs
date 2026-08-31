@@ -2676,3 +2676,95 @@ pub(super) fn phase_replace_one_refused_order(
     println!("  PASS\n");
     conns
 }
+
+// ─── Phase 200: A bracket child under a replace ───
+
+/// What a replace does to an order that hangs off another one.
+///
+/// This is the costly one of the refusals: a child sent without the link to its
+/// parent rests alone, and a fill on the sibling no longer cancels it. So it
+/// was refused a modify where the others were, and unlike the others no session
+/// had placed one and replaced it — a parent has to exist first.
+pub(super) fn phase_replace_a_bracket_child(conns: Conns) -> Conns {
+    phase!("--- Phase 200: what a replace does to a bracket child ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst, "STK", "SMART");
+    let join = run_hot_loop(hot_loop);
+
+    const RESTING: i64 = 100_000_000;
+    // The parent rests far under the market so neither leg trades.
+    let parent = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id: parent, instrument: inst, side: Side::Buy,
+        qty: 200 * ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: RESTING },
+        tif: b'0', attrs: OrderAttrs::default(),
+    })).unwrap();
+
+    let child = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id: child, instrument: inst, side: Side::Sell,
+        qty: 200 * ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 900_00_000_000 },
+        tif: b'0', attrs: OrderAttrs { parent_id: parent, ..Default::default() },
+    })).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut working = false;
+    let mut replaced = false;
+    let mut outcome: Option<String> = None;
+    while Instant::now() < deadline && outcome.is_none() {
+        let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100))
+        else { continue };
+        if u.order_id != child { continue; }
+        match u.status {
+            OrderStatus::Submitted | OrderStatus::PreSubmitted => {
+                if replaced {
+                    outcome = Some("the replace is taken, the child still works".into());
+                } else {
+                    working = true;
+                    control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                        order_id: child, price: 901_00_000_000, qty: 200 * ibx::types::QTY_SCALE,
+                        outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                    })).unwrap();
+                    replaced = true;
+                }
+            }
+            OrderStatus::Cancelled if replaced => {
+                outcome = Some("the child went with the replace".into());
+            }
+            OrderStatus::Rejected => {
+                let why = shared.orders.get_order_info(child)
+                    .map(|i| i.order_state.reject_reason)
+                    .filter(|w| !w.is_empty())
+                    .unwrap_or_else(|| "no reason given".to_string());
+                outcome = Some(if replaced {
+                    format!("the replace is refused — {why}")
+                } else {
+                    format!("the child was not placed — {why}")
+                });
+            }
+            _ => {}
+        }
+    }
+
+    for id in [child, parent] {
+        control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: id })).unwrap();
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    println!("  {}", outcome.unwrap_or_else(|| {
+        if replaced { "the replace drew no answer".into() }
+        else { "the child was never reported working, so nothing was asked".into() }
+    }));
+    let _ = working;
+    println!("  PASS\n");
+    conns
+}

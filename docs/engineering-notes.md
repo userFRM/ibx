@@ -315,13 +315,14 @@ takes the replace and whether the order is still working afterwards.
 | Midpoint | The replace is taken, the order still works |
 | Snap to midpoint | The replace is taken, the order still works |
 | Limit if touched | The replace is taken, the order still works |
+| A bracket child | The replace is taken, the child still works |
 | Cash quantity | The replace is taken, the order still works |
 | With a good-after time | The replace is taken, the order still works |
 | Non-default trigger method | The replace is taken, the order still works |
 | **Relative** | **Taken four times; three times the replace drew no answer, and neither did the withdrawal after it** |
 | With a minimum quantity | Not placed: `Partial AON orders not supported for this combination of exchange and security type` |
 
-Sixteen take the replace and go on working, so the reason written beside those
+Seventeen take the replace and go on working, so the reason written beside those
 refusals is not what this venue does, and they are gone. A good-after time
 needs an hour that has not passed: one already gone is refused as the order,
 `Invalid effective time`, rather than as the replace.
@@ -339,11 +340,14 @@ would settle it is a second session asking for the open orders after a silent
 replace — the order being there says the replace was ignored, and the order
 being gone says it was taken with the order.
 
+The bracket child was the costly one and the last to be asked, a parent having
+to exist before a child can hang off it. A child placed under a resting parent
+takes the replace and goes on working, so the link the refusal was protecting
+survives one.
+
 The minimum quantity is refused as an order rather than as a replace, on the
 venue and security type asked, so what a replace would do to one is a question
-it has not been possible to put. A bracket child is still refused and is the
-costly one: a child sent without its parent rests alone, a fill on the sibling
-no longer cancels it, and no session has placed one and replaced it.
+it has not been possible to put.
 
 The two the shared walk answered differently between runs were asked again on
 an engine of their own. A shared engine running fourteen orders in sequence
@@ -744,7 +748,7 @@ Nothing skips for contract data or account state. The venue answers for a contra
 | Rust, live | 9 | Yes |
 | Python | 471 | No |
 | Python, live | 135 | Yes |
-| Paper compatibility suite (149 phases) | 42 tests | Yes |
+| Paper compatibility suite (150 phases) | 42 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

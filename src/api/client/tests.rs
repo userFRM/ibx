@@ -318,13 +318,10 @@ fn an_order_defined_by_more_than_its_type_is_not_modified() {
         ("conditional", |o| o.conditions.push(
             crate::types::OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true },
         )),
-        // What is left of the attributes. A bracket child is the costly one:
-        // sent without its parent it rests alone, and a fill on the sibling no
-        // longer cancels it, and no session has placed one and replaced it. The
-        // minimum quantity is one the venue refuses as an order on the security
-        // type asked. Everything else came off this list when a session
-        // replaced it and the venue took it.
-        ("bracket child", |o| o.parent_id = 4242),
+        // What is left of the attributes: the minimum quantity, which this
+        // venue refuses as an order on the security type asked, so what a
+        // replace would do to one cannot be put to it. Everything else came off
+        // this list when a session placed it and the venue took the replace.
         ("minimum quantity", |o| o.min_qty = 50),
     ];
     for (name, set) in cases {
@@ -442,7 +439,6 @@ fn a_limit_if_touched_is_replaced_as_itself() {
 #[test]
 fn an_attribute_added_by_the_modify_is_refused_too() {
     let cases: Vec<OrderCase> = vec![
-        ("bracket child", |o| o.parent_id = 4242),
         ("minimum quantity", |o| o.min_qty = 50),
     ];
     for (name, set) in cases {
