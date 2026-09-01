@@ -293,7 +293,14 @@ pub struct EClient {
 
 impl Drop for EClient {
     fn drop(&mut self) {
-        // Ensure the hot-loop thread is stopped and joined.
+        // Ensure the hot-loop thread is stopped and joined. Dropping this
+        // client ends the session — its connections go with the engine, so
+        // there is nothing left to reuse — and a session that ends is logged
+        // out, the way `disconnect` ends one. Stopping the loop and ending the
+        // session are otherwise separate on purpose: a caller that stops the
+        // engine and keeps its connections must not have the session logged
+        // out from under it.
+        let _ = self.control_tx.send(ControlCommand::Logout);
         let _ = self.control_tx.send(ControlCommand::Shutdown);
         // Taken out before the join, not across it: the guard in an `if let`
         // scrutinee lives to the end of the body, and a second thread reaching

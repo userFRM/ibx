@@ -339,6 +339,17 @@ impl EClient {
         if self.connected.load(Ordering::Relaxed) {
             return Err(PyRuntimeError::new_err("Already connected"));
         }
+        // Past that refusal there can still be an engine running: a
+        // market-data farm that went away flips this flag while the trading
+        // connection is healthy and the ladder is still climbing, and
+        // answering that notice by connecting again is how callers of the
+        // reference client are written. Left running, the old engine loses its
+        // sender and takes the path that sends no logout and withdraws nothing
+        // it opened, so a session stays open at the venue while this one runs.
+        // Stopped and joined before the state is reset, so the engine that is
+        // going cannot write into what the new session has been given.
+        self.stop_engine(py);
+        self.forget_last_session();
 
         // Set before anything is sent, so there is no window in which the
         // session is open and the refusal is not yet in force.
@@ -498,26 +509,7 @@ impl EClient {
 
     /// Disconnect from IB.
     fn disconnect(&self, py: Python<'_>) -> PyResult<()> {
-        // Taken out of their locks first, as in `Drop`: the sends are bounded
-        // and the join waits on the engine, so a guard spanning either blocks
-        // every other thread that needs the same lock.
-        let tx = self.control_tx.lock().unwrap().clone();
-        if let Some(tx) = tx {
-            // The session is ending, so the venue is told before the engine
-            // stops. Detached: the channel is bounded, so a hot loop that is
-            // behind makes these wait, and waiting here with the GIL held
-            // stalls every Python thread instead of this call.
-            py.detach(|| {
-                let _ = tx.send(ControlCommand::Logout);
-                let _ = tx.send(ControlCommand::Shutdown);
-            });
-        }
-        let thread = self._thread.lock().unwrap().take();
-        if let Some(h) = thread {
-            // Same wedged-engine hazard as Drop: release the GIL
-            // for the join so a stuck engine thread stalls only this call.
-            py.detach(|| { let _ = h.join(); });
-        }
+        self.stop_engine(py);
         self.connected.store(false, Ordering::Release);
         self.session_ended.store(true, Ordering::Release);
         // Reset per-session state so connect() can be called again.
@@ -690,6 +682,33 @@ fn ibapi_name(snake: &str) -> String {
 
 
 impl EClient {
+    /// Stop the engine this client is running and wait for it.
+    ///
+    /// Both taken out of their locks first, as in `Drop`: the sends are bounded
+    /// and the join waits on the engine, so a guard spanning either blocks
+    /// every other thread that needs the same lock. Detached for both — the
+    /// channel is bounded and a wedged engine never returns from a join, so
+    /// holding the GIL across either stalls every Python thread rather than
+    /// this call alone.
+    fn stop_engine(&self, py: Python<'_>) {
+        let tx = self.control_tx.lock().unwrap().take();
+        if let Some(tx) = tx {
+            // The session is ending, so the venue is told before the engine
+            // stops. Left to notice its sender went away, the loop takes the
+            // path that sends no logout and withdraws nothing it opened.
+            py.detach(|| {
+                let _ = tx.send(ControlCommand::Logout);
+                let _ = tx.send(ControlCommand::Shutdown);
+            });
+        }
+        let thread = self._thread.lock().unwrap().take();
+        if let Some(h) = thread {
+            py.detach(|| {
+                let _ = h.join();
+            });
+        }
+    }
+
     /// Drop everything the last session held.
     ///
     /// Called both where a session is closed and where the next one is opened,

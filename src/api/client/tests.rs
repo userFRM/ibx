@@ -792,6 +792,19 @@ fn disconnect_ends_the_session_then_stops_the_engine() {
     assert!(matches!(rx.try_recv().unwrap(), ControlCommand::Shutdown));
 }
 
+/// Dropping a client ends the session, the way disconnecting one does.
+///
+/// Its connections go with the engine, so there is nothing left for a caller to
+/// reuse and nothing the venue should keep. Left to notice its sender went
+/// away, the engine takes the path that sends no logout.
+#[test]
+fn dropping_the_client_ends_the_session_then_stops_the_engine() {
+    let (client, rx, _shared) = test_client();
+    drop(client);
+    assert!(matches!(rx.try_recv().unwrap(), ControlCommand::Logout));
+    assert!(matches!(rx.try_recv().unwrap(), ControlCommand::Shutdown));
+}
+
 #[test]
 fn disconnect_idempotent() {
     let (client, _rx, _shared) = test_client();
