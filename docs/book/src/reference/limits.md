@@ -46,6 +46,25 @@ An empty answer means this session has seen no fills. It does not mean the
 account has none. A program that reconciles against an account's full execution
 history needs another source for it.
 
+## A bid of -1 is the venue saying there is none
+
+Some instruments have no bid and no ask. A calculated index is the clearest
+case: it is published as a level, not quoted by anyone. The venue states that
+by sending `-1` on the bid and the ask, and this client passes it on as sent
+rather than turning it into a zero or dropping it.
+
+Told apart by what comes with it:
+
+* **No bid or ask exists.** `-1` on both, and no bid or ask *size* at all,
+  while the last, high, low, close and open arrive normally. `VIX` on `CBOE`
+  reads this way; `SPX`, which does carry a quote, reads normally.
+* **Nothing is flowing.** No ticks at all, and no error — a listing whose
+  market is closed, which is what a Tokyo or Sydney listing gives during the
+  American session.
+
+So `-1` is a stated absence and silence is an unstated one. Neither is an error,
+and neither means the subscription failed.
+
 ## Market depth depends on the entitlement
 
 A book is asked for at a named venue, and every level names the venue it came
