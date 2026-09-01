@@ -148,6 +148,22 @@ the question waits on the subscription that asking opens.
   calendar's schema and event types are delivered either way; the events
   themselves come back empty without it.
 
+## A reconnect already under way outlives the call that stops it
+
+`disconnect` stops the engine and returns. An attempt to reopen a connection
+that was already in flight when it did is not stopped: it runs to its own end
+on a thread of its own.
+
+Nothing it opens is used. The engine refuses to install a connection that
+arrives after the stop — installed, it would be a freshly authenticated session
+at the venue opened after the caller was told the engine had stopped — and the
+socket closes when the engine goes.
+
+What a caller can see is a second-factor prompt arriving on their phone after
+`disconnect` returned, for a login nothing goes on to use. Stopping the attempt
+itself means interrupting a handshake in the middle of a blocking read, which
+this client does not do.
+
 ## What authenticates a farm connection
 
 A market-data or trading connection is opened with a request carrying the
