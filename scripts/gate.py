@@ -99,6 +99,13 @@ def steps(suites):
         # step above it, and three of them reached main because this line was
         # not here.
         (["cargo", "doc", "--no-deps", "--lib"], {"RUSTDOCFLAGS": "-D warnings"}),
+        # The extension the Python suite imports, rebuilt first. Without this
+        # the suite runs against whatever was built last: a change to any
+        # `#[pymethods]` body is invisible here, the Rust half recompiles and
+        # passes, and the same change fails in the workflow, which does build
+        # it. Two runs are only comparable if both are testing the same
+        # extension.
+        ([".venv/bin/maturin", "develop", "--features", "python,extension-module,test-helpers"], {}),
         # And the Python suite, which reads the Rust source in two places. Both
         # went stale in a refactor that every Rust suite passed.
         ([".venv/bin/python", "-m", "pytest", "tests/python", "-q"], {}),

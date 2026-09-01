@@ -1,9 +1,16 @@
 //! Protocol test vectors.
-//! These tests validate the binary protocol decoders against known-good captured data.
+//!
+//! These run the client's own decoders over captured bytes. They used to run
+//! copies of those decoders, written out here and drifted from the originals —
+//! different signatures on two of them — so the file proved only that the
+//! copies agreed with themselves and no change to the real ones could fail it.
 //!
 //! Sources:
 //! - reference test vectors (checksum, XOR fold)
 //! - reference test vectors (VLQ, hibit strings, tick decoding, bar captures)
+
+use ibx::protocol::fix::{fix_checksum, xor_fold};
+use ibx::protocol::tick_decoder::{read_hibit_str, read_vlq, vlq_signed};
 
 // ============================================================
 // VLQ (Variable-Length Quantity) decoder
@@ -11,59 +18,12 @@
 // IB uses VLQ encoding for tick-by-tick data. Bit 7 (0x80) marks the last byte.
 // Multi-byte values: bits [6:0] concatenated, MSB first.
 
-/// Decode a VLQ value from a byte slice starting at `pos`.
-/// Returns (value, byte_count, new_position).
-fn read_vlq(data: &[u8], pos: usize) -> (u64, usize, usize) {
-    let mut val: u64 = 0;
-    let mut i = pos;
-    loop {
-        let b = data[i] as u64;
-        val = (val << 7) | (b & 0x7F);
-        i += 1;
-        if b & 0x80 != 0 {
-            break;
-        }
-    }
-    (val, i - pos, i)
-}
-
-/// Convert VLQ unsigned value to signed using n-byte range.
-/// Upper half of the range maps to negative values.
-fn vlq_signed(val: i64, n: usize) -> i64 {
-    let half = 1i64 << (7 * n - 1);
-    if val >= half {
-        val - (half << 1)
-    } else {
-        val
-    }
-}
-
-/// Decode a hi-bit terminated string. Each byte is a 7-bit ASCII char;
-/// the last byte has bit 7 set. 0x80 alone = empty string.
-fn read_hibit_str(data: &[u8], pos: usize) -> (String, usize) {
-    let mut s = String::new();
-    let mut i = pos;
-    loop {
-        let b = data[i];
-        let ch = (b & 0x7F) as char;
-        i += 1;
-        if b & 0x80 != 0 {
-            if ch != '\0' {
-                s.push(ch);
-            }
-            break;
-        }
-        s.push(ch);
-    }
-    (s, i)
-}
-
 // --- VLQ tests (from reference test suite) ---
 
 #[test]
 fn vlq_single_byte() {
     // 0x88 → bit7=1 (last), value = 8
-    let (val, n, _) = read_vlq(&[0x88], 0);
+    let (val, n) = read_vlq(&[0x88], 0);
     assert_eq!(val, 8);
     assert_eq!(n, 1);
 }
@@ -71,7 +31,7 @@ fn vlq_single_byte() {
 #[test]
 fn vlq_multi_byte() {
     // 0x01 0x4d 0xe7 → 26343 (263.43 cents)
-    let (val, n, _) = read_vlq(&[0x01, 0x4d, 0xe7], 0);
+    let (val, n) = read_vlq(&[0x01, 0x4d, 0xe7], 0);
     assert_eq!(val, 26343);
     assert_eq!(n, 3);
 }
@@ -140,23 +100,23 @@ fn decode_alllast_tick(
 ) -> (u64, i64, u8, u64, String, String) {
     let mut p = pos;
 
-    let (ts, _, new_p) = read_vlq(data, p);
-    p = new_p;
+    let (ts, used) = read_vlq(data, p);
+    p += used;
 
-    let (price_raw, n, new_p) = read_vlq(data, p);
-    p = new_p;
-    let delta = vlq_signed(price_raw as i64, n);
+    let (price_raw, n) = read_vlq(data, p);
+    p += n;
+    let delta = vlq_signed(price_raw, n);
     *price_state += delta;
 
-    let (attribs_raw, _, new_p) = read_vlq(data, p);
-    p = new_p;
+    let (attribs_raw, used) = read_vlq(data, p);
+    p += used;
     let attribs_mask = (attribs_raw & 3) as u8;
 
-    let (size, _, new_p) = read_vlq(data, p);
-    p = new_p;
+    let (size, used) = read_vlq(data, p);
+    p += used;
 
-    let (exchange, new_p) = read_hibit_str(data, p);
-    p = new_p;
+    let (exchange, used) = read_hibit_str(data, p);
+    p += used;
 
     let (conditions, _) = read_hibit_str(data, p);
 
@@ -173,25 +133,29 @@ fn decode_bidask_tick(
 ) -> (u64, i64, i64, u8, u64, u64) {
     let mut p = pos;
 
-    let (ts, _, new_p) = read_vlq(data, p);
+    let (ts, _n) = read_vlq(data, p);
+    let new_p = p + _n;
     p = new_p;
 
-    let (bid_raw, n, new_p) = read_vlq(data, p);
+    let (bid_raw, n) = read_vlq(data, p);
+    let new_p = p + n;
     p = new_p;
-    *bid_state += vlq_signed(bid_raw as i64, n);
+    *bid_state += vlq_signed(bid_raw, n);
 
-    let (ask_raw, n, new_p) = read_vlq(data, p);
+    let (ask_raw, n) = read_vlq(data, p);
+    let new_p = p + n;
     p = new_p;
-    *ask_state += vlq_signed(ask_raw as i64, n);
+    *ask_state += vlq_signed(ask_raw, n);
 
-    let (attribs_raw, _, new_p) = read_vlq(data, p);
-    p = new_p;
+    let (attribs_raw, used) = read_vlq(data, p);
+    p += used;
     let attribs = (attribs_raw & 3) as u8;
 
-    let (bid_size, _, new_p) = read_vlq(data, p);
+    let (bid_size, _n) = read_vlq(data, p);
+    let new_p = p + _n;
     p = new_p;
 
-    let (ask_size, _, _) = read_vlq(data, p);
+    let (ask_size, _) = read_vlq(data, p);
 
     (ts, *bid_state, *ask_state, attribs, bid_size, ask_size)
 }
@@ -328,25 +292,6 @@ fn bidask_first_tick() {
 // ============================================================
 // FIX protocol
 // ============================================================
-
-/// Compute FIX checksum: sum of all bytes mod 256, zero-padded to 3 digits.
-fn fix_checksum(data: &[u8]) -> String {
-    let sum: u32 = data.iter().map(|&b| b as u32).sum();
-    format!("{:03}", sum % 256)
-}
-
-/// XOR-fold a 20-byte HMAC digest to 4 bytes → 8-char uppercase hex.
-fn xor_fold(data: &[u8]) -> String {
-    assert_eq!(data.len(), 20);
-    let mut result = [0u8; 4];
-    for (i, &b) in data.iter().enumerate() {
-        result[i % 4] ^= b;
-    }
-    result
-        .iter()
-        .map(|b| format!("{b:02X}"))
-        .collect::<String>()
-}
 
 #[test]
 fn fix_checksum_abc() {

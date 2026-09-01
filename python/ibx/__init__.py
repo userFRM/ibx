@@ -23,4 +23,7 @@ from ._ib import Client  # noqa: F401
 IB = Client
 from ._settings import UNAVAILABLE, configure, describe, settings  # noqa: F401
 
-__all__ = [n for n in dir() if not n.startswith("_")]
+# The extension module is bound on this package by the star-import above, so
+# `dir()` names it too. Left in, `from ibx import *` rebinds the caller's own
+# `ibx` to that submodule and `ibx.IB` stops existing.
+__all__ = [n for n in dir() if not n.startswith("_") and n != "ibx"]
