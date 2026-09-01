@@ -48,22 +48,31 @@ history needs another source for it.
 
 ## A bid of -1 is the venue saying there is none
 
-Some instruments have no bid and no ask. A calculated index is the clearest
-case: it is published as a level, not quoted by anyone. The venue states that
-by sending `-1` on the bid and the ask, and this client passes it on as sent
-rather than turning it into a zero or dropping it.
+Some instruments carry no bid and no ask. An index is the clearest case: it is
+published as a level rather than quoted by anyone. The venue states that by
+sending `-1` on the bid and the ask, and this client passes it on as sent
+rather than turning it into a zero.
 
-Told apart by what comes with it:
+It is not an entitlement. Three things separate them, and all three are worth
+checking before concluding a subscription is missing:
 
-* **No bid or ask exists.** `-1` on both, and no bid or ask *size* at all,
-  while the last, high, low, close and open arrive normally. `VIX` on `CBOE`
-  reads this way; `SPX`, which does carry a quote, reads normally.
-* **Nothing is flowing.** No ticks at all, and no error — a listing whose
-  market is closed, which is what a Tokyo or Sydney listing gives during the
-  American session.
+* **Not entitled** — no ticks at all, and no `market_data_type` callback
+  either. Nothing arrives to say what feed you are on, because you are on
+  none. Asking for delayed data then answers normally.
+* **Entitled, and the instrument has no quote** — `-1` on bid and ask, no bid
+  or ask *size*, and a `market_data_type` of 1 saying the feed is real time,
+  while the last, high, low, close and open arrive and move.
+* **Entitled, and it is quoted** — a real bid and ask.
 
-So `-1` is a stated absence and silence is an unstated one. Neither is an error,
-and neither means the subscription failed.
+Measured together with the market open: `SPX` on `CBOE` quotes; `VIX` on the
+same exchange and the same entitlement does not, and reads `-1` while its
+volume ticks up on a real-time feed. `RUT`, `INDU` and `TICK-NYSE` read `-1`
+the same way. `NDX` real time is the first case — silence, no feed stated —
+and it answers as soon as delayed data is asked for.
+
+Delayed data carries no index quote at all: on `market_data_type` 3 every one
+of them reads `-1`, `SPX` included. A quote that is on the real-time feed and
+not the delayed one is a property of the feed rather than of the account.
 
 ## Market depth depends on the entitlement
 
