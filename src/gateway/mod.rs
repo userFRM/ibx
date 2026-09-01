@@ -1042,7 +1042,7 @@ pub struct GatewayConfig {
     /// Only consulted on non-paper logins; paper logins skip the gate entirely.
     pub ib_key_timeout_secs: u64,
     /// Fallback second-factor token sub-type for the SWCR_TOKEN state=1 init
-    /// body (`M.D` field).
+    /// body (its fourth field).
     ///
     /// `AUTH_START` states the sub-type for the session, and that value wins:
     /// it is account- and session-specific, so a fixed setting can only ever

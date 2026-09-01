@@ -115,7 +115,7 @@ pub const MSG_MARKET_DATA_REQ: &str = "V";
 
 /// Render a FIX byte buffer with SOH (0x01) shown as `|` and any other
 /// non-printable bytes escaped as `\xNN`. For trace-level wire diagnostics
-/// ( capture); not used on hot paths.
+/// For trace-level wire diagnostics; not used on hot paths.
 pub fn fmt_pipe(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() + 8);
     for &b in bytes {

@@ -593,9 +593,9 @@ pub fn token_short_hash(session_token: &BigUint) -> String {
 /// or `IBX_ENCODED` (full string).
 ///
 /// Tag 8361 = `"(rolling)"` is load-bearing: it marks the client as a
-/// rolling-release build, which bypasses the server's IB_BUILD allow-list
-/// check. Without it the server rejects with "The TWS build you are
-/// currently running is no longer supported." Per the
+/// rolling-release build. Without it the logon is rejected with "The TWS
+/// build you are currently running is no longer supported."
+///
 /// The reference client also keeps 6397/6947/8098, so they stay.
 ///
 /// Tag 6947 carries the JVM default timezone (e.g. `Europe/Paris`,

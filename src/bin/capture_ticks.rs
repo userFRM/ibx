@@ -86,7 +86,7 @@ fn main() {
     let against_live = std::env::var("IB_PAPER").as_deref() == Ok("0");
     if against_live && !live_window_is_open() {
         eprintln!(
-            "the live account is in use by the daemon that trades it — a live run \
+            "the live account may be in use by another program — a live run \
              waits for the premarket window or for after the close. The paper \
              account is reachable now."
         );

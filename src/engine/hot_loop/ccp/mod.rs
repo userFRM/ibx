@@ -114,8 +114,8 @@ fn handle_trade_charge(parsed: &std::collections::HashMap<u32, String>, shared: 
 fn handle_venue_error(parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {
     let text = parsed.get(&58).map(String::as_str).unwrap_or("");
     if text.is_empty() {
-        // Nothing said. The vendor's client logs exactly this case and shows
-        // nothing, having nothing to show.
+        // The venue reported trouble and stated nothing about it. There is
+        // nothing to hand a caller, so this is recorded and not forwarded.
         log::warn!("The venue reported trouble and stated nothing about it");
         return;
     }

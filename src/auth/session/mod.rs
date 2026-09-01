@@ -104,13 +104,13 @@ pub fn get_session_id() -> String {
     format!("{secs:x}.{ms:04x}")
 }
 
-/// Path of the persistent 8-hex machine_id file used in tag 6351.
+/// Where the machine id sent in tag 6351 is kept.
 ///
-/// the Java client reads/creates `%USERPROFILE%\hwid`
-/// on Windows or `$HOME/.hwid` elsewhere, persists 8 hex chars there, and
-/// reuses it across logons. IB binds that prefix to the IBKey enrollment
-/// at first-login time; live farms silent-drop logons whose prefix isn't
-/// in the registered set.
+/// Eight hex characters, written on first use and reused by every logon
+/// after it: `%USERPROFILE%\hwid` on Windows, `$HOME/.hwid` elsewhere. The
+/// value has to stay the same between runs — a logon presenting one the
+/// account has not used before is not answered, and nothing says why, so a
+/// path that does not persist reads as a login that has stopped working.
 ///
 /// Override with the `IBX_HWID_PATH` env var to point elsewhere (containers,
 /// CI, sharing one cookie across multiple machines, etc.).
@@ -862,12 +862,12 @@ fn provider_panicked() -> io::Error {
 }
 
 /// Default deadline for the second-factor gate, matching the server-side
-/// timeout measured in capture run B (~18 min).
+/// timeout measured on a recorded session (~18 min).
 pub const IB_KEY_DEFAULT_TIMEOUT_SECS: u64 = 1080;
 
-/// Default IBKey token sub-type used in the SWCR_TOKEN state=1 body. Matches
-/// the captured reference profile in. Some accounts/SWCR
-/// configurations require a different value — override via
+/// Default IBKey token sub-type used in the second-factor state=1 body, and
+/// what the account this was written against is answered with. Another
+/// account may be answered with something else — override via
 /// [`crate::gateway::GatewayConfig::ib_key_token_sub_type`].
 pub const IB_KEY_DEFAULT_TOKEN_SUB_TYPE: &str = "2a";
 

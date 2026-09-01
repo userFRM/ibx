@@ -125,7 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.disconnect();
 
     if pass {
-        println!("\nPASS — issue verified on live account");
+        println!("\nPASS — contract details returned on a live session");
         Ok(())
     } else {
         Err("FAIL: contract_details_end not received".into())

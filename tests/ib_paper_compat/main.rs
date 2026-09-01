@@ -434,50 +434,50 @@ fn compat_suite() {
     // ── Authentication failure (gap #5) ──
     connection::phase_auth_wrong_password(&config);
 
-    // ── P0: Global cancel (emergency kill switch) ──
+    // ── Global cancel (emergency kill switch) ──
     conns = orders::phase_global_cancel(conns);
 
-    // ── P0: Cancel filled order (expect graceful handling) ──
+    // ── Cancel filled order (expect graceful handling) ──
     if needs_ticks {
         conns = orders::phase_cancel_filled_order(conns);
     } else {
         phase!("--- Phase 124: Cancel Filled Order ---\n  SKIP: {session:?} — needs fills\n");
     }
 
-    // ── P1: Matching symbols via ControlCommand channel ──
+    // ── Matching symbols via ControlCommand channel ──
     conns = contracts::phase_matching_symbols_channel(conns);
 
-    // ── P1: TBT unsubscribe lifecycle ──
+    // ── TBT unsubscribe lifecycle ──
     if needs_ticks && conns.hmds.is_some() {
         conns = market_data::phase_tbt_unsubscribe(conns);
     } else {
         phase!("--- Phase 126: TBT Unsubscribe ---\n  SKIP: needs ticks+HMDS\n");
     }
 
-    // ── P1: Cancel data requests (historical, fundamental, histogram, head timestamp) ──
+    // ── Cancel data requests (historical, fundamental, histogram, head timestamp) ──
     conns = historical::phase_cancel_data_requests(conns);
 
-    // ── P2: TBT + regular quotes dual stream ──
+    // ── TBT + regular quotes dual stream ──
     if needs_ticks && conns.hmds.is_some() {
         conns = market_data::phase_tbt_and_quotes_dual_stream(conns);
     } else {
         phase!("--- Phase 128: TBT + Regular Quotes Dual Stream ---\n  SKIP: needs ticks+HMDS\n");
     }
 
-    // ── P2: Concurrent subscribe stress (10 instruments) ──
+    // ── Concurrent subscribe stress (10 instruments) ──
     if needs_ticks {
         conns = market_data::phase_concurrent_subscribe_stress(conns);
     } else {
         phase!("--- Phase 129: Concurrent Subscribe Stress ---\n  SKIP: {session:?} — needs ticks\n");
     }
 
-    // ── P2: Historical data + live orders coexistence ──
+    // ── Historical data + live orders coexistence ──
     conns = historical::phase_historical_and_orders(conns);
 
-    // ── P2: RegisterInstrument via ControlCommand channel ──
+    // ── RegisterInstrument via ControlCommand channel ──
     conns = connection::phase_register_instrument_channel(conns);
 
-    // ── P2: UpdateParam smoke test ──
+    // ── UpdateParam smoke test ──
     conns = connection::phase_update_param(conns);
     conns = coverage::phase_endpoint_coverage(conns);
 

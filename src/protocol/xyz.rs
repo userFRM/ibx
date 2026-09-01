@@ -5,7 +5,7 @@
 
 use super::ns::NS_MAGIC;
 
-/// XYZ protocol version (from MITM capture, real Gateway uses 0x17 = 23).
+/// XYZ protocol version. The venue speaks 0x17 = 23.
 pub const XYZ_PROTOCOL_VERSION: u32 = 23;
 
 /// XYZ message types.
@@ -115,7 +115,7 @@ pub fn xyz_build_soft_token(state: u32, x: &str, y: &str, z: &str) -> Vec<u8> {
 
 /// Build the second-factor approval init message (state=1).
 ///
-/// Layout per — 5-slot header + 4 string fields in body:
+/// Layout: 5-slot header + 4 string fields in body:
 ///
 /// ```text
 /// Header (5 slots, 20 B):
@@ -125,17 +125,16 @@ pub fn xyz_build_soft_token(state: u32, x: &str, y: &str, z: &str) -> Vec<u8> {
 ///   state   (=1)
 ///   str_len of `str` param    (=0 — caller passes empty)
 /// Body (4 length-prefixed strings):
-///   M.x  = ""                 (username slot, EMPTY in state=1)
-///   M.z  = ""                 (security code, set in state=3)
-///   M.A  = ""                 (challenge response, set in state=3)
-///   M.D  = token_sub_type     (the only non-empty field; account-specific,
+///   field 1  = ""                 (username slot, EMPTY in state=1)
+///   field 2  = ""                 (security code, set in state=3)
+///   field 3  = ""                 (challenge response, set in state=3)
+///   field 4  = token_sub_type     (the only non-empty field; account-specific,
 ///                               typically "2a")
 /// ```
 ///
-/// `token_sub_type` is computed server-side per session — for accounts
-/// matching the captured profile it's `"2a"`, but other accounts/SWCR
-/// configurations may differ. Capture the live value via ib-agent's
-/// `SWCR_TOKEN_SUBTYPE` hook if the default doesn't trigger the push.
+/// `token_sub_type` is settled by the venue per session. `"2a"` is what the
+/// account this was written against is answered with; another account may be
+/// answered with something else, and the push does not arrive if it is wrong.
 pub fn xyz_build_swcr_token_init(token_sub_type: &str) -> Vec<u8> {
     let mut buf = Vec::new();
     // ── 5-slot header ────────────────────────────────────────────────
@@ -145,10 +144,10 @@ pub fn xyz_build_swcr_token_init(token_sub_type: &str) -> Vec<u8> {
     buf.extend_from_slice(&1u32.to_be_bytes());              // state = 1
     buf.extend_from_slice(&0u32.to_be_bytes());              // str_len = 0
     // ── 4 string fields ─────────────────────────────────────────────
-    xyz_write_string(&mut buf, "");                          // M.x
-    xyz_write_string(&mut buf, "");                          // M.z
-    xyz_write_string(&mut buf, "");                          // M.A
-    xyz_write_string(&mut buf, token_sub_type);              // M.D
+    xyz_write_string(&mut buf, "");                          // field 1
+    xyz_write_string(&mut buf, "");                          // field 2
+    xyz_write_string(&mut buf, "");                          // field 3
+    xyz_write_string(&mut buf, token_sub_type);              // field 4
     buf
 }
 
@@ -157,18 +156,18 @@ pub fn xyz_build_swcr_token_init(token_sub_type: &str) -> Vec<u8> {
 /// Sent after the server's state=2 challenge when the user has chosen the
 /// 8-character response-code variant in the IBKey dialog (as opposed to
 /// tapping Approve on the push notification). The literal ASCII code goes
-/// in the `M.z` slot — no transformation client-side. Layout:
+/// in the `field 2` slot — no transformation client-side. Layout:
 ///
 /// ```text
 /// Header (5 slots, 20 B):
 ///   version (=20), msg_id (=775), literal 1, state (=3), str_len (=0)
 /// Body (3 length-prefixed strings):
-///   M.x  = ""        (username slot, empty in submission)
-///   M.z  = code      (8 ASCII chars, no padding when len % 4 == 0)
-///   M.A  = ""        (challenge-response slot, empty for IBKey C/R)
+///   field 1  = ""        (username slot, empty in submission)
+///   field 2  = code      (8 ASCII chars, no padding when len % 4 == 0)
+///   field 3  = ""        (challenge-response slot, empty for IBKey C/R)
 /// ```
 ///
-/// state=3 carries 3 body strings, not 4: the `M.D` token sub-type field
+/// state=3 carries 3 body strings, not 4: the `field 4` token sub-type field
 /// present at state=1 is omitted here, matching the 40-byte capture.
 pub fn xyz_build_swcr_token_code_submission(code: &str) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -177,9 +176,9 @@ pub fn xyz_build_swcr_token_code_submission(code: &str) -> Vec<u8> {
     buf.extend_from_slice(&1u32.to_be_bytes());              // hardcoded 1
     buf.extend_from_slice(&3u32.to_be_bytes());              // state = 3
     buf.extend_from_slice(&0u32.to_be_bytes());              // str_len = 0
-    xyz_write_string(&mut buf, "");                          // M.x
-    xyz_write_string(&mut buf, code);                        // M.z = code
-    xyz_write_string(&mut buf, "");                          // M.A
+    xyz_write_string(&mut buf, "");                          // field 1
+    xyz_write_string(&mut buf, code);                        // field 2 = code
+    xyz_write_string(&mut buf, "");                          // field 3
     buf
 }
 
@@ -384,10 +383,10 @@ mod tests {
             0x00, 0x00, 0x00, 0x01, // state = 1
             0x00, 0x00, 0x00, 0x00, // str_len = 0
             // 4 string fields: x, z, A all empty; D = "2a"
-            0x00, 0x00, 0x00, 0x00, // M.x.length = 0
-            0x00, 0x00, 0x00, 0x00, // M.z.length = 0
-            0x00, 0x00, 0x00, 0x00, // M.A.length = 0
-            0x00, 0x00, 0x00, 0x02, // M.D.length = 2
+            0x00, 0x00, 0x00, 0x00, // field 1 length = 0
+            0x00, 0x00, 0x00, 0x00, // field 2 length = 0
+            0x00, 0x00, 0x00, 0x00, // field 3 length = 0
+            0x00, 0x00, 0x00, 0x02, // field 4 length = 2
             0x32, 0x61,             // "2a"
             0x00, 0x00,             // padding to 4-byte alignment
         ];
@@ -409,10 +408,10 @@ mod tests {
             0x00, 0x00, 0x00, 0x03, // state = 3
             0x00, 0x00, 0x00, 0x00, // str_len = 0
             // 3 string fields: x="", z=code, A=""
-            0x00, 0x00, 0x00, 0x00, // M.x.length = 0
-            0x00, 0x00, 0x00, 0x08, // M.z.length = 8
+            0x00, 0x00, 0x00, 0x00, // field 1 length = 0
+            0x00, 0x00, 0x00, 0x08, // field 2 length = 8
             0x30, 0x32, 0x32, 0x32, 0x36, 0x35, 0x33, 0x34, // "02226534"
-            0x00, 0x00, 0x00, 0x00, // M.A.length = 0
+            0x00, 0x00, 0x00, 0x00, // field 3 length = 0
         ];
         assert_eq!(expected.len(), 40, "canonical state=3 payload is 40 bytes");
         let got = xyz_build_swcr_token_code_submission("02226534");
@@ -426,7 +425,7 @@ mod tests {
         assert_eq!(msg_id, XYZ_MSG_SWCR_TOKEN);
         assert_eq!(state, 3);
         // The parser reads the 5th header slot (str_len=0) as fields[0], then
-        // M.x="" at fields[1], M.z=code at fields[2], M.A="" at fields[3].
+        // Field 1 is empty, field 2 carries the code, field 3 is empty.
         assert!(fields.iter().any(|f| f == "02226534"),
             "code must appear in parsed fields; got {fields:?}");
     }

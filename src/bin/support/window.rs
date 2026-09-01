@@ -2,7 +2,7 @@
 
 /// Whether the live account is free to be logged in to.
 ///
-/// A daemon trades that account through the session, so a capture takes it
+/// Another program may be trading that account, so a capture takes it
 /// only outside session hours: before 09:15 and from 16:15, New York, where
 /// the hours are stated. A clock that cannot be read counts as inside the
 /// session, because refusing a run is recoverable and taking the account from

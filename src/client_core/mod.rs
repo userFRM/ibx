@@ -1462,8 +1462,8 @@ impl ClientCore {
 
     // ── Display groups ──
 
-    /// The groups this client offers. Seven, matching what the vendor's client
-    /// presents, numbered from one.
+    /// The groups this client offers: seven, numbered from one. Nothing about
+    /// a group crosses the wire, so the number is this client's own.
     const DISPLAY_GROUPS: i32 = 7;
 
     /// What a group holds when nothing has been put in it.

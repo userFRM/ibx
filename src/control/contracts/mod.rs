@@ -748,8 +748,21 @@ fn is_session_field(tag: u32) -> bool {
 /// so that asking what arrived and went unread has an answer that cannot
 /// quietly drift as fields are added.
 pub fn tags_read_from_a_definition() -> Vec<u32> {
+    READ_FROM_A_DEFINITION.iter().copied().collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// The same set, worked out once.
+///
+/// This is read for every definition the venue sends, and a definition is not
+/// a rare thing: one option class is thirteen thousand of them. Worked out per
+/// definition it read this file through from the top each time, and again for
+/// every tag named rather than numbered.
+static READ_FROM_A_DEFINITION: std::sync::LazyLock<std::collections::HashSet<u32>> =
+    std::sync::LazyLock::new(|| {
     let source = include_str!("mod.rs");
-    let mut seen: Vec<u32> = Vec::new();
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
     // The parser reads a definition by looking tags up in one map, so every tag
     // it reads appears as a lookup on that map.
     for cap in source.split("tags.get(&").skip(1) {
@@ -759,15 +772,12 @@ pub fn tags_read_from_a_definition() -> Vec<u32> {
             .parse::<u32>()
             .ok()
             .or_else(|| named_tag(token.trim()));
-        if let Some(tag) = tag
-            && !seen.contains(&tag)
-        {
-            seen.push(tag);
+        if let Some(tag) = tag {
+            seen.insert(tag);
         }
     }
-    seen.sort_unstable();
     seen
-}
+});
 
 /// The value of a tag the parser refers to by name rather than by number.
 fn named_tag(name: &str) -> Option<u32> {
@@ -789,7 +799,7 @@ fn named_tag(name: &str) -> Option<u32> {
 /// the gap by ten and names the sequence number and the message type as
 /// dropped contract data.
 pub fn unread_definition_tags(data: &[u8]) -> Vec<u32> {
-    let read = tags_read_from_a_definition();
+    let read = &*READ_FROM_A_DEFINITION;
     let mut unread: Vec<u32> = fix::fix_parse(data)
         .keys()
         .copied()
@@ -980,7 +990,7 @@ pub fn parse_secdef_response(
     // identifier group states one per identifier — and a map keeps only the
     // last of each. Keeping only the last is the same loss this field exists to
     // prevent, one layer down.
-    let named = tags_read_from_a_definition();
+    let named = &*READ_FROM_A_DEFINITION;
     def.unnamed_fields = Vec::new();
     for part in data.split(|&b| b == fix::SOH) {
         if part.is_empty() {

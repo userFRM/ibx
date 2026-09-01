@@ -1458,7 +1458,7 @@ fn ib_key_2fa_rejected_when_passed_string_is_failed() {
 
 #[test]
 fn ib_key_2fa_cr_submits_code_then_passes_on_auth_finish_state_3() {
-    // Replay of run A (success path). Captured fixtures:
+    // Replay of the recorded success path. Captured fixtures:
     //   state=2: sessionId="399 830", challenge=10a447bc…0c9dc714 (20B / 40 hex),
     //            AVTH_URL=clientam.com/ibkr/ibkey/seamless?S=…
     //   user types "02226534" from the IBKey app
@@ -1509,7 +1509,7 @@ fn ib_key_2fa_cr_submits_code_then_passes_on_auth_finish_state_3() {
     assert_eq!(seen.display_id, RUN_A_SESSION_ID);
     assert_eq!(seen.avth_url, RUN_A_AVTH_URL);
 
-    // The state=3 frame must be byte-for-byte the 40-byte run-A capture.
+    // The state=3 frame must be byte-for-byte the recorded 40-byte capture.
     assert!(stream.written.windows(submission.len()).any(|f| f == submission),
         "state=3 submission must byte-match the recorded capture");
     // Nothing was waited on: an unattended login submits before any probe.

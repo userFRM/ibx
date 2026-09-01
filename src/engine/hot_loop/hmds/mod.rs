@@ -1343,8 +1343,20 @@ fn build_tbt_query(
             .iter()
             .position(|sub| sub.caller_req_id == caller_req_id && sub.instrument == instrument)
             // A caller that opened one stream on this contract and names it by
-            // something else still gets that one withdrawn.
-            .or_else(|| self.tbt_subscriptions.iter().position(|sub| sub.instrument == instrument))
+            // something else still gets that one withdrawn — but only where
+            // there is no doubt which. Where two callers hold streams on one
+            // contract, this took whichever came first, so a caller tidying up
+            // after its own refused stream stopped somebody else's, and that
+            // caller was told nothing because nothing had gone wrong for it.
+            .or_else(|| {
+                let mut here = self.tbt_subscriptions.iter()
+                    .enumerate()
+                    .filter(|(_, sub)| sub.instrument == instrument);
+                match (here.next(), here.next()) {
+                    (Some((only, _)), None) => Some(only),
+                    _ => None,
+                }
+            })
         {
             Some(i) => i,
             None => return,
