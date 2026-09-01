@@ -651,7 +651,6 @@ where
     let alias = ibapi_name(name);
     if alias != name
         && let Ok(f) = wrapper.getattr(py, alias.as_str())
-        && !is_base_noop(py, &f)
     {
         f.call1(py, args.clone())?;
         return Ok(());
@@ -663,6 +662,17 @@ where
 /// The reference client's spelling of a callback name: its words run together
 /// with each after the first capitalised.
 fn ibapi_name(snake: &str) -> String {
+    // Three it spells with its letters run together instead. Built the ordinary
+    // way `real_time_bar` is `realTimeBar`, which that client does not declare,
+    // so a wrapper written against it declares `realtimeBar`, nothing answers to
+    // the name built here, and the bar goes to this crate's own do-nothing
+    // rather than to the caller. Nothing is raised and nothing is logged.
+    match snake {
+        "real_time_bar" => return "realtimeBar".to_string(),
+        "receive_fa" => return "receiveFA".to_string(),
+        "replace_fa_end" => return "replaceFAEnd".to_string(),
+        _ => {}
+    }
     let mut out = String::with_capacity(snake.len());
     let mut upper = false;
     for c in snake.chars() {
@@ -678,16 +688,6 @@ fn ibapi_name(snake: &str) -> String {
     out
 }
 
-/// Whether an attribute is this base class's own do-nothing default rather than
-/// something the caller wrote. Calling the default would report the callback as
-/// delivered when nobody received it.
-fn is_base_noop(py: Python<'_>, f: &Py<PyAny>) -> bool {
-    f.getattr(py, "__objclass__")
-        .and_then(|c| c.getattr(py, "__name__"))
-        .and_then(|n| n.extract::<String>(py))
-        .map(|n| n == "EWrapper")
-        .unwrap_or(false)
-}
 
 impl EClient {
     /// Drop everything the last session held.
@@ -880,16 +880,7 @@ impl EClient {
     where
         A: pyo3::call::PyCallArgs<'py> + Clone,
     {
-        let alias = ibapi_name(name);
-        if alias != name
-            && let Ok(f) = self.wrapper.getattr(py, alias.as_str())
-            && !is_base_noop(py, &f)
-        {
-            f.call1(py, args.clone())?;
-            return Ok(());
-        }
-        self.wrapper.call_method1(py, name, args)?;
-        Ok(())
+        call_named(py, &self.wrapper, name, args)
     }
 
     /// Say the session closed, once, however the caller drives the dispatch.
@@ -970,6 +961,26 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
     use pyo3::Python;
+
+    /// A callback reaches the caller under the name the reference client gives
+    /// it, including the three that client spells with its letters run together.
+    ///
+    /// Built by capitalising after each underscore, `real_time_bar` is
+    /// `realTimeBar`. That client declares `realtimeBar`, so a wrapper written
+    /// against it declares `realtimeBar` too, and a bar sent to the name built
+    /// here reaches nobody — no exception, no log line, no bar.
+    #[test]
+    fn a_callback_is_named_the_way_the_reference_client_names_it() {
+        assert_eq!(ibapi_name("real_time_bar"), "realtimeBar");
+        assert_eq!(ibapi_name("receive_fa"), "receiveFA");
+        assert_eq!(ibapi_name("replace_fa_end"), "replaceFAEnd");
+
+        // The ordinary rule still holds for every other callback.
+        assert_eq!(ibapi_name("tick_price"), "tickPrice");
+        assert_eq!(ibapi_name("connection_closed"), "connectionClosed");
+        assert_eq!(ibapi_name("order_status"), "orderStatus");
+        assert_eq!(ibapi_name("error"), "error");
+    }
 
     /// A client that has not connected holds no session, and says so on every
     /// question about one.
