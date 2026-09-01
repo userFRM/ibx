@@ -93,11 +93,15 @@ regional doors and the venue answers by naming the server this account actually
 lives on; the session moves there. A host is worth stating only to knock at a
 particular region.
 
-**`paper`.** `true` skips the live second-factor approval gate. `false` enters
-it on connect, and that call blocks until the factor is approved. An account
-whose second factor is an authenticator code has no push to fall back on and
-needs a `code_provider`; for an IBKey account, leaving it unset means waiting
-for the mobile push.
+**`paper`.** `true` skips the live second-factor approval gate — a paper
+session presents no second factor. `false` enters that gate on connect, and
+that call blocks until it is answered.
+
+Which factor an account presents is stated by the venue when the gate opens,
+and this client handles two: an authenticator code, which has nothing to fall
+back on and needs a `code_provider`, and an IBKey push, which does not. Nothing
+below has been exercised against a live account from here, so treat the timing
+and the shape of the prompt as the venue's to state rather than as described.
 
 Use a paper account while you are writing something. A live account is a live
 account.

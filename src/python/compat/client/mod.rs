@@ -289,12 +289,14 @@ impl EClient {
     ///
     /// ``code_provider`` answers that factor with a typed code instead:
     /// ``code_provider(factor, display_id, avth_url) -> str``, where ``factor``
-    /// is ``"ibkey"`` (return the 8-character code shown for ``display_id``) or
+    /// is ``"ibkey"`` (return the code shown for ``display_id``) or
     /// ``"authenticator"`` (return the account's current code; ``display_id``
     /// and ``avth_url`` are empty). An authenticator account has no push to
     /// fall back to and cannot log in without this. It is called once, on a
     /// thread of its own, and holds the GIL while it runs — return the code,
-    /// don't block on input. One wrong code ends the login; there is no retry.
+    /// don't block on input. It is asked once and the login carries whatever it
+    /// returns; what the venue does with a wrong code has not been exercised
+    /// from here.
     ///
     /// Multiple ``EClient`` instances can run concurrently in one process; each
     /// owns its own state, sockets, and engine thread, and ``connect()`` does

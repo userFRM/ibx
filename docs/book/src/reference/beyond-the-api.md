@@ -72,9 +72,9 @@ close to the venue has to time a request that does something else.
 
 ## Why this is not in the API
 
-The API is a protocol between a gateway and a program on the same machine. The
-gateway holds this to decide what to enable, what to grey out, and what to
-refuse before sending; none of it was ever framed as a message to forward. A
+The API is a protocol between a gateway and a program on the same machine. What
+the gateway does with any of this is its own and not visible from here; what is
+visible is that none of it was ever framed as a message to forward. A
 client that speaks the venue's protocol receives it directly, so it is here.
 
 Two consequences worth stating plainly:

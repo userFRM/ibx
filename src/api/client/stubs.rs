@@ -335,9 +335,8 @@ impl EClient {
     /// The display groups on offer. Answered on `display_group_list`.
     ///
     /// A display group is a way for several callers on one session to agree on
-    /// a contract. The venue knows nothing about them, and never did: the
-    /// vendor's own client keeps them in its own state and serves them to its
-    /// callers from there, which is exactly what this does.
+    /// a contract. Nothing about one crosses this wire, so they are kept here
+    /// and served to callers from here.
     pub fn query_display_groups(&self, req_id: i64) {
         self.core.query_display_groups(req_id);
     }

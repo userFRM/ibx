@@ -80,9 +80,9 @@ pub use crate::client_core::parse_algo_params;
 /// # Live logins block on second-factor approval
 ///
 /// With `paper: false`, [`connect()`](EClient::connect) enters a second-factor
-/// approval window and **blocks** until the factor is approved (mobile push) or
-/// the server-side deadline fires (~18 min). This is expected — it is a human
-/// approval gate, not a hang. Bound or avoid it by using `paper: true`, lowering
+/// approval window and **blocks** until the factor is approved or the attempt
+/// runs out of time. This is expected — it is a human approval gate, not a
+/// hang. How long the venue allows has not been timed here. Bound or avoid it by using `paper: true`, lowering
 /// the timeout (via [`GatewayConfig::ib_key_timeout_secs`] when building through
 /// the lower-level API), or supplying a `code_provider`. Paper logins skip the
 /// gate entirely. An `info`-level log line is emitted when the wait begins

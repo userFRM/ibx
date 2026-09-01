@@ -196,7 +196,7 @@ official gateway behaves the same way.
 - **A caller's request id is not what the venue is asked under.** Every
   subscription is asked for under an id this client allocates and is mapped
   back to the caller who wanted it. The venue echoes an id back, so one taken
-  from the caller cannot be told apart from one allocated here. The venue
+  from the caller cannot be told apart from one allocated here. This client
   allocates the same way, from one upward, and keys its subscriptions on it.
 - **A request id states four bytes, and the top quarter of that range is this
   client's own.** A caller numbers requests below `0xC000_0000`; at and above
@@ -245,7 +245,7 @@ in.
 | The first connect knocks on the next door when one does not answer | ✅ Supported | One host per region. A door that answers and refuses ends the walk, so a refused logon is not repeated at every door |
 | The last order id is kept between runs | ✅ Supported | An order id belongs to the account, not the process: an id it has already used is refused by name. The last one handed out is remembered per account, kind of session and client id, and the next run counts on from it |
 | A session survives losing its connection | ✅ Supported | A dropped connection is rebuilt on the session already open, with no second factor: five forced drops recovered in 2-8s, and an eight hour session rode through its losses unattended |
-| A session does not survive its process | ✅ Documented | The venue holds a session for a socket, not for an account: killed without logging out, it was already gone forty seconds later, and a later start is answered with a handshake. A session is therefore bound to the socket that opened it: a restart costs a second factor and an uninterrupted session costs none |
+| A session does not survive its process | ✅ Documented | The venue holds a session for a socket, not for an account: killed without logging out, it was already gone forty seconds later, and a later start is answered with a handshake. A session is therefore bound to the socket that opened it, so a restart is a fresh logon and an uninterrupted session is not. What that costs an account with a second factor has not been measured here; a paper session presents none |
 | A session that has ended answers at once | ✅ Supported | Requests made after a terminal loss are refused with 504 immediately, rather than waiting out a timeout each. Every request already answered keeps the venue's answer |
 
 One session, held open for 175 minutes across a market open: 106,053 quotes,

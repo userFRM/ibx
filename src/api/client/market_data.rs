@@ -64,9 +64,10 @@ impl EClient {
     /// `regulatory_snapshot` asks for the venue's own chargeable one-shot
     /// snapshot: a request type of its own rather than a mode on an ordinary
     /// quote, asked for under the snapshot action and with no feed named
-    /// beside it. It is billed per snapshot and needs the entitlement — an
-    /// account without it is refused by the venue, which names the request
-    /// type back. It ends the way an ordinary snapshot does, so a caller hears
+    /// beside it. It needs the entitlement — an account without it is
+    /// refused by the venue, which names the request type back. Whether it
+    /// also costs something is between the account and the broker, and is not
+    /// on this wire. It ends the way an ordinary snapshot does, so a caller hears
     /// `tick_snapshot_end` either way. Its default is false.
     pub fn req_mkt_data_ex(
         &self, req_id: i64, contract: &Contract,
