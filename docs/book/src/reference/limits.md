@@ -200,14 +200,12 @@ arrives after the stop — installed, it would be a freshly authenticated sessio
 at the venue opened after the caller was told the engine had stopped — and the
 socket closes when the engine goes.
 
-What a caller can see is a second-factor prompt arriving on their phone after
-`disconnect` returned, for a login nothing goes on to use.
+The attempt is not stopped: the thread is started without a handle kept on it,
+and nothing carries the stop into the handshake it is running. It finishes on
+its own and its result is discarded.
 
-The attempt is not stopped because nothing carries the stop to it: the thread
-is started without keeping a handle on it, and no cancellation is passed into
-the handshake it runs. The handshake itself reads on a short poll rather than
-one long wait, so there is a place for such a check to go. This is a gap in
-this client, not a property of the venue's protocol.
+What that costs a live login has not been measured. A paper session presents no
+second factor, so nothing on this account reaches the case where it would.
 
 ## What authenticates a farm connection
 
