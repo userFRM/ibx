@@ -1067,8 +1067,8 @@ pub struct GatewayConfig {
     /// On the IBKey path it takes the **Challenge/Response** route instead of
     /// waiting for a mobile push: after the server delivers state=2 the
     /// callback is invoked once with the challenge details and the returned
-    /// 8-character code is submitted as state=3. `None` there leaves behaviour
-    /// unchanged, and the login completes by push approval.
+    /// code is submitted as state=3. `None` there leaves behaviour unchanged,
+    /// and the login completes by push approval.
     ///
     /// On an authenticator-code account it is the only way to log in — there is
     /// no push to approve — so `None` fails the connect rather than falling

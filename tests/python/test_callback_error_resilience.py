@@ -62,11 +62,11 @@ def test_subsequent_dispatches_work_after_exception():
     c._test_set_instrument_count(1)
     c._test_map_instrument(1, 0)
 
-    # Round 1
+    # The first raise.
     c._test_push_quote(0, bid=150.0, bid_size=100)
     c._test_dispatch_once()
 
-    # Round 2 — bridge is not poisoned
+    # And again, to show the bridge is not poisoned.
     c._test_push_quote(0, bid=151.0, bid_size=200)
     c._test_dispatch_once()
 

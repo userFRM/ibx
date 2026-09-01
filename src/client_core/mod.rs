@@ -584,10 +584,11 @@ pub struct ClientCore {
     // con_id → InstrumentId for find_or_register_instrument lookup
     /// The engine slot each contract id was given.
     pub con_id_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
-    /// What each display group currently holds. The venue knows nothing of
-    /// these: they are a way for several callers on one session to agree on a
-    /// contract, and the vendor's own client keeps them the same way, serving
-    /// them to its callers out of its own state.
+    /// What each display group currently holds.
+    ///
+    /// A group is a way for several callers on one session to agree on a
+    /// contract. Nothing about one crosses the wire, so they are kept here and
+    /// served to callers from here.
     display_groups: Mutex<HashMap<i32, String>>,
     /// Which group each subscribing request follows.
     group_subscriptions: Mutex<HashMap<i64, i32>>,

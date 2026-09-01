@@ -91,7 +91,7 @@ PARAM_DOCS: dict[str, str] = {
     "config": "Connection configuration (username, password, host, paper, core_id).",
     "ib_key_timeout_secs": "Live second-factor approval timeout in seconds (default ~18 min). Lower it to fail fast on unattended live logins; ignored for paper.",
     "ib_key_token_sub_type": "Fallback second-factor token sub-type (default `\"2a\"`), used only when the server states none for the session; ignored for paper.",
-    "code_provider": "Callable `(factor, display_id, avth_url) -> str` returning the second-factor code. `factor` is `\"ibkey\"` (the 8-character code shown for `display_id`) or `\"authenticator\"` (the account's current code). Required for authenticator accounts, which have no push to fall back to; ignored for paper.",
+    "code_provider": "Callable `(factor, display_id, avth_url) -> str` returning the second-factor code. `factor` is `\"ibkey\"` (the code shown for `display_id`) or `\"authenticator\"` (the account's current code). Required for authenticator accounts, which have no push to fall back to; ignored for paper.",
     "host": "Server hostname.",
     "port": "Port number (unused — ibx connects directly).",
     "client_id": "Client ID (unused — single-client engine).",

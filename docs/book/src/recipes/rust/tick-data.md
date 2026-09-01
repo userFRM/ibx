@@ -22,7 +22,7 @@ With `snapshot: true` you get the first available quote, then
 this client ending a subscription, not a separate request.
 
 `regulatory_snapshot: true` is the venue's own one-shot snapshot. It is a
-different request type, it is billed per snapshot, and an account without the
+different request type, and an account without the
 entitlement is refused by the venue. It also ends on `tick_snapshot_end`.
 
 ## Limits

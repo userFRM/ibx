@@ -48,7 +48,7 @@ def connect(host, port=0, client_id=0, username="", password="", paper=True, cor
 | `core_id` | `usize or None` | CPU core affinity for the hot loop thread. Use a distinct value per engine when running several in one process. |
 | `ib_key_timeout_secs` | `int or None` | Live second-factor approval timeout in seconds (default ~18 min). Lower it to fail fast on unattended live logins; ignored for paper. |
 | `ib_key_token_sub_type` | `str or None` | Fallback second-factor token sub-type (default `"2a"`), used only when the server states none for the session; ignored for paper. |
-| `code_provider` | `Py<PyAny> or None` | Callable `(factor, display_id, avth_url) -> str` returning the second-factor code. `factor` is `"ibkey"` (the 8-character code shown for `display_id`) or `"authenticator"` (the account's current code). Required for authenticator accounts, which have no push to fall back to; ignored for paper. |
+| `code_provider` | `Py<PyAny> or None` | Callable `(factor, display_id, avth_url) -> str` returning the second-factor code. `factor` is `"ibkey"` (the code shown for `display_id`) or `"authenticator"` (the account's current code). Required for authenticator accounts, which have no push to fall back to; ignored for paper. |
 | `readonly` | `bool` |  |
 
 ---
@@ -754,7 +754,7 @@ def req_mkt_data(req_id, contract, generic_tick_list, snapshot, regulatory_snaps
 
 #### `req_mkt_data_ex`
 
-Like `req_mkt_data`, but names the market-data mode on the request itself (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen) rather than taking the one the session is set to. The frozen one keeps thinly-traded names quoting after hours, when the realtime feed is silent.  A contract holds one subscription at a time, so this states the mode for that subscription rather than adding a second alongside it: a later request for a contract already subscribed follows the one that is up and is handed its quotes. To compare two modes on one contract, withdraw between them.  `regulatory_snapshot` asks for the venue's own chargeable one-shot snapshot: a request type of its own rather than a mode on an ordinary quote. It is billed per snapshot and needs the entitlement, and an account without it is refused by the venue, which names the request type back through `error`. It ends the way an ordinary snapshot does, so `tickSnapshotEnd` fires either way.
+Like `req_mkt_data`, but names the market-data mode on the request itself (0=realtime, 1=delayed, 2=frozen, 3=delayed-frozen) rather than taking the one the session is set to. The frozen one keeps thinly-traded names quoting after hours, when the realtime feed is silent.  A contract holds one subscription at a time, so this states the mode for that subscription rather than adding a second alongside it: a later request for a contract already subscribed follows the one that is up and is handed its quotes. To compare two modes on one contract, withdraw between them.  `regulatory_snapshot` asks for the venue's own chargeable one-shot snapshot: a request type of its own rather than a mode on an ordinary quote. It needs the entitlement, and an account without it is refused by the venue, which names the request type back through `error`. It ends the way an ordinary snapshot does, so `tickSnapshotEnd` fires either way.
 
 ```python
 def req_mkt_data_ex(req_id, contract, generic_tick_list="", snapshot=False, regulatory_snapshot=False, mode_9887=0)

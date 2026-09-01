@@ -54,7 +54,7 @@ impl EClient {
     ///
     /// `regulatory_snapshot` asks for the venue's own chargeable one-shot
     /// snapshot: a request type of its own rather than a mode on an ordinary
-    /// quote. It is billed per snapshot and needs the entitlement, and an
+    /// quote. It needs the entitlement, and an
     /// account without it is refused by the venue, which names the request
     /// type back through `error`. It ends the way an ordinary snapshot does,
     /// so `tickSnapshotEnd` fires either way.

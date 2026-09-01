@@ -106,11 +106,10 @@ fn handle_trade_charge(parsed: &std::collections::HashMap<u32, String>, shared: 
 
 /// What the venue says went wrong.
 ///
-/// It states the trouble as text and gives it no code and no severity. Nor,
-/// for all but a narrow family of requests, does it say which request failed:
-/// the vendor's own client shows these in a window and writes them to a log,
-/// with nothing to attribute them to. So this reports the text against no
-/// request, which is what it is, rather than guessing at an owner for it.
+/// It states the trouble as text and gives it no code and no severity, and for
+/// all but a narrow family of requests it does not say which request failed.
+/// So this reports the text against no request, which is what it is, rather
+/// than guessing at an owner for it.
 fn handle_venue_error(parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {
     let text = parsed.get(&58).map(String::as_str).unwrap_or("");
     if text.is_empty() {

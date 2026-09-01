@@ -785,7 +785,7 @@ fn ib_key_err(kind: io::ErrorKind, msg: impl Into<String>) -> io::Error {
 /// Which second factor the callback is being asked to answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SecondFactor {
-    /// IBKey Challenge/Response — answer with the 8-character code the app
+    /// IBKey Challenge/Response — answer with the code the app
     /// shows for `display_id`.
     #[default]
     IbKeyChallengeResponse,
@@ -797,7 +797,7 @@ pub enum SecondFactor {
 /// Challenge details surfaced to a [`CodeProvider`] callback.
 ///
 /// Populated from the server's `XYZ 775` state=2 reply: the per-session
-/// display id the user sees next to the 8-char code in the IBKey app, and
+/// display id the user sees next to the code in the IBKey app, and
 /// the `clientam.com/ibkr/ibkey/seamless?S=…` URL also used by the web
 /// fallback. Either may be empty if the server omitted it in this run.
 #[derive(Debug, Clone, Default)]
@@ -816,15 +816,15 @@ pub struct IbKeyChallenge {
 /// Invoked once per login, with [`IbKeyChallenge::factor`] naming what to
 /// return:
 ///
-/// - [`SecondFactor::IbKeyChallengeResponse`] — the 8-character code shown for
+/// - [`SecondFactor::IbKeyChallengeResponse`] — the code shown for
 ///   `display_id`, submitted as `XYZ 775` state=3. Supplying a provider selects
 ///   this over waiting for a mobile push.
 /// - [`SecondFactor::AuthenticatorCode`] — the account's current authenticator
 ///   code, submitted as `XYZ 774` code=1. Not optional: these accounts have no
 ///   push to fall back to, so a missing provider fails the login.
 ///
-/// Neither server retries. One wrong code ends the attempt and the socket is
-/// torn down, so pull the code from a deterministic source (stdin, secrets
+/// Neither server retries, and what a wrong code costs has not been watched
+/// from here, so pull the code from a deterministic source (stdin, a secrets
 /// vault) or return an `io::Error` to abort.
 ///
 /// Called on its own thread so the gate can keep answering the server's
@@ -842,7 +842,7 @@ pub type CodeProvider = std::sync::Arc<
 const IB_KEY_PROVIDER_FAST_PATH_GRACE: std::time::Duration =
     std::time::Duration::from_secs(1);
 
-/// Put the 8-character Challenge/Response code on the wire as `XYZ 775` state=3.
+/// Put the Challenge/Response code on the wire as `XYZ 775` state=3.
 fn submit_swcr_code<S: Write>(stream: &mut S, code: &str) -> io::Result<()> {
     let framed = xyz::xyz_wrap(&xyz::xyz_build_swcr_token_code_submission(code));
     stream.write_all(&framed)?;
@@ -1294,7 +1294,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                     announced_wait = true;
                 }
                 // Challenge/Response branch: if a code_provider is configured,
-                // pull the 8-char code from the callback and submit state=3
+                // pull the code from the callback and submit state=3
                 // instead of waiting for a phone tap. The callback runs off
                 // this thread because it blocks for as long as the operator
                 // needs to read the code off the IBKey app — this loop must

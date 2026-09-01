@@ -154,7 +154,7 @@ pub fn xyz_build_swcr_token_init(token_sub_type: &str) -> Vec<u8> {
 /// Build the Challenge/Response code submission (state=3).
 ///
 /// Sent after the server's state=2 challenge when the user has chosen the
-/// 8-character response-code variant in the IBKey dialog (as opposed to
+/// response-code variant in the IBKey dialog (as opposed to
 /// tapping Approve on the push notification). The literal ASCII code goes
 /// in the `field 2` slot — no transformation client-side. Layout:
 ///
