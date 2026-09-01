@@ -1183,23 +1183,22 @@ pub(super) fn run_submit_cancel_phase(
         // a DAY order of this shape draws no report at all, while the same type
         // sent GTC with outsideRTH is answered immediately. An un-acked order
         // outside regular hours says nothing about the client.
-        if !order_acked {
-            // Neither acknowledged nor refused. Outside regular hours that is
-            // the session; inside them it is the venue declining an order type
-            // it does not take for this security without saying so — the
-            // protection types are futures orders, and the market variant of
-            // the pair is refused in as many words for the same stock.
-            //
-            // Either way there is nothing here about the client: a malformed
-            // message comes back refused, with the field named.
-            let (session, _) = market_session();
-            if session == MarketSession::Regular {
-                skipped!("  SKIP: no answer — the venue neither took nor refused this order type here\n");
-            } else {
-                skipped!("  SKIP: {session:?} — not acknowledged (this order type needs a live market)\n");
-            }
+        // Inside regular hours, neither acknowledged nor refused is a failure.
+        // A malformed message comes back refused with the field named, so
+        // silence is not how the venue reports a badly built order — and it is
+        // what an order this client never sent looks like from here. Skipping
+        // on it passed every phase that goes through this helper whether or not
+        // anything reached the socket.
+        if skip_unacked_if_closed(order_acked) {
             return conns;
         }
+        assert!(
+            order_acked,
+            "{phase_name}: order {order_id} was neither acknowledged nor \
+             refused during the regular session; cancel requested={cancel_sent}, \
+             venue status {:?}",
+            shared.orders.get_order_info(order_id).map(|i| i.order_state.status),
+        );
         // A cancel races the venue, and on a liquid instrument in a live
         // market the venue sometimes wins. That the order filled instead of
         // cancelling says the cancel arrived second, which is the market's
