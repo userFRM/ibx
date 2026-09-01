@@ -211,6 +211,14 @@ jobs:
       - name: Nothing points at another project's issue tracker
         run: python scripts/check_no_foreign_tracker_links.py
 
+      # A published line that states what the venue holds internally, what an
+      # account is charged, or what a second factor looks like is a claim this
+      # client is not in a position to make: none of it crosses the wire it
+      # reads. Sweeping them by hand missed a second copy of the same sentence
+      # one file over, so the sweep is this instead.
+      - name: Nothing published claims what this client cannot see
+        run: python scripts/check_what_is_said.py
+
       - name: A function did not take a doc comment written for something else
         run: |
           python scripts/check_orphaned_docs.py --demo
