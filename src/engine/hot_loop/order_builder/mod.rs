@@ -1168,32 +1168,37 @@ fn replace_needs_the_placed_record(ord_type: u8) -> bool {
 /// records the new: measured on a paper session, a replace naming a trail of
 /// nine went out as five and was accepted.
 ///
+/// Only the trailing stop is corrected here. That is the one whose frame was
+/// read and whose replace the venue was seen to accept; for the rest, which
+/// of their numbers a replace names is not established.
+///
 /// A replace states nothing with a zero, which is how a caller moves the
 /// quantity alone; that leaves the placed value in force, which is right.
-fn restate_with(kind: &crate::types::OrderKind, price: i64, stop_price: i64) -> crate::types::OrderKind {
+fn restate_with(kind: &crate::types::OrderKind, _price: i64, stop_price: i64) -> crate::types::OrderKind {
     use crate::types::OrderKind as K;
     let named = |placed: i64, asked: i64| if asked != 0 { asked } else { placed };
     match kind {
+        // The trail goes out on tag 99, which is the field the reference
+        // client calls the auxiliary price and this command calls
+        // `stop_price`. The limit price a caller names is tag 44, which a
+        // trailing stop does not carry, so it is not the trail and mapping it
+        // to one puts the wrong number on the wire in the other direction.
+        //
+        // What the order was placed with beyond the trail — the price the
+        // trail starts from — is not written by the sender at all, so there
+        // is nothing to restate for it.
         K::TrailingStop { trail_stop_price, trail_amt } => K::TrailingStop {
-            trail_stop_price: named(*trail_stop_price, stop_price),
-            trail_amt: named(*trail_amt, price),
+            trail_stop_price: *trail_stop_price,
+            trail_amt: named(*trail_amt, stop_price),
         },
-        K::TrailingStopLimit { lmt_offset, trail_amt, trail_stop_price } => K::TrailingStopLimit {
-            lmt_offset: *lmt_offset,
-            trail_amt: named(*trail_amt, price),
-            trail_stop_price: named(*trail_stop_price, stop_price),
-        },
-        K::PegMkt { offset, price_cap } => K::PegMkt {
-            offset: named(*offset, price),
-            price_cap: *price_cap,
-        },
-        K::PegMid { offset, price_cap } => K::PegMid {
-            offset: named(*offset, price),
-            price_cap: *price_cap,
-        },
-        K::Rel { offset } => K::Rel { offset: named(*offset, price) },
-        // Everything else states its price on the lean message, where the
-        // caller's number already reaches the venue.
+        // The other shapes that carry a price here — a trailing stop with a
+        // limit, the two pegs, a relative order — have the same defect and are
+        // not corrected, because which of their numbers a replace names has
+        // not been measured. A peg to the midpoint carries an offset and a
+        // cap; nothing read so far says which of the two a caller means, and
+        // guessing puts a cap where an offset belongs. They keep restating the
+        // placed value, which is wrong in the same way and wrong in a way that
+        // has been seen rather than assumed.
         other => other.clone(),
     }
 }

@@ -355,12 +355,19 @@ impl CcpState {
         // that raced its own cancel-ack out of the book, one placed from
         // another client, or one left from an earlier session. The report
         // names the contract and the side, so book it from that rather
-        // than dropping a position the account actually holds. An untracked
-        // order has nothing filled yet, so the arithmetic below reconciles
-        // against zero.
+        // than dropping a position the account actually holds.
+        //
+        // What such an order has already filled is not known here, which is
+        // different from its being zero. The reconciliation below works out
+        // what to book by subtracting what is held from what the report
+        // states, and against a baseline of zero that subtraction returns the
+        // whole cumulative figure — so a bust, which restates that figure
+        // downwards, booked the entire trade again as a purchase. The
+        // baseline is stated as unknown instead, and an unknown one is not
+        // reconciled against.
         let target = match context.order(clord_id).copied() {
-            Some(order) => Some((order.instrument, order.side, order.filled)),
-            None => untracked_fill_target(context, parsed).map(|(i, s)| (i, s, 0i64)),
+            Some(order) => Some((order.instrument, order.side, Some(order.filled))),
+            None => untracked_fill_target(context, parsed).map(|(i, s)| (i, s, None)),
         };
         if let Some((instrument, side, already_filled)) = target {
             let booked = if is_resend {
@@ -375,6 +382,17 @@ impl CcpState {
                     // Nothing to reconcile against. Booking the increment
                     // would double what the recovery record already seeded.
                     log::debug!("Resent execution for order {clord_id} carries no CumQty — not booked");
+                    return None;
+                };
+                let Some(already_filled) = already_filled else {
+                    // Nothing here knows what this order had already filled,
+                    // so nothing here can say what changed. The position feed
+                    // states what the account holds and is what settles it.
+                    log::warn!(
+                        "Resent execution for order {clord_id}, which this session does not \
+                         track: what it had already filled is unknown, so no quantity is \
+                         booked from it and the position feed stands",
+                    );
                     return None;
                 };
                 {
@@ -403,6 +421,8 @@ impl CcpState {
                 log::warn!("Duplicate execution key={dedup_key} — the fill is already booked");
                 0
             } else {
+                // The report's own increment, which stands on its own and
+                // needs no baseline.
                 last_shares
             };
             if booked != 0 {

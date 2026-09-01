@@ -2395,9 +2395,10 @@ pub(super) fn phase_replace_a_trail_amount(conns: Conns) -> Conns {
                 OrderStatus::Submitted | OrderStatus::PreSubmitted if !working => {
                     working = true;
                     println!("  placed, trail {}", placed_trail / ibx::types::PRICE_SCALE);
+                    // The trail is the auxiliary price, tag 99.
                     control_tx.send(ControlCommand::Order(OrderRequest::Modify {
-                        order_id, price: asked_trail, qty: ibx::types::QTY_SCALE,
-                        outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                        order_id, price: 0, qty: ibx::types::QTY_SCALE,
+                        outside_rth: false, ord_type: 0, tif: 0, stop_price: asked_trail,
                     })).unwrap();
                     replace_sent = true;
                 }

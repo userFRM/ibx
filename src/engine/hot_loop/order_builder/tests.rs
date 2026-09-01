@@ -3096,12 +3096,13 @@ fn a_replace_naming_a_new_trail_puts_that_trail_on_the_wire() {
 
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 42,
-        price: 9 * crate::types::PRICE_SCALE,
+        price: 0,
         qty: crate::types::QTY_SCALE,
         outside_rth: false,
         ord_type: 0,
         tif: 0,
-        stop_price: 0,
+        // The trail is the auxiliary price, which is what this field carries.
+        stop_price: 9 * crate::types::PRICE_SCALE,
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let n = peer.read(&mut buf).unwrap();

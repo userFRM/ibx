@@ -4080,3 +4080,41 @@ fn a_record_that_states_no_charge_reports_none() {
         assert!(shared.orders.drain_charges().is_empty());
     }
 }
+
+/// A busted trade on an order this session does not track books nothing,
+/// rather than booking the trade again as a purchase.
+///
+/// A bust restates the cumulative quantity downwards. The reconciliation
+/// works out what to book by subtracting what the order has already filled
+/// from what the report states — and an untracked order used to supply a
+/// baseline of zero, so the subtraction returned the whole cumulative figure
+/// and a hundred lots that had just been undone were booked as a hundred
+/// bought. The position feed heals the account; the fill handed to the caller
+/// was never healed.
+#[test]
+fn a_bust_on_an_untracked_order_books_nothing_rather_than_a_purchase() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let shared = SharedState::new();
+
+    // Nothing is tracked under this number: another client's order, or one
+    // from a session that has since ended.
+    assert!(context.order(42).is_none(), "the order is untracked to begin with");
+
+    // A bust: the trade is undone, and the report restates the total.
+    let bust = exec_report_frame(&[
+        (150, "1"), (39, "1"), (20, "1"), (6008, "756733"),
+        (32, "100"), (14, "100"), (31, "500.0"), (54, "1"), (55, "SPY"),
+    ]);
+    ccp.handle_exec_report(&bust, b"", &mut context, &shared, &None, "");
+
+    // Summed rather than checked per fill, so no fills at all is an answer
+    // and not a test that skipped its own assertion.
+    let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
+    assert!(
+        booked <= 0,
+        "a busted trade booked {booked} as bought on an order nobody here tracks",
+    );
+}
