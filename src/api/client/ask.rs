@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
+
 use crate::error_codes::Refusal;
 use crate::types::model::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
@@ -31,6 +32,10 @@ use super::{Contract, EClient};
 /// How long a question waits for its answer.
 const ANSWER_TIMEOUT: Duration =
     Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
+
+/// The same, for a lookup that can name a whole class of contracts.
+const LOOKUP_TIMEOUT: Duration =
+    Duration::from_secs(crate::config::LOOKUP_TIMEOUT_SECS);
 
 /// Ids for questions this layer asks on the caller's behalf. Far above what a
 /// caller is likely to use, so an answer to one of these is never mistaken for
@@ -1049,6 +1054,7 @@ impl EClient {
     ///
     /// The same question `req_contract_details` asks, answered here instead of
     /// on a callback.
+    ///
     pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal> {
         // One question at a time: see `EClient::asking`.
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
@@ -1062,12 +1068,24 @@ impl EClient {
         self.req_contract_details(req_id, contract)?;
 
         let _notice = LeaveTheCloseNoticeForTheCaller::new(self);
-        let deadline = Instant::now() + ANSWER_TIMEOUT;
-        while Instant::now() < deadline {
+        // The clock measures silence, not the length of the answer. A class
+        // naming every expiry is thousands of definitions and the venue sends
+        // for as long as that takes; bounded on the total, an answer that is
+        // still arriving is given up on and the class reads as one the venue
+        // does not carry.
+        let mut quiet_since = Instant::now();
+        let mut had = 0usize;
+        while quiet_since.elapsed() < LOOKUP_TIMEOUT {
             self.pump_for_ask(&mut collector);
-            if answer.lock().unwrap().done {
+            let a = answer.lock().unwrap();
+            if a.done {
                 break;
             }
+            if a.details.len() != had {
+                had = a.details.len();
+                quiet_since = Instant::now();
+            }
+            drop(a);
             std::thread::sleep(Duration::from_millis(10));
         }
         // Once more before giving up, for the reason the shared waiter states:
@@ -1080,10 +1098,25 @@ impl EClient {
             return Err(e);
         }
         if !a.done {
-            return Err(Refusal::no_answer(format!(
-                "no answer within {}s to a contract lookup for {} {}",
-                ANSWER_TIMEOUT.as_secs(), contract.sec_type, contract.symbol,
-            )));
+            // What arrived says which of two things happened. Nothing at all
+            // is a question the venue has not begun answering; a partial set
+            // is one it was still answering when this stopped waiting, and a
+            // caller told only "no answer" would read a class the venue serves
+            // in full as one it does not carry.
+            let so_far = a.details.len();
+            return Err(Refusal::no_answer(if so_far == 0 {
+                format!(
+                    "no answer within {}s to a contract lookup for {} {}",
+                    LOOKUP_TIMEOUT.as_secs(), contract.sec_type, contract.symbol,
+                )
+            } else {
+                format!(
+                    "a contract lookup for {} {} went quiet for {}s having sent \
+                     {so_far} definitions, so what arrived is part of an answer: \
+                     ask for less at once, by naming an expiry or a single venue",
+                    contract.sec_type, contract.symbol, ANSWER_TIMEOUT.as_secs(),
+                )
+            }));
         }
         Ok(std::mem::take(&mut a.details))
     }

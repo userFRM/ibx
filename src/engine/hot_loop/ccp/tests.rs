@@ -2462,6 +2462,7 @@ fn u186_test_state() -> (CcpState, Context, SharedState) {
 #[test]
 fn the_engine_answers_before_a_caller_gives_up() {
     let caller = Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
+    let asking = Duration::from_secs(crate::config::LOOKUP_TIMEOUT_SECS);
     assert!(
         SECDEF_TIMEOUT < CcpState::NAMING_TIMEOUT,
         "a lookup's own answer is preferred to the fallback that covers it",
@@ -2471,6 +2472,14 @@ fn the_engine_answers_before_a_caller_gives_up() {
         "a held request is reported before the caller stops listening",
     );
     assert!(SECDEF_TIMEOUT < caller);
+    // A lookup a caller asked for has nothing covering it, so the one deadline
+    // it has to sit under is that caller's own.
+    assert!(
+        LOOKUP_TIMEOUT < asking,
+        "a lookup is reported before the caller asking for it stops listening",
+    );
+    assert_eq!(unanswered_after(crate::bridge::ENGINE_ID_BASE), SECDEF_TIMEOUT);
+    assert_eq!(unanswered_after(7), LOOKUP_TIMEOUT);
 }
 
 /// A lookup the venue never answers has to end anyway. A caller that

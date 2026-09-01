@@ -31,6 +31,10 @@ use super::super::contract::{BarData, Contract, ContractDescription, ContractDet
 const ANSWER_TIMEOUT: Duration =
     Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
 
+/// The same, for a lookup that can name a whole class of contracts.
+const LOOKUP_TIMEOUT: Duration =
+    Duration::from_secs(crate::config::LOOKUP_TIMEOUT_SECS);
+
 /// How long to sleep between looks at the queue. Short enough that a fast
 /// answer is not made to wait on the poll, long enough not to spin a core.
 const POLL: Duration = Duration::from_millis(5);
@@ -243,6 +247,7 @@ impl EClient {
     /// Sends the lookup, waits for the venue to say it has finished, and hands
     /// back every match. A description matching nothing returns an empty list;
     /// a venue that refuses the lookup raises with the reason it gave.
+    ///
     fn contract_details(
         &self,
         py: Python<'_>,
@@ -665,10 +670,15 @@ impl EClient {
         let shared = self.connected_shared()
             .map_err(|e| Refusal::not_connected(e.to_string()))?;
 
-        let deadline = Instant::now() + ANSWER_TIMEOUT;
+        // The clock measures silence, not the length of the answer: a class
+        // naming every expiry is thousands of definitions and the venue sends
+        // for as long as that takes, and bounded on the total an answer still
+        // arriving is given up on part-way through.
+        let mut quiet_since = Instant::now();
         let collected = py.detach(|| {
             let mut found = Vec::new();
             loop {
+                let had = found.len();
                 found.extend(shared.reference.take_contract_details_for(req_id as u32));
                 if let Some((code, msg)) = shared.reference.take_error_for(req_id as u32) {
                     return Err(Refusal::stated(code, msg));
@@ -690,13 +700,29 @@ impl EClient {
                         format!("the session is over: {why}"),
                     ));
                 }
-                if Instant::now() >= deadline {
-                    return Err(Refusal::no_answer(format!(
-                        "no answer within {}s to a lookup for {} {}",
-                        ANSWER_TIMEOUT.as_secs(),
-                        contract.sec_type,
-                        contract.symbol,
-                    )));
+                if found.len() != had {
+                    quiet_since = Instant::now();
+                }
+                if quiet_since.elapsed() >= LOOKUP_TIMEOUT {
+                    // What arrived says which of two things happened. Nothing
+                    // at all is a question the venue has not begun answering; a
+                    // partial set is one it was still answering, and a caller
+                    // told only "no answer" would read a class the venue serves
+                    // in full as one it does not carry.
+                    let so_far = found.len();
+                    return Err(Refusal::no_answer(if so_far == 0 {
+                        format!(
+                            "no answer within {}s to a lookup for {} {}",
+                            LOOKUP_TIMEOUT.as_secs(), contract.sec_type, contract.symbol,
+                        )
+                    } else {
+                        format!(
+                            "a lookup for {} {} went quiet for {}s having sent {so_far} \
+                             definitions, so what arrived is part of an answer: ask for \
+                             less at once, by naming an expiry or a single venue",
+                            contract.sec_type, contract.symbol, LOOKUP_TIMEOUT.as_secs(),
+                        )
+                    }));
                 }
                 std::thread::sleep(POLL);
             }

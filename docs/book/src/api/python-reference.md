@@ -151,7 +151,7 @@ def misc_url(key)
 
 #### `contract_details`
 
-Everything the venue knows about the contracts matching a description.  Sends the lookup, waits for the venue to say it has finished, and hands back every match. A description matching nothing returns an empty list; a venue that refuses the lookup raises with the reason it gave.
+Everything the venue knows about the contracts matching a description.  Sends the lookup, waits for the venue to say it has finished, and hands back every match. A description matching nothing returns an empty list; a venue that refuses the lookup raises with the reason it gave. 
 
 ```python
 def contract_details(contract)

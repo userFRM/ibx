@@ -21,12 +21,38 @@ use crate::types::{
 
 use super::{HeartbeatState, emit, clone_for_event, parse_price_tag, decode_tif, EventSink};
 
-/// Bound for an in-flight contract-details request (secdef reply or
-/// per-exchange fan-out). Refreshed on fan-out activity; on expiry the
-/// request surfaces error 200 + contract_details_end instead of hanging
-/// forever. A gateway rejection arrives in well under a second,
-/// and a full 27-exchange fan-out completes within a few.
+/// How long a contract-details request may go unanswered before it is ended.
+///
+/// A request always finishes, because something is waiting on it: ended here,
+/// the caller gets error 200 and the end of the request rather than a wait
+/// with nothing at the end of it.
+///
+/// Refreshed whenever the venue speaks on the request — a definition, or
+/// fan-out activity — so it measures silence rather than the length of an
+/// answer. A class naming every expiry sends for as long as that takes.
+///
+/// This client's own number, not one the venue states. Held below the wait of
+/// whatever is covering the request: a lookup this session took to name a
+/// contract is covered by [`CcpState::NAMING_TIMEOUT`], which reports in its
+/// place and must not report first.
 const SECDEF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The same, for a lookup a caller asked for.
+///
+/// A caller can name a whole class, which the venue takes about ten seconds to
+/// begin answering, so this is twice that. Nothing covers such a lookup: the
+/// caller waits on it directly, under a wait of its own that this is held
+/// below.
+const LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// How long this request may go unanswered, by who is waiting on it.
+///
+/// A request numbered in the internal band is one this session took for
+/// itself, and the fallback that covers it reports sooner than this. One a
+/// caller asked for has nothing covering it and can name a whole class.
+fn unanswered_after(req_id: u32) -> std::time::Duration {
+    if req_id >= crate::bridge::ENGINE_ID_BASE { SECDEF_TIMEOUT } else { LOOKUP_TIMEOUT }
+}
 
 /// Number of most-recent ExecIDs retained for fill deduplication. Bounds the
 /// memory of `seen_exec_ids` while staying large enough that a server replay
@@ -925,6 +951,14 @@ impl CcpState {
                         let join_key = def.join_key.clone();
                         if is_last {
                             self.pending_secdef.remove(idx);
+                        } else {
+                            // The venue is mid-answer, so the bound is on how
+                            // long it stays quiet, not on how long the answer
+                            // runs: a class naming every expiry sends for
+                            // longer than one contract does, and cut at a
+                            // fixed total it reads as a class the venue does
+                            // not carry. Same rule the fan-out leg keeps.
+                            self.pending_secdef[idx].2 = Instant::now() + unanswered_after(req_id);
                         }
                         let con_id = def.con_id as i64;
                         if con_id == 0 {
@@ -1674,7 +1708,7 @@ impl CcpState {
             log::warn!("secdef request req_id={req_id} queued with no CCP socket");
         }
         // Known-conId lookup: single record, no paginated terminator.
-        self.pending_secdef.push((req_id, true, Instant::now() + SECDEF_TIMEOUT));
+        self.pending_secdef.push((req_id, true, Instant::now() + unanswered_after(req_id)));
     }
 
     /// Ask the venue to name a contract so a subscription can be sent for it.
@@ -1876,7 +1910,7 @@ impl CcpState {
         // server never emits a 323=5/6 terminator; completion is detected
         // by counting per-exchange fan-out replies (see `pending_fanout`).
         self.details_delivered.remove(&req_id);
-        self.pending_secdef.push((req_id, false, Instant::now() + SECDEF_TIMEOUT));
+        self.pending_secdef.push((req_id, false, Instant::now() + unanswered_after(req_id)));
     }
 
     /// Send a per-exchange fan-out request after a by-symbol master reply.

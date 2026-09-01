@@ -5970,7 +5970,11 @@ fn placing_an_unnamed_contract_does_not_wait_on_itself() {
         flag.store(true, std::sync::atomic::Ordering::SeqCst);
     });
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // Longer than the wait it is bounded by, read from that wait rather than
+    // restated: written out, this raced it the moment the wait moved. Naming
+    // the contract is a lookup, so the lookup's wait is the one to clear.
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(crate::config::LOOKUP_TIMEOUT_SECS * 2);
     while std::time::Instant::now() < deadline {
         if done.load(std::sync::atomic::Ordering::SeqCst) {
             return;

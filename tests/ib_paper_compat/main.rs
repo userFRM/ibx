@@ -790,6 +790,46 @@ fn an_order_on_an_index_live() {
     client.disconnect();
 }
 
+// ─── Phase 202: A lookup broader than one contract ───
+
+/// A lookup broader than the bound for a single contract, given the time it
+/// takes.
+///
+/// Run: cargo test --test ib_paper_compat a_broad_lookup_phase_live -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of; run it with --ignored"]
+fn a_broad_lookup_phase_live() {
+    start_logging();
+    let config = match get_config() { Some(c) => c, None => return };
+    let settings = ibx::EClientConfig {
+        username: config.username.clone(),
+        password: config.password.to_string(),
+        paper: config.paper,
+        ..Default::default()
+    };
+    let client = EClient::connect(&settings).expect("connect failed");
+
+    // An option class naming every expiry at once, the broadest question the
+    // lookup takes. One question per session: a lookup given up on is still
+    // being answered, and the answer read past while the next one waits.
+    let broad = ApiContract {
+        symbol: "SPY".into(), sec_type: "OPT".into(), exchange: "SMART".into(),
+        currency: "USD".into(), ..Default::default()
+    };
+
+    phase!("--- Phase 202: a lookup broader than one contract ---");
+    let started = Instant::now();
+    match client.contract_details(&broad) {
+        Ok(found) => println!(
+            "  {} definitions in {}s",
+            found.len(), started.elapsed().as_secs(),
+        ),
+        Err(refusal) => println!("  after {}s: {refusal}", started.elapsed().as_secs()),
+    }
+    println!("\n=== done ===");
+    client.disconnect();
+}
+
 /// What the venue does with a news query withdrawn under the document a
 /// withdrawal carries.
 #[test]

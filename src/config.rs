@@ -48,6 +48,18 @@ pub const CCP_HOSTS: &[&str] = &[
 /// caller should hear why, not that it waited.
 pub const ANSWER_TIMEOUT_SECS: u64 = 15;
 
+/// The same, for a lookup that can name a whole class of contracts.
+///
+/// Every other question has an answer of a size the venue knows before it
+/// starts. A contract lookup does not: `SPY` options across every expiry is
+/// 13,580 definitions over nineteen exchanges, and the venue takes about ten
+/// seconds to say anything at all before sending them. Held to the wait above,
+/// a lookup was called unanswered while the venue was about to answer it.
+///
+/// This client's own patience, not a limit the venue states, and it measures
+/// silence rather than the length of an answer.
+pub const LOOKUP_TIMEOUT_SECS: u64 = 30;
+
 /// The locale a session announces itself with, where it states none.
 pub const IB_LOCALE: &str = "en_US";
 

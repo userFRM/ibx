@@ -73,6 +73,19 @@ The number is this client's own allocation, not a limit the venue states. One
 option chain asked for at once is 282 live subscriptions on a single
 underlying, and the venue served all of them.
 
+## A broad lookup takes longer than one contract
+
+A lookup naming a whole class is a different question from one naming a single
+contract. `SPY` options across every expiry is 13,580 definitions over nineteen
+exchanges, and the venue takes about ten seconds to send the first of them.
+
+The wait measures silence, not the length of an answer: it is reset each time
+the venue speaks, so an answer that runs for as long as that one does is not cut
+off part-way through. A lookup that does run out says how many definitions
+arrived before it did, since a partial answer and no answer are different facts
+and only the first says to ask a narrower question — by naming an expiry, or a
+single venue.
+
 ## Two orders a modify cannot restate
 
 A modify is a full statement of the order, rebuilt from what was placed. Two
