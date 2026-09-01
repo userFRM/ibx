@@ -365,7 +365,13 @@ impl EClient {
             match self.next_order_id.compare_exchange_weak(
                 held, first + n, Ordering::AcqRel, Ordering::Acquire,
             ) {
-                Ok(_) => return first as i64,
+                Ok(_) => {
+                    // Said where the id is handed out rather than only where
+                    // one is stated, so a caller that never asks what the next
+                    // one is still hears it.
+                    crate::bridge::say_if_past_a_request_id(first);
+                    return first as i64;
+                }
                 Err(seen) => held = seen,
             }
         }

@@ -6366,3 +6366,25 @@ fn a_request_numbered_where_the_engine_numbers_its_own_is_refused() {
         "a number below every reserved band stopped being a caller's",
     );
 }
+
+/// An account whose order ids have outgrown a request number is told so on
+/// whichever surface hands one out, not on the Python one alone.
+#[test]
+fn every_path_that_hands_out_a_wide_order_id_says_so() {
+    let orders = std::fs::read_to_string(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/src/api/client/orders.rs"),
+    ).expect("the order surface is there to read");
+    // Where the id is taken, not only where one is stated: a caller that never
+    // asks what the next id is still places under one.
+    let reserving = orders.split("fn reserve_order_ids(").nth(1)
+        .expect("ids are still reserved in one place");
+    assert!(
+        reserving.contains("say_if_past_a_request_id"),
+        "an id is handed out without saying it has outgrown a request number",
+    );
+    let stating = orders.split("pub fn req_ids(").nth(1).expect("req_ids is still there");
+    assert!(
+        stating.contains("say_if_past_a_request_id"),
+        "the stated id no longer says it either",
+    );
+}

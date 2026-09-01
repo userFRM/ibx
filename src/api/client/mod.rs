@@ -343,20 +343,6 @@ impl Drop for Answering {
 /// would answer under an id the caller never used — and `next_order_id()`
 /// hands out ids well past `u32::MAX`, so the ibapi idiom of one counter for
 /// orders and requests hit it on the first call. Refuse instead.
-/// The request a refusal is reported against, or the mark for none.
-///
-/// A number too wide to carry is reported against no request rather than
-/// against its own low half. Narrowed, a refusal for one request is delivered
-/// under another that a caller may well be waiting on — and this account hands
-/// out order ids far wider than a request number, so a caller numbering both
-/// from one counter reaches this with every refusal it gets.
-pub(crate) fn carried_under(req_id: i64) -> u32 {
-    match u32::try_from(req_id) {
-        Ok(id) if id != crate::bridge::ReferenceState::NO_REQUEST => id,
-        _ => crate::bridge::ReferenceState::NO_REQUEST,
-    }
-}
-
 pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, Refusal> {
     let id = u32::try_from(req_id).map_err(|_| {
         Refusal::validation(format!(
@@ -403,6 +389,20 @@ pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, Refusal> {
         )));
     }
     Ok(id)
+}
+
+/// The request a refusal is reported against, or the mark for none.
+///
+/// A number too wide to carry is reported against no request rather than
+/// against its own low half. Narrowed, a refusal for one request is delivered
+/// under another that a caller may well be waiting on — and this account hands
+/// out order ids far wider than a request number, so a caller numbering both
+/// from one counter reaches this with every refusal it gets.
+pub(crate) fn carried_under(req_id: i64) -> u32 {
+    match u32::try_from(req_id) {
+        Ok(id) if id != crate::bridge::ReferenceState::NO_REQUEST => id,
+        _ => crate::bridge::ReferenceState::NO_REQUEST,
+    }
 }
 
 /// The gateway's view of an [`EClientConfig`].
