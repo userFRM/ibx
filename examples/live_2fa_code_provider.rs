@@ -44,18 +44,17 @@ fn load_dotenv() {
 /// Prompt the operator for whichever code this account's factor calls for.
 fn read_code_from_stdin(challenge: IbKeyChallenge) -> io::Result<String> {
     println!();
-    let (banner, prompt, want) = match challenge.factor {
+    // Neither code's length has been watched from here, so take what the
+    // operator types. A length rule this client invented would refuse a valid
+    // code before the server ever saw it.
+    let (banner, prompt) = match challenge.factor {
         SecondFactor::IbKeyChallengeResponse => (
             "== IBKey Challenge/Response ==",
-            "Enter the 8-character code shown in the IBKey app: ",
-            Some(8),
+            "Enter the code shown in the IBKey app: ",
         ),
-        // Length is not fixed across authenticator configurations, so take
-        // what the operator types rather than rejecting a valid code.
         SecondFactor::AuthenticatorCode => (
             "== Authenticator code ==",
             "Enter the current code from your authenticator app: ",
-            None,
         ),
     };
     println!("{banner}");
@@ -74,13 +73,6 @@ fn read_code_from_stdin(challenge: IbKeyChallenge) -> io::Result<String> {
     if code.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "no code entered"));
     }
-    if let Some(n) = want
-        && code.len() != n {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("expected {} characters, got {}", n, code.len()),
-            ));
-        }
     Ok(code)
 }
 
