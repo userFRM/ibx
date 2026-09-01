@@ -119,11 +119,11 @@ def test_placing_an_order_hands_back_a_record_that_moves():
     order.orderType = "MKT"
     order.totalQuantity = 5
 
-    try:
-        trade = ib.placeOrder(spy(), order)
-    except RuntimeError:
-        # No venue behind a test session; the record is still registered.
-        trade = ib.wrapper.trade_for(7)
+    # Registered as a placed order is, without a place: a test session has no
+    # venue behind it, so the transport refuses and the record of an order
+    # nobody sent is taken back — which is a different property, tested where
+    # it belongs. What this is about is the record moving under the caller.
+    trade = ib.wrapper.register_order(7, spy(), order)
 
     assert trade is not None
     assert trade.orderStatus.status == "PendingSubmit"

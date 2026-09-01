@@ -214,3 +214,4 @@ class TestOrderLifecycle:
         sell_oid = oid + 1
         self.client.place_order(sell_oid, spy, sell)
         time.sleep(5)
+

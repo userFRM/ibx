@@ -643,7 +643,19 @@ class Client:
         except AttributeError:
             pass
         trade = self.wrapper.register_order(order_id, contract, order)
+        # A transport that will not carry the order says so on the error
+        # callback and returns, which is how the reference client answers a
+        # request it refuses. Said during the call, it is about this order not
+        # being sent — a rejection from the venue arrives later — so the record
+        # goes with it. Kept, `openTrades()` lists an order working at a venue
+        # that never received one.
+        before = len(self.wrapper.errors)
         self.client.place_order(order_id, contract, order)
+        refused = any(
+            err[0] == order_id for err in self.wrapper.errors[before:]
+        )
+        if refused:
+            self.wrapper.forget_trade(order_id)
         return trade
 
     def cancelOrder(self, order, manualCancelOrderTime=""):

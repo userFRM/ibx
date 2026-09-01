@@ -85,7 +85,7 @@ pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
         &data[soh2 + 1..]
     };
 
-    let mut decoder = ZlibDecoder::new(raw);
+    let mut decoder = ZlibDecoder::new(raw).take(MAX_INFLATED + 1);
     let mut decompressed = Vec::new();
     if let Err(e) = decoder.read_to_end(&mut decompressed) {
         // On inflate failure, dump the raw zlib payload and the full
@@ -98,6 +98,14 @@ pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
             e, data.len(), raw.len(), raw_hex, unsigned_hex,
         );
         return Err(e);
+    }
+    // Past the ceiling, so what this frame carries cannot be read whole. Told
+    // rather than truncated: half a batch of messages read as the whole of one
+    // is a fill or an acknowledgement that silently never arrives.
+    if decompressed.len() as u64 > MAX_INFLATED {
+        return Err(parse_err(
+            "fixcomp: a frame inflating past what this client holds for one",
+        ));
     }
 
     let (messages, unread) = split_messages(&decompressed);
@@ -183,6 +191,19 @@ pub fn fixcomp_frame_length(data: &[u8]) -> FrameLength {
         FrameLength::Complete(total)
     }
 }
+
+/// How much one frame is allowed to become once inflated.
+///
+/// This client's own allocation, not a size the venue states. A compressed
+/// frame is small whatever it carries, so without a ceiling one peer's frame
+/// can ask this process for every byte it has, and everything waiting behind
+/// it — a fill, an acknowledgement — never arrives.
+///
+/// Sixty-four mebibytes. The largest payload a session has been sent is the
+/// calendar's own list of event types at a little under a hundred and eighty
+/// kilobytes, so this is some hundreds of times the largest thing seen rather
+/// than a figure anything is expected to approach.
+const MAX_INFLATED: u64 = 64 * 1024 * 1024;
 
 /// How much of a frame is read before its header is given up on.
 ///
@@ -391,6 +412,37 @@ mod tests {
         let parsed = fix_parse(&messages[0]);
         assert_eq!(parsed[&35], "B");
         assert_eq!(parsed[&58], long_value);
+    }
+
+    /// A frame that inflates past what this client holds for one is told,
+    /// not truncated.
+    ///
+    /// A compressed frame is small whatever it carries, so without a ceiling
+    /// one peer's frame asks this process for every byte it has and everything
+    /// behind it — a fill, an acknowledgement — never arrives. Read short
+    /// instead, half a batch of messages would pass as the whole of one.
+    #[test]
+    fn a_frame_that_inflates_past_the_ceiling_is_refused() {
+        use flate2::{Compression, write::ZlibEncoder};
+
+        // Compresses to almost nothing and inflates past the ceiling.
+        let huge = vec![b'x'; (MAX_INFLATED + 4096) as usize];
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&huge).unwrap();
+        let payload = encoder.finish().unwrap();
+        assert!(
+            (payload.len() as u64) < MAX_INFLATED / 1000,
+            "the frame itself is small: {} bytes",
+            payload.len(),
+        );
+
+        let mut frame = b"8=X\x019=0\x01".to_vec();
+        frame.extend_from_slice(&payload);
+        let refused = fixcomp_decompress(&frame).expect_err("it is refused");
+        assert!(
+            refused.to_string().contains("holds for one"),
+            "and says why: {refused}",
+        );
     }
 
     #[test]
