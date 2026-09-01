@@ -158,19 +158,8 @@ pub(crate) fn uncertain_update(
 ///
 /// Derived from the handler itself so it cannot fall behind as fields are
 /// added, the same way a definition's is.
-pub fn tags_read_from_an_execution() -> Vec<u32> {
-    READ_FROM_AN_EXECUTION.iter().copied().collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-/// The same set, worked out once.
-///
-/// This is read for every execution report the venue sends. Worked out per
-/// report it read three files through from the top each time, and again for
-/// every tag named rather than numbered.
-static READ_FROM_AN_EXECUTION: std::sync::LazyLock<std::collections::HashSet<u32>> =
-    std::sync::LazyLock::new(|| {
+pub(crate) static READ_FROM_AN_EXECUTION:
+    std::sync::LazyLock<std::collections::HashSet<u32>> = std::sync::LazyLock::new(|| {
     // Every file this module is written across, because the reading is done
     // across all of them: the report handler is here, the routing that reads a
     // few tags of its own is next door, and the position and P&L handlers read

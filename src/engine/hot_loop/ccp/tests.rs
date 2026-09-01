@@ -3278,7 +3278,7 @@ mod unnamed_execution_tests {
     /// tiny — which would make everything look unread.
     #[test]
     fn the_tags_the_handler_reads_are_derived_from_the_handler() {
-        let read = super::executions::tags_read_from_an_execution();
+        let read = &*super::executions::READ_FROM_AN_EXECUTION;
         assert!(read.len() > 30, "only {} tags reported as read", read.len());
         assert!(read.contains(&17), "the execution id is read");
     }
