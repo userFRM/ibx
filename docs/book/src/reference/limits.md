@@ -201,9 +201,13 @@ at the venue opened after the caller was told the engine had stopped — and the
 socket closes when the engine goes.
 
 What a caller can see is a second-factor prompt arriving on their phone after
-`disconnect` returned, for a login nothing goes on to use. Stopping the attempt
-itself means interrupting a handshake in the middle of a blocking read, which
-this client does not do.
+`disconnect` returned, for a login nothing goes on to use.
+
+The attempt is not stopped because nothing carries the stop to it: the thread
+is started without keeping a handle on it, and no cancellation is passed into
+the handshake it runs. The handshake itself reads on a short poll rather than
+one long wait, so there is a place for such a check to go. This is a gap in
+this client, not a property of the venue's protocol.
 
 ## What authenticates a farm connection
 
