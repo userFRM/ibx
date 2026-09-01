@@ -41,8 +41,6 @@ pub struct Recorded {
     pub managed_accounts: Option<String>,
     /// The providers this account may read.
     pub news_providers: Vec<String>,
-    /// The scan definitions the venue publishes.
-    pub scanner_parameters: Option<String>,
 }
 
 impl Wrapper for Recorded {
@@ -54,6 +52,13 @@ impl Wrapper for Recorded {
     }
     fn managed_accounts(&mut self, accounts: &str) {
         self.managed_accounts = Some(accounts.to_string());
+    }
+    // The two below were declared and never filled: the calls that ask for
+    // them handed the answer to a callback nothing here implemented, so a
+    // caller reading the field it was told to read found it empty however
+    // long it waited.
+    fn news_providers(&mut self, providers: &[crate::types::NewsProvider]) {
+        self.news_providers = providers.iter().map(|p| p.code.clone()).collect();
     }
 }
 
@@ -486,6 +491,12 @@ impl Client {
     }
 
     /// Every scan the venue offers, and what each can be filtered by.
+    ///
+    /// Asked here and answered on the session underneath: the venue sends this
+    /// after the request rather than with it, and this shape has nowhere to
+    /// put an answer that arrives later. Read it through [`Self::inner`] with a
+    /// wrapper of your own. It was declared as something this recorded and
+    /// never was.
     pub fn scanner_parameters(&self) -> Result<(), Refusal> {
         self.inner.req_scanner_parameters()
     }
@@ -859,6 +870,14 @@ mod tests {
         assert_eq!(r.managed_accounts.as_deref(), Some("DU1,DU2"));
         assert_eq!(r.errors.len(), 1);
         assert_eq!(r.errors[0].0, 7);
+
+        // Declared and never filled: the call that asks for these handed the
+        // answer to a callback nothing here implemented, so a caller reading
+        // the field it was told to read found it empty however long it waited.
+        r.news_providers(&[
+            crate::types::NewsProvider { code: "BRFG".into(), name: "Briefing".into() },
+        ]);
+        assert_eq!(r.news_providers, ["BRFG"]);
     }
 
     /// A refusal names the request it belongs to. Without the id a caller

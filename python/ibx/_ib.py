@@ -109,6 +109,15 @@ class Client:
         A program that already holds a session needs no edit; one that relied
         on a running gateway to have logged in supplies the login here.
 
+        ``timeout`` is accepted and ignored, and this is the one place that
+        matters. In the wrapper this follows it bounds a socket opening to a
+        process on the same machine, which takes milliseconds. Here the wait it
+        would bound is a person approving a login on their phone, and four
+        seconds of that is every first login refused. What bounds this call is
+        ``ib_key_timeout_secs`` on the client underneath, which is that wait
+        and defaults to about eighteen minutes; a program that cannot block for
+        it runs this on a worker of its own.
+
         ``readonly`` is carried through: a read-only session refuses to send
         anything that changes a position, and says so rather than appearing to
         have sent it.
@@ -119,6 +128,9 @@ class Client:
         belong to the process, and are what a session that states none falls
         back to.
         """
+        # `timeout` is not carried: see above. It names a socket opening in
+        # the wrapper this follows and a person's phone here, and the two do
+        # not take the same number.
         del host, port, timeout, account
         self.client.connect(
             client_id=clientId,
