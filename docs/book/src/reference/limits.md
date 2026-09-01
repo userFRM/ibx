@@ -48,10 +48,12 @@ history needs another source for it.
 
 ## A bid of -1 is the venue saying there is none
 
-Some instruments carry no bid and no ask. An index is the clearest case: it is
-published as a level rather than quoted by anyone. The venue states that by
-sending `-1` on the bid and the ask, and this client passes it on as sent
-rather than turning it into a zero.
+Some instruments carry no bid and no ask. The venue says so by sending `-1` on
+both, and this client passes it on as sent rather than turning it into a zero.
+
+Which instruments those are is the venue's to say and not something this client
+can work out. Indices are where it was met: most of the ones below carry no
+quote, and one of them does, so the kind of instrument is not the rule.
 
 It is not an entitlement. Three things separate them, and all three are worth
 checking before concluding a subscription is missing:
