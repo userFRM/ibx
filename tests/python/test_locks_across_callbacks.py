@@ -231,3 +231,17 @@ def test_an_order_is_reported_under_the_client_that_placed_it():
 
     assert w.opened == [7], "the order names the client that placed it"
     assert w.status == [7], "and so does its status"
+
+    # The same on the replay a caller asks for, while the order is still open.
+    w.status.clear()
+    c.req_open_orders()
+    c._test_dispatch_once()
+    assert w.status == [7], "a replayed status names the client that placed the order"
+
+    # And so does the status a fill produces. Reported under client zero, the
+    # fill files under a key nobody holds: the trade shows Submitted under the
+    # session's client and Filled under none, so it reads as still working.
+    w.status.clear()
+    c._test_push_fill(0, 21, "BUY", 100.0, 1, 0, 0.0)
+    c._test_dispatch_once()
+    assert w.status == [7], f"a fill's status named client {w.status}, not the session's"

@@ -489,7 +489,14 @@ pub fn fix_unsign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>, b
         None => return (msg_bytes, iv.to_vec(), false),
     };
 
-    let body = &msg_bytes[after9..t8349];
+    // The two offsets are found by separate searches, and a frame can put them
+    // in either order: the bare `9=` needle matches inside `8349=`, so a frame
+    // whose only `9=` lies within the signature field ends the body before it
+    // begins. Sliced that way round it panics, and a panic here is the reader
+    // thread and every subscription on it.
+    let Some(body) = msg_bytes.get(after9..t8349) else {
+        return (msg_bytes, iv.to_vec(), false);
+    };
 
     let mut mac = Hmac::<Sha1>::new_from_slice(mac_key).unwrap();
     mac.update(iv);
@@ -1044,5 +1051,24 @@ mod tests {
         let r3 = (0x04 ^ 0x40 ^ 0x08) ^ 0xDD;
         let expected = format!("{r0:02X}{r1:02X}{r2:02X}{r3:02X}");
         assert_eq!(xor_fold(&digest), expected);
+    }
+}
+
+#[cfg(test)]
+mod hostile_frame_tests {
+    use super::*;
+
+    /// A frame whose only `9=` lies inside the signature field is refused
+    /// rather than panicking.
+    ///
+    /// The bare needle matches at offset 3 of `8349=`, so the body would be
+    /// sliced from after that to before it. A panic on the reader thread ends
+    /// the session and every subscription on it, which is what this protocol
+    /// module exists to prevent.
+    #[test]
+    fn a_frame_whose_length_field_sits_inside_the_signature_is_refused() {
+        let hostile = b"8=FIX.4.1\x018349=00000000\x01";
+        let (_, _, valid) = fix_unsign(hostile, &[0u8; 20], &[0u8; 16]);
+        assert!(!valid, "a frame this shape must be refused, not accepted");
     }
 }

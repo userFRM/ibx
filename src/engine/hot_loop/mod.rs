@@ -2816,7 +2816,12 @@ pub(crate) fn extract_raw_tag(msg: &[u8], tag: u32) -> Option<Vec<u8>> {
             let needle_bytes = needle.as_bytes();
             if let Some(idx) = msg.windows(needle_bytes.len()).position(|w| w == needle_bytes) {
                 let val_start = idx + needle_bytes.len();
-                let val_end = (val_start + data_len).min(msg.len());
+                // The length is the peer's to state and is read as a usize, so
+                // a frame naming one near the top of the range overflows the
+                // add: a panic where overflow is checked, and a wrapped end
+                // before the start where it is not. Either way the reader
+                // thread goes, and with it the session.
+                let val_end = val_start.saturating_add(data_len).min(msg.len());
                 return Some(msg[val_start..val_end].to_vec());
             }
         }

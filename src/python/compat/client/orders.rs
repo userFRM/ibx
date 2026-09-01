@@ -426,7 +426,8 @@ impl EClient {
             self.callback(py, "open_order", (*order_id as i64, &c_py, &o_py, &state_py))?;
             self.callback(py, "order_status",
                 (*order_id as i64, tracked.status.as_str(), tracked.filled, tracked.remaining,
-                 0.0f64, tracked.order.perm_id, tracked.order.parent_id, 0.0f64, 0i64, "", 0.0f64))?;
+                 0.0f64, tracked.order.perm_id, tracked.order.parent_id, 0.0f64,
+                 self.client_id.load(Ordering::Acquire) as i64, "", 0.0f64))?;
         }
         self.callback(py, "open_order_end", ())?;
         Ok(())

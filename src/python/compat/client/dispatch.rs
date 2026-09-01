@@ -270,7 +270,8 @@ impl EClient {
             // `lastFillPrice` describes this print.
             let avg_price = fill.avg_price as f64 / PRICE_SCALE_F;
             call_wrapper!(self.wrapper, py, "order_status", (fill.order_id as i64, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining),
-                 avg_price, perm_id, parent_id, price, 0i64, "", 0.0f64));
+                 avg_price, perm_id, parent_id, price,
+                 self.client_id.load(Ordering::Acquire) as i64, "", 0.0f64));
 
             // Track execution for req_executions.
             //
