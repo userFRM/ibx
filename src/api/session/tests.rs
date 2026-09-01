@@ -22,6 +22,38 @@ fn a_session(
     (session, rx)
 }
 
+/// The last holder stops the session, whichever two go at once.
+///
+/// Read as a count and then acted on, the last two clones can both read two
+/// and neither stop anything — leaving the reading thread, the engine and the
+/// connection alive with nobody holding them. Dropping the handle answers who
+/// was last as one step, so one of the two always sets it.
+#[test]
+fn the_last_two_holders_do_not_both_stand_aside() {
+    for _ in 0..200 {
+        let shared = Arc::new(crate::bridge::SharedState::new());
+        let (session, _rx) = a_session(&shared);
+        let stop = Arc::clone(&session.stop);
+        let other = session.clone();
+
+        // Both let go at the same instant. Spawned without one, the first
+        // thread is finished before the second starts and the two never
+        // overlap — which is the window this is about.
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let g1 = Arc::clone(&gate);
+        let g2 = Arc::clone(&gate);
+        let a = std::thread::spawn(move || { g1.wait(); drop(session); });
+        let b = std::thread::spawn(move || { g2.wait(); drop(other); });
+        a.join().unwrap();
+        b.join().unwrap();
+
+        assert!(
+            stop.load(std::sync::atomic::Ordering::Relaxed),
+            "whichever went last stopped the session",
+        );
+    }
+}
+
 /// Wait for something the reading thread does, rather than for a length of
 /// time: on a machine under load a fixed sleep is either slow or a flake.
 fn within_a_moment(mut happened: impl FnMut() -> bool) -> bool {

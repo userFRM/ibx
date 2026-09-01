@@ -704,13 +704,19 @@ impl Drop for Client {
         // Only the last holder stops the session: cloning shares it, and a
         // clone going out of scope is not the caller finishing with it.
         //
-        // Counted on the reader's own handle, which is the one thing here that
+        // Taken on the reader's own handle, which is the one thing here that
         // only a session holds. The client, the kept state and the stop flag
-        // are all shared with the reading thread, so counting any of those
-        // never reaches one while that thread is alive. Dropping the session
-        // would then stop nothing, and the thread, the engine and the
-        // connection would outlive every caller.
-        if Arc::strong_count(&self.reader) == 1 {
+        // are all shared with the reading thread, so any of those is still held
+        // while that thread runs and would never say the last caller had
+        // finished.
+        //
+        // Taken rather than counted: reading the count and then acting on it
+        // lets the last two clones both read two and neither stop anything,
+        // leaving the thread, the engine and the connection alive with nobody
+        // holding them. Dropping the handle answers who was last as one step.
+        if Arc::into_inner(std::mem::replace(&mut self.reader, Arc::new(Mutex::new(None))))
+            .is_some()
+        {
             self.stop.store(true, Ordering::Relaxed);
         }
     }

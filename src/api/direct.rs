@@ -719,11 +719,20 @@ impl Client {
         self.inner.shared_state().settings().timezone.clone()
     }
 
-    /// How much this client writes about what it is doing.
+    /// Set server log level.
+    ///
+    /// Taken and not applied, as it is on the other two surfaces: the session
+    /// holds no log level of its own and this protocol carries no message
+    /// asking the venue to change one, so what a caller states here is written
+    /// to this client's log and nothing else. This client's own logging is set
+    /// where the process sets it, through `IBX_LOG_LEVEL` or `RUST_LOG`.
+    ///
+    /// It wrote that variable here, which set nothing — the filter is built
+    /// when the logger is installed and does not read it again — and wrote it
+    /// from a client that already owns threads, which is not a thing a process
+    /// may do to its own environment while they run.
     pub fn set_server_log_level(&self, level: &str) {
-        // This asks a local process to change its logging. There is
-        // no local process, so this sets this client's own.
-        unsafe { std::env::set_var("IBX_LOG_LEVEL", level) };
+        log::info!("set_server_log_level: {level}");
     }
 
     /// Send an order, under an id this shape chooses.

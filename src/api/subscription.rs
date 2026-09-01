@@ -147,7 +147,12 @@ impl<T> Subscription<T> {
                 return None;
             }
             if Instant::now() >= deadline {
-                self.done = true;
+                // Withdrawn, not merely given up on. The idle period ending
+                // ends this subscription for the caller — every call after it
+                // answers nothing — so leaving the request standing has the
+                // venue streaming for a reader that cannot read again, until
+                // whenever the object happens to be dropped.
+                self.cancel();
                 return None;
             }
             std::thread::sleep(POLL);
@@ -178,6 +183,33 @@ mod tests {
 
     fn state() -> Arc<SharedState> {
         Arc::new(SharedState::new())
+    }
+
+    /// The idle period ending withdraws the request rather than dropping it.
+    ///
+    /// It ends the subscription for the caller — every call after it answers
+    /// nothing — so a request left standing has the venue streaming for a
+    /// reader that cannot read again, until the object happens to be dropped.
+    #[test]
+    fn an_idle_stream_is_withdrawn_rather_than_left_standing() {
+        let shared = state();
+        let withdrawn = Arc::new(AtomicI64::new(0));
+        let w = Arc::clone(&withdrawn);
+        let mut sub: Subscription<i64> = Subscription::new(
+            7,
+            Arc::clone(&shared),
+            |_, _| Vec::new(),
+            move |req_id| { w.store(req_id, Ordering::Relaxed); },
+        );
+        sub.idle = Duration::from_millis(20);
+
+        assert!(sub.next_item().is_none(), "nothing arrives, so the idle period ends it");
+        assert_eq!(withdrawn.load(Ordering::Relaxed), 7, "and the request is withdrawn");
+
+        // Withdrawn once: dropping it afterwards does not ask again.
+        withdrawn.store(0, Ordering::Relaxed);
+        drop(sub);
+        assert_eq!(withdrawn.load(Ordering::Relaxed), 0);
     }
 
     /// What has arrived is handed over in the order it arrived.
