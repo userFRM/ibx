@@ -6369,22 +6369,62 @@ fn a_request_numbered_where_the_engine_numbers_its_own_is_refused() {
 
 /// An account whose order ids have outgrown a request number is told so on
 /// whichever surface hands one out, not on the Python one alone.
+///
+/// Read out of each function's own body rather than the rest of the file: a
+/// search that ran to the end of the file passed on the strength of a call in
+/// a later function, so removing either one went unnoticed.
 #[test]
 fn every_path_that_hands_out_a_wide_order_id_says_so() {
+    for (file, wanted) in [
+        ("src/api/client/orders.rs", ["fn reserve_order_ids(", "pub fn req_ids("]),
+        ("src/python/compat/client/mod.rs", ["fn take_order_id(", "fn stated_order_id("]),
+    ] {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file),
+        ).unwrap_or_else(|e| panic!("{file} is there to read: {e}"));
+        for signature in wanted {
+            let body = body_of(&src, signature)
+                .unwrap_or_else(|| panic!("{file}: {signature} is no longer there"));
+            assert!(
+                body.contains("say_if_past_a_request_id"),
+                "{file}: {signature} hands out an id without saying it has outgrown a \
+                 request number",
+            );
+        }
+    }
+}
+
+/// The body of the function whose signature this names, by matching braces.
+fn body_of(src: &str, signature: &str) -> Option<String> {
+    let from = src.find(signature)? + signature.len();
+    let open = from + src[from..].find('{')?;
+    let mut depth = 0usize;
+    for (at, c) in src[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(src[open..open + at].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A bracket takes three consecutive ids, and the line a request number stops
+/// at can fall between the first and the last of them.
+#[test]
+fn a_run_of_ids_is_measured_by_its_widest() {
     let orders = std::fs::read_to_string(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/api/client/orders.rs"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api/client/orders.rs"),
     ).expect("the order surface is there to read");
-    // Where the id is taken, not only where one is stated: a caller that never
-    // asks what the next id is still places under one.
-    let reserving = orders.split("fn reserve_order_ids(").nth(1)
-        .expect("ids are still reserved in one place");
+    let body = body_of(&orders, "fn reserve_order_ids(").expect("ids are reserved in one place");
     assert!(
-        reserving.contains("say_if_past_a_request_id"),
-        "an id is handed out without saying it has outgrown a request number",
-    );
-    let stating = orders.split("pub fn req_ids(").nth(1).expect("req_ids is still there");
-    assert!(
-        stating.contains("say_if_past_a_request_id"),
-        "the stated id no longer says it either",
+        body.contains("say_if_past_a_request_id(first + n - 1)"),
+        "a run is measured by its first id, so a bracket whose children cross the line \
+         hands them out in silence",
     );
 }

@@ -831,7 +831,13 @@ impl EClient {
             match self.next_order_id.compare_exchange_weak(
                 held, id + 1, Ordering::AcqRel, Ordering::Acquire,
             ) {
-                Ok(_) => return id,
+                // Against what is handed out, not against the floor it was
+                // taken from: the counter can already be past the floor, and
+                // two callers racing here take ids either side of the line.
+                Ok(_) => {
+                    crate::bridge::say_if_past_a_request_id(id);
+                    return id;
+                }
                 Err(seen) => held = seen,
             }
         }

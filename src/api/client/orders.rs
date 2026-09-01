@@ -366,10 +366,12 @@ impl EClient {
                 held, first + n, Ordering::AcqRel, Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    // Said where the id is handed out rather than only where
+                    // Said where the ids are handed out rather than only where
                     // one is stated, so a caller that never asks what the next
-                    // one is still hears it.
-                    crate::bridge::say_if_past_a_request_id(first);
+                    // one is still hears it — and against the widest of the
+                    // run, because a bracket's children are the first plus one
+                    // and two, and the run can cross the line between them.
+                    crate::bridge::say_if_past_a_request_id(first + n - 1);
                     return first as i64;
                 }
                 Err(seen) => held = seen,
