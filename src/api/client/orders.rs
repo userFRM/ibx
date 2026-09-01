@@ -326,6 +326,7 @@ impl EClient {
         // Stated without being taken, as the reference client states it: the
         // caller places under it, and the reservation happens then.
         let stated = self.next_order_id.load(Ordering::Acquire).max(self.next_id_base());
+        crate::bridge::say_if_past_a_request_id(stated);
         wrapper.next_valid_id(stated as i64);
     }
 

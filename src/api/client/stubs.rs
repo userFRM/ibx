@@ -414,15 +414,8 @@ impl EClient {
     /// a slow gateway, so it is told on the channel a venue uses to say it
     /// will not act on a request.
     pub(crate) fn report_reason(&self, req_id: i64, reason: &Refusal) {
-        // A refusal against no request keeps that fact rather than being
-        // clamped onto request zero, which a caller may well have asked under.
-        let carried = if req_id < 0 {
-            crate::bridge::ReferenceState::NO_REQUEST
-        } else {
-            req_id as u32
-        };
         self.shared.reference.push_historical_error(
-            carried, reason.code, reason.message.clone(),
+            super::carried_under(req_id), reason.code, reason.message.clone(),
         );
     }
 }

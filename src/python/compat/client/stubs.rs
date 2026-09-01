@@ -712,12 +712,12 @@ fn report_reason(client: &EClient, req_id: i64, reason: &Refusal) {
 }
 
 /// The request a refusal is reported against, or the mark for none.
+///
+/// The same rule the Rust surface keeps, and for the same reason: a number too
+/// wide to carry is reported against no request rather than against its own
+/// low half.
 fn carried_under(req_id: i64) -> u32 {
-    if req_id < 0 {
-        crate::bridge::ReferenceState::NO_REQUEST
-    } else {
-        req_id as u32
-    }
+    crate::api::client::carried_under(req_id)
 }
 
 /// The word the venue names a partition of an advisor's configuration by.

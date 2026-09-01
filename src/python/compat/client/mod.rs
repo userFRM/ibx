@@ -811,21 +811,7 @@ impl EClient {
             .map(|shared| shared.orders.working_id_watermark() + 1)
             .unwrap_or(1);
         let id = self.next_order_id.load(Ordering::Acquire).max(floor);
-        // An account whose ids have gone past what a request carries is one a
-        // program written against the reference client can no longer address:
-        // that client numbers its orders and its requests out of the same
-        // signed 32-bit counter, and this protocol carries an order id far
-        // wider than it carries a request id. Nothing here can undo an id the
-        // account has already used, so it is said rather than worked around —
-        // silently, it reads as a client that cannot place its first order.
-        if id > u32::MAX as u64 {
-            static SAID: std::sync::Once = std::sync::Once::new();
-            SAID.call_once(|| log::warn!(
-                "this account has used an order id above {}, so the next one is {id}; a \
-                 program that numbers its requests from the same counter cannot carry it",
-                u32::MAX,
-            ));
-        }
+        crate::bridge::say_if_past_a_request_id(id);
         id
     }
 

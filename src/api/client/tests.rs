@@ -2958,15 +2958,26 @@ fn an_unwireable_req_id_is_refused() {
             assert!(err.message.contains("req_id"), "{name}: the error names the field: {err}");
             assert!(rx.try_recv().is_err(), "{name}: and nothing reaches the wire");
         }
-        // The largest id a request can take is one below the top of the range,
-        // because the top of it already means something: it is what this client
-        // reports when a message names no request, and an answer under it
-        // reaches a caller as minus one.
+        // The largest id a request can take is one below the first band this
+        // client reserves. Above it are the numbers the answering calls hold
+        // and the ones the engine numbers its own lookups with, and an answer
+        // under either is taken by this client rather than handed on.
         let (client, rx, _shared) = test_client();
-        if let Err(e) = call(&client, (u32::MAX - 1) as i64) {
+        let largest = crate::bridge::ReferenceState::ASK_ID_BASE as i64 - 1;
+        if let Err(e) = call(&client, largest) {
             panic!("{name}: the largest usable id must still request: {e}");
         }
         assert!(rx.try_recv().is_ok(), "{name}: and it reaches the wire");
+
+        // And the band above it is not a caller's, which is what a request
+        // numbered there used to be answered as: read as internal, its
+        // callbacks kept rather than delivered.
+        let (client, rx, _shared) = test_client();
+        assert!(
+            call(&client, crate::bridge::ENGINE_ID_BASE as i64).is_err(),
+            "{name}: a request numbered where the engine numbers its own is answered to nobody",
+        );
+        assert!(rx.try_recv().is_err(), "{name}: and nothing reaches the wire under it");
 
         let (client, rx, _shared) = test_client();
         let refused = call(&client, u32::MAX as i64);
@@ -6307,4 +6318,51 @@ fn a_caller_cannot_take_a_number_this_client_reserves() {
     );
     // And an ordinary request is unaffected.
     assert!(client.req_contract_details(1, &spy).is_ok());
+}
+
+/// A refusal against a request too wide to carry is reported against no
+/// request, not against its own low half.
+///
+/// This account hands out order ids far wider than a request number, so a
+/// caller numbering both from one counter reaches this with every refusal it
+/// gets. Narrowed, the refusal for one request is delivered under another the
+/// caller may well be waiting on.
+#[test]
+fn a_refusal_for_an_uncarryable_request_is_not_delivered_under_another() {
+    use crate::api::client::carried_under;
+    use crate::bridge::ReferenceState;
+
+    // What this account actually hands out.
+    assert_eq!(carried_under(1_787_685_160_171_122), ReferenceState::NO_REQUEST);
+    // The collision the narrowing made: these two differ by exactly 2^32.
+    assert_ne!(carried_under(1), carried_under(4_294_967_297));
+    assert_eq!(carried_under(-1), ReferenceState::NO_REQUEST);
+    // One that does fit is carried as itself.
+    assert_eq!(carried_under(4242), 4242);
+    // The mark for none is not a request number a caller can be answered under.
+    assert_eq!(
+        carried_under(u32::MAX as i64), ReferenceState::NO_REQUEST,
+        "a request numbered with the mark for none is reported as its own answer",
+    );
+}
+
+/// The engine numbers the lookups it takes for itself above a line, and an
+/// answer above that line is kept rather than handed on.
+#[test]
+fn a_request_numbered_where_the_engine_numbers_its_own_is_refused() {
+    use crate::api::client::wire_req_id;
+    use crate::bridge::{ENGINE_ID_BASE, ReferenceState};
+
+    let refused = wire_req_id(ENGINE_ID_BASE as i64).expect_err("the band is not a caller's");
+    assert!(
+        refused.message.contains("lookups it takes"),
+        "the refusal does not say why: {}", refused.message,
+    );
+    assert!(wire_req_id(ENGINE_ID_BASE as i64 + 1).is_err());
+    // Everything from the answering band up was already refused; this band sat
+    // above it and fell through, which is the gap. Below both is a caller's.
+    assert!(
+        wire_req_id(ReferenceState::ASK_ID_BASE as i64 - 1).is_ok(),
+        "a number below every reserved band stopped being a caller's",
+    );
 }

@@ -387,10 +387,19 @@ impl EClient {
     /// order id than that has no such number above it, so this answers with
     /// the widest the account has used that a request can carry, and the
     /// counting goes on from there.
-    fn next_shared_id(&self, py: Python<'_>) -> i64 {
+    fn next_shared_id(&self, py: Python<'_>) -> PyResult<i64> {
         self.wait_for_the_replay(py);
-        let Ok(shared) = self.shared_state() else { return 1 };
-        (shared.orders.narrow_id_watermark() + 1) as i64
+        let Ok(shared) = self.shared_state() else { return Ok(1) };
+        let next = shared.orders.narrow_id_watermark() + 1;
+        // One past the widest carryable id is not itself carryable, and nor is
+        // anything this client has reserved. Handing one back would number a
+        // request that is answered to nobody, so the caller is told instead.
+        crate::api::client::wire_req_id(next as i64)
+            .map(|_| next as i64)
+            .map_err(|refusal| PyRuntimeError::new_err(format!(
+                "this account has no order id left that a request can also carry: {}",
+                refusal.message,
+            )))
     }
 
     /// Request all open orders for this client.

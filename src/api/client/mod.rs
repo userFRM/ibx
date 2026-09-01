@@ -343,6 +343,20 @@ impl Drop for Answering {
 /// would answer under an id the caller never used — and `next_order_id()`
 /// hands out ids well past `u32::MAX`, so the ibapi idiom of one counter for
 /// orders and requests hit it on the first call. Refuse instead.
+/// The request a refusal is reported against, or the mark for none.
+///
+/// A number too wide to carry is reported against no request rather than
+/// against its own low half. Narrowed, a refusal for one request is delivered
+/// under another that a caller may well be waiting on — and this account hands
+/// out order ids far wider than a request number, so a caller numbering both
+/// from one counter reaches this with every refusal it gets.
+pub(crate) fn carried_under(req_id: i64) -> u32 {
+    match u32::try_from(req_id) {
+        Ok(id) if id != crate::bridge::ReferenceState::NO_REQUEST => id,
+        _ => crate::bridge::ReferenceState::NO_REQUEST,
+    }
+}
+
 pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, Refusal> {
     let id = u32::try_from(req_id).map_err(|_| {
         Refusal::validation(format!(
@@ -374,6 +388,18 @@ pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, Refusal> {
             "req_id {req_id} is the number this client uses for a message that names no \
              request, and an answer under it reaches a caller as -1: number the request \
              below it",
+        )));
+    }
+    // Above this the engine numbers the lookups it takes for itself, and the
+    // answers to those are kept rather than handed on. A caller numbering a
+    // request here is answered by nobody: the reply is read as internal and
+    // its callbacks are suppressed, which reads as a request that vanished.
+    if id >= crate::bridge::ENGINE_ID_BASE {
+        return Err(Refusal::validation(format!(
+            "req_id {req_id} is inside the range this client numbers the lookups it takes \
+             for itself in, and an answer under it is kept rather than handed on: number \
+             the request below {}",
+            crate::bridge::ENGINE_ID_BASE,
         )));
     }
     Ok(id)

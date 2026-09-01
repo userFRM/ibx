@@ -48,6 +48,27 @@ pub struct OrderState {
     order_inactive: Mutex<Vec<(u64, i32, String)>>,
 }
 
+/// Say, once, that this account's order ids have outgrown a request id.
+///
+/// A program written against the reference client numbers its orders and its
+/// requests out of one signed 32-bit counter, and this protocol carries an
+/// order id far wider than it carries a request id. Nothing here can undo an
+/// id the account has already used, so it is said rather than worked around —
+/// silently, it reads as a client that cannot place its first order.
+///
+/// [`OrderState::narrow_id_watermark`] is what such a program should count
+/// from instead.
+pub fn say_if_past_a_request_id(order_id: u64) {
+    if order_id > u32::MAX as u64 {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| log::warn!(
+            "this account has used an order id above {}, so the next one is {order_id}; a \
+             program that numbers its requests from the same counter cannot carry it",
+            u32::MAX,
+        ));
+    }
+}
+
 impl OrderState {
     pub(super) fn new() -> Self {
         Self {

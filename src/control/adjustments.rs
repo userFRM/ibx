@@ -457,6 +457,39 @@ pub fn scale_bars(
 mod tests {
     use super::*;
 
+    /// A future rolling into its next month is read, and moves no scale.
+    ///
+    /// No contract this session can reach carries one, so the row is written
+    /// here as the venue writes it. What the code does with it is this
+    /// client's own and is checkable without one: the kind is named rather
+    /// than left unknown, and a price either side of the day it states is
+    /// unmoved, because a rollover is a contract ending rather than a price
+    /// being restated.
+    #[test]
+    fn a_future_rollover_is_named_and_moves_no_scale() {
+        let answered = "conc\n4815747,-1,-1\n\
+                        FR\n20240315,0,,20240315\n";
+        let (_, actions) = parse_adjustments(answered);
+        assert_eq!(actions.len(), 1, "the row was dropped rather than read");
+        assert_eq!(
+            actions[0].kind, Some(AdjustmentKind::FutureRollover),
+            "an FR row was left with no kind, so whoever scales cannot tell it \
+             from one this client has never heard of",
+        );
+        assert_eq!(
+            actions[0].kind.map(AdjustmentKind::code), Some("FR"),
+            "the kind does not write itself back",
+        );
+
+        for day in ["20240314", "20240316"] {
+            let scale = scale_before(day, &actions).expect("a rollover is not a refusal");
+            assert!(
+                (scale - 1.0).abs() < f64::EPSILON,
+                "a rollover moved the scale to {scale} on {day}; it restates no price",
+            );
+        }
+    }
+
     /// A price from before a split reads on the scale after it.
     ///
     /// The venue stated a ten-for-one split on a day, and a bar series across
