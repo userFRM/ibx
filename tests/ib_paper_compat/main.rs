@@ -860,9 +860,26 @@ fn crypto_order_phase_live() {
     let _ = connection::phase_graceful_shutdown(conns);
 }
 
+/// What the venue holds after a replace that names a new trail.
+///
+/// Run: cargo test --test ib_paper_compat replace_a_trail_amount_phase_live -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of; run it with --ignored"]
+fn replace_a_trail_amount_phase_live() {
+    start_logging();
+    let config = match get_config() { Some(c) => c, None => return };
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
+    let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    let conns = orders::phase_replace_a_trail_amount(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}
+
 /// Whether a replace leaves a trailing stop working, which decides whether the
 /// refusal in front of it keeps its reason.
 #[test]
+#[ignore = "opens a session of its own, which the account allows one of; run it with --ignored"]
 fn replace_a_trailing_stop_phase_live() {
     start_logging();
     let config = match get_config() { Some(c) => c, None => return };

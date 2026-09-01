@@ -3057,3 +3057,61 @@ fn a_replace_for_an_untracked_order_is_refused_rather_than_invented() {
         "and the caller is told which order could not be replaced: {told:?}",
     );
 }
+
+/// What a replace carrying a new trail actually puts on the wire.
+///
+/// The venue accepts such a replace — measured on a paper session — so the
+/// question is only which trail it is told. This client restates the trail
+/// from the record the order was placed under, and a caller naming a new one
+/// has to see that number reach the venue, or the two disagree with nothing
+/// saying so.
+#[test]
+fn a_replace_naming_a_new_trail_puts_that_trail_on_the_wire() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        order_id: 42,
+        instrument,
+        side: Side::Sell,
+        qty: crate::types::QTY_SCALE,
+        kind: crate::types::OrderKind::TrailingStop {
+            trail_stop_price: 0,
+            trail_amt: 5 * crate::types::PRICE_SCALE,
+        },
+        tif: b'0',
+        attrs: crate::types::OrderAttrs::default(),
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let mut buf = [0u8; 8192];
+    let _placed = peer.read(&mut buf).expect("the order reaches the peer");
+
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 42,
+        price: 9 * crate::types::PRICE_SCALE,
+        qty: crate::types::QTY_SCALE,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+    assert_eq!(
+        tag("211=").as_deref(), Some("9"),
+        "the replace carries the trail the caller named, not the one the order was \
+         placed with: {msg}",
+    );
+}

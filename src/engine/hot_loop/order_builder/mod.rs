@@ -565,11 +565,19 @@ pub(crate) fn drain_and_send_orders(
                     // A trailing stop carries its trail on tag 211, and a
                     // replace that left it out was refused naming the field —
                     // "Message must contain field # 211".
-                    push_type_and_prices(&mut attr_fields, &spec.kind);
+                    //
+                    // Restated from the record alone it carries the price the
+                    // order was placed with, so a caller naming a new one was
+                    // answered as though it took while the venue kept the old:
+                    // measured, a replace naming a trail of nine went out as
+                    // `99=5 211=5`, and the venue accepted it. What the caller
+                    // named goes on the wire instead.
+                    let restated = restate_with(&spec.kind, price, stop_price);
+                    push_type_and_prices(&mut attr_fields, &restated);
                     restated_type = push_order_attrs(
                         &mut attr_fields,
                         &spec.attrs,
-                        &spec.kind,
+                        &restated,
                         orig.side,
                         exec_inst_for(&spec.kind),
                     );
@@ -1149,6 +1157,45 @@ fn replace_needs_the_placed_record(ord_type: u8) -> bool {
                 | crate::types::ORD_SNAP_MID
                 | crate::types::ORD_SNAP_PRI
         )
+}
+
+/// The placed shape with whatever the replace named written into it.
+///
+/// These types carry their price in the shape rather than on the lean
+/// message — a trail amount, a peg offset, a snap cap — so a replace restates
+/// it from the record. A caller naming a new one means that number, and left
+/// out of the restatement the venue keeps the old one while this session
+/// records the new: measured on a paper session, a replace naming a trail of
+/// nine went out as five and was accepted.
+///
+/// A replace states nothing with a zero, which is how a caller moves the
+/// quantity alone; that leaves the placed value in force, which is right.
+fn restate_with(kind: &crate::types::OrderKind, price: i64, stop_price: i64) -> crate::types::OrderKind {
+    use crate::types::OrderKind as K;
+    let named = |placed: i64, asked: i64| if asked != 0 { asked } else { placed };
+    match kind {
+        K::TrailingStop { trail_stop_price, trail_amt } => K::TrailingStop {
+            trail_stop_price: named(*trail_stop_price, stop_price),
+            trail_amt: named(*trail_amt, price),
+        },
+        K::TrailingStopLimit { lmt_offset, trail_amt, trail_stop_price } => K::TrailingStopLimit {
+            lmt_offset: *lmt_offset,
+            trail_amt: named(*trail_amt, price),
+            trail_stop_price: named(*trail_stop_price, stop_price),
+        },
+        K::PegMkt { offset, price_cap } => K::PegMkt {
+            offset: named(*offset, price),
+            price_cap: *price_cap,
+        },
+        K::PegMid { offset, price_cap } => K::PegMid {
+            offset: named(*offset, price),
+            price_cap: *price_cap,
+        },
+        K::Rel { offset } => K::Rel { offset: named(*offset, price) },
+        // Everything else states its price on the lean message, where the
+        // caller's number already reaches the venue.
+        other => other.clone(),
+    }
 }
 
 /// The order type byte, tracked price and tracked trigger a kind is held as.

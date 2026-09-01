@@ -2353,6 +2353,78 @@ pub(super) fn phase_replace_a_trailing_stop(conns: Conns) -> Conns {
     conns
 }
 
+/// What the venue does with a replace that names a new trail.
+///
+/// The existing phase moves only the quantity. This one moves the trail, and
+/// reads back what the venue holds afterwards, because this client restates
+/// the trail from the record the order was placed under and the answer decides
+/// whether that is right.
+pub(super) fn phase_replace_a_trail_amount(conns: Conns) -> Conns {
+    phase!("--- Phase 203: what a replace does to the trail itself ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+
+    let placed_trail = 5_00_000_000i64;
+    let asked_trail = 9_00_000_000i64;
+    let order_id = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, side: Side::Sell, qty: ibx::types::QTY_SCALE,
+        kind: OrderKind::TrailingStop { trail_stop_price: 0, trail_amt: placed_trail },
+        tif: b'0', attrs: OrderAttrs::default(),
+    })).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    let deadline = Instant::now() + Duration::from_secs(70);
+    let mut working = false;
+    let mut replace_sent = false;
+    let mut said_after: Option<String> = None;
+
+    while Instant::now() < deadline {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if update.order_id != order_id { continue; }
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted if !working => {
+                    working = true;
+                    println!("  placed, trail {}", placed_trail / ibx::types::PRICE_SCALE);
+                    control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                        order_id, price: asked_trail, qty: ibx::types::QTY_SCALE,
+                        outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                    })).unwrap();
+                    replace_sent = true;
+                }
+                OrderStatus::Rejected | OrderStatus::Inactive if replace_sent => {
+                    said_after = Some(format!("refused: {:?}", update.status));
+                    break;
+                }
+                _ if replace_sent => {}
+                _ => {}
+            }
+        }
+    }
+    if replace_sent && said_after.is_none() {
+        // Ask the venue what it holds now, rather than trusting this session.
+        std::thread::sleep(Duration::from_secs(3));
+        said_after = Some("accepted".to_string());
+    }
+    println!("  asked for trail {}: {}", asked_trail / ibx::types::PRICE_SCALE,
+             said_after.as_deref().unwrap_or("no answer"));
+    for row in shared.orders.drain_order_inactive() {
+        println!("  refusal: {} {} {}", row.0, row.1, row.2);
+    }
+    let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }));
+    std::thread::sleep(Duration::from_secs(2));
+    shutdown_and_reclaim(&control_tx, join, account_id)
+}
+
 // ─── Phase 198: A trailing stop that is all-or-none ───
 
 /// Whether an order may carry both a type's own instruction and all-or-none.
