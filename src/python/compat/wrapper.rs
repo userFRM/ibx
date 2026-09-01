@@ -29,25 +29,7 @@ impl EWrapper {
     /// the names this class defines, and a name that names no callback is still
     /// refused rather than answered with a do-nothing.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
-        let mut snake = String::with_capacity(name.len() + 4);
-        for (i, c) in name.chars().enumerate() {
-            if c.is_ascii_uppercase() {
-                if i != 0 {
-                    snake.push('_');
-                }
-                snake.extend(c.to_lowercase());
-            } else {
-                snake.push(c);
-            }
-        }
-        if snake != name
-            && let Ok(f) = slf.as_any().getattr(snake.as_str())
-        {
-            return Ok(f.unbind());
-        }
-        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-            "'EWrapper' object has no attribute '{name}'"
-        )))
+        super::contract::by_reference_name(slf.as_any(), name, &[])
     }
 
     // ── Connection ──

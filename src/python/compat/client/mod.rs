@@ -485,25 +485,15 @@ impl EClient {
     /// Only reached when the attribute was not found, so it costs nothing on
     /// the name this client has always used.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
-        let mut snake = String::with_capacity(name.len() + 4);
-        for (i, c) in name.chars().enumerate() {
-            if c.is_ascii_uppercase() {
-                if i != 0 {
-                    snake.push('_');
-                }
-                snake.extend(c.to_lowercase());
-            } else {
-                snake.push(c);
-            }
-        }
-        if snake != name
-            && let Ok(f) = slf.as_any().getattr(snake.as_str())
-        {
-            return Ok(f.unbind());
-        }
-        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-            "'EClient' object has no attribute '{name}'"
-        )))
+        // The two the reference client opens with an `e`. Its `eConnect` takes
+        // a host, a port and a client id, which are this call's first three
+        // arguments in that order, so a program written against it reaches the
+        // same call the same way.
+        super::contract::by_reference_name(
+            slf.as_any(),
+            name,
+            &[("eConnect", "connect"), ("eDisconnect", "disconnect")],
+        )
     }
 
     /// Disconnect from IB.
