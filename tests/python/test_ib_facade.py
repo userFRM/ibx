@@ -254,7 +254,7 @@ def test_a_regulatory_snapshot_is_not_registered_as_a_stream():
     ib = connected_ib()
     contract = spy()
     ib.reqMktData(contract, regulatorySnapshot=True)
-    assert ("quote", id(contract)) not in ib._by_contract
+    assert ib._recall("quote", contract) is None
 
 
 def test_a_snapshot_does_not_take_a_running_stream_s_place():
@@ -265,9 +265,9 @@ def test_a_snapshot_does_not_take_a_running_stream_s_place():
     ib = connected_ib()
     contract = spy()
     ib.reqMktData(contract)
-    streaming = ib._by_contract[("quote", id(contract))]
+    streaming = ib._recall("quote", contract)
     ib.reqTickers(contract, timeout=0)
-    assert ib._by_contract[("quote", id(contract))] == streaming
+    assert ib._recall("quote", contract) == streaming
     assert streaming in ib._subscribed
 
 
@@ -279,16 +279,16 @@ def test_a_snapshot_asked_for_as_market_data_answers_no_later_ask():
     ib = connected_ib()
     contract = spy()
     ib.reqMktData(contract, snapshot=True)
-    assert ("quote", id(contract)) not in ib._by_contract, "a snapshot took the slot"
+    assert ib._recall("quote", contract) is None, "a snapshot took the slot"
 
     stream = ib.reqMktData(contract)
-    assert ib._by_contract[("quote", id(contract))] in ib._subscribed
+    assert ib._recall("quote", contract) in ib._subscribed
     assert stream is not None, "the stream was answered with the finished snapshot"
 
     # A snapshot on a contract that never quotes is still withdrawable by
     # naming the contract, which is the only handle a caller who did not keep
     # the id has.
-    snap = ib._by_contract[("snapshot", id(contract))]
+    snap = ib._recall("snapshot", contract)
     assert snap in ib._subscribed
     ib.cancelMktData(contract)     # the stream, which is named first
     ib.cancelMktData(contract)     # then the snapshot behind it
@@ -303,13 +303,13 @@ def test_a_second_quote_on_one_contract_is_the_first_one_back():
     ib = connected_ib()
     contract = spy()
     first = ib.reqMktData(contract)
-    req_id = ib._by_contract[("quote", id(contract))]
+    req_id = ib._recall("quote", contract)
     before = len(ib._subscribed)
 
     second = ib.reqMktData(contract)
 
     assert second is first, "the same quote back, not a second subscription"
-    assert ib._by_contract[("quote", id(contract))] == req_id, "and the same id"
+    assert ib._recall("quote", contract) == req_id, "and the same id"
     assert len(ib._subscribed) == before, "nothing further was opened"
 
 

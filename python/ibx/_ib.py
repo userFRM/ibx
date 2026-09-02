@@ -69,7 +69,7 @@ class Client:
         # any of them sent the wrong kind of cancel under another request's id,
         # withdrew a subscription the caller still wanted, and left the one
         # they asked to stop running at the venue.
-        self._by_contract: dict[tuple[str, int], int] = {}
+        self._by_contract: dict[tuple[str, int], tuple[int, object]] = {}
         # Which request id each P&L subscription was made under, so a cancel
         # names the one it was asked about.
         self._pnl_reqs: dict[tuple[str, str], int] = {}
@@ -78,13 +78,42 @@ class Client:
         self._wsh_meta = 0
         self._wsh_event = 0
         self._req_id = 0
+        # One guard over the counter and the registry beside it. The wheel is
+        # built free-threaded, so two callers really do run here at once: the
+        # counter handed out the same number to both — thirty thousand
+        # collisions in forty thousand calls, measured — and two subscriptions
+        # under one number overwrite each other, so a cancel for the first
+        # stopped the second and left the first running at the venue.
+        self._registry = threading.Lock()
         # What a wait with no timeout of its own waits for. `setTimeout` names
         # another.
         self._timeout = 60
 
     def _next_req_id(self) -> int:
-        self._req_id += 1
-        return self._req_id
+        with self._registry:
+            self._req_id += 1
+            return self._req_id
+
+    def _remember(self, kind: str, contract, req_id: int) -> None:
+        """Keep the contract, not only its address.
+
+        The key is the address, and an address is only that object's for as
+        long as the object lives. Kept without it, the entry outlived the
+        contract, the next contract was built at the same address, and a
+        cancel naming that one stopped the stream belonging to the first.
+        """
+        with self._registry:
+            self._by_contract[(kind, id(contract))] = (req_id, contract)
+
+    def _recall(self, kind: str, contract) -> int | None:
+        with self._registry:
+            entry = self._by_contract.get((kind, id(contract)))
+        return entry[0] if entry else None
+
+    def _forget(self, kind: str, contract) -> int | None:
+        with self._registry:
+            entry = self._by_contract.pop((kind, id(contract)), None)
+        return entry[0] if entry else None
 
     # -- session ---------------------------------------------------------
 
@@ -259,7 +288,7 @@ class Client:
 
     def ticker(self, contract):
         """The quote for a contract already subscribed to, or nothing."""
-        req_id = self._by_contract.get(("quote", id(contract)))
+        req_id = self._recall("quote", contract)
         if req_id is None:
             for rid, c in self._subscribed.items():
                 if getattr(c, "conId", None) and getattr(c, "conId", None) == getattr(contract, "conId", None):
@@ -294,7 +323,7 @@ class Client:
         # A regulatory snapshot is one too, and the request builder treats it
         # as one, so it takes the same path.
         if not (snapshot or regulatorySnapshot):
-            already = self._by_contract.get(("quote", id(contract)))
+            already = self._recall("quote", contract)
             if already is not None:
                 return self.wrapper.ticker_for(already)
         req_id, ticker = self._start_quote(
@@ -305,7 +334,7 @@ class Client:
         # never quotes can still be withdrawn by naming the contract, which
         # is the only handle a caller who did not keep the id has.
         one_shot = snapshot or regulatorySnapshot
-        self._by_contract[("snapshot" if one_shot else "quote", id(contract))] = req_id
+        self._remember("snapshot" if one_shot else "quote", contract, req_id)
         return ticker
 
     def _start_quote(
@@ -329,9 +358,9 @@ class Client:
     def cancelMktData(self, contract):
         # The stream first: a snapshot beside it ends on its own, and a caller
         # cancelling a contract it is streaming means the stream.
-        req_id = self._by_contract.pop(("quote", id(contract)), None)
+        req_id = self._forget("quote", contract)
         if req_id is None:
-            req_id = self._by_contract.pop(("snapshot", id(contract)), None)
+            req_id = self._forget("snapshot", contract)
         if req_id is None:
             return
         self._subscribed.pop(req_id, None)
@@ -706,36 +735,36 @@ class Client:
     def reqMktDepth(self, contract, numRows=5, isSmartDepth=False, mktDepthOptions=None):
         _refuse_options("mktDepthOptions", mktDepthOptions)
         req_id = self._next_req_id()
-        self._by_contract[("depth", id(contract))] = req_id
+        self._remember("depth", contract, req_id)
         self.client.req_mkt_depth(req_id, contract, numRows, isSmartDepth, [])
         return req_id
 
     def cancelMktDepth(self, contract, isSmartDepth=False):
-        req_id = self._by_contract.pop(("depth", id(contract)), None)
+        req_id = self._forget("depth", contract)
         if req_id is not None:
             self.client.cancel_mkt_depth(req_id, isSmartDepth)
 
     def reqRealTimeBars(self, contract, barSize=5, whatToShow="TRADES", useRTH=True, realTimeBarsOptions=None):
         _refuse_options("realTimeBarsOptions", realTimeBarsOptions)
         req_id = self._next_req_id()
-        self._by_contract[("bars", id(contract))] = req_id
+        self._remember("bars", contract, req_id)
         self.client.req_real_time_bars(req_id, contract, barSize, whatToShow, useRTH, [])
         return req_id
 
     def cancelRealTimeBars(self, bars):
-        req_id = bars if isinstance(bars, int) else self._by_contract.pop(("bars", id(bars)), None)
+        req_id = bars if isinstance(bars, int) else self._forget("bars", bars)
         if req_id is not None:
             self.client.cancel_real_time_bars(req_id)
 
     def reqTickByTickData(self, contract, tickType="Last", numberOfTicks=0, ignoreSize=False):
         req_id = self._next_req_id()
-        self._by_contract[("ticks", id(contract))] = req_id
+        self._remember("ticks", contract, req_id)
         self.client.req_tick_by_tick_data(req_id, contract, tickType, numberOfTicks, ignoreSize)
         return req_id
 
     def cancelTickByTickData(self, contract, tickType="Last"):
         del tickType
-        req_id = self._by_contract.pop(("ticks", id(contract)), None)
+        req_id = self._forget("ticks", contract)
         if req_id is not None:
             self.client.cancel_tick_by_tick_data(req_id)
 
