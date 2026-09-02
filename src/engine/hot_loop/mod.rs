@@ -3554,11 +3554,30 @@ mod tests {
     use crate::types::*;
     use std::time::Duration;
 
-    /// A contract specified the ordinary ibapi way — symbol, secType,
-    /// exchange, no conId — arrives here with conId 0. Keyed on that alone,
-    /// every such contract resolves to whichever one registered first: quotes
-    /// land in one slot and an order built from it goes out under the first
-    /// contract's symbol.
+    /// A registration naming no symbol keeps the one the slot has.
+    ///
+    /// Orders, positions and fills all register by contract id with no symbol.
+    /// Written unconditionally, that blanked the name of a slot already
+    /// registered under one, and the order built from it went out with an
+    /// empty symbol tag.
+    #[test]
+    fn a_registration_naming_no_symbol_keeps_the_one_the_slot_has() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let id = hl
+            .register_or_reject(756733, "SPY".into(), "STK", "SMART", "", &None)
+            .expect("registered under its name");
+        assert_eq!(
+            hl.register_or_reject(756733, String::new(), "", "", "", &None),
+            Some(id),
+            "the same contract is the same slot",
+        );
+        assert_eq!(
+            hl.context.market.symbol(id),
+            "SPY",
+            "a registration by id alone blanked the name tag 55 reads",
+        );
+    }
+
     /// A lookup naming a contract another slot holds follows that slot.
     ///
     /// One caller names a contract by its id, another by its symbol, and the
@@ -3601,30 +3620,6 @@ mod tests {
             shared.market.drain_subscription_moves(),
             vec![(by_name, by_id)],
             "the caller given the second slot is told to read the first",
-        );
-    }
-
-    /// A registration naming no symbol keeps the one the slot has.
-    ///
-    /// Orders, positions and fills all register by contract id with no symbol.
-    /// Written unconditionally, that blanked the name of a slot already
-    /// registered under one, and the order built from it went out with an
-    /// empty symbol tag.
-    #[test]
-    fn a_registration_naming_no_symbol_keeps_the_one_the_slot_has() {
-        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
-        let id = hl
-            .register_or_reject(756733, "SPY".into(), "STK", "SMART", "", &None)
-            .expect("registered under its name");
-        assert_eq!(
-            hl.register_or_reject(756733, String::new(), "", "", "", &None),
-            Some(id),
-            "the same contract is the same slot",
-        );
-        assert_eq!(
-            hl.context.market.symbol(id),
-            "SPY",
-            "a registration by id alone blanked the name tag 55 reads",
         );
     }
 
@@ -3693,6 +3688,11 @@ mod tests {
         );
     }
 
+    /// A contract specified the ordinary ibapi way — symbol, secType,
+    /// exchange, no conId — arrives here with conId 0. Keyed on that alone,
+    /// every such contract resolves to whichever one registered first: quotes
+    /// land in one slot and an order built from it goes out under the first
+    /// contract's symbol.
     /// Two conId-less options on one underlying differ only by strike and right,
     /// which the descriptor did not carry: both landed in one slot, so the put's
     /// quotes and its minTick overwrote the call's — and minTick is what snaps an

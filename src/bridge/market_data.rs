@@ -220,6 +220,10 @@ impl MarketDataState {
     }
 
     /// Take every subscription failures waiting, leaving none.
+    pub fn drain_subscription_failures(&self) -> Vec<(crate::types::InstrumentId, String)> {
+        self.subscription_failures.lock().unwrap().drain(..).collect()
+    }
+
     /// Where a caller's slot has to follow, because the contract it named is
     /// already held by another. Read the way a refusal is.
     pub fn drain_subscription_moves(
@@ -235,10 +239,6 @@ impl MarketDataState {
         into: crate::types::InstrumentId,
     ) {
         self.subscription_moves.lock().unwrap().push((from, into));
-    }
-
-    pub fn drain_subscription_failures(&self) -> Vec<(crate::types::InstrumentId, String)> {
-        self.subscription_failures.lock().unwrap().drain(..).collect()
     }
 
     // ── Hot-loop-side writers ──

@@ -1080,23 +1080,6 @@ impl ClientCore {
     /// and leave the loser cancelling the winner's feed.
     ///
     /// Answers whether this request ended up a follower.
-    /// Point everything watching one slot at another.
-    ///
-    /// The engine says so when a lookup names a contract another slot already
-    /// holds: only one subscription per contract exists on the wire, so the
-    /// callers given the second slot have to read the first, or their quotes
-    /// arrive on a slot nothing is watching.
-    pub(crate) fn move_watchers(&self, from: InstrumentId, into: InstrumentId) {
-        let held = self.instrument_to_req.lock().unwrap().remove(&from);
-        let following = self.instrument_followers.lock().unwrap().remove(&from).unwrap_or_default();
-        for req_id in held.into_iter().chain(following) {
-            if !self.take_or_follow(into, req_id) {
-                self.req_to_instrument.lock().unwrap().insert(req_id, into);
-            }
-        }
-        self.last_quotes.lock().unwrap().remove(&from);
-    }
-
     pub(crate) fn take_or_follow(&self, instrument: InstrumentId, req_id: i64) -> bool {
         let mut held = self.instrument_to_req.lock().unwrap();
         match held.get(&instrument) {
@@ -1113,6 +1096,23 @@ impl ClientCore {
                 false
             }
         }
+    }
+
+    /// Point everything watching one slot at another.
+    ///
+    /// The engine says so when a lookup names a contract another slot already
+    /// holds: only one subscription per contract exists on the wire, so the
+    /// callers given the second slot have to read the first, or their quotes
+    /// arrive on a slot nothing is watching.
+    pub(crate) fn move_watchers(&self, from: InstrumentId, into: InstrumentId) {
+        let held = self.instrument_to_req.lock().unwrap().remove(&from);
+        let following = self.instrument_followers.lock().unwrap().remove(&from).unwrap_or_default();
+        for req_id in held.into_iter().chain(following) {
+            if !self.take_or_follow(into, req_id) {
+                self.req_to_instrument.lock().unwrap().insert(req_id, into);
+            }
+        }
+        self.last_quotes.lock().unwrap().remove(&from);
     }
 
     /// Every other request watching a contract, so one quote reaches them all.
