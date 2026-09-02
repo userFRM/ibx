@@ -350,6 +350,35 @@ mod resub_tests {
     /// A disconnect clears `instrument_md_reqs` and keeps `md_resub_info`.
     /// Selecting the reconnect's work from the cleared list re-subscribed
     /// nothing, so the farm came back healthy and delivered no ticks for the
+    /// Everything the connection's own numbers key is dropped with it.
+    ///
+    /// Seven maps were cleared and three keyed the same way were not. What
+    /// removes an entry from those three looks it up by an id the reconnect
+    /// has already replaced, so an entry left behind is never named again —
+    /// and both of the lists are scanned in full on a path that runs per
+    /// acknowledgement and per withdrawal.
+    #[test]
+    fn nothing_keyed_by_the_old_connection_survives_a_disconnect() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let _instrument = context.market.register(756733);
+
+        farm.send_depth_subscribe(
+            5, 756733, "SMART", "ISLAND", "STK", 10, true, &mut None, &mut hb, &shared,
+        );
+        farm.handle_disconnect(&mut context, &None);
+
+        assert!(
+            farm.depth_fanout_exchange.is_empty(),
+            "left behind, no later withdrawal names it: {:?}",
+            farm.depth_fanout_exchange,
+        );
+        assert!(farm.greeks_subs.is_empty(), "same, keyed by a replaced id");
+        assert!(farm.quotes_for_no_one.is_empty(), "server tags start again");
+    }
+
     /// rest of the session.
     ///
     /// Drives the real `handle_disconnect` rather than simulating what it does

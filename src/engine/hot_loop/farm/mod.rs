@@ -2168,6 +2168,17 @@ impl FarmState {
         // tick the last one asked for.
         self.generic_tick_reqs.clear();
         self.generic_tick_tags.clear();
+        // Keyed the same way, and left behind they are never reachable again:
+        // what removes an entry looks it up by an id the reconnect has already
+        // replaced, so nothing afterwards names the old one. Both are scanned
+        // in full on a path that runs per acknowledgement and per withdrawal,
+        // so a session that reconnects through a night grows its own latency.
+        self.depth_fanout_exchange.clear();
+        self.greeks_subs.clear();
+        // Server tags are the venue's and start again with the connection, so
+        // one already warned about would otherwise silence the warning for a
+        // different tick that happened to be given the same number.
+        self.quotes_for_no_one.clear();
         context.market.clear_server_tags();
         context.market.zero_all_quotes();
         // Not Event::Disconnected — that is the session going, and a rebuild
