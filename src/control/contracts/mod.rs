@@ -100,13 +100,13 @@ pub const TAG_SETTLEMENT_METHOD: u32 = 6660;
 pub const TAG_IB_STOCK_TYPE: u32 = 8077;
 
 // Market rule tags.
-/// value "1" starts a new rule block
+/// FIX tag 6019: value "1" opens a new rule block.
 pub const TAG_MARKET_RULE_START: u32 = 6019;
-/// rule ID integer
+/// FIX tag 6031: the rule's own number.
 pub const TAG_MARKET_RULE_ID: u32 = 6031;
-/// price increment threshold
+/// FIX tag 6023: the price a band starts at.
 pub const TAG_LOW_EDGE: u32 = 6023;
-/// tick size at that price level
+/// FIX tag 6027: the increment inside that band.
 pub const TAG_INCREMENT: u32 = 6027;
 /// Opens the table of price increments in a rule. What follows, until the size
 /// table opens, is a low edge and an increment per price band.
