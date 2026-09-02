@@ -42,7 +42,7 @@ fn full_lifecycle() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].price, 150 * PRICE_SCALE);
+    assert_eq!(fills[0].0.price, 150 * PRICE_SCALE);
 }
 
 #[test]

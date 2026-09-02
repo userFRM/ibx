@@ -109,6 +109,39 @@ pub struct Execution {
     pub pending_price_revision: bool,
 }
 
+impl Execution {
+    /// The same execution in the shape a caller reads.
+    ///
+    /// Every field, so the record stored for a replay and the object announced
+    /// on the callback cannot differ: built separately, one carried the
+    /// caller's own label for the order and the other did not, and a replay
+    /// answered with a blank where the live callback had stated it.
+    pub(crate) fn from_api(e: &crate::types::model::Execution) -> Self {
+        Self {
+            unnamed_fields: e.unnamed_fields.clone(),
+            exec_id: e.exec_id.clone(),
+            time: e.time.clone(),
+            acct_number: e.acct_number.clone(),
+            exchange: e.exchange.clone(),
+            side: e.side.clone(),
+            shares: e.shares,
+            price: e.price,
+            perm_id: e.perm_id,
+            client_id: e.client_id,
+            order_id: e.order_id,
+            liquidation: e.liquidation,
+            cum_qty: e.cum_qty,
+            avg_price: e.avg_price,
+            order_ref: e.order_ref.clone(),
+            ev_rule: e.ev_rule.clone(),
+            ev_multiplier: e.ev_multiplier,
+            model_code: e.model_code.clone(),
+            last_liquidity: e.last_liquidity,
+            pending_price_revision: e.pending_price_revision,
+        }
+    }
+}
+
 #[pymethods]
 impl Execution {
     /// Answer to the name the reference client gives a field as well as the

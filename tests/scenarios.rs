@@ -490,8 +490,8 @@ fn account_round_trip_position() {
     // Two fills in shared state
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 2);
-    assert_eq!(fills[0].side, Side::Buy);
-    assert_eq!(fills[1].side, Side::Sell);
+    assert_eq!(fills[0].0.side, Side::Buy);
+    assert_eq!(fills[1].0.side, Side::Sell);
 }
 
 /// Multiple instruments: fills on A and B → positions aggregate correctly.
@@ -765,8 +765,8 @@ fn engine_full_trade_lifecycle() {
     // Verify all fills flowed to SharedState
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 2);
-    assert_eq!(fills[0].price, 450 * PRICE_SCALE);
-    assert_eq!(fills[1].price, 455 * PRICE_SCALE);
+    assert_eq!(fills[0].0.price, 450 * PRICE_SCALE);
+    assert_eq!(fills[1].0.price, 455 * PRICE_SCALE);
 }
 
 /// Engine + EClient end-to-end: HotLoop pushes → EClient dispatches to wrapper.

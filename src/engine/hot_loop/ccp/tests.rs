@@ -333,7 +333,7 @@ fn leaves_qty_is_still_reported_as_the_remainder() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].remaining, 70 * QTY_SCALE, "the fill reports what is still working");
+    assert_eq!(fills[0].0.remaining, 70 * QTY_SCALE, "the fill reports what is still working");
 }
 
 /// `filled_quantity` was taken from tag 151 (LeavesQty), the *unfilled*
@@ -1666,7 +1666,7 @@ fn a_busted_execution_reconciles_rather_than_adds() {
     assert_eq!(context.position(0), 0.0, "and neither does the position");
     let fills = shared.orders.drain_fills();
     assert!(
-        fills.iter().any(|f| f.qty == -50 * QTY_SCALE),
+        fills.iter().any(|f| f.0.qty == -50 * QTY_SCALE),
         "the caller is told what was taken back: {fills:?}",
     );
 }
@@ -1683,7 +1683,7 @@ fn a_corrected_execution_reconciles_to_the_cumulative_figure() {
         (17, "exec-1"), (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
     ]);
     ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
-    let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
+    let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.0.qty).sum();
     assert_eq!(booked, 50 * QTY_SCALE, "the original execution books what it states");
 
     let corrected = exec_report_frame(&[
@@ -1691,7 +1691,7 @@ fn a_corrected_execution_reconciles_to_the_cumulative_figure() {
         (17, "exec-2"), (20, "2"), (32, "60"), (31, "412.25"), (14, "60"), (38, "100"),
     ]);
     ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
-    let after: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
+    let after: i64 = shared.orders.drain_fills().iter().map(|f| f.0.qty).sum();
     assert_eq!(after, 10 * QTY_SCALE, "the correction books the difference, not the whole trade again");
 }
 
@@ -1722,7 +1722,7 @@ fn an_unknown_status_still_books_its_fill() {
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1, "the fill survives a status this does not know");
-    assert_eq!(fills[0].qty, 50 * QTY_SCALE);
+    assert_eq!(fills[0].0.qty, 50 * QTY_SCALE);
 }
 
 /// Absent is not zero. Without 151 the caller was told nothing was left on an
@@ -2742,11 +2742,11 @@ fn a_fill_for_an_untracked_order_is_still_booked() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1, "the fill must be reported");
-    assert_eq!(fills[0].qty, 5 * QTY_SCALE);
-    assert_eq!(fills[0].order_id, 99);
-    assert_eq!(fills[0].side, Side::Buy);
+    assert_eq!(fills[0].0.qty, 5 * QTY_SCALE);
+    assert_eq!(fills[0].0.order_id, 99);
+    assert_eq!(fills[0].0.side, Side::Buy);
     assert_eq!(
-        context.position(fills[0].instrument), 5.0,
+        context.position(fills[0].0.instrument), 5.0,
         "the position must move by the filled quantity",
     );
 }
@@ -2762,8 +2762,8 @@ fn an_untracked_sell_moves_the_position_down() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].side, Side::Sell);
-    assert_eq!(context.position(fills[0].instrument), -5.0);
+    assert_eq!(fills[0].0.side, Side::Sell);
+    assert_eq!(context.position(fills[0].0.instrument), -5.0);
 }
 
 /// Without a contract or a side there is nothing to book against, and
@@ -2862,9 +2862,9 @@ fn a_fractional_print_books_the_fraction_it_states() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1, "the fill is reported");
-    assert_eq!(fills[0].qty, QTY_SCALE / 2, "half a share books as half a share");
-    assert_eq!(fills[0].cum_qty, QTY_SCALE / 2, "and the order total states the same");
-    assert_eq!(fills[0].remaining, QTY_SCALE / 4, "as does what is still working");
+    assert_eq!(fills[0].0.qty, QTY_SCALE / 2, "half a share books as half a share");
+    assert_eq!(fills[0].0.cum_qty, QTY_SCALE / 2, "and the order total states the same");
+    assert_eq!(fills[0].0.remaining, QTY_SCALE / 4, "as does what is still working");
     assert_eq!(
         context.position(0) - before, 0.5,
         "and the position moves by the fraction that filled",
@@ -2890,11 +2890,11 @@ fn the_fill_carries_the_orders_totals_not_the_prints() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].qty, 5 * QTY_SCALE, "qty stays the print");
-    assert_eq!(fills[0].price, 101 * PRICE_SCALE, "price stays the print");
-    assert_eq!(fills[0].cum_qty, 12 * QTY_SCALE, "cum_qty is the order total from tag 14");
+    assert_eq!(fills[0].0.qty, 5 * QTY_SCALE, "qty stays the print");
+    assert_eq!(fills[0].0.price, 101 * PRICE_SCALE, "price stays the print");
+    assert_eq!(fills[0].0.cum_qty, 12 * QTY_SCALE, "cum_qty is the order total from tag 14");
     assert_eq!(
-        fills[0].avg_price, 100 * PRICE_SCALE + PRICE_SCALE / 2,
+        fills[0].0.avg_price, 100 * PRICE_SCALE + PRICE_SCALE / 2,
         "avg_price is the volume-weighted average from tag 6",
     );
 }
@@ -2915,7 +2915,7 @@ fn a_missing_cumulative_quantity_does_not_walk_backwards() {
         &mut context, &shared, &None, "",
     );
     let first = shared.orders.drain_fills();
-    assert_eq!(first[0].cum_qty, 7 * QTY_SCALE);
+    assert_eq!(first[0].0.cum_qty, 7 * QTY_SCALE);
 
     // One more, with the cumulative fields absent.
     ccp.handle_exec_report(
@@ -2926,7 +2926,7 @@ fn a_missing_cumulative_quantity_does_not_walk_backwards() {
     );
     let second = shared.orders.drain_fills();
     assert_eq!(
-        second[0].cum_qty, 8 * QTY_SCALE,
+        second[0].0.cum_qty, 8 * QTY_SCALE,
         "the order's own total carries it, rather than dropping back to the print",
     );
 }
@@ -2941,7 +2941,7 @@ fn a_negative_average_price_is_not_treated_as_absent() {
     ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
 
     let fills = shared.orders.drain_fills();
-    assert_eq!(fills[0].avg_price, -(PRICE_SCALE + PRICE_SCALE / 2), "-1.50 is kept");
+    assert_eq!(fills[0].0.avg_price, -(PRICE_SCALE + PRICE_SCALE / 2), "-1.50 is kept");
 }
 
 /// With no order to accumulate against and no tags, the print is all there
@@ -2955,8 +2955,8 @@ fn the_fill_falls_back_to_the_print_when_the_totals_are_absent() {
 
     let fills = shared.orders.drain_fills();
     assert_eq!(fills.len(), 1);
-    assert_eq!(fills[0].cum_qty, 5 * QTY_SCALE);
-    assert_eq!(fills[0].avg_price, 101 * PRICE_SCALE);
+    assert_eq!(fills[0].0.cum_qty, 5 * QTY_SCALE);
+    assert_eq!(fills[0].0.avg_price, 101 * PRICE_SCALE);
 }
 
 /// The side mapping is the whole sign of the position delta, so every arm
@@ -2975,9 +2975,9 @@ fn every_side_maps_to_the_right_position_delta() {
         );
         let fills = shared.orders.drain_fills();
         assert_eq!(fills.len(), 1, "Side={tag54} books");
-        assert_eq!(fills[0].side, expected_side, "Side={tag54}");
+        assert_eq!(fills[0].0.side, expected_side, "Side={tag54}");
         assert_eq!(
-            context.position(fills[0].instrument), expected_delta as f64,
+            context.position(fills[0].0.instrument), expected_delta as f64,
             "Side={tag54} moves the position {expected_delta}",
         );
     }
@@ -4212,7 +4212,7 @@ fn a_bust_on_an_untracked_order_books_nothing_rather_than_a_purchase() {
 
     // Summed rather than checked per fill, so no fills at all is an answer
     // and not a test that skipped its own assertion.
-    let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.qty).sum();
+    let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.0.qty).sum();
     assert!(
         booked <= 0,
         "a busted trade booked {booked} as bought on an order nobody here tracks",

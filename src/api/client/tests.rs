@@ -2625,6 +2625,57 @@ fn a_restated_execution_answers_req_executions_and_nobody_else() {
     assert_eq!(answered, ["exec_details:7:BOT:10"], "the caller that asked is answered");
 }
 
+/// Two prints of one order in one pass are two executions.
+///
+/// A fill carries the print; everything else about it — the execution's id, the
+/// time, the running quantity, the average — is on the report it was booked
+/// off. Looked up against the order afterwards, both prints read the record the
+/// later one left, so the earlier was reported under the later's id and the
+/// charge that named that id was attached to both.
+#[test]
+fn two_prints_of_one_order_in_one_pass_are_two_executions() {
+    #[derive(Default)]
+    struct Seen { rows: Vec<(String, f64)> }
+    impl Wrapper for Seen {
+        fn exec_details(&mut self, _r: i64, _c: &Contract, e: &crate::types::model::Execution) {
+            self.rows.push((e.exec_id.clone(), e.cum_qty));
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let report = |exec_id: &str, cum: f64| crate::bridge::RichOrderInfo {
+        contract: ApiContract { symbol: "SPY".into(), ..Default::default() },
+        order: Order { order_id: 77, ..Default::default() },
+        order_state: Default::default(),
+        last_exec: crate::types::model::Execution {
+            exec_id: exec_id.into(), cum_qty: cum, ..Default::default()
+        },
+    };
+    let print = |qty: i64, remaining: i64| Fill {
+        instrument: 0, order_id: 77, side: Side::Buy,
+        price: 150 * PRICE_SCALE, qty, remaining, commission: 0, timestamp_ns: 0,
+        cum_qty: qty, avg_price: 150 * PRICE_SCALE,
+    };
+    shared.orders.push_fill_reported(
+        print(5 * crate::types::QTY_SCALE, 5 * crate::types::QTY_SCALE),
+        report("0001f4e8.1", 5.0),
+    );
+    shared.orders.push_fill_reported(
+        print(5 * crate::types::QTY_SCALE, 0),
+        report("0001f4e8.2", 10.0),
+    );
+    // The order's own record holds the later report, as it does in a session.
+    shared.orders.push_order_info(77, report("0001f4e8.2", 10.0));
+
+    let mut w = Seen::default();
+    client.process_msgs(&mut w);
+    assert_eq!(
+        w.rows,
+        [("0001f4e8.1".to_string(), 5.0), ("0001f4e8.2".to_string(), 10.0)],
+        "each print is reported under the execution it was booked off",
+    );
+}
+
 #[test]
 fn req_global_cancel_sends_cancel_all_for_each_instrument() {
     let (client, rx, shared) = test_client();

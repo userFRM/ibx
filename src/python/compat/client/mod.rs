@@ -1663,6 +1663,117 @@ w = W()",
         });
     }
 
+    /// What a replay states about a fill is what the callback stated.
+    ///
+    /// The record kept for `req_executions` was built from nothing rather than
+    /// from the report, so it dropped everything only the report carries — the
+    /// caller's own label for the order, whether the venue closed the position,
+    /// which side of the book the fill took. The live callback stated all
+    /// three and the replay of the same fill stated none of them, which is the
+    /// twin of this surface's own callback, not of the other surface.
+    #[test]
+    fn a_replayed_fill_states_what_its_callback_stated() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            shared.orders.push_order_info(77, crate::bridge::RichOrderInfo {
+                contract: ApiContract { symbol: "SPY".into(), ..Default::default() },
+                order: Default::default(),
+                order_state: Default::default(),
+                last_exec: crate::types::model::Execution {
+                    exec_id: "0001f4e8.7".into(),
+                    order_ref: "my-strategy".into(),
+                    liquidation: 1,
+                    last_liquidity: 2,
+                    ..Default::default()
+                },
+            });
+            shared.orders.push_fill(crate::types::Fill {
+                instrument: 0, order_id: 77, side: crate::types::Side::Buy,
+                price: 150 * crate::types::PRICE_SCALE, qty: 10 * crate::types::QTY_SCALE,
+                remaining: 0, commission: 0, timestamp_ns: 0,
+                cum_qty: 10 * crate::types::QTY_SCALE,
+                avg_price: 150 * crate::types::PRICE_SCALE,
+            });
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let told = || -> Vec<(String, i32, i32)> {
+                py.eval(
+                    c"[(c[3].orderRef, c[3].liquidation, c[3].lastLiquidity) \
+                       for c in w.calls if c[0] in ('exec_details', 'execDetails')]",
+                    Some(&g), None,
+                ).unwrap().extract().unwrap()
+            };
+            assert_eq!(
+                told(), [("my-strategy".to_string(), 1, 2)],
+                "the callback states what the report stated",
+            );
+
+            client.call_method1(py, "req_executions", (7i64,)).unwrap();
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
+            assert_eq!(
+                told(), [
+                    ("my-strategy".to_string(), 1, 2),
+                    ("my-strategy".to_string(), 1, 2),
+                ],
+                "and the replay of that same fill states it too",
+            );
+        });
+    }
+
+    /// Two prints of one order in one pass are two executions, here too.
+    ///
+    /// Everything about a fill beyond the print is on the report it was booked
+    /// off. Looked up against the order afterwards, both prints read the record
+    /// the later one left.
+    #[test]
+    fn two_prints_of_one_order_in_one_pass_are_two_executions() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            let report = |exec_id: &str, cum: f64| crate::bridge::RichOrderInfo {
+                contract: ApiContract { symbol: "SPY".into(), ..Default::default() },
+                order: Default::default(),
+                order_state: Default::default(),
+                last_exec: crate::types::model::Execution {
+                    exec_id: exec_id.into(), cum_qty: cum, ..Default::default()
+                },
+            };
+            let print = |qty: i64, remaining: i64| crate::types::Fill {
+                instrument: 0, order_id: 77, side: crate::types::Side::Buy,
+                price: 150 * crate::types::PRICE_SCALE, qty, remaining,
+                commission: 0, timestamp_ns: 0, cum_qty: qty,
+                avg_price: 150 * crate::types::PRICE_SCALE,
+            };
+            shared.orders.push_fill_reported(
+                print(5 * crate::types::QTY_SCALE, 5 * crate::types::QTY_SCALE),
+                report("0001f4e8.1", 5.0),
+            );
+            shared.orders.push_fill_reported(
+                print(5 * crate::types::QTY_SCALE, 0),
+                report("0001f4e8.2", 10.0),
+            );
+            // The order's own record holds the later report, as in a session.
+            shared.orders.push_order_info(77, report("0001f4e8.2", 10.0));
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let rows: Vec<(String, f64)> = py.eval(
+                c"[(c[3].execId, c[3].cumQty) for c in w.calls \
+                   if c[0] in ('exec_details', 'execDetails')]",
+                Some(&g), None,
+            ).unwrap().extract().unwrap();
+            assert_eq!(
+                rows,
+                [("0001f4e8.1".to_string(), 5.0), ("0001f4e8.2".to_string(), 10.0)],
+                "each print is reported under the execution it was booked off",
+            );
+        });
+    }
+
     /// One pass can carry two reports for the same order: an acknowledgement
     /// and then a fill. Keeping one report per order dropped the earlier one,
     /// and the caller was never told the order had been acknowledged.

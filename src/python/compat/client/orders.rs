@@ -534,28 +534,7 @@ impl EClient {
         for se in snapshot {
             let c_py = Py::new(py, Contract::from_api(&se.contract))?.into_any();
 
-            let exec_obj = Execution {
-                unnamed_fields: se.execution.unnamed_fields.clone(),
-                exec_id: se.execution.exec_id.clone(),
-                time: se.execution.time.clone(),
-                acct_number: se.execution.acct_number.clone(),
-                exchange: se.execution.exchange.clone(),
-                side: se.execution.side.clone(),
-                shares: se.execution.shares,
-                price: se.execution.price,
-                perm_id: se.execution.perm_id,
-                client_id: se.execution.client_id,
-                order_id: se.execution.order_id,
-                liquidation: se.execution.liquidation,
-                cum_qty: se.execution.cum_qty,
-                avg_price: se.execution.avg_price,
-                order_ref: se.execution.order_ref.clone(),
-                ev_rule: se.execution.ev_rule.clone(),
-                ev_multiplier: se.execution.ev_multiplier,
-                model_code: se.execution.model_code.clone(),
-                last_liquidity: se.execution.last_liquidity,
-                pending_price_revision: se.execution.pending_price_revision,
-            };
+            let exec_obj = Execution::from_api(&se.execution);
             let exec_py = Py::new(py, exec_obj)?.into_any();
 
             self.deliver(py, "exec_details", (req_id, &c_py, &exec_py))?;

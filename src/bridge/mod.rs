@@ -483,6 +483,7 @@ mod tests {
         });
         let fills = ss.orders.drain_fills();
         assert_eq!(fills.len(), 2);
+        assert!(fills.iter().all(|(_, report)| report.is_none()), "none was pushed with one");
         // Second drain should be empty
         assert!(ss.orders.drain_fills().is_empty());
     }

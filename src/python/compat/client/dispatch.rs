@@ -236,7 +236,7 @@ impl EClient {
 
         // Drain fills -> execDetails + orderStatus
         let fills = shared.orders.drain_fills();
-        for fill in fills {
+        for (fill, booked_off) in fills {
             // A fill nobody asked for is numbered -1. The reference wrapper
             // decides a fill is live by the request id not matching one it is
             // waiting on, so any other id files the fill as the answer to that
@@ -289,7 +289,10 @@ impl EClient {
             // composed here: an id built from an order number and a counter is
             // not the venue's, and the id is what a fill is reconciled against
             // a broker's own record by.
-            let rich_info = shared.orders.get_order_info(fill.order_id);
+            // The report this fill was booked off, not whatever the order's
+            // record says now: one pass can carry two prints of one order, and
+            // the record holds only the later.
+            let rich_info = booked_off.or_else(|| shared.orders.get_order_info(fill.order_id));
             // What the report stated beyond the print, taken before anything
             // consumes the record.
             let from_the_report = rich_info
@@ -320,6 +323,11 @@ impl EClient {
                 })
                 .unwrap_or_default();
 
+            // Everything the report stated, with the print's own numbers over
+            // it. Built from nothing instead, the record kept for a replay
+            // dropped what only the report carries — the caller's own label for
+            // the order among it — so a fill answered under `req_executions`
+            // was blank where the live callback had stated it.
             let api_exec = ApiExecution {
                 exec_id: exec_id.clone(),
                 time: now_str.clone(),
@@ -337,7 +345,7 @@ impl EClient {
                 client_id: self.client_id.load(Ordering::Acquire) as i64,
                 cum_qty,
                 avg_price,
-                ..Default::default()
+                ..from_the_report
             };
             // What it cost is not stated on this report. It arrives on a
             // record of its own, after this, and is reported from there — see
@@ -345,39 +353,12 @@ impl EClient {
             // says the charge is unknown rather than that it was nothing.
             let api_commission = ApiCommissionAndFeesReport::default();
 
-            // Build Python contract for callback
-            let exec_contract = Contract::from_api(&api_contract);
-
-            // Store for req_executions replay via shared core
+            let c_py = Py::new(py, Contract::from_api(&api_contract))?.into_any();
+            // The same record the replay keeps, in the shape a caller reads,
+            // so the two cannot state different things about one fill.
+            let exec_py = Py::new(py, Execution::from_api(&api_exec))?.into_any();
+            // Kept for `req_executions` to answer from.
             self.core.push_execution(req_id, api_contract, api_exec, api_commission);
-
-            let acct_name = self.account();
-            let c_py = Py::new(py, exec_contract)?.into_any();
-            let exec_obj = Execution {
-                exec_id: exec_id.clone(),
-                time: now_str.clone(),
-                acct_number: acct_name,
-                exchange: exec_exchange.clone(),
-                side: side_str.to_string(),
-                shares: qty_to_f64(fill.qty),
-                price,
-                perm_id,
-                client_id: self.client_id.load(Ordering::Acquire) as i64,
-                order_id: fill.order_id as i64,
-                // What the report stated beyond the print — whether the venue
-                // closed the position, which side of the book the fill took,
-                // and the caller's own label for the order. Zeroed and blanked
-                // here while the record the engine keeps carried all three, so
-                // a program matching its fills by label matched none of them.
-                liquidation: from_the_report.liquidation,
-                cum_qty,
-                avg_price,
-                last_liquidity: from_the_report.last_liquidity,
-                order_ref: from_the_report.order_ref.clone(),
-                pending_price_revision: from_the_report.pending_price_revision,
-                ..Default::default()
-            };
-            let exec_py = Py::new(py, exec_obj)?.into_any();
             call_wrapper!(self.wrapper, py, "exec_details", (req_id, &c_py, &exec_py));
 
             // Update open order tracking

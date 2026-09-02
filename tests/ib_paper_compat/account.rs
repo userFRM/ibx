@@ -870,7 +870,7 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
 
     // Exercise exec_details path (same as process_msgs)
     let mut wrapper = ExecWrapper { execs: Vec::new() };
-    for fill in shared.orders.drain_fills() {
+    for (fill, _) in shared.orders.drain_fills() {
         let price_f = fill.price as f64 / api::PRICE_SCALE_F;
         let side_str = match fill.side {
             Side::Buy => "BOT",

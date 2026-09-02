@@ -1070,6 +1070,11 @@ impl CcpState {
                 }
             }
 
+        // The report the fill below was booked off, kept for it. Read back off
+        // the order afterwards instead, a pass carrying two prints of one order
+        // reported both under the later print's execution.
+        let booked_off: Option<RichOrderInfo>;
+
         // Enrich order/contract caches block
         {
             let account = parsed.get(&1).cloned().unwrap_or_default();
@@ -1425,6 +1430,7 @@ impl CcpState {
             // completed order to a working quantity. Every other report
             // that would do that is a replay.
             let info = RichOrderInfo { contract, order, order_state, last_exec };
+            booked_off = filled.is_some().then(|| info.clone());
             if matches!(exec_type, "G" | "H") {
                 shared.orders.push_order_correction(clord_id, info);
             } else {
@@ -1475,7 +1481,10 @@ impl CcpState {
         // acts on a notification the moment it arrives, and each of those
         // actions reads a record this report writes.
         if let Some(fill) = filled {
-            shared.orders.push_fill(fill);
+            match booked_off {
+                Some(report) => shared.orders.push_fill_reported(fill, report),
+                None => shared.orders.push_fill(fill),
+            }
             emit(event_tx, Event::Fill(fill));
         }
         if let Some(update) = announce {

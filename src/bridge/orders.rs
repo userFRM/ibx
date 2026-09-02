@@ -11,7 +11,14 @@ use crate::types::model as api;
 /// Fills, order status updates, cancel rejects, what-if responses, order
 /// cache, and inactive-order reasons.
 pub struct OrderState {
-    fills: Mutex<Vec<Fill>>,
+    /// Each fill and the report it was booked off, where there is one.
+    ///
+    /// One pass can carry two prints of the same order. Looked up against the
+    /// order afterwards, both read the record the later print left, so the
+    /// earlier one was reported under the later one's execution id, time,
+    /// running quantity and average — and the charge that named that id was
+    /// then attached to both.
+    fills: Mutex<Vec<(Fill, Option<RichOrderInfo>)>>,
     order_updates: Mutex<Vec<OrderUpdate>>,
     cancel_rejects: Mutex<Vec<CancelReject>>,
     /// What each fill cost, as the venue states it on a record of its own.
@@ -95,7 +102,7 @@ impl OrderState {
     }
 
     /// Take every fills waiting, leaving none.
-    pub fn drain_fills(&self) -> Vec<Fill> {
+    pub fn drain_fills(&self) -> Vec<(Fill, Option<RichOrderInfo>)> {
         self.fills.lock().unwrap().drain(..).collect()
     }
 
@@ -192,7 +199,7 @@ impl OrderState {
     /// A fill is read against the order's record, so the record outlives the
     /// fill rather than the other way round.
     pub fn has_pending_fill(&self, order_id: u64) -> bool {
-        self.fills.lock().unwrap().iter().any(|f| f.order_id == order_id)
+        self.fills.lock().unwrap().iter().any(|(f, _)| f.order_id == order_id)
     }
 
     /// Remove an enriched entry. Called after a completed order has been
@@ -204,7 +211,13 @@ impl OrderState {
     // ── Hot-loop-side writers ──
 
     #[doc(hidden)] pub fn push_fill(&self, fill: Fill) {
-        self.fills.lock().unwrap().push(fill);
+        self.fills.lock().unwrap().push((fill, None));
+    }
+
+    /// A fill and the report it was booked off, which is the one that states
+    /// its execution.
+    #[doc(hidden)] pub fn push_fill_reported(&self, fill: Fill, report: RichOrderInfo) {
+        self.fills.lock().unwrap().push((fill, Some(report)));
     }
 
     #[doc(hidden)] pub fn push_order_update(&self, update: OrderUpdate) {

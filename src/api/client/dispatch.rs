@@ -173,7 +173,7 @@ impl EClient {
         }
         let mut paired: Vec<crate::types::OrderUpdate> =
             self.shared.orders.drain_order_updates();
-        for fill in self.shared.orders.drain_fills() {
+        for (fill, booked_off) in self.shared.orders.drain_fills() {
             let price_f = fill.price as f64 / PRICE_SCALE_F;
             // Paired on the report, not the order: one pass can carry both an
             // acknowledgement and a fill for the same order. The matching report
@@ -211,7 +211,11 @@ impl EClient {
                 Side::Sell => "SLD",
                 Side::ShortSell => "SLD",
             };
-            let (c, exec) = if let Some(info) = self.shared.orders.get_order_info(fill.order_id) {
+            // The report this fill was booked off, not whatever the order's
+            // record says now: one pass can carry two prints of one order, and
+            // the record holds only the later.
+            let booked_off = booked_off.or_else(|| self.shared.orders.get_order_info(fill.order_id));
+            let (c, exec) = if let Some(info) = booked_off {
                 let mut ex = info.last_exec;
                 ex.side = side_str.into();
                 ex.shares = qty_to_f64(fill.qty);
