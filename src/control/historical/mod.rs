@@ -118,6 +118,13 @@ impl BarDataType {
     /// answers "no historical market data" — which reads as a series that does
     /// not exist rather than a name it does not know. Asked and answered
     /// against a session; see `probe_midpoint`.
+    ///
+    /// A week and a month are the two that are not their API spelling. Sent as
+    /// `1 week` the venue answers six months with a hundred and twenty-four
+    /// bars — one a day — and sent as `1 month` it answers with one a minute;
+    /// sent as `1W` and `1M` it answers twenty-six and six, and restates the
+    /// step it used in the reply. So the API spelling was being answered at a
+    /// size nobody asked for and handed on under the size they did.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Trades => "Last",
@@ -158,6 +165,8 @@ pub enum BarSize {
     Min2,
     /// One bar covers three minutes.
     Min3,
+    /// One bar covers four minutes.
+    Min4,
     /// One bar covers five minutes.
     Min5,
     /// One bar covers ten minutes.
@@ -189,12 +198,14 @@ pub enum BarSize {
 impl BarSize {
     /// Read the official API's bar-size string.
     ///
-    /// The one table every request path reads, and case-sensitive on purpose:
-    /// the official strings are exact, and a size this does not know is an
-    /// error rather than a fallback — plausible, complete candles of the wrong
-    /// size are worse than none.
+    /// The one table every request path reads. Case is folded before the
+    /// match: asked in any casing the venue answers with bars, so refusing
+    /// `4 MINS` refused a question it would have answered. A size not in the
+    /// table is still an error rather than a fallback — plausible, complete
+    /// candles of the wrong size are worse than none.
     pub fn from_api_str(s: &str) -> Result<BarSize, String> {
-        Ok(match s {
+        let lowered = s.to_ascii_lowercase();
+        Ok(match lowered.as_str() {
             "1 secs" | "1 sec" => Self::Sec1,
             "5 secs" => Self::Sec5,
             "10 secs" => Self::Sec10,
@@ -203,6 +214,7 @@ impl BarSize {
             "1 min" => Self::Min1,
             "2 mins" => Self::Min2,
             "3 mins" => Self::Min3,
+            "4 mins" => Self::Min4,
             "5 mins" => Self::Min5,
             "10 mins" => Self::Min10,
             "15 mins" => Self::Min15,
@@ -214,15 +226,15 @@ impl BarSize {
             "4 hours" => Self::Hour4,
             "8 hours" => Self::Hour8,
             "1 day" => Self::Day1,
-            "1 week" | "1W" => Self::Week1,
-            "1 month" | "1M" => Self::Month1,
+            "1 week" | "1w" => Self::Week1,
+            "1 month" | "1m" => Self::Month1,
             other => {
                 return Err(format!(
                     "Unsupported bar_size '{other}': expected one of 1 secs, 5 secs, \
-                     10 secs, 15 secs, 30 secs, 1 min, 2 mins, 3 mins, 5 mins, \
-                     10 mins, 15 mins, 20 mins, 30 mins, 1 hour, 2 hours, \
-                     3 hours, 4 hours, 8 hours, 1 day, 1 week, 1 month \
-                     (case-sensitive)",
+                     10 secs, 15 secs, 30 secs, 1 min, 2 mins, 3 mins, 4 mins, \
+                     5 mins, 10 mins, 15 mins, 20 mins, 30 mins, 1 hour, \
+                     2 hours, 3 hours, 4 hours, 8 hours, 1 day, 1 week, \
+                     1 month, 3 months, 1 year (case-sensitive)",
                 ));
             }
         })
@@ -260,6 +272,7 @@ impl BarSize {
             Self::Min1 => 60,
             Self::Min2 => 120,
             Self::Min3 => 180,
+            Self::Min4 => 240,
             Self::Min5 => 300,
             Self::Min10 => 600,
             Self::Min15 => 900,
@@ -293,6 +306,7 @@ impl BarSize {
             Self::Min1 => "1 min",
             Self::Min2 => "2 mins",
             Self::Min3 => "3 mins",
+            Self::Min4 => "4 mins",
             Self::Min5 => "5 mins",
             Self::Min10 => "10 mins",
             Self::Min15 => "15 mins",
@@ -304,8 +318,8 @@ impl BarSize {
             Self::Hour4 => "4 hours",
             Self::Hour8 => "8 hours",
             Self::Day1 => "1 day",
-            Self::Week1 => "1 week",
-            Self::Month1 => "1 month",
+            Self::Week1 => "1W",
+            Self::Month1 => "1M",
         }
     }
 }
@@ -563,7 +577,14 @@ pub fn parse_bar_response(xml: &str) -> Option<HistoricalResponse> {
             return None;
         };
         let bar = HistoricalBar {
-            time: tag(bar_xml, "time").unwrap_or("").to_string(),
+            // A bar the venue aggregated is dated rather than timed: a week
+            // and a month arrive as `date` and `endDate` where everything
+            // shorter arrives as `time` and `endTime`. Read for `time` alone
+            // they reached the caller with no date at all.
+            time: tag(bar_xml, "time")
+                .or_else(|| tag(bar_xml, "date"))
+                .unwrap_or("")
+                .to_string(),
             open,
             high,
             low,

@@ -3019,11 +3019,14 @@ fn req_historical_data_carries_the_contract_s_own_type_and_venue() {
 #[test]
 fn req_historical_data_rejects_unknown_bar_size() {
     let (client, rx, _shared) = test_client();
-    // A bar size in the wrong case is refused rather than answered with
-    // five-minute candles.
-    let err = client.req_historical_data(5, &spy(), "", "2 D", "1 Min", "TRADES", true, 1, false).unwrap_err();
+    // A size that is not one is refused rather than answered with five-minute
+    // candles. Its casing is not what makes it one: `1 Min` is a minute.
+    let err = client.req_historical_data(5, &spy(), "", "2 D", "1 minute", "TRADES", true, 1, false).unwrap_err();
     assert!(err.message.contains("bar_size"), "got: {err}");
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
+    client.req_historical_data(5, &spy(), "", "2 D", "1 Min", "TRADES", true, 1, false)
+        .expect("a minute asked for in another casing is still a minute");
+    assert!(rx.try_recv().is_ok(), "and it reaches the engine");
 }
 
 #[test]

@@ -287,7 +287,7 @@ fn engine_rejects_unknown_bar_size_with_error_and_sentinel() {
     let mut hb = HeartbeatState::new();
     let mut conn: Option<Connection> = None;
 
-    hmds.send_historical_request_ex(9, 756733, "", "2 d", "1 Min", "TRADES",
+    hmds.send_historical_request_ex(9, 756733, "", "2 d", "1 minute", "TRADES",
         true, false, false, "SPY", "STK", "SMART", &mut conn, &mut hb, &shared);
 
     assert!(hmds.pending_historical.is_empty(), "rejected request must not go pending");

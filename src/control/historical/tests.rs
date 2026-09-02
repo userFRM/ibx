@@ -37,12 +37,33 @@ fn bar_size_from_api_str_accepts_all_official_strings() {
 }
 
 #[test]
-fn bar_size_from_api_str_rejects_unknown_and_wrong_case() {
-    // The issue's exact repro: "1 Min" silently became 5-minute bars.
-    for s in ["1 Min", "1min", "1 minute", "7 mins", ""] {
+fn bar_size_from_api_str_rejects_what_is_not_a_size_and_reads_any_casing() {
+    // The issue's exact repro: an unknown size silently became 5-minute bars.
+    for s in ["1min", "1 minute", "7 mins", ""] {
         let err = BarSize::from_api_str(s).unwrap_err();
         assert!(err.contains("bar_size"), "'{s}' -> {err}");
     }
+    // Casing is the caller's business: asked in any of these the venue answers
+    // with bars of that size, so refusing them refused a question it would
+    // have answered.
+    assert_eq!(BarSize::from_api_str("1 Min").unwrap(), BarSize::Min1);
+    assert_eq!(BarSize::from_api_str("4 MINS").unwrap(), BarSize::Min4);
+    assert_eq!(BarSize::from_api_str("1 Day").unwrap(), BarSize::Day1);
+    assert_eq!(BarSize::from_api_str("30 SECS").unwrap(), BarSize::Sec30);
+}
+
+/// A week and a month are asked for under a name of their own.
+///
+/// Sent the API's own spelling the venue answers a six-month window with a
+/// hundred and twenty-four bars for `1 week` and one a minute for `1 month`.
+/// Sent `1W` and `1M` it answers twenty-six and six, and restates the step it
+/// used. Everything shorter is asked for by its API name.
+#[test]
+fn a_week_and_a_month_go_out_under_the_name_the_venue_answers() {
+    assert_eq!(BarSize::Week1.as_str(), "1W");
+    assert_eq!(BarSize::Month1.as_str(), "1M");
+    assert_eq!(BarSize::Day1.as_str(), "1 day");
+    assert_eq!(BarSize::Min4.as_str(), "4 mins");
 }
 
 
@@ -188,6 +209,39 @@ fn parse_bar_response_incomplete() {
     let resp = parse_bar_response(xml).unwrap();
     assert!(!resp.is_complete);
     assert_eq!(resp.bars.len(), 1);
+}
+
+/// A week and a month come back dated rather than timed.
+///
+/// The venue states `date` and `endDate` on a bar it aggregated where it
+/// states `time` and `endTime` on everything shorter. A reader looking only
+/// for `time` handed the caller a full candle with no date on it, which is
+/// what a chart plots at the epoch.
+#[test]
+fn a_bar_the_venue_aggregated_is_read_from_the_date_it_states() {
+    let xml = r#"<ResultSetBar>
+        <id>q3</id>
+        <eoq>true</eoq>
+        <approxStep>1W</approxStep>
+        <Events>
+            <Bar>
+                <date>20260309</date>
+                <endDate>20260314</endDate>
+                <open>666.39</open>
+                <close>662.29</close>
+                <high>683.36</high>
+                <low>661.36</low>
+                <weightedAvg>671.482</weightedAvg>
+                <volume>339498148</volume>
+                <count>3351333</count>
+            </Bar>
+        </Events>
+    </ResultSetBar>"#;
+
+    let resp = parse_bar_response(xml).unwrap();
+    assert_eq!(resp.bars.len(), 1);
+    assert_eq!(resp.bars[0].time, "20260309", "the week it covers");
+    assert_eq!(resp.bars[0].close, 662.29);
 }
 
 #[test]
