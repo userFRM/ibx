@@ -134,11 +134,11 @@ impl EClient {
 
     /// Cancel market data.
     pub fn cancel_mkt_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
         if instrument.is_none() && stop_news.is_none() {
             return Ok(());
         }
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
         // Asked separately, because the quotes stay up for another caller
         // while the headlines this one asked for stop. Withdrawn only
         // alongside the quotes, they carried on with nobody listening.
@@ -238,10 +238,10 @@ impl EClient {
         // Removed before the send, not across it: the send is bounded and runs
         // detached from Python, so a guard spanning it blocks another thread
         // cancelling a different subscription.
+        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.tbt_kind.lock().unwrap().remove(&req_id);
         let instrument = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id);
         if let Some(instrument) = instrument {
-            let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
             Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         }
         Ok(())
@@ -278,6 +278,13 @@ impl EClient {
     /// subscriptions live. `req_mkt_data_ex` states the type per request,
     /// which allows two feeds on one contract at once.
     fn req_market_data_type(&self, market_data_type: i32) -> PyResult<()> {
+        // Answered under 504 with no session, as every request is, and the
+        // type is then not kept. It used to be: set before `connect`, it
+        // applied to the session that followed. The reference client's sends
+        // and stores nothing, so a program written against it sets the type
+        // after connecting, having never had another way; what a caller loses
+        // here is only a setting the reference never let it make.
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.set_market_data_type(market_data_type);
         Ok(())
     }

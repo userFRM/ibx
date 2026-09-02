@@ -392,6 +392,7 @@ impl EClient {
                 "cancel_order_by_perm_id: perm_id must be non-zero",
             ));
         }
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let found = self.core.collect_open_orders(&shared)
             .into_iter()
@@ -487,6 +488,7 @@ impl EClient {
 
     /// Request all open orders for this client.
     fn req_open_orders(&self, py: Python<'_>) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         // The venue names the working orders unprompted after a connect.
         // Answering before that replay lands reports none of them, and a
@@ -545,6 +547,7 @@ impl EClient {
         // but 0, and otherwise sets state that does not apply here: this
         // session is told about every order on the account whether or not it
         // placed them. The refusal is the only observable part.
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         if self.client_id.load(std::sync::atomic::Ordering::Acquire) != 0 {
             crate::python::compat::client::stubs::report_unserviceable_with(
                 self,
@@ -637,6 +640,7 @@ impl EClient {
     #[pyo3(signature = (api_only=false))]
     fn req_completed_orders(&self, py: Python<'_>, api_only: bool) -> PyResult<()> {
         let _ = api_only;
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         // Bind the clone out of the guard first. A MutexGuard temporary in an
         // if-let scrutinee lives to the end of the body, so cloning alone does
         // not release it — a callback re-entering disconnect() would deadlock

@@ -418,6 +418,7 @@ impl EClient {
 
     /// Request all open orders. Matches `reqAllOpenOrders` in C++.
     pub fn req_all_open_orders(&self, wrapper: &mut impl Wrapper) {
+        if !self.is_connected() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         // The orders already working are named by the server unprompted after a
         // connect, and answering before that lands reports none of them. A
         // strategy asking what it already has on, at the moment it starts, is
@@ -462,6 +463,7 @@ impl EClient {
     /// them rather than with a guess at which were typed.
     pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper) {
         let _ = api_only;
+        if !self.is_connected() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         // Drained once and retained. The queue empties on read and the venue does
         // not resend completed orders, so later calls answer from this archive.
         {

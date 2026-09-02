@@ -72,6 +72,7 @@ impl EClient {
     /// portfolio to name.
     #[pyo3(signature = (req_id, account, model_code, con_id))]
     fn req_pnl_single(&self, req_id: i64, account: &str, model_code: &str, con_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.subscribe_pnl_single(req_id, con_id);
         let _ = (account, model_code);
         Ok(())
@@ -79,6 +80,7 @@ impl EClient {
 
     /// Cancel single-position P&L subscription.
     fn cancel_pnl_single(&self, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.unsubscribe_pnl_single(req_id);
         Ok(())
     }
@@ -90,6 +92,7 @@ impl EClient {
     /// asked which, so there is no second account or model portfolio to name.
     #[pyo3(signature = (req_id, group_name, tags))]
     fn req_account_summary(&self, req_id: i64, group_name: &str, tags: &str) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.subscribe_account_summary(req_id, tags);
         let _ = group_name;
         Ok(())
@@ -97,6 +100,7 @@ impl EClient {
 
     /// Cancel account summary.
     fn cancel_account_summary(&self, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.unsubscribe_account_summary(req_id);
         Ok(())
     }
@@ -183,6 +187,7 @@ impl EClient {
     // stops, and reporting an error for withdrawing a subscription that was
     // never made would be wrong.
     fn cancel_positions(&self) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.positions_requested.store(false, Ordering::Release);
         Ok(())
     }
@@ -199,9 +204,9 @@ impl EClient {
     /// that subscribed and then read the account got nothing.
     #[pyo3(signature = (subscribe, _acct_code=""))]
     fn req_account_updates(&self, py: Python<'_>, subscribe: bool, _acct_code: &str) -> PyResult<()> {
+        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.subscribe_account_updates(subscribe);
         if subscribe {
-            let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
             let account = self.account();
             if let Err(why) = Self::send_control(py, &tx, ControlCommand::RefreshAccount { account })
             {
@@ -261,6 +266,7 @@ impl EClient {
     /// `req_id` reaches nothing, because there is nothing to withdraw: account
     /// values arrive with the session rather than by subscription.
     fn cancel_account_updates_multi(&self, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let _ = req_id;
         Ok(())
     }
@@ -296,6 +302,7 @@ impl EClient {
     // `cancel_positions`. What stops is the reporting — a holding that moves
     // after this is no longer delivered on `position_multi` for this request.
     fn cancel_positions_multi(&self, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.positions_multi_requested.lock().unwrap().remove(&req_id);
         Ok(())
     }

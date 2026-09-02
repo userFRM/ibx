@@ -63,6 +63,7 @@ impl EClient {
         &self, py: Python<'_>, req_id: i64, contract: &Contract, option_price: f64,
         under_price: f64, implied_vol_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = implied_vol_options;
         if let Err(why) = self.answer_option_model(req_id, contract, |terms, model| {
             crate::control::option_model::implied_volatility(
@@ -104,6 +105,7 @@ impl EClient {
         &self, py: Python<'_>, req_id: i64, contract: &Contract, volatility: f64,
         under_price: f64, opt_prc_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(req_id) else { return Ok(()) };
         let _ = opt_prc_options;
         if let Err(why) = self.answer_option_model(req_id, contract, |terms, model| {
             crate::control::option_model::option_price(
@@ -134,12 +136,14 @@ impl EClient {
     /// withdraw. One that opened a watch is holding a subscription the caller
     /// never asked for by name, and this is what releases it.
     fn cancel_calculate_implied_volatility(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(req_id) else { return Ok(()) };
         self.forget_option_calc(py, req_id);
         Ok(())
     }
 
     /// As for [`cancel_calculate_implied_volatility`](Self::cancel_calculate_implied_volatility).
     fn cancel_calculate_option_price(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(req_id) else { return Ok(()) };
         self.forget_option_calc(py, req_id);
         Ok(())
     }
@@ -160,6 +164,7 @@ impl EClient {
     /// are kept for a caller who has not asked yet.
     #[pyo3(signature = (all_msgs=true))]
     fn req_news_bulletins(&self, all_msgs: bool) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let _ = all_msgs;
         self.core.subscribe_bulletins();
         Ok(())
@@ -167,6 +172,7 @@ impl EClient {
 
     /// Stop receiving broadcast notices.
     fn cancel_news_bulletins(&self) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.unsubscribe_bulletins();
         Ok(())
     }
@@ -317,6 +323,7 @@ impl EClient {
     /// Ask which display groups exist. Answered on
     /// `display_group_list`.
     fn query_display_groups(&self, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.query_display_groups(req_id);
         Ok(())
     }
@@ -324,18 +331,21 @@ impl EClient {
     /// Watch what a display group is showing. Answered on
     /// `display_group_updated`.
     fn subscribe_to_group_events(&self, req_id: i64, group_id: i32) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.subscribe_to_group_events(req_id, group_id);
         Ok(())
     }
 
     /// Stop watching a display group.
     fn unsubscribe_from_group_events(&self, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         self.core.unsubscribe_from_group_events(req_id);
         Ok(())
     }
 
     /// Tell a display group what to show.
     fn update_display_group(&self, req_id: i64, contract_info: &str) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         // The reference client answers a request it cannot serve on the error
         // callback and returns normally. Raising here would make a caller
         // written against it fall over on a request that merely came in the
@@ -357,6 +367,7 @@ impl EClient {
     /// and that whole table is what comes back.
     fn req_smart_components(&self, py: Python<'_>, req_id: i64, bbo_exchange: &str) -> PyResult<()> {
         let _ = bbo_exchange;
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let sc = shared.reference.smart_components();
         let map = pyo3::types::PyDict::new(py);
@@ -377,6 +388,7 @@ impl EClient {
     /// Ask which news providers this account may read. Answered on
     /// `news_providers`.
     fn req_news_providers(&self, py: Python<'_>) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let np = shared.reference.news_providers();
         let mut providers: Vec<Py<NewsProviderPy>> = Vec::with_capacity(np.len());
@@ -394,6 +406,7 @@ impl EClient {
     /// Ask which soft dollar tiers this account may direct commission
     /// to. Answered on `soft_dollar_tiers`.
     fn req_soft_dollar_tiers(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let tiers = shared.reference.soft_dollar_tiers();
         let mut objs: Vec<Py<SoftDollarTierPy>> = Vec::with_capacity(tiers.len());
@@ -415,6 +428,7 @@ impl EClient {
     /// Ask which account families this login belongs to. Answered on
     /// `family_codes`.
     fn req_family_codes(&self, py: Python<'_>) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let codes = shared.reference.family_codes();
         let py_list = pyo3::types::PyList::new(py, codes.iter().map(|fc| {
@@ -437,6 +451,7 @@ impl EClient {
     /// exist.
     #[pyo3(signature = (log_level=2))]
     fn set_server_log_level(&self, py: Python<'_>, log_level: i32) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let level = match log_level {
             1 => "error",
             2 => "warn",
@@ -455,6 +470,7 @@ impl EClient {
 
     /// Ask what this login is entitled to. Answered on `user_info`.
     fn req_user_info(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let id = shared.reference.white_branding_id();
         self.deliver(py, "user_info", (req_id, id))?;
