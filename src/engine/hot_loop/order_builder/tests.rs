@@ -1969,7 +1969,8 @@ mod modify_wire_tests {
             context.market.set_routing(instrument, "OPT", "SMART");
 
             context.pending_orders.push(
-                crate::client_core::ClientCore::build_exercise_request(7, instrument, action, 3 * crate::types::QTY_SCALE),
+                crate::client_core::ClientCore::build_exercise_request(
+                    7, instrument, action, 3 * crate::types::QTY_SCALE, Default::default()),
             );
             let sent = drain(&mut context);
 

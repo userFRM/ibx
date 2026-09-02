@@ -439,10 +439,11 @@ impl Client {
         quantity: i32,
         account: &str,
         override_precaution: bool,
+        stated: crate::client_core::ExerciseStates,
     ) -> Result<(), Refusal> {
         self.inner.exercise_options(
             self.stream_id(), contract, action, quantity, account,
-            override_precaution,
+            override_precaution, stated,
         )
     }
 

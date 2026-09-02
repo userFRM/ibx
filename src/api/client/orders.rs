@@ -242,6 +242,7 @@ impl EClient {
     pub fn exercise_options(
         &self, req_id: i64, contract: &Contract, exercise_action: i32,
         exercise_quantity: i32, account: &str, override_: bool,
+        stated: crate::client_core::ExerciseStates,
     ) -> Result<(), Refusal> {
         self.core.refuse_if_readonly("an exercise").map_err(Refusal::validation)?;
         if !override_ {
@@ -273,7 +274,9 @@ impl EClient {
             &identity,
         )?;
         self.send(ControlCommand::Order(
-            ClientCore::build_exercise_request(oid, instrument, action, crate::types::qty_from_wire(qty as i64)),
+            ClientCore::build_exercise_request(
+                oid, instrument, action, crate::types::qty_from_wire(qty as i64), stated,
+            ),
         ))
     }
 

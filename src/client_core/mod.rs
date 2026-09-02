@@ -785,6 +785,23 @@ pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
+/// What an exercise states beyond the instruction itself.
+///
+/// Three fields an order carries and an exercise did not take, though the same
+/// request goes out either way and the same tags carry them: when a person
+/// entered it, whose account it is for, and whether that person is a
+/// professional. A caller that named any of them was answered as though they
+/// had named none.
+#[derive(Debug, Default, Clone)]
+pub struct ExerciseStates {
+    /// When a person entered it, where a person did.
+    pub manual_order_time: String,
+    /// The account it is taken for, where that is not the one connected.
+    pub customer_account: String,
+    /// Whether the person it is for is a professional.
+    pub professional_customer: bool,
+}
+
 impl ClientCore {
     /// An empty one.
     pub fn new() -> Self {
@@ -3518,6 +3535,7 @@ impl ClientCore {
     /// order, so no tag carries it and there is nothing to send.
     pub fn build_exercise_request(
         order_id: OrderId, instrument: InstrumentId, action: u8, qty: Qty,
+        stated: ExerciseStates,
     ) -> OrderRequest {
         OrderRequest::SubmitEx {
             order_id,

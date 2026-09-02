@@ -860,7 +860,7 @@ mod readonly_tests {
         assert!(client.cancel_order_by_perm_id(1).is_err(), "a cancel by permanent id is refused");
         assert!(client.req_global_cancel().is_err(), "a global cancel is refused");
         assert!(
-            client.exercise_options(1, &spy, 1, 1, "", false).is_err(),
+            client.exercise_options(1, &spy, 1, 1, "", false, Default::default()).is_err(),
             "an exercise is refused",
         );
         // Three orders under one call, and the only trading call that reached

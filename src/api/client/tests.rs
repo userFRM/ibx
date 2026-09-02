@@ -2431,13 +2431,13 @@ fn an_exercise_it_cannot_serve_is_refused_before_anything_is_sent() {
         ("another account", 1, 1, "DU999"),
     ];
     for (name, action, qty, account) in cases {
-        client.exercise_options(1, &opt, action, qty, account, false).expect_err(name);
+        client.exercise_options(1, &opt, action, qty, account, false, Default::default()).expect_err(name);
         assert!(rx.try_recv().is_err(), "{name} reached the engine");
     }
 
     // One it can serve gets as far as naming the contract. This fixture has no
     // engine to answer the registration, so the call ends there.
-    let _ = client.exercise_options(1, &opt, 1, 1, "DU123", false);
+    let _ = client.exercise_options(1, &opt, 1, 1, "DU123", false, Default::default());
     assert!(
         matches!(rx.try_recv(), Ok(ControlCommand::RegisterInstrument { contract: ContractRef { con_id: 999002, .. }, .. })),
         "a served exercise registers its contract",

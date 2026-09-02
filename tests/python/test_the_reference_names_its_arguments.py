@@ -111,3 +111,16 @@ def test_a_keyword_that_names_no_argument_is_still_refused():
     except TypeError:
         return
     raise AssertionError("a name that names no argument was accepted")
+
+
+def test_the_exercise_states_what_the_reference_states():
+    # The reference names nine, and the last three are carried on the same
+    # tags an order carries them on. Taken as six, a caller who named when a
+    # person entered it, whose account it is for, or that they are a
+    # professional was answered as though they had named none.
+    client = _client()
+    client.exerciseOptions(1, ibx.Contract(), 1, 100, "DU1", 0,
+                           "20260902-14:30:00", "DU2", True)
+    client.exercise_options(2, ibx.Contract(), 1, 100, "DU1", 0,
+                            manual_order_time="20260902-14:30:00",
+                            customer_account="DU2", professional_customer=True)

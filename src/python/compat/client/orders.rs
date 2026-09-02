@@ -14,6 +14,49 @@ use crate::types::*;
 use super::EClient;
 use super::super::contract::{Contract, Order, OrderState, CommissionAndFeesReport, Execution};
 
+/// What a withdrawal states about itself that this wire cannot carry.
+///
+/// `None` where it states nothing — no object, or one left as it comes. The
+/// reference client's object holds three fields and a cancel on this wire names
+/// five, none of them these, so anything stated has nowhere to go. Read by
+/// attribute, as every object a caller fills in is read here, and a plain
+/// string is taken as the time on its own.
+fn withdrawal_states(py: Python<'_>, order_cancel: Option<&Py<PyAny>>) -> Option<String> {
+    let held = order_cancel?;
+    if let Ok(time) = held.extract::<String>(py) {
+        return (!time.is_empty()).then(|| WITHDRAWAL_CARRIES.replace("{field}", "a time"));
+    }
+    let says = |attr: &str| -> bool {
+        held.getattr(py, attr)
+            .ok()
+            .filter(|v| !v.is_none(py))
+            .and_then(|v| v.extract::<String>(py).ok())
+            .is_some_and(|text| !text.is_empty())
+    };
+    for (attr, named) in [
+        ("manualOrderCancelTime", "a time"),
+        ("extOperator", "an operator"),
+    ] {
+        if says(attr) {
+            return Some(WITHDRAWAL_CARRIES.replace("{field}", named));
+        }
+    }
+    // The indicator is a number, and the one it carries when nobody set it is
+    // the number this protocol writes for an integer nobody set.
+    let indicator = held.getattr(py, "manualOrderIndicator").ok()
+        .and_then(|v| v.extract::<i32>(py).ok());
+    match indicator {
+        Some(i) if i != i32::MAX => Some(WITHDRAWAL_CARRIES.replace("{field}", "who entered it")),
+        _ => None,
+    }
+}
+
+/// Said whichever of the three the caller stated.
+const WITHDRAWAL_CARRIES: &str = "a withdrawal states {field}, and this protocol \
+     carries no field for it: the cancel names five and none of them is that one, so the \
+     order would be withdrawn without it. Withdraw it without stating one, or state it \
+     where the order was placed.";
+
 #[pymethods]
 impl EClient {
     /// Place an order.
@@ -254,10 +297,12 @@ impl EClient {
     /// it, because what it rests on is the venue's word on where the option
     /// stands, which this client does not ask for. An instruction is sent as
     /// given; passing `0` says so in the log and changes nothing else.
-    #[pyo3(signature = (req_id, contract, exercise_action, exercise_quantity, account, _override))]
+    #[pyo3(signature = (req_id, contract, exercise_action, exercise_quantity, account, _override,
+                        manual_order_time="", customer_account="", professional_customer=false))]
     fn exercise_options(
         &self, py: Python<'_>, req_id: i64, contract: &Contract, exercise_action: i32,
         exercise_quantity: i32, account: &str, _override: i32,
+        manual_order_time: &str, customer_account: &str, professional_customer: bool,
     ) -> PyResult<()> {
         self.core.refuse_if_readonly("an exercise").map_err(PyRuntimeError::new_err)?;
         if _override == 0 {
@@ -298,17 +343,34 @@ impl EClient {
         };
         let instrument = self.find_or_register_instrument(py, contract)?;
         Self::send_control(py, &tx, ControlCommand::Order(
-            ClientCore::build_exercise_request(oid, instrument, action, crate::types::qty_from_wire(qty as i64)),
+            ClientCore::build_exercise_request(
+                oid, instrument, action, crate::types::qty_from_wire(qty as i64),
+                crate::client_core::ExerciseStates {
+                    manual_order_time: manual_order_time.to_string(),
+                    customer_account: customer_account.to_string(),
+                    professional_customer,
+                },
+            ),
         ))
     }
 
     /// Cancel an order.
     ///
-    /// `manual_order_cancel_time` is taken and not applied. A cancel on this
-    /// wire names five fields and no time among them.
-    #[pyo3(signature = (order_id, manual_order_cancel_time=""))]
-    fn cancel_order(&self, py: Python<'_>, order_id: i64, manual_order_cancel_time: &str) -> PyResult<()> {
+    /// The second argument is what the reference client states about the
+    /// withdrawal itself — when a person entered it, on whose authority, and
+    /// whether a person entered it at all. It is taken as that object or as
+    /// the time alone, which is how this client took it before.
+    ///
+    /// A cancel on this wire names five fields and none of those is among
+    /// them, so a withdrawal that states one is refused rather than sent
+    /// without it: taken and dropped, the order was withdrawn under nobody's
+    /// name while the caller had given one.
+    #[pyo3(signature = (order_id, order_cancel=None))]
+    fn cancel_order(&self, py: Python<'_>, order_id: i64, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
         self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
+        if let Some(stated) = withdrawal_states(py, order_cancel.as_ref()) {
+            return self.report_refusal(py, order_id, Refusal::validation(stated));
+        }
         let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
         // As `place_order`. A negative id read as unsigned is a number above
         // nine quintillion, and the cancel names it.
@@ -317,9 +379,7 @@ impl EClient {
                 "cancel_order: order_id {order_id} is not an order number",
             )));
         };
-        Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: oid }))?;
-        let _ = manual_order_cancel_time;
-        Ok(())
+        Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: oid }))
     }
 
     /// Cancel an order identified by `permId` — stable across sessions, unlike
@@ -342,12 +402,16 @@ impl EClient {
                 format!("cancel_order_by_perm_id: permId {perm_id} not found in open orders"),
             ));
         };
-        self.cancel_order(py, order_id as i64, "")
+        self.cancel_order(py, order_id as i64, None)
     }
 
     /// Cancel all orders globally.
-    fn req_global_cancel(&self, py: Python<'_>) -> PyResult<()> {
+    #[pyo3(signature = (order_cancel=None))]
+    fn req_global_cancel(&self, py: Python<'_>, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
         self.core.refuse_if_readonly("a global cancel").map_err(PyRuntimeError::new_err)?;
+        if let Some(stated) = withdrawal_states(py, order_cancel.as_ref()) {
+            return self.report_refusal(py, -1, Refusal::validation(stated));
+        }
         let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
         let shared = self.shared_state()?;
         let count = shared.market.instrument_count();
