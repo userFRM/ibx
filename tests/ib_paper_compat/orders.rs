@@ -2410,14 +2410,36 @@ pub(super) fn phase_replace_a_trail_amount(conns: Conns) -> Conns {
         }
     }
     if replace_sent && said_after.is_none() {
-        // Ask the venue what it holds now, rather than trusting this session.
+        // Nothing refused it within the window. That is not the venue saying
+        // it took the new trail — this session cannot ask what the venue holds,
+        // because a session that placed an order answers about it from its own
+        // record, which states whatever was last asked for. What the venue
+        // holds was read on a second session instead, and it holds the trail
+        // the replace named; the check that belongs here is that nothing
+        // refused it and that the trail this session states is the asked one.
         std::thread::sleep(Duration::from_secs(3));
-        said_after = Some("accepted".to_string());
+        said_after = Some("nothing refused it".to_string());
     }
     println!("  asked for trail {}: {}", asked_trail / ibx::types::PRICE_SCALE,
              said_after.as_deref().unwrap_or("no answer"));
-    for row in shared.orders.drain_order_inactive() {
+    let refusals = shared.orders.drain_order_inactive();
+    for row in &refusals {
         println!("  refusal: {} {} {}", row.0, row.1, row.2);
+    }
+    if replace_sent {
+        assert!(
+            refusals.is_empty(),
+            "the venue refused a replace naming a different trail: {refusals:?} —              measured on a second session it holds the trail the replace named, so a              refusal here is a change in what the venue accepts",
+        );
+        let stated = shared.orders.get_order_info(order_id).map(|i| i.order.aux_price);
+        if let Some(stated) = stated.filter(|t| *t != 0.0) {
+            let asked = asked_trail as f64 / ibx::types::PRICE_SCALE as f64;
+            assert!(
+                (stated - asked).abs() < 1e-9,
+                "the trail this session states after the replace is {stated}, not the \
+                 {asked} that was asked for",
+            );
+        }
     }
     let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }));
     std::thread::sleep(Duration::from_secs(2));

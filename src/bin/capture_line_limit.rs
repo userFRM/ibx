@@ -31,7 +31,13 @@ impl Wrapper for Heard {
             self.absent += 1;
         }
     }
-    fn tick_price(&mut self, req_id: i64, _field: i32, _price: f64, _attrib: &ibx::api::types::TickAttrib) {
+    fn tick_price(
+        &mut self,
+        req_id: i64,
+        _field: i32,
+        _price: f64,
+        _attrib: &ibx::api::types::TickAttrib,
+    ) {
         self.ticking.insert(req_id);
     }
     fn tick_size(&mut self, req_id: i64, _field: i32, _size: f64) {
@@ -70,14 +76,20 @@ fn main() {
     }
 
     let config = EClientConfig {
-        username, password,
+        username,
+        password,
         host: std::env::var("IB_HOST").unwrap_or_default(),
-        paper: true, core_id: None, code_provider: None,
+        paper: true,
+        core_id: None,
+        code_provider: None,
         ..Default::default()
     };
     let client = match EClient::connect(&config) {
         Ok(c) => c,
-        Err(e) => { eprintln!("could not open a session: {e}"); std::process::exit(1); }
+        Err(e) => {
+            eprintln!("could not open a session: {e}");
+            std::process::exit(1);
+        }
     };
     println!("session open");
 

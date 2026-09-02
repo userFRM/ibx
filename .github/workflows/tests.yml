@@ -261,7 +261,6 @@ jobs:
     # the tree-wide rewrite arriving one pull request at a time. So the gate is
     # on what a change *adds*: a new file is formatted, and the rest is left
     # where it is.
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -272,7 +271,16 @@ jobs:
 
       - name: Check the Rust files this change adds
         run: |
-          base=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          # A pull request is measured against its base; a push to main against
+          # what main was before it. Measured only on pull requests, a file added
+          # by a direct push was never formatted by anything.
+          if [ -n "${{ github.base_ref }}" ]; then
+            base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          elif git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            base="${{ github.event.before }}"
+          else
+            base=$(git rev-parse HEAD~1)
+          fi
           files=$(git diff --name-only --diff-filter=A "$base" HEAD -- '*.rs')
           if [ -z "$files" ]; then echo "no new Rust files"; exit 0; fi
           echo "$files"

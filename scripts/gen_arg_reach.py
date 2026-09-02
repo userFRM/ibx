@@ -160,12 +160,19 @@ IMPL = re.compile(r"^\s*impl(?:<[^>]*>)? (?:\w+ for )?(\w+)", re.M)
 
 
 def _impl_at(text: str, at: int) -> str:
-    """Which `impl` block a position falls in."""
+    """Which `impl` block a position falls in: the innermost whose braces hold it.
+
+    Taking the nearest header above the position instead attributed every
+    method after an `impl Wrapper for Bars` written inside a function body to
+    `Bars`, and eighteen public calls on the Rust surface were never inspected.
+    """
     last = ""
     for m in IMPL.finditer(text):
         if m.start() > at:
             break
-        last = m.group(1)
+        start = text.find("{", m.end())
+        if 0 <= start <= at < start + len(_body(text, m.end())):
+            last = m.group(1)
     return last
 
 
@@ -178,7 +185,8 @@ def collect() -> list[tuple[str, str, str, str]]:
             text = path.read_text()
             for m in CALL.finditer(text):
                 doc, call, raw = m.group(1), m.group(2), m.group(3)
-                if call.startswith("_test") or call.startswith("new"):
+                # The constructor by name, not by prefix: `news_headlines` starts with it.
+                if call.startswith("_test") or call == "new":
                     continue
                 if _impl_at(text, m.start()) != "EClient":
                     continue

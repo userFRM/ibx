@@ -77,6 +77,14 @@ SAYINGS: list[tuple[str, re.Pattern[str], str]] = [
     ),
 ]
 
+#: Every kind of file a reader is handed. Workflows, manifests and notebooks
+#: carry comments and prose the same as source does, and were never read.
+PUBLISHED_IN = (".rs", ".py", ".md", ".yml", ".yaml", ".json", ".toml", ".ipynb")
+
+#: The start of a line, up to its comment leader: what a claim written across
+#: two comment lines has between its words.
+LEADER = re.compile(r"^[ \t]*(?:///?|//!|#|\*|<!--)?[ \t]*")
+
 #: Where a claim is published. Test fixtures and this file are exempt: a
 #: fixture quotes the venue rather than speaking for the client, and this one
 #: has to name what it forbids.
@@ -88,7 +96,7 @@ def published() -> list[pathlib.Path]:
     for name in tracked:
         if name == "scripts/check_what_is_said.py":
             continue
-        if name.endswith((".rs", ".py", ".md")) and not name.endswith("tests.rs"):
+        if name.endswith(PUBLISHED_IN) and not name.endswith("tests.rs"):
             out.append(pathlib.Path(name))
     return out
 
@@ -100,10 +108,17 @@ def main() -> int:
             body = (ROOT / name).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for number, line in enumerate(body.splitlines(), start=1):
+        lines = body.splitlines()
+        for number, line in enumerate(lines, start=1):
+            # This line and the start of the next, so a claim broken across a
+            # line break is read as the sentence it is. Reported against the
+            # line it starts on, once.
+            following = LEADER.sub("", lines[number]) if number < len(lines) else ""
+            window = f"{line} {following}"
             for what, pattern, why in SAYINGS:
-                if pattern.search(line):
-                    problems.append(f"{name}:{number} {what}: {line.strip()[:100]}\n    {why}")
+                found = pattern.search(window)
+                if found and found.start() <= len(line):
+                    problems.append(f"{name}:{number} {what}: {window.strip()[:100]}\n    {why}")
 
     # A commit message is read on the same page as the code it changed, but
     # only for how it talks about the work. A commit that removes a claim has
