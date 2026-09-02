@@ -538,6 +538,10 @@ impl EClient {
     /// Reported rather than returning silently: a caller told nothing waits
     /// for orders that will not arrive.
     ///
+    /// `order_bound` is never fired here: the permanent id an order was given
+    /// arrives on its status and its fills, and the reference client no longer
+    /// gates anything on the message that would carry it.
+    ///
     /// `b_auto_bind` is taken and not applied. Whether it asks to bind or to
     /// stop binding, the answer is the same: this session hears about every
     /// order on the account either way.
@@ -566,6 +570,10 @@ impl EClient {
     /// every other request made before connecting is. Answered instead, the
     /// answer waits for a dispatch pass no session is there to make, and the
     /// caller hears nothing at all.
+    ///
+    /// `lastNDays` and `specificDates` on the filter are refused when stated:
+    /// the executions answered are this session's, filtered by the other
+    /// fields, and a window this client cannot apply would go unapplied.
     #[pyo3(signature = (req_id, exec_filter=None))]
     fn req_executions(&self, py: Python<'_>, req_id: i64, exec_filter: Option<Py<PyAny>>) -> PyResult<()> {
         let Some(_connected) = self.tx_or_report(req_id) else { return Ok(()) };
@@ -580,6 +588,22 @@ impl EClient {
                     .and_then(|v| v.extract::<i64>(py))
                     .unwrap_or_default()
             };
+            // Two filters this session cannot apply: it answers from the
+            // executions it has seen and does not ask the venue, so a window
+            // stated in days or dates would be dropped rather than applied.
+            // The reference leaves `lastNDays` at UNSET_INTEGER and
+            // `specificDates` at None; an object without them reads as 0.
+            let last_n_days = get_i64("lastNDays");
+            let dates_stated = fobj
+                .getattr(py, pyo3::types::PyString::new(py, "specificDates"))
+                .ok()
+                .is_some_and(|v| !v.is_none(py) && v.bind(py).len().is_ok_and(|n| n > 0));
+            if (last_n_days != 0 && last_n_days != i64::from(i32::MAX)) || dates_stated {
+                return self.report_refusal(py, req_id, Refusal::validation(
+                    "req_executions: lastNDays and specificDates are not applied here; \
+                     executions are this session's, filtered by the other fields",
+                ));
+            }
             ExecutionFilter {
                 symbol: get("symbol"),
                 sec_type: get("secType"),

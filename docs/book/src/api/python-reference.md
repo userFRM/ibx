@@ -135,7 +135,7 @@ client.asynchronous  # read-only attribute
 
 #### `server_version`
 
-`None`: no protocol version was stated. The reference client reads one off its gateway's greeting and gates what it sends on it. This session is opened against the venue itself, whose answer to the logon names no such number — the build and version on that exchange are the ones this client announces. Not a number in its place: a comparison against one, which is what the reference client uses this for, would be deciding on something nothing said.
+The protocol level this client implements: 217, the reference client's `MIN_SERVER_VER_ADDITIONAL_ORDER_PARAMS_2`. `None` before a session, as the reference client answers before its greeting.  In the reference architecture this number is the API level of the process a program is talking to. That process was the vendor's gateway, which announced it and had every request gated on it; here it is this client, so the number is a statement about this client and not a reading off the venue, whose logon names no such level.  217 is the newest gate whose feature is carried here. Nothing above it is: attached orders (218), the configuration requests (219, 221), `hedgeMaxSize` (223) and `conditionsIncludeOvernight` (226) are absent. Below it, a program that believes the number is wrong about the following, and every one fails loudly on use rather than quietly:  * Order fields this protocol does not carry, refused by name on `error` under 321 when the order is placed: `optOutSmartRouting` (56), `smartComboRoutingParams` (57), the delta-neutral settling, clearing and open/close fields (58, 66), `scaleInitFillQty` (60), `scaleTable` (69), `orderMiscOptions` (70), `algoId` (71), `randomizePrice` (76), `modelCode` on an order (103), `dontUseAutoPriceForHedge` (141), `whatIfType` (217). * Requests and fields that do not exist here, an `AttributeError`: the four `verify*` calls (70), `cancelContractData` and `cancelHistoricalTicks` (215), `ContractDetails.ineligibilityReasonList` (186), `Execution.submitter` (198). * A withdrawal stating a manual time, an operator or who entered it (169, 192), and an execution filter stating `lastNDays` or `specificDates` (200): refused by name on `error`. * Callbacks nothing fires, said on the call that would produce them: `receiveFA` and `replaceFAEnd` (157) after `requestFA` and `replaceFA`, whose answer is not read back, and `orderBound` (144) after `reqAutoOpenOrders`. These are the one case that is quiet at run time: a program that waits on them waits, and only the doc says why.  Every other gate at or below 217 names a request, field or callback that is here and carried.
 
 ```python
 def server_version()
@@ -809,7 +809,7 @@ def req_all_open_orders()
 
 #### `req_auto_open_orders`
 
-Binding an order placed elsewhere to this session.  The reference client asks a local process to hand over orders a person entered by hand in front of it. There is no such process here and no such person, so there is nothing to hand over, and this reports that rather than returning as though the binding were in place.  Reported rather than returning silently: a caller told nothing waits for orders that will not arrive.  `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
+Binding an order placed elsewhere to this session.  The reference client asks a local process to hand over orders a person entered by hand in front of it. There is no such process here and no such person, so there is nothing to hand over, and this reports that rather than returning as though the binding were in place.  Reported rather than returning silently: a caller told nothing waits for orders that will not arrive.  `order_bound` is never fired here: the permanent id an order was given arrives on its status and its fills, and the reference client no longer gates anything on the message that would carry it.  `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
 
 ```python
 def req_auto_open_orders(b_auto_bind)
@@ -823,7 +823,7 @@ def req_auto_open_orders(b_auto_bind)
 
 #### `req_executions`
 
-Request execution reports.  Before a session exists this is reported on the error callback, as every other request made before connecting is. Answered instead, the answer waits for a dispatch pass no session is there to make, and the caller hears nothing at all.
+Request execution reports.  Before a session exists this is reported on the error callback, as every other request made before connecting is. Answered instead, the answer waits for a dispatch pass no session is there to make, and the caller hears nothing at all.  `lastNDays` and `specificDates` on the filter are refused when stated: the executions answered are this session's, filtered by the other fields, and a window this client cannot apply would go unapplied.
 
 ```python
 def req_executions(req_id, exec_filter=None)
@@ -970,7 +970,7 @@ def last_rtt_ms()
 
 #### `req_market_data_type`
 
-Name the kind of data every subscription after this one asks for: 1 live, 2 frozen, 3 delayed, 4 delayed-frozen.  The type is carried on each subscription that follows, and the `market_data_type` callback reports the type that subscription was made under. A type this client does not know is logged and leaves subscriptions live. `req_mkt_data_ex` states the type per request, which allows two feeds on one contract at once.  Answered under 504 with no session, as every request is, and the type is then not kept. It used to be: set before `connect`, it applied to the session that followed. The reference client's sends and stores nothing, so a program written against it sets the type after connecting, having never had another way; what a caller loses here is only a setting the reference never let it make.
+Name the kind of data every subscription after this one asks for: 1 live, 2 frozen, 3 delayed, 4 delayed-frozen.  The type is carried on each subscription that follows, and the `market_data_type` callback reports the type that subscription was made under. A type this client does not know is logged and leaves subscriptions live. `req_mkt_data_ex` states the type per request, which allows two feeds on one contract at once.
 
 ```python
 def req_market_data_type(market_data_type)

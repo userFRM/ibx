@@ -80,6 +80,8 @@ class ExecutionFilter:
         self.secType = ""
         self.exchange = ""
         self.side = ""
+        self.lastNDays = UNSET_INTEGER
+        self.specificDates = None
 
 
 class ScannerSubscription:

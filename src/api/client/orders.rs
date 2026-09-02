@@ -526,6 +526,9 @@ impl EClient {
     /// them or not — and this surface names no client, so there is nothing to
     /// refuse and nothing left to do.
     ///
+    /// [`Wrapper::order_bound`] is never fired here: the permanent id an order
+    /// was given arrives on its status and its fills.
+    ///
     /// `b_auto_bind` is taken and not applied. Whether it asks to bind or to
     /// stop binding, the answer is the same: this session hears about every
     /// order on the account either way.

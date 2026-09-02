@@ -26,6 +26,10 @@ use crate::client_core::ClientCore;
 
 /// What the reference client reports for a request made before connecting.
 const NOT_CONNECTED_CODE: i64 = 504;
+/// The reference client's protocol level this client implements: the newest of
+/// its `MIN_SERVER_VER_*` gates whose feature is carried here. `server_version`
+/// says what a program believing it gets wrong.
+const SERVER_VERSION: i32 = 217;
 use crate::gateway::{Gateway, GatewayConfig, Session};
 use crate::types::*;
 use super::contract::Contract;
@@ -684,15 +688,46 @@ impl EClient {
         false
     }
 
-    /// `None`: no protocol version was stated. The reference client reads one
-    /// off its gateway's greeting and gates what it sends on it. This session
-    /// is opened against the venue itself, whose answer to the logon names no
-    /// such number — the build and version on that exchange are the ones this
-    /// client announces. Not a number in its place: a comparison against one,
-    /// which is what the reference client uses this for, would be deciding on
-    /// something nothing said.
+    /// The protocol level this client implements: 217, the reference client's
+    /// `MIN_SERVER_VER_ADDITIONAL_ORDER_PARAMS_2`. `None` before a session, as
+    /// the reference client answers before its greeting.
+    ///
+    /// In the reference architecture this number is the API level of the
+    /// process a program is talking to. That process was the vendor's gateway,
+    /// which announced it and had every request gated on it; here it is this
+    /// client, so the number is a statement about this client and not a
+    /// reading off the venue, whose logon names no such level.
+    ///
+    /// 217 is the newest gate whose feature is carried here. Nothing above it
+    /// is: attached orders (218), the configuration requests (219, 221),
+    /// `hedgeMaxSize` (223) and `conditionsIncludeOvernight` (226) are absent.
+    /// Below it, a program that believes the number is wrong about the
+    /// following, and every one fails loudly on use rather than quietly:
+    ///
+    /// * Order fields this protocol does not carry, refused by name on `error`
+    ///   under 321 when the order is placed: `optOutSmartRouting` (56),
+    ///   `smartComboRoutingParams` (57), the delta-neutral settling, clearing
+    ///   and open/close fields (58, 66), `scaleInitFillQty` (60), `scaleTable`
+    ///   (69), `orderMiscOptions` (70), `algoId` (71), `randomizePrice` (76),
+    ///   `modelCode` on an order (103), `dontUseAutoPriceForHedge` (141),
+    ///   `whatIfType` (217).
+    /// * Requests and fields that do not exist here, an `AttributeError`: the
+    ///   four `verify*` calls (70), `cancelContractData` and
+    ///   `cancelHistoricalTicks` (215), `ContractDetails.ineligibilityReasonList`
+    ///   (186), `Execution.submitter` (198).
+    /// * A withdrawal stating a manual time, an operator or who entered it
+    ///   (169, 192), and an execution filter stating `lastNDays` or
+    ///   `specificDates` (200): refused by name on `error`.
+    /// * Callbacks nothing fires, said on the call that would produce them:
+    ///   `receiveFA` and `replaceFAEnd` (157) after `requestFA` and `replaceFA`,
+    ///   whose answer is not read back, and `orderBound` (144) after
+    ///   `reqAutoOpenOrders`. These are the one case that is quiet at run
+    ///   time: a program that waits on them waits, and only the doc says why.
+    ///
+    /// Every other gate at or below 217 names a request, field or callback
+    /// that is here and carried.
     fn server_version(&self) -> Option<i32> {
-        None
+        self.is_connected().then_some(SERVER_VERSION)
     }
 
     /// When the venue says this session logged in, by its own clock and in its

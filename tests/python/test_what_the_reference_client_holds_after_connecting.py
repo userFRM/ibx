@@ -38,7 +38,7 @@ def test_the_client_id_is_the_sessions_and_none_without_one():
 def test_what_belongs_to_a_gateway_is_absent():
     c = EClient(EWrapper())
     c._test_connect()
-    assert c.serverVersion() is None
+    assert c.serverVersion() == 217, "the level this client implements; None only before a session"
     assert c.conn is None
     assert c.port is None
     assert c.asynchronous is False

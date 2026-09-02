@@ -1048,7 +1048,7 @@ pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper)
 
 #### `req_auto_open_orders`
 
-Automatically bind future orders to this client. Bind orders entered elsewhere to this client. Nothing goes to the venue; this is answered locally, setting a property of its own and refusing it for any client but the one those orders bind to. What that property gates does not arise here — this session is told about every order on the account, whether it placed them or not — and this surface names no client, so there is nothing to refuse and nothing left to do. `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
+Automatically bind future orders to this client. Bind orders entered elsewhere to this client. Nothing goes to the venue; this is answered locally, setting a property of its own and refusing it for any client but the one those orders bind to. What that property gates does not arise here — this session is told about every order on the account, whether it placed them or not — and this surface names no client, so there is nothing to refuse and nothing left to do. [`Wrapper::order_bound`] is never fired here: the permanent id an order was given arrives on its status and its fills. `b_auto_bind` is taken and not applied. Whether it asks to bind or to stop binding, the answer is the same: this session hears about every order on the account either way.
 
 ```rust
 pub fn req_auto_open_orders(&self, _b_auto_bind: bool)
