@@ -338,8 +338,6 @@ impl EClient {
         // approval and does not count as a new login. Owner-only, sealed with
         // the password, and bound to this account and this kind of session.
         session_file: Option<String>,
-        // Where the last order id handed out is kept. Beside the session file
-        // by default, or under the caller's home where there is none.
     ) -> PyResult<()> {
         let username_for_resume = username.clone();
         let username_for_session = username.clone();

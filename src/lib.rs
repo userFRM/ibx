@@ -88,8 +88,6 @@ pub mod engine;
 pub mod gateway;
 #[doc(hidden)]
 pub mod logging;
-/// The last order id handed out, kept between runs.
-#[doc(hidden)]
 #[doc(hidden)]
 pub mod protocol;
 

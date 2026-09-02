@@ -839,6 +839,15 @@ impl HotLoop {
         let mut cmds: Vec<ControlCommand> = std::mem::take(&mut self.ccp.resolved_named);
         cmds.append(&mut self.cmd_buf);
         for cmd in cmds {
+            // Nothing is carried out after the stop. A caller on another
+            // thread can have a subscription or an order in the same batch as
+            // the disconnect, and by then the stop has already withdrawn every
+            // stream and refused everything still queued — so one sent from
+            // here is live at the venue with no engine left to withdraw it,
+            // and an order queued from here is queued after the refusal swept.
+            if !self.running {
+                break;
+            }
             // A caller who passed the contract it wrote down rather than the
             // venue's id for it gets the lookup made on its behalf, and the
             // request arrives here again once the venue has named it.
@@ -3556,6 +3565,36 @@ mod tests {
         assert_eq!(
             destination, "BEST",
             "an unnamed venue is the smart one, and a security type is not a venue",
+        );
+    }
+
+    /// A command batched behind the stop is not carried out.
+    ///
+    /// One caller disconnecting while another subscribes puts both in the same
+    /// batch. The stop withdraws every stream and refuses everything queued,
+    /// and then the loop went on to the next command — so a subscription sent
+    /// from there is live at the venue with no engine left to withdraw it.
+    #[test]
+    fn nothing_batched_behind_the_stop_is_carried_out() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+
+        tx.send(ControlCommand::Shutdown).expect("the engine holds the other end");
+        tx.send(ControlCommand::SubscribeNews {
+            con_id: 265598,
+            symbol: "AAPL".into(),
+            sec_type: "STK".into(),
+            providers: String::new(),
+            reply_tx: None,
+        })
+        .expect("the engine holds the other end");
+        hl.poll_control_commands();
+
+        assert!(
+            hl.context.market.instrument_by_con_id(265598).is_none(),
+            "the subscription behind the stop registered nothing",
         );
     }
 

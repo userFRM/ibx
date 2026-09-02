@@ -18,7 +18,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Requests | 80. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
 | Order fields | 154. 114 are sent; 35 have no field in the protocol to carry them and the call says so rather than dropping them; 5 are what the venue fills on the way back, which an order does not carry out |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 2,360 offline, and 190 more that live in the suites run against a broker session |
+| Tests | 2,368 offline, and 191 more that live in the suites run against a broker session |
 
 ## API surface
 
@@ -63,10 +63,10 @@ nothing reaches and is counted as one on the limits page.
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,803 | No |
+| Rust unit and integration | 1,811 | No |
 | Rust, live | 9 | Yes |
 | Python | 557 | No |
-| Python, live | 136 | Yes |
+| Python, live | 137 | Yes |
 | Paper compatibility suite (153 phases) | 45 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
@@ -125,7 +125,7 @@ entitlement is answered with.
 
 | Capability | Status | Verification |
 | --- | :---: | --- |
-| 23 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat`. A preview states the order's type as one byte, and eleven types have one — the rest are previewed as a limit at the same price, so the margin comes back for a limit. Placing is unaffected; only the preview is |
+| 23 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat`. Every type this client places is previewed as itself |
 | Order fields | ✅ Supported | An order has 154 fields. 114 are sent. 35 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. 5 more are what the venue fills on the way back, which an order does not carry out. A check on every commit fails if a field starts being dropped |
 | Non-US markets | ✅ Supported | Previews accepted on DE, NL, GB, CH, AU, CA, US equities and FX; JP and HK rejected for lot size, which is the exchange rule and is surfaced to the caller |
 | Modify, cancel, global cancel | ✅ Supported | `scripts/sdk_lifecycle.py` (place → modify → cancel), `tests/ib_paper_compat` Phase 9 / 9b |
@@ -133,7 +133,7 @@ entitlement is answered with.
 | Conditions | ✅ Supported | All 6 types (price, volume, percent change, margin, execution, time) accepted and held by the server; `tests/ib_paper_compat` Phase 60 |
 | Order acceptance | ✅ Supported | Every change to an order answers with the order as this client sent it and the status it is now in, which is the pair the protocol answers a change with. 45 orders placed, modified and withdrawn over a 15-cycle session, every one reaching Cancelled, with no error |
 | Executions and fills | ✅ Supported | Fill reported and position reconciled; execution report retains server fields including unnamed tags; `tests/ib_paper_compat` Phase 97 |
-| A round trip on a funded account | ✅ Supported | One same-day option bought and sold on a funded account during regular hours: limit in, filled, limit out, position and account values reconciled, and nothing left open. Run once by hand rather than by a phase, a funded account being one the suite may not trade — so unlike every row beside it this one records a session rather than something a reader can repeat. The order id an account has already used is refused by name, so ids are counted from what the account last used rather than from one |
+| A round trip on a funded account | ✅ Supported | One same-day option bought and sold on a funded account during regular hours: limit in, filled, limit out, position and account values reconciled, and nothing left open. Run once by hand rather than by a phase, a funded account being one the suite may not trade — so unlike every row beside it this one records a session rather than something a reader can repeat |
 | Option exercise and lapse | ✅ Supported | Both submitted for a resolved option contract; server response 399 *"You have not got the number of options requested to be exercised"* delivered to the caller |
 
 ## Account
@@ -243,7 +243,7 @@ in.
 | The heartbeat is the interval the venue answered with | ✅ Supported | The interval a logon proposes is not what it is held to; the answer is read from the logon response and applied on every reconnect |
 | A reconnect follows the venue | ✅ Supported | It uses the hosts this session reached the venue through, on the port the venue named in its redirect, and stops walking hosts when one answers and refuses |
 | The first connect knocks on the next door when one does not answer | ✅ Supported | One host per region. A door that answers and refuses ends the walk, so a refused logon is not repeated at every door |
-| The last order id is kept between runs | ✅ Supported | An order id belongs to the account, not the process: an id it has already used is refused by name. The last one handed out is remembered per account, kind of session and client id, and the next run counts on from it |
+| An order id is counted from what the account is working | ✅ Supported | An order id belongs to the account, not the process, and the venue refuses one while the order under it is still working. Nothing is kept on disk: at each connect the venue replays what the account is working, and ids count from one past the highest of those — from one when nothing is working |
 | A session survives losing its connection | ✅ Supported | A dropped connection is rebuilt on the session already open, with no second factor: five forced drops recovered in 2-8s, and an eight hour session rode through its losses unattended |
 | A session does not survive its process | ✅ Documented | The venue holds a session for a socket, not for an account: killed without logging out, it was already gone forty seconds later, and a later start is answered with a handshake. A session is therefore bound to the socket that opened it, so a restart is a fresh logon and an uninterrupted session is not. What that costs an account with a second factor has not been measured here; a paper session presents none |
 | A session that has ended answers at once | ✅ Supported | Requests made after a terminal loss are refused with 504 immediately, rather than waiting out a timeout each. Every request already answered keeps the venue's answer |

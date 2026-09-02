@@ -158,17 +158,6 @@ None is silently dropped, and that is checked rather than claimed:
 `python scripts/gen_order_field_reach.py` recounts all four figures from the
 order builders and exits non-zero if any field becomes settable and unread.
 
-## What a margin preview actually previews
-
-A preview states the order's type as a single byte, and not every order type has
-one. Those that do not are previewed as a limit at the same price, so the margin
-that comes back is a limit's.
-
-Placing is unaffected. Only the preview is. Which types have their own byte is
-recorded in
-[capabilities.md](https://github.com/userFRM/ibx/blob/main/docs/capabilities.md),
-against the session it was measured on.
-
 ## Implied volatility and option price
 
 The venue computes its option model and publishes it per option, on a
