@@ -2674,6 +2674,17 @@ fn two_prints_of_one_order_in_one_pass_are_two_executions() {
         [("0001f4e8.1".to_string(), 5.0), ("0001f4e8.2".to_string(), 10.0)],
         "each print is reported under the execution it was booked off",
     );
+
+    // And the record kept for a replay holds two. Stored under one id they
+    // would be one execution: the second is refused as a duplicate of the
+    // first, and the caller is answered with half its fills.
+    w.rows.clear();
+    client.req_executions(3, &crate::types::model::ExecutionFilter::default(), &mut w);
+    assert_eq!(
+        w.rows,
+        [("0001f4e8.1".to_string(), 5.0), ("0001f4e8.2".to_string(), 10.0)],
+        "and the caller that asks for the day's executions is answered with both",
+    );
 }
 
 #[test]

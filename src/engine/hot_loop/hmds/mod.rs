@@ -1541,9 +1541,9 @@ fn build_tbt_query(
     }
 
     pub(crate) fn send_head_timestamp_request(&mut self, req_id: u32, con_id: i64, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
-        // Same shared table as the bar paths — this was a third divergent
-        // copy with a silent TRADES fallback.
-        let data_type = match crate::control::historical::BarDataType::from_api_str(what_to_show) {
+        // The head-timestamp table, which is the bar one and the rate: this
+        // was a third divergent copy with a silent TRADES fallback.
+        let data_type = match crate::control::historical::head_timestamp_data_type(what_to_show) {
             Ok(dt) => dt,
             Err(e) => {
                 log::error!("head timestamp req_id={req_id}: {e}");

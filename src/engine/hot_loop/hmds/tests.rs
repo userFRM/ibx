@@ -800,7 +800,7 @@ mod hmds_correlation_tests {
                     con_id,
                     sec_type: "CS".into(),
                     exchange: "SMART".into(),
-                    data_type: crate::control::historical::BarDataType::Trades,
+                    data_type: "Last",
                     use_rth: true,
                 },
             )

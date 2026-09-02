@@ -623,6 +623,22 @@ pub fn parse_ticker_id(xml: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// What the venue calls a series asked for the earliest moment it holds.
+///
+/// A head timestamp is a query type of its own, and the venue's vocabulary for
+/// it is not the bar one. Asked here for the option-exercise rate it answers
+/// that it holds no data for the contract, naming the series back — the same
+/// answer the tick query gives — where a bar query for the same name is
+/// refused as a query type that does not take it. Read through the bar table
+/// alone, the one name the two vocabularies differ on was refused here without
+/// being asked.
+pub fn head_timestamp_data_type(what_to_show: &str) -> Result<&'static str, String> {
+    if what_to_show.eq_ignore_ascii_case("OPTION_EXERCISE_INTEREST_RATE") {
+        return Ok("OptExInterestRate");
+    }
+    BarDataType::from_api_str(what_to_show).map(|series| series.as_str())
+}
+
 /// Parameters for a head timestamp request.
 #[derive(Debug, Clone)]
 pub struct HeadTimestampRequest {
@@ -632,8 +648,8 @@ pub struct HeadTimestampRequest {
     pub sec_type: String,
     /// Which venue to answer for.
     pub exchange: String,
-    /// Which series is wanted.
-    pub data_type: BarDataType,
+    /// Which series is wanted, under the name the venue knows it by.
+    pub data_type: &'static str,
     /// Whether to count only regular trading hours.
     pub use_rth: bool,
 }
@@ -659,7 +675,7 @@ pub fn head_timestamp_query_id(req: &HeadTimestampRequest) -> String {
     };
     let rth = if req.use_rth { "true" } else { "false" };
     format!("TickHeadClient1;;{}@{} {};;0;;{};;0;;U",
-        req.con_id, exchange, req.data_type.as_str(), rth)
+        req.con_id, exchange, req.data_type, rth)
 }
 
 /// Build the XML query for a head timestamp request.
@@ -691,7 +707,7 @@ pub fn build_head_timestamp_xml(req: &HeadTimestampRequest) -> String {
          </ListOfQueries>",
         con_id = req.con_id,
         sec_type = req.sec_type,
-        data = req.data_type.as_str(),
+        data = req.data_type,
     )
 }
 

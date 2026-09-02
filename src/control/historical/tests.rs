@@ -343,7 +343,7 @@ fn head_timestamp_xml_structure() {
         con_id: 756733,
         sec_type: "STK".to_string(),
         exchange: "SMART".to_string(),
-        data_type: BarDataType::Trades,
+        data_type: "Last",
         use_rth: true,
     };
     let xml = build_head_timestamp_xml(&req);
@@ -1011,6 +1011,28 @@ fn the_series_the_venue_carries_are_asked_for_by_its_own_names() {
             .unwrap_or_else(|why| panic!("{asked} is a series the venue carries: {why}"));
         assert_eq!(read.as_str(), on_the_wire, "{asked} goes out under the wrong name");
     }
+}
+
+/// The head timestamp takes a name the bar query refuses.
+///
+/// Its query type is its own and so is the venue's vocabulary for it: asked
+/// here for the option-exercise rate the venue answers that it holds no data
+/// for the contract, naming the series back, where a bar query for the same
+/// name is refused as a query type that does not take it. Read through the bar
+/// table alone, the one name the two differ on was refused without being asked.
+#[test]
+fn the_head_timestamp_takes_the_rate_the_bar_query_refuses() {
+    assert_eq!(head_timestamp_data_type("OPTION_EXERCISE_INTEREST_RATE"), Ok("OptExInterestRate"));
+    assert!(BarDataType::from_api_str("OPTION_EXERCISE_INTEREST_RATE").is_err());
+    // And everything the bar table takes, under the same names.
+    for asked in ["TRADES", "MIDPOINT", "BID_ASK", "HISTORICAL_VOLATILITY"] {
+        assert_eq!(
+            head_timestamp_data_type(asked),
+            BarDataType::from_api_str(asked).map(|s| s.as_str()),
+            "{asked}",
+        );
+    }
+    assert!(head_timestamp_data_type("NONSENSE").is_err());
 }
 
 /// One name that is two series is not answered with one of them.
