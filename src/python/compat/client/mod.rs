@@ -695,9 +695,9 @@ impl EClient {
         if self.is_connected() { self.logged_in_at.lock().unwrap().clone() } else { None }
     }
 
-    /// Taken and not applied. The reference client carries these on its
-    /// greeting to its gateway, which reads them; there is no gateway between
-    /// this client and the venue to read them.
+    /// `opts` is taken and not applied. The reference client carries these on
+    /// its greeting to its gateway, which reads them; there is no gateway
+    /// between this client and the venue to read them.
     fn set_connect_options(&self, opts: &str) {
         let _ = opts;
     }

@@ -95,7 +95,7 @@ client.client_id  # read-only attribute
 
 #### `host`
 
-The auth server this session logged in through, and `None` when there is no session.  Where the venue sent it, which is not always where it knocked: the venue answers the first message by naming the server the account belongs on, and the session follows. The reference client holds the machine its gateway runs on here. There is no gateway, and of the servers the venue names for a session this is the one it logged in through.
+The server this session connected to, and `None` when there is no session.  The one it knocked on, which is the one the caller named — the venue may then send it elsewhere, and the rest of that list is where. The reference client holds what its caller passed here too.
 
 ```python
 client.host  # read-only attribute
@@ -155,7 +155,7 @@ def tws_connection_time()
 
 #### `set_connect_options`
 
-Taken and not applied. The reference client carries these on its greeting to its gateway, which reads them; there is no gateway between this client and the venue to read them.
+`opts` is taken and not applied. The reference client carries these on its greeting to its gateway, which reads them; there is no gateway between this client and the venue to read them.
 
 ```python
 def set_connect_options(opts)
