@@ -292,6 +292,13 @@ impl EClient {
                 "order_id {order_id} is not an order number: they start at one",
             ))
         })?;
+        // An order still held never reached the venue, so withdrawing it is
+        // forgetting a command rather than sending one. Sent, the venue
+        // answers that it knows no such order and the command stays queued to
+        // go out behind the next thing that transmits.
+        if self.core.withdraw_held(order_id) {
+            return Ok(());
+        }
         self.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
     }
 
@@ -323,6 +330,11 @@ impl EClient {
     pub fn req_global_cancel(&self) -> Result<(), Refusal> {
         self.refuse_if_trading_is_over("a withdrawal of every order")?;
         self.core.refuse_if_readonly("a global cancel").map_err(Refusal::validation)?;
+        // Everything held goes with everything working: an order the venue was
+        // never given is withdrawn by forgetting it, and left queued it would
+        // go out behind the next thing that transmits — after the caller had
+        // asked for every order to be taken back.
+        self.core.withdraw_all_held();
         // Use global instrument count (not just locally-tracked ones)
         let count = self.shared.market.instrument_count();
         for instrument in 0..count {

@@ -212,6 +212,58 @@ fn a_tick_by_tick_stream_checks_the_number_it_was_given() {
     assert!(err.message.contains("req_id"), "got: {err}");
 }
 
+/// Withdrawing a held order forgets it rather than telling the venue.
+///
+/// It was never sent, so the venue knows no such order — and left queued, the
+/// next thing that transmitted sent the order the caller had just cancelled.
+#[test]
+fn a_held_order_that_is_withdrawn_does_not_go_out_later() {
+    let (client, rx, _shared) = test_client();
+    let leg = |id: i64, parent: i64, transmit: bool| Order {
+        order_id: id,
+        parent_id: parent,
+        transmit,
+        action: if parent == 0 { "BUY".into() } else { "SELL".into() },
+        total_quantity: 100.0,
+        order_type: "LMT".into(),
+        lmt_price: 100.0,
+        tif: "DAY".into(),
+        ..Default::default()
+    };
+
+    client.place_order(80, &spy(), &leg(80, 0, false)).expect("held");
+    client.cancel_order(80, "").expect("withdrawn");
+    assert!(rx.try_recv().is_err(), "nothing was sent, so nothing is withdrawn at the venue");
+
+    client.place_order(81, &spy(), &leg(81, 80, true)).expect("this one transmits");
+    let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert_eq!(sent.len(), 1, "only the order that transmitted: {sent:?}");
+}
+
+/// A parent placed again to transmit sends the children held under it.
+#[test]
+fn transmitting_a_parent_releases_what_hangs_from_it() {
+    let (client, rx, _shared) = test_client();
+    let leg = |id: i64, parent: i64, transmit: bool| Order {
+        order_id: id,
+        parent_id: parent,
+        transmit,
+        action: if parent == 0 { "BUY".into() } else { "SELL".into() },
+        total_quantity: 100.0,
+        order_type: "LMT".into(),
+        lmt_price: 100.0,
+        tif: "DAY".into(),
+        ..Default::default()
+    };
+
+    client.place_order(90, &spy(), &leg(90, 0, false)).expect("held");
+    client.place_order(91, &spy(), &leg(91, 90, false)).expect("held under it");
+    client.place_order(90, &spy(), &leg(90, 0, true)).expect("the parent transmits");
+
+    let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert_eq!(sent.len(), 2, "the child held under it goes too: {sent:?}");
+}
+
 /// A bracket built the way the reference client's own sample builds one.
 ///
 /// It places a parent and a take-profit held back and lets the stop-loss send

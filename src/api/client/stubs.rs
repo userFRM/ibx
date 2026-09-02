@@ -324,7 +324,19 @@ impl EClient {
 
     /// Drop a kept question and the watch it opened.
     fn forget_option_calc(&self, req_id: i64) {
-        if self.pending_option_calcs.lock().unwrap().remove(&req_id).is_some() {
+        // The watch goes with the last question on the contract, not the
+        // first. The venue states a model only for a contract something is
+        // watching, so the first question opens the watch and the next finds
+        // it open and opens nothing; withdrawing the first took the watch out
+        // from under the second, which could then never be answered and was
+        // never refused either. The other surface says the same.
+        let mut kept = self.pending_option_calcs.lock().unwrap();
+        let Some(gone) = kept.remove(&req_id) else { return };
+        let still_watched = kept
+            .values()
+            .any(|other| other.contract.con_id == gone.contract.con_id);
+        drop(kept);
+        if !still_watched {
             let _ = self.cancel_mkt_data(req_id);
         }
     }

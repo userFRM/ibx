@@ -871,6 +871,29 @@ impl ClientCore {
         held.push(HeldOrder { order_id, parent_id, command });
     }
 
+    /// Take back an order that never went, and say whether it was held.
+    ///
+    /// A held order is one the venue was never given, so withdrawing it is not
+    /// a message to the venue — it is forgetting a command that had not been
+    /// sent. Sent anyway, the venue answers that it knows no such order, and
+    /// the command stayed queued to go out later behind something that
+    /// transmits: a caller that withdrew a parent and then sent its stop-loss
+    /// had the parent it had cancelled placed for it.
+    pub fn withdraw_held(&self, order_id: u64) -> bool {
+        let mut held = self.held_orders.lock().unwrap();
+        let before = held.len();
+        held.retain(|other| other.order_id != order_id);
+        held.len() != before
+    }
+
+    /// Take back everything held, and say how many there were.
+    ///
+    /// What a withdrawal of everything means for orders that were never sent.
+    pub fn withdraw_all_held(&self) -> usize {
+        let mut held = self.held_orders.lock().unwrap();
+        std::mem::take(&mut *held).len()
+    }
+
     /// The held orders an order that transmits releases, in the order they go.
     ///
     /// Its own parent first, then anything else held that hangs from the same
@@ -888,7 +911,13 @@ impl ClientCore {
         }
         let mut siblings = Vec::new();
         held.retain(|h| {
-            let same_family = parent_id != 0 && h.parent_id == parent_id && h.order_id != order_id;
+            // Beside it under the same parent, or hanging from this one: a
+            // parent placed again to transmit is what releases its own
+            // children, and collecting only siblings left them held until the
+            // session ended.
+            let same_family = (parent_id != 0 && h.parent_id == parent_id)
+                || h.parent_id == order_id as i64;
+            let same_family = same_family && h.order_id != order_id;
             if same_family {
                 siblings.push(h.command.clone());
             }
