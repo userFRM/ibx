@@ -791,6 +791,14 @@ pub struct PositionInfo {
     pub market_value: Price,     // position mark * PRICE_SCALE
     /// What it has made and not realised.
     pub unrealized_pnl: Price,   // * PRICE_SCALE
+    /// Whether the venue has stated that figure.
+    ///
+    /// Zero is one of the figures it states — a position marked at what it
+    /// cost has made nothing — so the number alone cannot say whether it was
+    /// given. Read as unstated, a stated zero fell through to one worked out
+    /// here from the last print, which differs from the venue's by whatever
+    /// the mark and the last print differ by.
+    pub unrealized_stated: bool,
     /// What has been realised on it.
     pub realized_pnl: Price,     // * PRICE_SCALE
 }

@@ -2487,7 +2487,7 @@ impl ClientCore {
             // The venue states what the position has made and not realised,
             // and it is the only figure that is right for a contract worth
             // more than one unit of its own price.
-            let unrealized = if pi.unrealized_pnl != 0 {
+            let unrealized = if pi.unrealized_stated {
                 pi.unrealized_pnl as f64 / PRICE_SCALE_F
             } else if avg_cost != 0 && !position_is_multiplied(&pi) {
                 qty_now * (price_now - avg_cost) as f64 / PRICE_SCALE_F

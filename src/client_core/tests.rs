@@ -395,6 +395,32 @@ fn a_seed_without_a_quantity_is_not_read_as_opened_today() {
     );
 }
 
+/// A stated zero is a figure, not a silence.
+///
+/// A position marked at what it cost has made nothing, and the venue says so.
+/// Read as though nothing had been said, that fell through to a figure worked
+/// out here from the last print — so a caller was told a position had made
+/// something on a report where the venue said it had made nothing.
+#[test]
+fn a_position_the_venue_says_has_made_nothing_is_reported_as_nothing() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    core.subscribe_pnl_single(11, 8002);
+
+    // Held at 100, and the last print is 105 — so a figure worked out here
+    // would say 50. The venue marks it at what it cost and states that it has
+    // made nothing, which is the answer.
+    seed_pnl_position(&core, &shared, 8002, 0, 10.0, 100.0, 105.0, 100.0);
+    shared.portfolio.set_position_marks(8002, Some((100.0 * PRICE_SCALE_F) as i64), None, Some(0), None);
+
+    let updates = core.poll_pnl_single(&shared);
+    let update = updates.first().expect("callback must fire");
+    assert_eq!(
+        update.unrealized_pnl, 0.0,
+        "the venue said nothing was made, so nothing was made",
+    );
+}
+
 #[test]
 fn poll_pnl_intraday_opened_position_fires_callback() {
     // An account flat at midnight that opens a position during the day.
@@ -1081,6 +1107,7 @@ fn a_position_pnl_is_answered_without_a_market_data_subscription() {
         market_price: (105.0 * PRICE_SCALE_F) as i64,
         market_value: (1050.0 * PRICE_SCALE_F) as i64,
         unrealized_pnl: (50.0 * PRICE_SCALE_F) as i64,
+        unrealized_stated: true,
         realized_pnl: 0,
     });
     shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {

@@ -211,7 +211,7 @@ impl PortfolioState {
         let entry = map.entry(con_id).or_insert_with(|| PositionInfo { con_id, ..Default::default() });
         if let Some(v) = market_price { entry.market_price = v; }
         if let Some(v) = market_value { entry.market_value = v; }
-        if let Some(v) = unrealized_pnl { entry.unrealized_pnl = v; }
+        if let Some(v) = unrealized_pnl { entry.unrealized_pnl = v; entry.unrealized_stated = true; }
         if let Some(v) = realized_pnl { entry.realized_pnl = v; }
     }
 
