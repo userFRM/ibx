@@ -74,10 +74,12 @@ pub fn event_data_request(query: &CalendarQuery) -> Result<String, String> {
     } else if let Some(con_id) = query.con_id {
         format!(r#"{{"watchlist":["{con_id}"]}}"#)
     } else {
-        return Err(
-            "a calendar request needs either a filter or a contract to fetch events for"
-                .to_string(),
-        );
+        // Neither stated. The document is still a document — a request scoped
+        // by the portfolio or by competitors states neither — and what the
+        // venue answers a request with no scope is for the venue to say. It
+        // was refused here on a prediction of that answer, which made those
+        // requests unreachable from this client.
+        String::from("{}")
     };
 
     let mut parts = vec![format!(r#""sources":["{CALENDAR_SOURCE}"]"#)];
@@ -175,11 +177,23 @@ mod tests {
         assert!(bounded.contains(r#""total_limit":"50""#), "{bounded}");
     }
 
-    /// A request with neither a filter nor a contract is refused here rather
-    /// than sent. The venue would answer it with everything or with nothing,
-    /// and neither is what the caller meant.
+    /// A request that names neither a filter nor a contract is still a request.
+    ///
+    /// It was refused here on what the venue would answer — everything, or
+    /// nothing — which is a prediction of a reply nobody had asked for. The
+    /// scopes that name neither, the portfolio and the competitors, were
+    /// unreachable from this client for as long as it stood.
     #[test]
-    fn asking_for_nothing_in_particular_is_refused() {
-        assert!(event_data_request(&CalendarQuery::default()).is_err());
+    fn a_request_that_names_no_scope_is_still_asked() {
+        let asked = event_data_request(&CalendarQuery::default())
+            .expect("the venue is asked, and the venue answers");
+        assert!(asked.contains(r#""filters":{}"#), "{asked}");
+
+        let portfolio = event_data_request(&CalendarQuery {
+            fill_portfolio: true,
+            ..Default::default()
+        })
+        .expect("a portfolio-scoped request names no filter and no contract");
+        assert!(portfolio.contains(r#""fill_portfolio":true"#), "{portfolio}");
     }
 }

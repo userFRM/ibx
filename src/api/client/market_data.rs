@@ -140,6 +140,12 @@ impl EClient {
         &self, req_id: i64, contract: &Contract, tick_type: &str,
         number_of_ticks: i32, ignore_size: bool,
     ) -> Result<(), Refusal> {
+        // The only request surface that did not check the number it was given.
+        // Unchecked, it was narrowed further down instead, so a caller
+        // numbering its requests from the order counter — which the venue lets
+        // run past what a request id can hold — had this stream's refusals
+        // reported against somebody else's request.
+        let _ = wire_req_id(req_id)?;
         // Named by the venue where the caller named it by id alone.
         let contract = &*self.named_by_the_venue(contract)?;
         if number_of_ticks != 0 {
@@ -259,9 +265,17 @@ impl EClient {
         // Refused here rather than turned into trades on the way out: a
         // misspelled "BID" answered with trade bars looks like data.
         crate::control::historical::BarDataType::from_api_str(what_to_show)?;
+        let wire = wire_req_id(req_id)?;
+        // A historical request that finished under this number left the number
+        // marked as one whose bars are updates to it, and only a new or a
+        // cancelled historical request cleared that mark. Backfill and then
+        // stream on the same number — the ordinary way to write it — and every
+        // bar of the stream arrived as an update to the finished request, so a
+        // caller that overrode only the stream read it as dead.
+        self.core.historical_request_is_new(wire);
         self.send(ControlCommand::SubscribeRealTimeBar {
             contract: contract.into(),
-            req_id: wire_req_id(req_id)?,
+            req_id: wire,
             filters: contract.lookup_filters(),
             what_to_show: what_to_show.into(),
             use_rth,

@@ -585,9 +585,22 @@ impl EClient {
         true
     }
 
-    /// Drop a kept question and the watch it opened.
+    /// Drop a kept question, and the watch it opened if it was the last on it.
+    ///
+    /// The venue states a model only for a contract something is watching, so
+    /// the first question on a contract opens the watch and the next one finds
+    /// it already open and opens nothing. Withdrawing the first therefore took
+    /// the watch out from under the second, which could then never be answered
+    /// and was never refused either — no model, no error, for the rest of the
+    /// session.
     fn forget_option_calc(&self, py: Python<'_>, req_id: i64) {
-        if self.pending_option_calcs.lock().unwrap().remove(&req_id).is_some() {
+        let mut kept = self.pending_option_calcs.lock().unwrap();
+        let Some(gone) = kept.remove(&req_id) else { return };
+        let still_watched = kept
+            .values()
+            .any(|other| other.contract.con_id == gone.contract.con_id);
+        drop(kept);
+        if !still_watched {
             let _ = self.cancel_mkt_data(py, req_id);
         }
     }

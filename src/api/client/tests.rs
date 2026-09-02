@@ -197,6 +197,47 @@ fn a_what_if_preview_reports_the_parent_the_child_was_given() {
     );
 }
 
+/// Every request checks the number it was given, including this one.
+///
+/// It was the only surface that did not. Unchecked here, the number was
+/// narrowed further down instead, so a caller numbering its requests from the
+/// order counter — which the venue lets run past what a request id holds — had
+/// this stream's refusals reported against somebody else's request.
+#[test]
+fn a_tick_by_tick_stream_checks_the_number_it_was_given() {
+    let (client, _rx, _shared) = test_client();
+    let err = client
+        .req_tick_by_tick_data(u32::MAX as i64 + 1, &spy(), "Last", 0, false)
+        .expect_err("a number no request id can hold is refused");
+    assert!(err.message.contains("req_id"), "got: {err}");
+}
+
+/// A stream taking a number a finished lookup used is a stream, not an update.
+///
+/// A completed historical request left the number marked as one whose bars
+/// belong to it, and only a new or a cancelled historical request cleared the
+/// mark. Backfill and then stream on one number — which is how it is written —
+/// and every bar of the stream arrived as an update to the request that had
+/// already ended, so a caller that overrode only the stream read it as dead.
+#[test]
+fn a_stream_on_a_finished_lookups_number_is_a_stream() {
+    let (client, rx, _shared) = test_client();
+    client.core.hist_initial_complete.lock().unwrap().insert(4242);
+    assert!(
+        client.core.hist_initial_complete.lock().unwrap().contains(&4242),
+        "the lookup finished",
+    );
+
+    client
+        .req_real_time_bars(4242, &spy(), 5, "TRADES", true)
+        .expect("the stream takes the number");
+    assert!(
+        !client.core.hist_initial_complete.lock().unwrap().contains(&4242),
+        "and the number is a stream's again, not a finished lookup's",
+    );
+    let _ = rx;
+}
+
 /// A quantity that is not a number, or overflows the fixed-point form, becomes
 /// a size the caller did not ask for.
 ///
