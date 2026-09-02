@@ -177,13 +177,19 @@ pub struct Order {
     /// The order this one is a child of. A bracket's children name their
     /// parent, and the venue holds them until it fills.
     pub parent_id: i64,
-    /// Whether the venue acts on the order now.
+    /// Whether the order goes to the venue now.
     ///
-    /// **Not carried by this protocol.** There is no staging: an order that
-    /// reaches the venue is working. Taken here and kept, so an order built
-    /// against another client reads back what it set, and an order asking to
-    /// be held back is refused rather than placed live — which is what it
-    /// would otherwise be, immediately and without saying so.
+    /// **Held here.** The venue has no word for an order held back — the field is one the
+    /// reference client sends to its counterpart, not one that reaches the
+    /// venue, and that counterpart's own words for an order set this way are
+    /// that it is created and not transmitted. So it is held here instead:
+    /// nothing is sent until an order that transmits releases it, which is
+    /// either this one placed again or another in the same family. The
+    /// reference client's own bracket sample places a parent and a take-profit
+    /// held back and lets the stop-loss send all three.
+    ///
+    /// A held order never reached the venue, so it is dropped when the session
+    /// ends, as the counterpart drops its own.
     pub transmit: bool,
     /// How far past the limit the order may reach, unshown.
     pub discretionary_amt: f64,

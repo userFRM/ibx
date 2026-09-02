@@ -209,7 +209,17 @@ impl EClient {
         } else {
             ClientCore::build_order_request(order, oid, instrument, Some(contract))?
         };
-        self.send(cmd)?;
+        // An order that does not transmit is built and kept, not sent and not
+        // refused. One that does sends whatever of its family was kept, in the
+        // order it was placed, and then itself.
+        if order.transmit {
+            for waiting in self.core.release_before(oid, order.parent_id) {
+                self.send(waiting)?;
+            }
+            self.send(cmd)?;
+        } else {
+            self.core.hold_until_transmitted(oid, order.parent_id, cmd);
+        }
         self.core.cache_contract(contract.con_id, contract.clone());
         self.core.track_order(oid, contract.clone(), order.clone(), instrument);
         Ok(())

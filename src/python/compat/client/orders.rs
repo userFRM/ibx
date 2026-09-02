@@ -211,7 +211,17 @@ impl EClient {
                 Err(why) => return self.report_refusal(py, order_id, why.into()),
             }
         };
-        Self::send_control(py, &tx, cmd)?;
+        // As on the other surface: an order that does not transmit is built
+        // and kept, and one that does sends whatever of its family was kept
+        // before sending itself.
+        if api_order.transmit {
+            for waiting in self.core.release_before(oid, api_order.parent_id) {
+                Self::send_control(py, &tx, waiting)?;
+            }
+            Self::send_control(py, &tx, cmd)?;
+        } else {
+            self.core.hold_until_transmitted(oid, api_order.parent_id, cmd);
+        }
 
         // Track order in shared core
         let api_contract = contract.to_api();

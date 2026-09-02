@@ -550,6 +550,16 @@ pub enum GroupEvent {
 
 /// What both client surfaces share: which request is on which
 /// contract, what the venue last said, and what is still subscribed.
+/// An order built and not sent, waiting for one that transmits.
+pub struct HeldOrder {
+    /// The id it was placed under.
+    pub order_id: u64,
+    /// The order it hangs from, or zero.
+    pub parent_id: i64,
+    /// What will go out, exactly as it would have.
+    pub command: ControlCommand,
+}
+
 /// What one historical request asked for.
 ///
 /// Kept because the reply states neither: the counterpart writes the request's
@@ -688,6 +698,15 @@ pub struct ClientCore {
     /// reply states neither — the counterpart states the request's own range
     /// beside the last bar, so the request is what has to be kept.
     historical_asks: Mutex<HashMap<i64, HistoricalAsk>>,
+    /// Orders built and not sent, waiting for one that transmits.
+    ///
+    /// The counterpart holds these itself: the field saying whether an order
+    /// goes now is one the reference client sends to it, not one the venue
+    /// reads, and its own words for an order held back are that it is created
+    /// and not transmitted. This client stands where it stood, so the holding
+    /// is this client's. Kept in the order they were placed, which is the
+    /// order they go out in.
+    held_orders: Mutex<Vec<HeldOrder>>,
 
     // Historical data keepUpToDate: req_ids that have completed initial batch.
     // Subsequent bars for these req_ids dispatch as historical_data_update.
@@ -807,6 +826,7 @@ impl ClientCore {
             mdt_sent: Mutex::new(HashSet::new()),
             mdt_by_req: Mutex::new(HashMap::new()),
             historical_asks: Mutex::new(HashMap::new()),
+            held_orders: Mutex::new(Vec::new()),
             hist_initial_complete: Mutex::new(HashSet::new()),
             // Empty until something states them. Which providers an account
             // may read is the venue's answer, given at logon; a pair of codes
@@ -841,9 +861,54 @@ impl ClientCore {
         Ok(())
     }
 
+    /// Keep an order back until one that transmits releases it.
+    ///
+    /// Nothing is sent and nothing is refused. The reference client's own
+    /// bracket sample places a parent and a take-profit this way and lets the
+    /// stop-loss send all three, so refusing it here made that sample — the
+    /// documented way to place a bracket — impossible.
+    pub fn hold_until_transmitted(&self, order_id: u64, parent_id: i64, command: ControlCommand) {
+        let mut held = self.held_orders.lock().unwrap();
+        held.retain(|other| other.order_id != order_id);
+        held.push(HeldOrder { order_id, parent_id, command });
+    }
+
+    /// The held orders an order that transmits releases, in the order they go.
+    ///
+    /// Its own parent first, then anything else held that hangs from the same
+    /// parent, then the caller sends the transmitting order itself. Only the
+    /// family it belongs to: an order that transmits says nothing about a
+    /// bracket somebody else is still building, and sending those too would
+    /// put orders on the venue that nobody asked to send yet.
+    pub fn release_before(&self, order_id: u64, parent_id: i64) -> Vec<ControlCommand> {
+        let mut held = self.held_orders.lock().unwrap();
+        let mut going: Vec<ControlCommand> = Vec::new();
+        if parent_id != 0
+            && let Some(at) = held.iter().position(|h| h.order_id == parent_id as u64)
+        {
+            going.push(held.remove(at).command);
+        }
+        let mut siblings = Vec::new();
+        held.retain(|h| {
+            let same_family = parent_id != 0 && h.parent_id == parent_id && h.order_id != order_id;
+            if same_family {
+                siblings.push(h.command.clone());
+            }
+            !same_family
+        });
+        going.extend(siblings);
+        // And the order itself, where it was held before and now transmits.
+        held.retain(|h| h.order_id != order_id);
+        going
+    }
+
     /// Forget everything this session held, so the next one starts clean.
     pub fn reset(&self) {
         self.req_to_instrument.lock().unwrap().clear();
+        // An order held back never reached the venue, and the counterpart
+        // loses its own held orders when it stops. Carried into the next
+        // session they would go out under an id that session never issued.
+        self.held_orders.lock().unwrap().clear();
         self.instrument_to_req.lock().unwrap().clear();
         self.tbt_to_instrument.lock().unwrap().clear();
         self.instrument_followers.lock().unwrap().clear();
@@ -2841,11 +2906,6 @@ impl ClientCore {
                             not carried on the order, so the full quantity \
                             would fill on the connected account rather than \
                             the share stated.",
-            transmit: "transmit=false is not supported: orders are transmitted \
-                       immediately on place_order; there is no staging concept, \
-                       so the order would go live despite transmit=false. Place \
-                       child orders with parent_id/oca_group set and keep \
-                       transmit=true (the engine links them server-side).",
             order_misc_options, origin, override_percentage_constraints,
             parent_perm_id, pt_order_id, pt_order_type, randomize_price,
             scale_init_fill_qty, scale_table, shareholder, sl_order_id,

@@ -211,6 +211,26 @@ def reported() -> dict[str, str]:
     return out
 
 
+def held() -> dict[str, str]:
+    """Fields this client acts on itself rather than sending or refusing.
+
+    The counterpart this replaces reads some of what the reference client sends
+    it and never puts it on the wire — an order held back is created there and
+    not transmitted. Such a field is neither carried nor refused, and it is not
+    dropped either: something happens because it was set. Counted apart so that
+    a field genuinely going nowhere still shows up as one.
+    """
+    text = module("src/types/model").read_text()
+    at = text.index("pub struct Order ")
+    end = text.index("\n}", at)
+    out = {}
+    for m in re.finditer(r"((?:^\s*///.*\n)+)\s*pub (\w+):", text[at:end], re.M):
+        doc = " ".join(line.strip(" /") for line in m.group(1).strip().splitlines())
+        if "held here" in doc.lower():
+            out[m.group(2)] = doc
+    return out
+
+
 def where_fields_are_read() -> str:
     """Everything that reads an order, with the order's own definition removed.
 
@@ -282,9 +302,10 @@ def main() -> int:
     read = where_fields_are_read()
 
     echoed = reported()
+    kept = held()
     carried, dropped = [], []
     for field in fields:
-        if field in says_so or field in echoed:
+        if field in says_so or field in echoed or field in kept:
             continue
         if re.search(rf"\b{field}\b", read):
             carried.append(field)
@@ -305,6 +326,7 @@ def main() -> int:
         f"| carried | {len(carried)} | goes out under a tag |",
         f"| refused | {len(says_so)} | this protocol does not carry it, and the field says so |",
         f"| reported | {len(echoed)} | the venue fills it on the way back; an order does not carry it out |",
+        f"| held | {len(kept)} | this client acts on it rather than sending it |",
         f"| dropped | {len(dropped)} | a caller can set it and nothing reads it |",
         "",
         "`dropped` is the order-field form of `silent`: the call returns, the",
@@ -314,6 +336,10 @@ def main() -> int:
         "",
     ]
     lines.append(", ".join(f"`{f}`" for f in sorted(dropped)) if dropped else "None.")
+    lines += ["", "## Acted on here, not sent", ""]
+    lines.append(
+        "\n".join(f"- `{f}` — {why}" for f, why in sorted(kept.items())) if kept else "None."
+    )
     lines += ["", "## Reported by the venue, not sent", ""]
     lines.append(", ".join(f"`{f}`" for f in sorted(echoed)) if echoed else "None.")
     lines += ["", "## Not carried by this protocol", ""]

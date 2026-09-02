@@ -575,9 +575,11 @@ class Client:
         stop-loss to the market with no position behind it.
 
         The wrapper this follows holds the first two back with transmit=False
-        as well. There is no staging here — an order reaches the market when it
-        is placed — so an order carrying it is refused outright, and the parent
-        id is what does the linking.
+        as well, and so does this: the field is one that client sends to its
+        counterpart rather than to the venue, and the counterpart keeps such an
+        order without working it. Kept here for the same reason, and sent when
+        an order in the same family transmits. The parent id is what links them
+        once they go.
         """
         from .ibx import Order
 

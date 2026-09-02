@@ -212,6 +212,38 @@ fn a_tick_by_tick_stream_checks_the_number_it_was_given() {
     assert!(err.message.contains("req_id"), "got: {err}");
 }
 
+/// A bracket built the way the reference client's own sample builds one.
+///
+/// It places a parent and a take-profit held back and lets the stop-loss send
+/// all three, with a comment saying so: the field is one that client sends to
+/// its counterpart, not one the venue reads, and the counterpart holds the
+/// order rather than working it. Refused here, the sample's parent and
+/// take-profit never went and the stop-loss went alone, carrying a link to an
+/// order the venue had never been given.
+#[test]
+fn a_bracket_held_back_goes_out_when_its_last_leg_transmits() {
+    let (client, rx, _shared) = test_client();
+    let held = |id: i64, parent: i64, transmit: bool| Order {
+        order_id: id,
+        parent_id: parent,
+        transmit,
+        action: if parent == 0 { "BUY".into() } else { "SELL".into() },
+        total_quantity: 100.0,
+        order_type: "LMT".into(),
+        lmt_price: 100.0,
+        tif: "DAY".into(),
+        ..Default::default()
+    };
+
+    client.place_order(70, &spy(), &held(70, 0, false)).expect("kept, not refused");
+    client.place_order(71, &spy(), &held(71, 70, false)).expect("kept, not refused");
+    assert!(rx.try_recv().is_err(), "nothing goes out while every leg is held");
+
+    client.place_order(72, &spy(), &held(72, 70, true)).expect("and this one sends them");
+    let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert_eq!(sent.len(), 3, "the parent, the sibling and this one: {sent:?}");
+}
+
 /// A stream taking a number a finished lookup used is a stream, not an update.
 ///
 /// A completed historical request left the number marked as one whose bars
@@ -1744,19 +1776,27 @@ fn place_order_empty_tif_is_day() {
     }
 }
 
-// ── transmit=false must be rejected, not silently ignored ──
+// ── an order held back is kept, not refused and not sent ──
 
+/// The field is one the reference client sends to its counterpart, not one the
+/// venue reads, and that counterpart holds the order rather than working it.
+/// This client stands where it stood, so the holding is this client's: nothing
+/// goes out, nothing is refused, and an order that transmits sends it.
 #[test]
-fn place_order_transmit_false_is_rejected() {
+fn an_order_held_back_reaches_neither_the_venue_nor_a_refusal() {
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
     let order = Order {
         action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
         lmt_price: 100.0, transmit: false, ..Default::default()
     };
-    let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.to_string().contains("transmit=false"), "got: {err}");
-    assert!(rx.try_recv().is_err(), "nothing may reach the engine");
+    client.place_order(1, &spy(), &order).expect("kept, not refused");
+    assert!(rx.try_recv().is_err(), "and nothing reaches the engine");
+
+    // Placed again, transmitting, it goes.
+    let now = Order { transmit: true, ..order };
+    client.place_order(1, &spy(), &now).expect("and now it goes");
+    assert!(rx.try_recv().is_ok(), "the order the caller asked to send");
 }
 
 // ── FA allocation must be rejected, not silently dropped ──
