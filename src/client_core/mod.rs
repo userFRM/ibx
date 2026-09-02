@@ -3242,8 +3242,10 @@ impl ClientCore {
         crate::control::historical::BarDataType::from_api_str(what_to_show)?;
         if keep_up_to_date && !bs.supports_keep_up_to_date() {
             return Err(format!(
-                "bar_size '{bar_size}' is not supported with keep_up_to_date=true: \
-                 supported sizes are 1 secs, 5 secs, 5 mins, 1 hour, 1 day",
+                "bar_size '{bar_size}' cannot be kept up to date: what the venue \
+                 keeps sending is five-second bars and a bar still forming is folded \
+                 from those, so a size that is a whole number of them can be formed \
+                 and one shorter than five seconds cannot",
             ));
         }
         Ok(())

@@ -3037,10 +3037,11 @@ fn req_historical_data_rejects_unknown_what_to_show() {
 #[test]
 fn req_historical_data_rejects_unsupported_keep_up_to_date_size() {
     let (client, rx, _shared) = test_client();
-    // "1 min" is valid on the batch path and not supported for streaming, and
-    // is refused here rather than downgraded to five-minute bars.
-    let err = client.req_historical_data(5, &spy(), "", "1 D", "1 min", "TRADES", true, 1, true).unwrap_err();
-    assert!(err.message.contains("keep_up_to_date"), "got: {err}");
+    // A second is shorter than the five-second bars a forming bar is folded
+    // from, so nothing can form it. Refused here rather than answered with
+    // five-second bars relabelled as one-second ones.
+    let err = client.req_historical_data(5, &spy(), "", "1 D", "1 secs", "TRADES", true, 1, true).unwrap_err();
+    assert!(err.message.contains("kept up to date"), "got: {err}");
     assert!(rx.try_recv().is_err());
 }
 

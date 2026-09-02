@@ -228,11 +228,22 @@ impl BarSize {
         })
     }
 
-    /// Bar sizes the `keepUpToDate` streaming path supports. The rest are
-    /// accepted on the batch path only, and asking for one here is an error
-    /// rather than a quiet substitution.
+    /// Whether a bar this long can be kept up to date.
+    ///
+    /// What the venue keeps sending after the batch is five-second bars, and
+    /// the bar still forming is folded from those. So a size that is a whole
+    /// number of them can be formed and one that is not cannot: a second is
+    /// shorter than what arrives, and folding into it relabelled each
+    /// five-second bar as a one-second one and handed the caller five times
+    /// the volume under a size it never traded in.
+    ///
+    /// This is what this client can form, not what the venue accepts — nothing
+    /// on the wire says a size may not be kept up to date. The list it replaces
+    /// named five sizes, refusing sixteen that fold exactly and admitting the
+    /// one that cannot.
     pub fn supports_keep_up_to_date(&self) -> bool {
-        matches!(self, Self::Sec1 | Self::Sec5 | Self::Min5 | Self::Hour1 | Self::Day1)
+        let seconds = self.seconds();
+        seconds >= 5 && seconds.is_multiple_of(5)
     }
 
     /// How long one of these lasts.

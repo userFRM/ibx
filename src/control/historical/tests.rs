@@ -45,15 +45,6 @@ fn bar_size_from_api_str_rejects_unknown_and_wrong_case() {
     }
 }
 
-#[test]
-fn bar_size_keep_up_to_date_support() {
-    for s in ["1 secs", "5 secs", "5 mins", "1 hour", "1 day"] {
-            assert!(BarSize::from_api_str(s).unwrap().supports_keep_up_to_date(), "{}", s);
-    }
-    for s in ["10 secs", "1 min", "15 mins", "4 hours", "1 week"] {
-        assert!(!BarSize::from_api_str(s).unwrap().supports_keep_up_to_date(), "{}", s);
-    }
-}
 
 #[test]
 fn bar_data_type_from_api_str() {
@@ -942,4 +933,29 @@ fn the_series_the_venue_carries_are_asked_for_by_its_own_names() {
 fn a_name_meaning_two_series_is_refused_rather_than_half_answered() {
     let why = BarDataType::from_api_str("YIELD_BID_ASK").expect_err("two series, not one");
     assert!(why.contains("two series"), "{why}");
+}
+
+/// A bar can be kept up to date if it folds from what the venue keeps sending.
+///
+/// Five-second bars are what arrive, and the bar still forming is made of
+/// them. A size that is a whole number of them can be formed; one shorter
+/// cannot. The list this replaced named five sizes: it refused sixteen that
+/// fold exactly, and admitted the one that does not — a one-second bar, which
+/// was formed by relabelling each five-second bar and handing the caller five
+/// times the volume under a size nothing traded in.
+#[test]
+fn a_bar_is_kept_up_to_date_when_it_folds_from_the_five_second_stream() {
+    for asked in ["5 secs", "10 secs", "1 min", "5 mins", "1 hour", "1 day"] {
+        let size = BarSize::from_api_str(asked).expect("a size this client reads");
+        assert!(
+            size.supports_keep_up_to_date(),
+            "{asked} is {} seconds, a whole number of five-second bars",
+            size.seconds(),
+        );
+    }
+    let second = BarSize::from_api_str("1 secs").expect("a size this client reads");
+    assert!(
+        !second.supports_keep_up_to_date(),
+        "a second is shorter than what arrives, so nothing can form it",
+    );
 }
