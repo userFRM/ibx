@@ -123,19 +123,19 @@ impl Client {
 
     /// What this client speaks.
     ///
-    /// In a client that talks to a local process, this is the version that
-    /// process announced. There is no local process here, so what it can
-    /// honestly report is the build this client states to the venue at logon
-    /// and is accepted under.
+    /// In a client that talks to a local process, this is the protocol level
+    /// that process announced, and a program compares it against the level a
+    /// feature was introduced at. There is no local process here; this client
+    /// is what a program is talking to, so it answers with its own level.
     ///
-    /// It is not a negotiated protocol version and is on a different scale
-    /// from one. A program gating a feature on it will find every feature
-    /// available, which is the right answer: this client speaks the current
-    /// protocol, not an older one it has to ask permission for.
+    /// It answered with the build it states at logon before, which is a number
+    /// on another scale entirely — above every level there is — so a program
+    /// gating on it was told every feature exists. Measured against that
+    /// client's own gates, a dozen order fields are refused here, four calls
+    /// and two of its newest cancels are absent, and nothing above this level
+    /// is carried at all. `EClient::server_version` lists them.
     pub fn server_version(&self) -> i32 {
-        // The build this session actually stated, not the one a fresh session
-        // would state: a caller that set its own build is told what it sent.
-        self.inner.shared_state().settings().build.parse().unwrap_or(0)
+        crate::client_core::PROTOCOL_LEVEL
     }
 
     /// Which client this is, of several sharing one local process.

@@ -785,6 +785,18 @@ pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
+/// The reference client's protocol level this client implements.
+///
+/// The newest of that client's `MIN_SERVER_VER_*` gates whose feature is
+/// carried here. The number was never the venue's — it is the level of the
+/// process a program is talking to, which in that client is its gateway and
+/// here is this client — so every surface that answers the question answers
+/// with this, and a program is told one thing about one client.
+///
+/// What it overstates is listed on `EClient::server_version`, which is the
+/// call a program reads it through.
+pub const PROTOCOL_LEVEL: i32 = 217;
+
 /// What an exercise states beyond the instruction itself.
 ///
 /// Three fields an order carries and an exercise did not take, though the same

@@ -59,3 +59,22 @@ def test_the_reference_defaults_pass_through():
     c._test_dispatch_once()
     assert not w.errors, w.errors
     assert 3 in w.ended
+
+
+def test_every_surface_answers_the_question_with_one_number():
+    # Three surfaces answer "what protocol level am I talking to". One of them
+    # used to answer with the build this client states at logon — a number on
+    # another scale, above every level there is — so a program gating a feature
+    # on it was told every feature exists.
+    import subprocess
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    stated = subprocess.run(
+        ["grep", "-rn", "PROTOCOL_LEVEL", str(root / "src")],
+        capture_output=True, text=True,
+    ).stdout
+    answering = [line for line in stated.splitlines() if "client_core::PROTOCOL_LEVEL" in line]
+    assert len(answering) >= 2, f"a surface answers with something else:\n{stated}"
+    assert "settings().build" not in (root / "src/api/direct.rs").read_text(), \
+        "a surface still answers the protocol question with the build number"

@@ -26,10 +26,6 @@ use crate::client_core::ClientCore;
 
 /// What the reference client reports for a request made before connecting.
 const NOT_CONNECTED_CODE: i64 = 504;
-/// The reference client's protocol level this client implements: the newest of
-/// its `MIN_SERVER_VER_*` gates whose feature is carried here. `server_version`
-/// says what a program believing it gets wrong.
-const SERVER_VERSION: i32 = 217;
 use crate::gateway::{Gateway, GatewayConfig, Session};
 use crate::types::*;
 use super::contract::Contract;
@@ -727,7 +723,7 @@ impl EClient {
     /// Every other gate at or below 217 names a request, field or callback
     /// that is here and carried.
     fn server_version(&self) -> Option<i32> {
-        self.is_connected().then_some(SERVER_VERSION)
+        self.is_connected().then_some(crate::client_core::PROTOCOL_LEVEL)
     }
 
     /// When the venue says this session logged in, by its own clock and in its
