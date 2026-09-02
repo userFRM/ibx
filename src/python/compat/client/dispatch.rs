@@ -197,10 +197,11 @@ impl EClient {
         // A holding that moved since the caller last heard, where the caller
         // asked for positions and has not withdrawn the ask. The feed is
         // real-time, so a fill that changes what the account holds is followed
-        // by the holding it changed. Nothing is drained while no ask stands:
-        // `req_positions` clears what accumulated before it, and draining here
-        // as well discarded the moves that landed while it was still
-        // assembling its answer, which no later report would repeat.
+        // by the holding it changed. Nothing is drained while no ask stands.
+        // `req_positions` takes what stood before its own answer and hands it
+        // to the per-request watchers itself, so what is left here is what
+        // moved after that answer — reported once, rather than replayed on the
+        // pass that carries the answer.
         let on_position = self.positions_requested.load(Ordering::Acquire);
         let per_request: Vec<i64> = {
             let watching = self.positions_multi_requested.lock().unwrap();

@@ -127,6 +127,13 @@ impl EClient {
         // The set is read inside the wait and delivered as read. Waiting on
         // one set and delivering another hands back a holding that arrives
         // between the two, which no lookup has named.
+        // What moved before this answer is in the answer. Left standing, the
+        // pass that hands the answer over replays every one of them as a move,
+        // so a caller asking once is told about a holding twice — and the
+        // comment on the dispatch beside it says this call clears them, which
+        // it did not. Taken here, and given below to the per-request watchers,
+        // which have not been answered and would otherwise never hear of them.
+        let already_stated = shared.portfolio.drain_position_changes();
         let waited_from = std::time::Instant::now();
         let mut positions = shared.portfolio.position_infos();
         loop {
@@ -145,11 +152,27 @@ impl EClient {
             self.deliver(py, "position", (self.account().as_str(), &c_py, pi.position, avg_cost))?;
         }
         self.deliver(py, "position_end", ())?;
-        // Reported from here, on the next holding to move. What was already
-        // recorded is left standing rather than dropped: the record is kept by
-        // contract and states what the holding is now, so at worst the caller
-        // is told once more what the answer above already said — and dropping
-        // it would lose a holding that moved while the answer was assembled.
+        // What was taken above belongs to the per-request watchers too, and
+        // they were not answered here. Handed over now rather than dropped, or
+        // a holding that moved before this ask would reach them never.
+        let watching: Vec<i64> = {
+            let asked = self.positions_multi_requested.lock().unwrap();
+            let mut ids: Vec<i64> = asked.iter().copied().collect();
+            ids.sort_unstable();
+            ids
+        };
+        for pi in &already_stated {
+            let c_py = Py::new(py, self.position_contract(pi, &shared))?.into_any();
+            let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
+            for req_id in &watching {
+                self.deliver(
+                    py,
+                    "position_multi",
+                    (*req_id, self.account().as_str(), "", &c_py, pi.position, avg_cost),
+                )?;
+            }
+        }
+        // Reported from here, on the next holding to move.
         self.positions_requested.store(true, Ordering::Release);
         Ok(())
     }
