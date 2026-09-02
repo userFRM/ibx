@@ -1047,6 +1047,18 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+/// When this client raised something itself, in milliseconds.
+///
+/// The reference client stamps the trouble it raises before anything reaches
+/// the venue — a call made with no session, a request it will not send — and
+/// leaves the field at zero for trouble the venue stated.
+pub(crate) fn raised_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1538,16 +1550,4 @@ w = W()",
             assert_eq!(ended, 1, "the request ends once");
         });
     }
-}
-
-/// When this client raised something itself, in milliseconds.
-///
-/// The reference client stamps the trouble it raises before anything reaches
-/// the venue — a call made with no session, a request it will not send — and
-/// leaves the field at zero for trouble the venue stated.
-pub(crate) fn raised_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
 }
