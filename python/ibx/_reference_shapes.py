@@ -52,6 +52,7 @@ ListOfHistoricalTick = list
 ListOfHistoricalTickBidAsk = list
 ListOfHistoricalTickLast = list
 ListOfHistoricalSessions = list
+ListOfOrder = list
 HistogramDataList = list
 
 

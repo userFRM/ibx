@@ -52,6 +52,7 @@ from ._reference_shapes import (  # noqa: F401
     ListOfHistoricalTickBidAsk,
     ListOfHistoricalTickLast,
     ListOfNewsProviders,
+    ListOfOrder,
     ListOfPriceIncrements,
     MarketDataTypeEnum,
     Object,

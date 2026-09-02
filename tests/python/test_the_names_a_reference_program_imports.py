@@ -85,6 +85,7 @@ def test_the_aliases_a_callback_annotation_names():
     assert ibx.SetOfString is set and ibx.SetOfFloat is set
     assert ibx.SmartComponentMap is dict
     assert ibx.ListOfContractDescription is list
+    assert ibx.ListOfOrder is list
     assert ibx.HistogramDataList is list
 
 

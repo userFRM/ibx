@@ -80,7 +80,7 @@ def install(surface: dict) -> dict:
                  "ListOfContractDescription", "ListOfDepthExchanges", "ListOfNewsProviders",
                  "ListOfPriceIncrements", "ListOfFamilyCode", "ListOfHistoricalTick",
                  "ListOfHistoricalTickBidAsk", "ListOfHistoricalTickLast",
-                 "ListOfHistoricalSessions", "UNSET_DOUBLE", "UNSET_INTEGER", "UNSET_LONG",
+                 "ListOfHistoricalSessions", "ListOfOrder", "UNSET_DOUBLE", "UNSET_INTEGER", "UNSET_LONG",
                  "UNSET_DECIMAL", "DOUBLE_INFINITY", "INFINITY_STR", "NO_VALID_ID",
                  "MAX_MSG_LEN"),
             "The shapes and the constants a callback signature names.",
