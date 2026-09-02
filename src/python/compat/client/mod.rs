@@ -103,6 +103,13 @@ pub struct EClient {
     /// never reaches the end of `run`, which is where the notice used to be
     /// sent — so it was never told the session had ended at all.
     pub(crate) close_notified: AtomicBool,
+    /// Whether this session has already waited out the replay once.
+    ///
+    /// An account with nothing working never sees the replay end, so the wait
+    /// runs to its bound every time it is entered. Entered per id, that was
+    /// three seconds on every call for an account with no working orders —
+    /// which is the ordinary way an id is asked for before each order.
+    pub(crate) replay_waited: AtomicBool,
     /// The number this session connected under, as the caller gave it.
     ///
     /// One session holds the account here, so this does not route anything.
@@ -266,6 +273,7 @@ impl EClient {
             positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
             session_ended: AtomicBool::new(false),
             close_notified: AtomicBool::new(false),
+            replay_waited: AtomicBool::new(false),
             event_rx: Mutex::new(None),
             events_lost: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             _test_event_tx: Mutex::new(None),
@@ -729,6 +737,7 @@ impl EClient {
         // Counted per session, so a caller reading it is told what this
         // session lost rather than a total carried over from the last.
         self.events_lost.store(0, Ordering::Relaxed);
+        self.replay_waited.store(false, Ordering::Relaxed);
         self.core.reset();
     }
 
@@ -795,13 +804,22 @@ impl EClient {
     /// same way and for the same reason as the open-order replay beside it: an
     /// account with nothing working never sees the replay end.
     pub(crate) fn wait_for_the_replay(&self, py: Python<'_>) {
+        // Once per session, however many ids are asked for. What the wait is
+        // for is the floor being raised before the first id goes out, and that
+        // has either happened by the time the first wait returns or it is not
+        // going to: an account with nothing working never sees the replay end,
+        // so waiting again only spends the bound again.
+        if self.replay_waited.load(Ordering::Acquire) {
+            return;
+        }
         let Ok(shared) = self.shared_state() else { return };
         for _ in 0..300 {
             if shared.orders.replay_done() {
-                return;
+                break;
             }
             py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
         }
+        self.replay_waited.store(true, Ordering::Release);
     }
 
     /// The id a caller may next place under, without taking it.

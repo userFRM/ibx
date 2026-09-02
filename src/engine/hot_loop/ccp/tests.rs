@@ -9,6 +9,36 @@ use crate::types::model as api;
 use crate::bridge::RichOrderInfo;
 use crate::types::{PositionInfo, Price, Side, PRICE_SCALE, QTY_SCALE};
 
+/// A second sentinel report brings the reconciliation forward, never back.
+///
+/// The deadline is shortened when the push says it has finished, so orders it
+/// left out can be judged without waiting out the whole grace. This arm is
+/// reached by any report whose order id does not read, not by that terminator
+/// alone, so assigning the deadline outright pushed it back each time one
+/// arrived — and under a steady trickle the sweep that reports those orders
+/// never ran at all.
+#[test]
+fn a_later_sentinel_does_not_push_the_reconciliation_back() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+
+    let soon = Instant::now() + Duration::from_millis(1);
+    ccp.recovery_sweep_at = Some(soon);
+
+    // A report whose order id does not read, which is what reaches that arm.
+    let mut parsed = std::collections::HashMap::new();
+    parsed.insert(11u32, "*".to_string());
+    parsed.insert(35u32, "8".to_string());
+    ccp.handle_exec_report(&parsed, b"", &mut context, &shared, &None, "DU111111");
+
+    let after = ccp.recovery_sweep_at.expect("the deadline is still set");
+    assert!(
+        after <= soon,
+        "a sentinel may bring the reconciliation forward and must not delay it",
+    );
+}
+
 /// `Uncertain` promises the caller a reconciliation when the reconnect
 /// completes. Nothing completed it, so an order the recovery push left out
 /// waited on a message that was never coming.

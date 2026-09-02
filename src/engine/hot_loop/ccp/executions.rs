@@ -797,8 +797,13 @@ impl CcpState {
             }
             // The push said everything it was going to say, so the orders it
             // left out can be judged without waiting out the whole grace.
-            if self.recovery_sweep_at.is_some() {
-                self.recovery_sweep_at = Some(Instant::now() + RECOVERY_TERMINATOR_GRACE);
+            // Only ever brought forward: this arm is reached by any report
+            // whose order id does not read, not by the terminator alone, so
+            // assigning the deadline outright pushed it back every time one
+            // arrived and a steady trickle of them meant the sweep never ran.
+            if let Some(at) = self.recovery_sweep_at {
+                self.recovery_sweep_at =
+                    Some(at.min(Instant::now() + RECOVERY_TERMINATOR_GRACE));
             }
             return;
         }
