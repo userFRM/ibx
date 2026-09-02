@@ -77,14 +77,27 @@ def test_both_clients_carry_the_same_contract_details():
 #: An argument a surface takes and will not send is refused with this sentence,
 #: which names the argument first. Read from the sources for the same reason the
 #: fields are: a list beside them is a third thing to forget.
-_REFUSED = re.compile(r'"([a-z_]+)=?\{?[a-z_]*\}? is not carried by this protocol')
+#: An argument named at the start of a refusal, however the refusal goes on.
+#: Keyed on one sentence, this stopped reading the day the last refusal using
+#: that sentence was resolved, and the guard below is what said so.
+_REFUSED = re.compile(
+    r'"([a-z_]+)[= ]\{?[a-z_]*\}? (?:is not carried by this protocol|is negative)'
+    r'|wire_u32\("([a-z_]+)"'
+)
 
 
 def _refused(where: str) -> set[str]:
     return {
-        m.group(1)
+        # Either group: one surface writes the refusal where it happens and the
+        # other names the argument to a helper that writes it, and a scan
+        # reading only the first saw one surface refusing nothing.
+        m.group(1) or m.group(2)
         for f in (ROOT / where).rglob("*.rs")
         for m in _REFUSED.finditer(f.read_text())
+        # A request's own number and a contract's are narrowed on the way to
+        # the wire by every request that carries one. That is not an argument
+        # a caller is refused for naming, which is what this compares.
+        if (m.group(1) or m.group(2)) not in ("req_id", "con_id")
     }
 
 

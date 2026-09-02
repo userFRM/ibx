@@ -52,10 +52,10 @@ fn a_reconnect_puts_the_tick_by_tick_streams_back() {
     let mut hmds = HmdsState::new();
     let mut market = crate::engine::market_state::MarketState::new();
     let instrument = market.try_register(756733).expect("slot");
-    hmds.tbt_subscriptions.push(TbtSubscription { instrument, query_id: "tbt_0".to_string(), kind: TbtType::Last, caller_req_id: 0, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
+    hmds.tbt_subscriptions.push(TbtSubscription { ignore_size: false, instrument, query_id: "tbt_0".to_string(), kind: TbtType::Last, caller_req_id: 0, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
     // One with no contract behind it: it must be reported, not resubscribed
     // against a contract id the engine does not have.
-    hmds.tbt_subscriptions.push(TbtSubscription { instrument: 7, query_id: "tbt_1".to_string(), kind: TbtType::BidAsk, caller_req_id: 0, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
+    hmds.tbt_subscriptions.push(TbtSubscription { ignore_size: false, instrument: 7, query_id: "tbt_1".to_string(), kind: TbtType::BidAsk, caller_req_id: 0, venue_id: 0, min_tick: 0, size_tick: 0.0, running: Default::default() });
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -470,6 +470,7 @@ mod withdrawing_one_stream_tests {
 
     fn stream(caller_req_id: i64, instrument: InstrumentId, kind: TbtType) -> TbtSubscription {
         TbtSubscription {
+            ignore_size: false,
             instrument,
             query_id: format!("tbt_{caller_req_id}"),
             kind,
@@ -905,13 +906,26 @@ fn a_query_id_that_prefixes_another_does_not_take_its_bars() {
 /// and where it came from, and nothing it was not given.
 #[test]
 fn a_tick_stream_states_the_contract_and_the_kind() {
-    let q = super::HmdsState::build_tbt_query(7, 265598, "BEST", "CS", "AllLast");
+    let q = super::HmdsState::build_tbt_query(7, 265598, "BEST", "CS", "AllLast", 0, false);
     assert!(q.contains("<id>tbt_7</id>"));
     assert!(q.contains("<contractID>265598</contractID>"));
     assert!(q.contains("<data>AllLast</data>"));
     assert!(q.contains("<source>API</source>"));
-    // And no filter: the venue carries one, this client has not settled how to
-    // make it apply, and `ignore_size` is refused rather than sent — so a
-    // filter appearing here would be one nothing asked for.
+    // And nothing the caller did not ask for: no prelude and no filter where
+    // it asked for neither.
+    assert!(!q.contains("timeLength"), "{q}");
     assert!(!q.contains("filter"), "{q}");
+}
+
+/// A prelude and a size filter are stated where the caller asked for them.
+///
+/// The query carries a length for a run of past ticks before the stream, and a
+/// filter for leaving out a change that moves only the size. Both were refused
+/// at the surface instead, so a caller could ask for neither — and the refusal
+/// said this protocol had no field for a prelude, which this query does have.
+#[test]
+fn a_tick_stream_states_the_prelude_and_the_filter_it_was_asked_for() {
+    let asked = super::HmdsState::build_tbt_query(7, 265598, "BEST", "CS", "AllLast", 100, true);
+    assert!(asked.contains("<timeLength>100 t</timeLength>"), "{asked}");
+    assert!(asked.contains("<filter><ignoreSize>true</ignoreSize></filter>"), "{asked}");
 }

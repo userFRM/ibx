@@ -133,6 +133,12 @@ pub enum ControlCommand {
         contract: ContractRef,
         /// Which stream is wanted.
         tbt_type: TbtType,
+        /// How many past ticks to send before the stream, where the caller
+        /// asked for a prelude. Zero for none, which is the venue's default.
+        number_of_ticks: u32,
+        /// Whether the caller asked for changes that move only the size to be
+        /// left out.
+        ignore_size: bool,
         /// Where the engine sends the slot it registered.
         reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
     },

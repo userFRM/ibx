@@ -148,24 +148,6 @@ impl EClient {
         let _ = wire_req_id(req_id)?;
         // Named by the venue where the caller named it by id alone.
         let contract = &*self.named_by_the_venue(contract)?;
-        if number_of_ticks != 0 {
-            return Err(Refusal::validation(format!(
-                "number_of_ticks={number_of_ticks} is not carried by this protocol: a \
-                 tick-by-tick subscription states the contract and the kind of stream, \
-                 with no field for a prelude of past ticks. Ask for those with \
-                 req_historical_ticks",
-            )));
-        }
-        if ignore_size {
-            return Err(Refusal::validation(
-                "ignore_size is not sent by this client. The query the venue answers does \
-                 carry a filter and the filter does carry this term, so the protocol is \
-                 not the reason — what is not settled is how to make the venue apply it: \
-                 asked for two ways, the stream came back with the size-only changes \
-                 still in it. Sent regardless, a caller would be told the changes were \
-                 filtered and be reading a stream that was not",
-            ));
-        }
         let kind = TbtType::named(tick_type)?;
 
         // A stream is asked for by the venue's id for the contract. Sent
@@ -190,6 +172,8 @@ impl EClient {
                 &contract.sec_type,
                 &contract.exchange,
                 kind,
+                number_of_ticks.max(0) as u32,
+                ignore_size,
             )
             .map(|_| ())?;
         // Which stream the callback names when these trades arrive: 1 = Last,

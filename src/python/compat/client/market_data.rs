@@ -179,23 +179,6 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
 
-        if number_of_ticks != 0 {
-            return self.report_refusal(py, req_id, Refusal::validation(format!(
-                "number_of_ticks={number_of_ticks} is not carried by this protocol: a \
-                 tick-by-tick subscription states the contract and the kind of stream, \
-                 with no field for a prelude of past ticks. Ask for those with \
-                 reqHistoricalTicks",
-            )));
-        }
-
-        if ignore_size {
-            return self.report_refusal(py, req_id, Refusal::validation(
-                "ignore_size is not sent by this client: the venue's query carries a \
-                 filter for it, but how to make the venue apply it is not settled — \
-                 asked for two ways, the stream came back with the size-only changes \
-                 still in it",
-            ));
-        }
         let tbt_type = match TbtType::named(tick_type) {
             Ok(named) => named,
             // A tick type this client does not carry is a request it will not
@@ -233,6 +216,7 @@ impl EClient {
         let (sec_type, exchange) = (contract.sec_type.clone(), contract.exchange.clone());
         if let Err(why) = py.detach(|| self.core.register_tbt(
             &shared, &tx, req_id, con_id, &symbol, &sec_type, &exchange, tbt_type,
+            number_of_ticks.max(0) as u32, ignore_size,
         )) {
             return self.report_refusal(py, req_id, why);
         }

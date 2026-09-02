@@ -407,6 +407,8 @@ pub(super) fn phase_tbt_subscribe(conns: Conns) -> Conns {
         .send(ControlCommand::SubscribeTbt {
             contract: ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".to_string(), exchange: "SMART".to_string(), ..Default::default() },
             req_id: 1,
+            number_of_ticks: 0,
+            ignore_size: false,
             tbt_type: TbtType::Last,
             reply_tx: None,
         })
@@ -1031,6 +1033,8 @@ pub(super) fn phase_tbt_unsubscribe(conns: Conns) -> Conns {
         .send(ControlCommand::SubscribeTbt {
             contract: ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".to_string(), exchange: "SMART".to_string(), ..Default::default() },
             req_id: 1,
+            number_of_ticks: 0,
+            ignore_size: false,
             tbt_type: TbtType::Last,
             reply_tx: None,
         })
@@ -1132,6 +1136,8 @@ pub(super) fn phase_tbt_and_quotes_dual_stream(conns: Conns) -> Conns {
         .send(ControlCommand::SubscribeTbt {
             contract: ContractRef { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".to_string(), exchange: "SMART".to_string(), ..Default::default() },
             req_id: 1,
+            number_of_ticks: 0,
+            ignore_size: false,
             tbt_type: TbtType::Last,
             reply_tx: None,
         })

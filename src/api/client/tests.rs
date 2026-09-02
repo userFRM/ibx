@@ -5641,29 +5641,6 @@ fn the_millisecond_clock_keeps_what_the_second_one_drops() {
     assert_eq!(heard.millis[1], 1_786_795_200_250, "and a quarter of it besides");
 }
 
-/// Arguments this protocol cannot carry are refused rather than dropped.
-///
-/// A tick-by-tick subscription states the contract and the kind of stream and
-/// nothing else. A caller that asked for a prelude of past ticks, or for
-/// size-only changes to be suppressed, and was answered anyway would be
-/// reading a stream it did not ask for with nothing to say so.
-#[test]
-fn tick_by_tick_refuses_what_it_cannot_ask_for() {
-    let (client, _rx, _shared) = test_client();
-
-    let asked_for_history = client.req_tick_by_tick_data(1, &spy(), "Last", 100, false);
-    assert!(asked_for_history.is_err(), "a prelude of past ticks cannot be asked for here");
-
-    let asked_to_drop_sizes = client.req_tick_by_tick_data(2, &spy(), "Last", 0, true);
-    assert!(asked_to_drop_sizes.is_err(), "nor can size-only changes be suppressed");
-
-    // And the refusal names the argument rather than the request, so a caller
-    // can tell this from a contract or entitlement problem.
-    let why = asked_for_history.unwrap_err();
-    assert!(why.message.contains("number_of_ticks"), "{}", why.message);
-    assert!(asked_to_drop_sizes.unwrap_err().message.contains("ignore_size"));
-}
-
 /// A session that came back and went again is not a connected session.
 ///
 /// Loss and recovery were two flags with no order between them. Both raised,

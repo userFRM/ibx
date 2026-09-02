@@ -998,7 +998,7 @@ impl HotLoop {
                     }
                     self.try_reclaim_instrument(instrument);
                 }
-                ControlCommand::SubscribeTbt { contract, req_id, tbt_type, reply_tx } => {
+                ControlCommand::SubscribeTbt { contract, req_id, tbt_type, number_of_ticks, ignore_size, reply_tx } => {
                     let ContractRef { con_id, symbol, sec_type, exchange, .. } = contract;
                     // A stream is asked for by the venue's id for the contract.
                     // Sent with none, the venue answers "Unknown contract"
@@ -1024,7 +1024,8 @@ impl HotLoop {
                     if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, &exchange, "", &reply_tx) {
                         let mts = self.context.market.min_tick_scaled(id);
                         self.hmds.send_tbt_subscribe(
-                            req_id, con_id, id, tbt_type, &sec_type, &exchange, mts,
+                            req_id, con_id, id, tbt_type, number_of_ticks, ignore_size,
+                            &sec_type, &exchange, mts,
                             &mut self.hmds_conn, &mut self.hb,
                         );
                     }
@@ -4149,6 +4150,7 @@ mod tests {
         hl.context.market.register_server_tag(910_001, id);
         hl.farm.instrument_md_reqs.push((id, vec![7]));
         hl.hmds.tbt_subscriptions.push(crate::engine::hot_loop::hmds::TbtSubscription {
+            ignore_size: false,
             instrument: id,
             query_id: "AAPL".to_string(),
             kind: TbtType::AllLast,

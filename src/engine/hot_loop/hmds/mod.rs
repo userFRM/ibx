@@ -31,6 +31,10 @@ pub(crate) struct TbtSubscription {
     pub(crate) caller_req_id: i64,
     /// The venue's number for it, stated on every frame.
     pub(crate) venue_id: u64,
+    /// Whether the caller asked for changes that move only the size to be left
+    /// out. Kept because a stream rebuilt on a new connection is the same
+    /// stream and must come back filtered the same way.
+    pub(crate) ignore_size: bool,
     /// The increment its prices move in.
     pub(crate) min_tick: i64,
     /// The increment its sizes are counted in.
@@ -362,8 +366,13 @@ impl HmdsState {
                 Some(con_id) => {
                     let (stype, venue) = market.order_routing(instrument);
                     let mts = market.min_tick_scaled(instrument);
+                    // No prelude on a rebuild. The caller was given the past
+                    // ticks when it asked; asking again would hand it the same
+                    // ones over as though they were new. The filter is part of
+                    // what the stream is, so that does come back.
                     self.send_tbt_subscribe(
-                        dead.caller_req_id, con_id, instrument, tbt_type, &stype, &venue,
+                        dead.caller_req_id, con_id, instrument, tbt_type, 0, dead.ignore_size,
+                        &stype, &venue,
                         mts, hmds_conn, hb,
                     )
                 }
@@ -1242,7 +1251,23 @@ fn build_tbt_query(
     venue: &str,
     stype: &str,
     tbt_type_str: &str,
+    number_of_ticks: u32,
+    ignore_size: bool,
 ) -> String {
+    // A prelude of past ticks, where the caller asked for one, and the filter
+    // that leaves out a change moving only the size. Both are stated the way
+    // the query states everything else; neither is sent when the caller asked
+    // for the venue's own default.
+    let prelude = if number_of_ticks > 0 {
+        format!("<timeLength>{number_of_ticks} t</timeLength>")
+    } else {
+        String::new()
+    };
+    let filter = if ignore_size {
+        "<filter><ignoreSize>true</ignoreSize></filter>"
+    } else {
+        ""
+    };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
          <ListOfQueries>\
@@ -1255,6 +1280,8 @@ fn build_tbt_query(
          <type>TickData</type>\
          <refresh>ticks</refresh>\
          <data>{tbt_type_str}</data>\
+         {prelude}\
+         {filter}\
          <source>API</source>\
          </Query>\
          </ListOfQueries>"
@@ -1269,6 +1296,8 @@ fn build_tbt_query(
         con_id: i64,
         instrument: InstrumentId,
         tbt_type: TbtType,
+        number_of_ticks: u32,
+        ignore_size: bool,
         sec_type: &str,
         exchange: &str,
         // The smallest increment this contract's price moves in, scaled. A
@@ -1301,7 +1330,9 @@ fn build_tbt_query(
         // description that was not its own.
         let venue = hist_exchange(exchange);
         let stype = hist_sec_type(sec_type);
-        let xml = Self::build_tbt_query(req_id, con_id, &venue, &stype, tbt_type_str);
+        let xml = Self::build_tbt_query(
+            req_id, con_id, &venue, &stype, tbt_type_str, number_of_ticks, ignore_size,
+        );
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
             let _ = conn.send_fix(&[
@@ -1314,6 +1345,7 @@ fn build_tbt_query(
         }
         let ticker_id = format!("tbt_{req_id}");
         self.tbt_subscriptions.push(TbtSubscription {
+            ignore_size,
             instrument,
             query_id: ticker_id,
             kind: tbt_type,
