@@ -290,6 +290,12 @@ impl EClient {
             // not the venue's, and the id is what a fill is reconciled against
             // a broker's own record by.
             let rich_info = shared.orders.get_order_info(fill.order_id);
+            // What the report stated beyond the print, taken before anything
+            // consumes the record.
+            let from_the_report = rich_info
+                .as_ref()
+                .map(|info| info.last_exec.clone())
+                .unwrap_or_default();
             let exec_id = rich_info
                 .as_ref()
                 .map(|i| i.last_exec.exec_id.clone())
@@ -358,11 +364,17 @@ impl EClient {
                 perm_id,
                 client_id: self.client_id.load(Ordering::Acquire) as i64,
                 order_id: fill.order_id as i64,
-                liquidation: 0,
+                // What the report stated beyond the print — whether the venue
+                // closed the position, which side of the book the fill took,
+                // and the caller's own label for the order. Zeroed and blanked
+                // here while the record the engine keeps carried all three, so
+                // a program matching its fills by label matched none of them.
+                liquidation: from_the_report.liquidation,
                 cum_qty,
                 avg_price,
-                last_liquidity: 0,
-                pending_price_revision: false,
+                last_liquidity: from_the_report.last_liquidity,
+                order_ref: from_the_report.order_ref.clone(),
+                pending_price_revision: from_the_report.pending_price_revision,
                 ..Default::default()
             };
             let exec_py = Py::new(py, exec_obj)?.into_any();

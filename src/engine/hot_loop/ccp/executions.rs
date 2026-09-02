@@ -1344,6 +1344,11 @@ impl CcpState {
                 shares: qty_to_f64(last_shares),
                 price: last_px,
                 order_id: clord_id as i64,
+                // Read off the report, which restates it every time, rather
+                // than looked up against the order this client remembers: a
+                // fill on an order placed in another session is still
+                // labelled, and this client remembers no such order.
+                order_ref: parsed.get(&6010).cloned().unwrap_or_default(),
                 // The execution record describes this report, so an absent
                 // cumulative is zero here rather than the cached total.
                 cum_qty: cum_qty.unwrap_or(0.0),

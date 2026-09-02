@@ -3007,6 +3007,12 @@ fn the_order_a_report_restates_carries_what_the_caller_gave_it() {
 
     let info = shared.orders.get_order_info(42).expect("the order is recorded");
     assert_eq!(info.order.order_ref, "my-strategy", "the caller's own name for it");
+    // And on the execution, which is where a program matching its fills by
+    // that name reads it. Blank there, it matched none of them.
+    assert_eq!(
+        info.last_exec.order_ref, "my-strategy",
+        "the report restates it on every fill, so the fill carries it too",
+    );
     assert_eq!(info.order.rule80a, "A");
     assert_eq!(info.order.good_till_date, "20260401-16:00:00");
     assert_eq!(info.order.client_id, 7);

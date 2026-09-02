@@ -549,7 +549,7 @@ impl EClient {
                 liquidation: se.execution.liquidation,
                 cum_qty: se.execution.cum_qty,
                 avg_price: se.execution.avg_price,
-                order_ref: String::new(),
+                order_ref: se.execution.order_ref.clone(),
                 ev_rule: se.execution.ev_rule.clone(),
                 ev_multiplier: se.execution.ev_multiplier,
                 model_code: se.execution.model_code.clone(),

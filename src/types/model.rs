@@ -1399,6 +1399,13 @@ pub struct Execution {
     pub client_id: i64,
     /// The id the client placed it under.
     pub order_id: i64,
+    /// The caller's own label for the order, as the report restates it.
+    ///
+    /// The venue states it on every report, so it is read there rather than
+    /// looked up against the order this client remembers: a fill on an order
+    /// placed in another session is still labelled, and a program matching its
+    /// fills by label matched none.
+    pub order_ref: String,
     /// How much of the order has filled in total.
     pub cum_qty: f64,
     /// The average price of everything filled so far.
