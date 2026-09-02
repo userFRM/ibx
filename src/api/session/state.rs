@@ -626,7 +626,11 @@ impl Wrapper for LiveState {
             } else {
                 trade.status.average_price
             },
-            perm_id,
+            // Zero is unstated here too, the same as the average above and
+            // the same as the order's own copy two lines up. A later report
+            // that carries none would otherwise erase the name this order is
+            // known by across sessions.
+            perm_id: if perm_id != 0 { perm_id } else { trade.status.perm_id },
             why_held: why_held.to_string(),
             // Carried rather than discarded: the venue states them on every
             // report and the session exposes them nowhere else. A bracket's

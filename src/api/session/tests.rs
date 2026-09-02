@@ -185,6 +185,27 @@ fn an_order(id: i64) -> Order {
     Order { order_id: id, ..Order::limit("BUY", 100.0, 42.5) }
 }
 
+/// A report stating no permanent id does not take away the one already known.
+///
+/// Zero is what "unstated" looks like on this field, which is why the order's
+/// own copy is only ever filled in from a report that carries one. The status
+/// took whatever arrived. A later report without one erased the name the order
+/// is known by across sessions, and a cancel addressed by that name then had
+/// nothing to address.
+#[test]
+fn a_report_without_a_permanent_id_leaves_the_one_already_held() {
+    let mut kept = LiveState::default();
+    kept.order_status(1, "Submitted", 0.0, 100.0, 0.0, 77, 0, 0.0, 1, "", 0.0);
+    assert_eq!(kept.trade(1).unwrap().status.perm_id, 77);
+
+    kept.order_status(1, "Submitted", 0.0, 100.0, 0.0, 0, 0, 0.0, 1, "", 0.0);
+    assert_eq!(
+        kept.trade(1).unwrap().status.perm_id,
+        77,
+        "a report that states none leaves the one already learned",
+    );
+}
+
 /// What the session is told stays, and the last word wins.
 ///
 /// A status is a statement about now, so a second one replaces the first. Kept

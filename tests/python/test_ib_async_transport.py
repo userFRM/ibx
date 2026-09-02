@@ -29,6 +29,22 @@ def test_attach_replaces_only_the_transport():
     assert not ib.isConnected()
 
 
+def test_a_session_the_engine_lost_is_not_reported_as_connected():
+    """The shim's own flag records what it was asked to do, not what holds.
+
+    It moves on connect and on disconnect and nothing else touches it, so a
+    session the venue took away or a reconnect gave up on left it saying
+    connected. A watchdog written the ordinary way never fired, and every
+    request made afterwards waited on an answer that was not coming.
+    """
+    ib = ibx.ib_async.attach(ib_async.IB())
+    client = ib.client
+    client.connState = client.CONNECTED
+    assert not client.isConnected(), (
+        "the engine underneath holds no session, so neither does this"
+    )
+
+
 def test_a_request_their_client_carries_and_this_one_does_not_says_so():
     ib = ibx.ib_async.attach(ib_async.IB())
     with pytest.raises(NotImplementedError, match="not carried"):

@@ -201,7 +201,20 @@ class IbxClient:
     # ── what IB reads directly ──
 
     def isConnected(self):
-        return self.connState == IbxClient.CONNECTED
+        """Whether a session is open, not whether one was opened.
+
+        ``connState`` records what this shim was told to do — it moves on
+        connect and on disconnect and nothing else touches it. The engine
+        underneath knows when the venue took the session away or a reconnect
+        gave up, and the sibling facade already asks it. Reading the flag alone
+        answered True for a session that could carry nothing, so a watchdog
+        written the ordinary way never fired and every request made after the
+        loss waited on an answer that was not coming.
+        """
+        return (
+            self.connState == IbxClient.CONNECTED
+            and self._client.is_connected()
+        )
 
     def isReady(self):
         return self.isConnected()
