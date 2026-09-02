@@ -992,6 +992,12 @@ const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     // longer exists cannot be replaced, and that is the venue's account of
     // its own book rather than anything about the message this client built.
     "too late to replace",
+    // The account is too small for the lot, stated as the two figures rather
+    // than as a word this list already holds: "YOUR NET LIQ [3584.96 CHF] MUST
+    // EXCEED THE MARGIN REQ [8896.91 CHF]", on a hundred shares of a franc
+    // stock. That is the account talking, and the phrase it talks in is not
+    // "insufficient".
+    "must exceed the margin req",
 ];
 
 /// The reason a rejected order was rejected, for a phase that is about to skip.
