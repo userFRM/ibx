@@ -1792,10 +1792,36 @@ impl ClientCore {
     // ── Execution replay store ──
 
     /// Store an execution for later replay via `req_executions`.
+    ///
+    /// Once per execution. The venue restates the day's executions at every
+    /// logon, so the same one can arrive again; it is known again by the id
+    /// it carries. One carrying no id is kept, there being nothing to know it
+    /// by.
     pub fn push_execution(&self, req_id: i64, contract: ApiContract, execution: ApiExecution, commission_and_fees: ApiCommissionAndFeesReport) {
-        self.executions.lock().unwrap().push(StoredExecution {
-            req_id, contract, execution, commission_and_fees,
-        });
+        let mut execs = self.executions.lock().unwrap();
+        if !execution.exec_id.is_empty()
+            && execs.iter().any(|stored| stored.execution.exec_id == execution.exec_id)
+        {
+            return;
+        }
+        execs.push(StoredExecution { req_id, contract, execution, commission_and_fees });
+    }
+
+    /// File the executions the venue restated, announcing none of them.
+    ///
+    /// A restated execution books nothing — the quantity is already held, or
+    /// the order was never this session's — so it never becomes a fill, and
+    /// the fill path was the only way into the record `req_executions` answers
+    /// from. After a restart that record was empty, and a caller asking was
+    /// told, silently, that nothing had filled. Called from the dispatch pass
+    /// on either surface: a caller that asks is answered, and one that did
+    /// not hears nothing.
+    pub fn record_restated_executions(&self, shared: &SharedState) {
+        for (contract, execution) in shared.orders.drain_restated_executions() {
+            // Unsolicited, as a live fill is stored, and costed the same way:
+            // what it cost arrives on a record of its own, if it arrives.
+            self.push_execution(-1, contract, execution, ApiCommissionAndFeesReport::default());
+        }
     }
 
     /// Note what an execution cost against the execution itself, so a replay

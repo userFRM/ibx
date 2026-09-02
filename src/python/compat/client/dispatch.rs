@@ -385,6 +385,11 @@ impl EClient {
 
         }
 
+        // Executions the venue restated rather than announced. Filed for
+        // `req_executions` and reported to nobody: a caller that asks is
+        // answered, and one that did not hears nothing.
+        self.core.record_restated_executions(shared);
+
         // What the venue says its fills cost, each naming the execution it
         // belongs to. Reported after the executions above, which is the order
         // they arrive in and the order a caller reads them in.

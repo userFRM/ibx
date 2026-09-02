@@ -6,6 +6,7 @@ use std::time::Instant;
 use std::sync::Mutex;
 use std::collections::HashMap;
 use crate::types::*;
+use crate::types::model as api;
 
 /// Fills, order status updates, cancel rejects, what-if responses, order
 /// cache, and inactive-order reasons.
@@ -15,6 +16,11 @@ pub struct OrderState {
     cancel_rejects: Mutex<Vec<CancelReject>>,
     /// What each fill cost, as the venue states it on a record of its own.
     charges: Mutex<Vec<crate::types::model::CommissionAndFeesReport>>,
+    /// Executions the venue restated rather than announced: replayed at logon
+    /// for quantity the book already holds, or for an order this session never
+    /// tracked. Nothing is booked from them, so none became a fill; they are
+    /// kept so a caller asking for the day's executions is answered.
+    restated_executions: Mutex<Vec<(api::Contract, api::Execution)>>,
     what_if_responses: Mutex<Vec<WhatIfResponse>>,
     completed_orders: Mutex<Vec<CompletedOrder>>,
     /// Enriched order info from CCP exec reports (order_id -> RichOrderInfo).
@@ -76,6 +82,7 @@ impl OrderState {
             order_updates: Mutex::new(Vec::with_capacity(64)),
             cancel_rejects: Mutex::new(Vec::with_capacity(16)),
             charges: Mutex::new(Vec::with_capacity(16)),
+            restated_executions: Mutex::new(Vec::new()),
             what_if_responses: Mutex::new(Vec::with_capacity(8)),
             completed_orders: Mutex::new(Vec::with_capacity(64)),
             order_cache: Mutex::new(HashMap::new()),
@@ -130,6 +137,15 @@ impl OrderState {
 
     #[doc(hidden)] pub fn push_charge(&self, charge: crate::types::model::CommissionAndFeesReport) {
         self.charges.lock().unwrap().push(charge);
+    }
+
+    /// Take the executions the venue restated, leaving none.
+    pub fn drain_restated_executions(&self) -> Vec<(api::Contract, api::Execution)> {
+        self.restated_executions.lock().unwrap().drain(..).collect()
+    }
+
+    #[doc(hidden)] pub fn push_restated_execution(&self, contract: api::Contract, execution: api::Execution) {
+        self.restated_executions.lock().unwrap().push((contract, execution));
     }
 
     /// Drain reasons for genuinely-Inactive (39=I) transitions, each as

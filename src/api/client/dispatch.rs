@@ -249,6 +249,11 @@ impl EClient {
             self.core.update_order_fill(fill.order_id, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining));
         }
 
+        // Executions the venue restated rather than announced. Filed for
+        // `req_executions` and reported to nobody: a caller that asks is
+        // answered, and one that did not hears nothing.
+        self.core.record_restated_executions(&self.shared);
+
         // What the venue says its fills cost, each naming the execution it
         // belongs to. Reported after the executions above, which is the order
         // they arrive in and the order a caller reads them in.

@@ -1288,3 +1288,17 @@ fn a_snapshot_ends_on_the_venue_or_on_the_wait_from_asking() {
     assert!(core.check_snapshot_done(2), "nothing was ever stated, and the wait is up");
     assert!(core.snapshot_reqs.lock().unwrap().is_empty(), "and nothing is left waiting");
 }
+
+/// The venue restates the day's executions at every logon, so the same one
+/// reaches the record more than once. It is stored once, known by its id.
+#[test]
+fn an_execution_is_stored_once_under_its_id() {
+    let core = ClientCore::new();
+    let stated = |id: &str| crate::types::model::Execution { exec_id: id.into(), ..Default::default() };
+    for id in ["0001f4e8.1", "0001f4e8.1", "0001f4e8.2"] {
+        core.push_execution(-1, Default::default(), stated(id), Default::default());
+    }
+    let stored = core.snapshot_executions(&Default::default());
+    let ids: Vec<&str> = stored.iter().map(|s| s.execution.exec_id.as_str()).collect();
+    assert_eq!(ids, ["0001f4e8.1", "0001f4e8.2"], "each execution once, by id");
+}

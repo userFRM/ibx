@@ -1399,6 +1399,39 @@ w = W()",
         });
     }
 
+    /// An execution the venue restated at logon is announced to nobody and
+    /// answers the caller that asks for it — on this surface as on the Rust
+    /// one, so a program written against either reads the same record.
+    #[test]
+    fn a_restated_execution_answers_req_executions_and_nobody_else() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            shared.orders.push_restated_execution(
+                ApiContract { symbol: "SPY".into(), ..Default::default() },
+                crate::types::model::Execution {
+                    exec_id: "0001f4e8.1".into(), side: "BOT".into(), shares: 10.0,
+                    ..Default::default()
+                },
+            );
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let told = || -> Vec<(i64, String)> {
+                py.eval(
+                    c"[(c[1], c[3].exec_id) for c in w.calls if c[0] in ('exec_details', 'execDetails')]",
+                    Some(&g), None,
+                ).unwrap().extract().unwrap()
+            };
+            assert!(told().is_empty(), "nobody asked, so nobody is told");
+
+            client.call_method1(py, "req_executions", (7i64,)).unwrap();
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
+            assert_eq!(told(), [(7, "0001f4e8.1".to_string())], "the caller that asked is answered");
+        });
+    }
+
     /// One pass can carry two reports for the same order: an acknowledgement
     /// and then a fill. Keeping one report per order dropped the earlier one,
     /// and the caller was never told the order had been acknowledged.

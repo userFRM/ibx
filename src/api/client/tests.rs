@@ -2600,6 +2600,31 @@ fn execution_filter_time_is_a_lower_bound() {
     assert_eq!(w3.seen.len(), 2, "a date-only bound keeps that day");
 }
 
+/// An execution the venue restated at logon is not a fill and is announced as
+/// none — but a caller asking for the day's executions is owed it. After a
+/// restart the record was empty, and that caller was told, silently, that
+/// nothing had filled.
+#[test]
+fn a_restated_execution_answers_req_executions_and_nobody_else() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.push_restated_execution(
+        crate::types::model::Contract { symbol: "SPY".into(), ..Default::default() },
+        crate::types::model::Execution {
+            exec_id: "0001f4e8.1".into(), side: "BOT".into(), shares: 10.0, ..Default::default()
+        },
+    );
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        !w.events.iter().any(|e| e.starts_with("exec_details:")),
+        "nobody asked, so nobody is told: {:?}", w.events,
+    );
+
+    client.req_executions(7, &crate::types::model::ExecutionFilter::default(), &mut w);
+    let answered: Vec<&String> = w.events.iter().filter(|e| e.starts_with("exec_details:")).collect();
+    assert_eq!(answered, ["exec_details:7:BOT:10"], "the caller that asked is answered");
+}
+
 #[test]
 fn req_global_cancel_sends_cancel_all_for_each_instrument() {
     let (client, rx, shared) = test_client();

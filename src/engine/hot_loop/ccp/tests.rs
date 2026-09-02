@@ -1033,6 +1033,70 @@ fn a_fresh_process_does_not_book_the_history_it_is_replayed() {
     assert_eq!(context.order(78).expect("tracked").filled, 10 * QTY_SCALE, "and nothing is double-counted");
 }
 
+/// The same replay, seen from the record a caller asking for executions is
+/// answered from. A restated execution books nothing, so it never became a
+/// fill — and the fill path was the only way into that record, so after a
+/// restart a caller was told, silently, that nothing had filled. It is filed
+/// on the venue's own terms and announced to nobody; a live execution is a
+/// fill, and is not filed a second time here.
+#[test]
+fn a_restated_execution_is_filed_and_not_announced() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+
+    // The recovery record, then the replayed execution behind it.
+    let mut recovery = std::collections::HashMap::new();
+    for (tag, val) in [
+        (11u32, "78"), (150u32, "0"), (39u32, "0"), (6008u32, "756733"),
+        (38u32, "100"), (14u32, "10"), (55u32, "SPY"), (54u32, "1"), (40u32, "2"),
+    ] {
+        recovery.insert(tag, val.to_string());
+    }
+    ccp.handle_exec_report(&recovery, b"", &mut context, &shared, &None, "");
+    let mut replay = std::collections::HashMap::new();
+    for (tag, val) in [
+        (11u32, "78"), (150u32, "F"), (39u32, "1"), (97u32, "Y"), (54u32, "1"),
+        (17u32, "OLD-EXEC"), (14u32, "10"), (32u32, "10"), (31u32, "100.0"),
+        (151u32, "90"), (60u32, "20260101-16:00:00"), (37u32, "1234567.0"), (109u32, "7"),
+    ] {
+        replay.insert(tag, val.to_string());
+    }
+    ccp.handle_exec_report(&replay, b"", &mut context, &shared, &None, "");
+
+    assert!(shared.orders.drain_fills().is_empty(), "nothing is announced");
+    let filed = shared.orders.drain_restated_executions();
+    assert_eq!(filed.len(), 1, "the execution is on record");
+    let (contract, execution) = &filed[0];
+    assert_eq!(contract.symbol, "SPY");
+    assert_eq!(execution.exec_id, "OLD-EXEC");
+    assert_eq!(execution.side, "BOT");
+    assert_eq!(execution.shares, 10.0);
+    assert_eq!(execution.client_id, 7, "the client that placed the order");
+    assert_ne!(execution.perm_id, 0, "and the order's permanent number");
+
+    // An order finished before the restart has no recovery record. Its
+    // executions are replayed all the same, and with no tracked order to read
+    // the side off, the report is what states it.
+    let mut finished = replay.clone();
+    for (tag, val) in [(11u32, "77"), (17u32, "OLDER-EXEC"), (54u32, "2"), (39u32, "2"), (151u32, "0")] {
+        finished.insert(tag, val.to_string());
+    }
+    ccp.handle_exec_report(&finished, b"", &mut context, &shared, &None, "");
+    assert!(shared.orders.drain_fills().is_empty(), "nothing is announced for that one either");
+    let filed = shared.orders.drain_restated_executions();
+    assert_eq!(filed.len(), 1, "an execution on an order this session never tracked is on record too");
+    assert_eq!(filed[0].1.exec_id, "OLDER-EXEC");
+    assert_eq!(filed[0].1.side, "SLD", "the side the report states");
+
+    // The positive control: a live execution is a fill, and the fill path is
+    // what files it.
+    let (mut ccp, mut context, shared) = tracked_order_state();
+    ccp.handle_exec_report(&fill_frame(&[]), b"", &mut context, &shared, &None, "");
+    assert_eq!(shared.orders.drain_fills().len(), 1, "a live execution books");
+    assert!(shared.orders.drain_restated_executions().is_empty(), "and is not filed twice");
+}
+
 /// The case a blanket suppression of marked reports loses. A CCP reconnect
 /// keeps this state — window and order book both survive — and the gateway
 /// replays recent executions on the new session. A fill that executed

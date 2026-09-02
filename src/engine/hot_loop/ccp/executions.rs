@@ -1004,7 +1004,8 @@ impl CcpState {
             exec_id.to_string()
         };
 
-        let filled = if matches!(exec_type, "F" | "1" | "2") && last_shares > 0 {
+        let is_execution = matches!(exec_type, "F" | "1" | "2") && last_shares > 0;
+        let filled = if is_execution {
             self.book_fill(
                 parsed, clord_id, &dedup_key, is_resend, restates_history, last_px,
                 last_shares, report_cum_qty, commission, leaves_qty, order_cum_qty,
@@ -1338,12 +1339,24 @@ impl CcpState {
                 time: transact_time,
                 acct_number: account,
                 exchange: exec_exchange,
-                side: if let Some(o) = context.order(clord_id) {
-                    match o.side { Side::Buy => "BOT", Side::Sell | Side::ShortSell => "SLD" }.to_string()
-                } else { String::new() },
+                // The venue's word for the side, read off the report as the
+                // action above is. Read off the order this session tracks, an
+                // execution restated for an order it never tracked — one that
+                // finished before a restart — stated no side at all.
+                side: match action {
+                    "BUY" => "BOT",
+                    "SELL" | "SSHORT" => "SLD",
+                    _ => "",
+                }.to_string(),
                 shares: qty_to_f64(last_shares),
                 price: last_px,
                 order_id: clord_id as i64,
+                // The order's permanent number and the client that placed it,
+                // as the report states them. Left at zero, a restated execution
+                // named no client, and a request filtered by client matched
+                // none of them.
+                perm_id,
+                client_id: i64::from(order.client_id),
                 // Read off the report, which restates it every time, rather
                 // than looked up against the order this client remembers: a
                 // fill on an order placed in another session is still
@@ -1397,6 +1410,14 @@ impl CcpState {
                     None => contract.clone(),
                 };
                 shared.reference.cache_contract(con_id, merged);
+            }
+
+            // An execution the venue restated and nothing above booked: the
+            // quantity is already held, or the order was never this session's.
+            // No fill, and announced as none — but one of the day's executions,
+            // which a caller asking for those is owed.
+            if is_resend && is_execution && filled.is_none() {
+                shared.orders.push_restated_execution(contract.clone(), last_exec.clone());
             }
 
             // A trade cancel (150=H) or trade correction (150=G) restates an
