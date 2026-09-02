@@ -22,6 +22,20 @@ pub enum BarDataType {
     Ask,
     /// Both sides.
     BidAsk,
+    /// Trades, aggregated as the venue aggregates them.
+    AggTrades,
+    /// The rate charged to borrow the stock.
+    FeeRate,
+    /// The yield at the bid.
+    YieldBid,
+    /// The yield at the ask.
+    YieldAsk,
+    /// The yield at the last trade.
+    YieldLast,
+    /// The yield at the venue's own mark.
+    YieldMark,
+    /// A fund's net asset value.
+    NavLast,
     /// The volatility the underlying realised.
     HistoricalVolatility,
     /// The volatility its options implied.
@@ -62,6 +76,23 @@ impl BarDataType {
                  `control::adjustments::scale_bars`"
                     .to_string(),
             ),
+            "AGGTRADES" => Self::AggTrades,
+            "FEE_RATE" => Self::FeeRate,
+            "YIELD_BID" => Self::YieldBid,
+            "YIELD_ASK" => Self::YieldAsk,
+            "YIELD_LAST" => Self::YieldLast,
+            "YIELD_MARK" => Self::YieldMark,
+            "NAV_LAST" => Self::NavLast,
+            // Two series the venue carries separately and neither holds both,
+            // so answering it means folding one bar out of two. Refused until
+            // this client does that, rather than answering with one of them
+            // under a name that says both.
+            "YIELD_BID_ASK" => return Err(
+                "YIELD_BID_ASK is two series, the yield at the bid and the yield at the \
+                 ask, and the venue carries no series holding both. Ask for YIELD_BID \
+                 and YIELD_ASK"
+                    .to_string(),
+            ),
             "HISTORICAL_VOLATILITY" => Self::HistoricalVolatility,
             "OPTION_IMPLIED_VOLATILITY" => Self::ImpliedVolatility,
             // The rate the venue prices options at, as a series of its own.
@@ -72,7 +103,8 @@ impl BarDataType {
             other => {
                 return Err(format!(
                     "Unsupported what_to_show '{other}': expected TRADES, MIDPOINT, \
-                     BID, ASK, BID_ASK, HISTORICAL_VOLATILITY, \
+                     BID, ASK, BID_ASK, AGGTRADES, FEE_RATE, YIELD_BID, YIELD_ASK, \
+                     YIELD_LAST, YIELD_MARK, NAV_LAST, HISTORICAL_VOLATILITY, \
                      OPTION_IMPLIED_VOLATILITY or OPTION_EXERCISE_INTEREST_RATE",
                 ));
             }
@@ -93,6 +125,13 @@ impl BarDataType {
             Self::Bid => "Bid",
             Self::Ask => "Ask",
             Self::BidAsk => "BidAsk",
+            Self::AggTrades => "AggLast",
+            Self::FeeRate => "FeeRate",
+            Self::YieldBid => "BidYield",
+            Self::YieldAsk => "AskYield",
+            Self::YieldLast => "LastYield",
+            Self::YieldMark => "MarkYield",
+            Self::NavLast => "NavLast",
             Self::HistoricalVolatility => "HistVol",
             Self::ImpliedVolatility => "OptionImpliedVol",
             Self::OptionInterestRate => "OptExInterestRate",

@@ -910,3 +910,36 @@ fn the_volatility_series_ask_under_names_the_venue_answers_to() {
     assert_eq!(BarDataType::HistoricalVolatility.as_str(), "HistVol");
     assert_eq!(BarDataType::ImpliedVolatility.as_str(), "OptionImpliedVol");
 }
+
+/// The series the venue carries are asked for by the names it answers to.
+///
+/// Refused before they were sent, a caller could not ask for any of them. The
+/// names were read off the venue and checked against it: on a paper session
+/// FEE_RATE drew four bars for a stock and NAV_LAST five, while AGGTRADES and
+/// YIELD_LAST drew none and the venue answered naming the series back —
+/// "AggLast", "LastYield" — which is a contract with no such series, not a
+/// name it does not know. A name it does not know comes back as "NoType",
+/// which is what the two volatility series drew before they were corrected.
+#[test]
+fn the_series_the_venue_carries_are_asked_for_by_its_own_names() {
+    for (asked, on_the_wire) in [
+        ("AGGTRADES", "AggLast"),
+        ("FEE_RATE", "FeeRate"),
+        ("YIELD_BID", "BidYield"),
+        ("YIELD_ASK", "AskYield"),
+        ("YIELD_LAST", "LastYield"),
+        ("YIELD_MARK", "MarkYield"),
+        ("NAV_LAST", "NavLast"),
+    ] {
+        let read = BarDataType::from_api_str(asked)
+            .unwrap_or_else(|why| panic!("{asked} is a series the venue carries: {why}"));
+        assert_eq!(read.as_str(), on_the_wire, "{asked} goes out under the wrong name");
+    }
+}
+
+/// One name that is two series is not answered with one of them.
+#[test]
+fn a_name_meaning_two_series_is_refused_rather_than_half_answered() {
+    let why = BarDataType::from_api_str("YIELD_BID_ASK").expect_err("two series, not one");
+    assert!(why.contains("two series"), "{why}");
+}
