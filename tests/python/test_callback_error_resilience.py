@@ -20,7 +20,7 @@ class RaisingTickPriceWrapper(EWrapper):
     def tick_size(self, req_id, tick_type, size):
         self.events.append(("tick_size", req_id, tick_type, size))
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         self.events.append(("error", req_id, error_code, error_string))
 
     def connect_ack(self):
@@ -100,7 +100,7 @@ class RaisingAllWrapper(EWrapper):
         self.call_count += 1
         raise ValueError("tick_size boom")
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         self.call_count += 1
         raise ValueError("error boom")
 

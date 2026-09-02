@@ -36,7 +36,7 @@ class ReferenceStyle(EWrapper):
     def execDetails(self, reqId, contract, execution):
         self.seen.append(("execDetails", reqId))
 
-    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+    def error(self, reqId, errorTime, errorCode, errorString, advancedOrderRejectJson=""):
         self.errors.append(errorCode)
 
 

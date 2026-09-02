@@ -16,7 +16,7 @@ class NotConnectedProbe(EWrapper):
         super().__init__()
         self.errors = []
 
-    def error(self, req_id, code, msg, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, code, msg, advanced_order_reject_json=""):
         self.errors.append((req_id, code, msg))
 
     @property

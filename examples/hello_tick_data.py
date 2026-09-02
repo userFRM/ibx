@@ -30,7 +30,7 @@ class TickWrapper(EWrapper):
     def tick_size(self, req_id, tick_type, size):
         self.ticks += 1
 
-    def error(self, req_id, code, msg, advanced=""):
+    def error(self, req_id, error_time, code, msg, advanced=""):
         if code not in (2104, 2106, 2158):
             print(f"[error] {code}: {msg}")
 

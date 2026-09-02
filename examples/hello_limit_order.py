@@ -28,7 +28,7 @@ class OrderWrapper(EWrapper):
         if status == "Cancelled":
             self.cancelled.set()
 
-    def error(self, req_id, code, msg, advanced=""):
+    def error(self, req_id, error_time, code, msg, advanced=""):
         if code not in (2104, 2106, 2158):
             print(f"[error] {code}: {msg}")
 

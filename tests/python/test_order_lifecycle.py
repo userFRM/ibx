@@ -76,7 +76,7 @@ class OrderLifecycleWrapper(EWrapper):
     def commission_and_fees_report(self, commission_and_fees_report):
         pass
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         # 2104/2106/2158 = data farm connection messages (noise)
         # 202 = order cancelled (expected)
         if error_code not in (2104, 2106, 2158, 202):

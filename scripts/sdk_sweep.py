@@ -30,7 +30,7 @@ def main() -> int:
         paper=True,
     )
     said: list[tuple[int, str]] = []
-    ib.wrapper.error = lambda r, code, m, a="": said.append((code, m[:70]))
+    ib.wrapper.error = lambda r, when, code, m, a="": said.append((code, m[:70]))
 
     stock = ibx.Contract(symbol="SPY", secType="STK", exchange="SMART", currency="USD")
     spy = ib.reqContractDetails(stock)[0].contract

@@ -20,7 +20,7 @@ class _Recorder(ibx.EWrapper):
         self.errors = []
         self.prints = []
 
-    def error(self, reqId, code, msg, advanced=""):
+    def error(self, reqId, errorTime, code, msg, advanced=""):
         self.errors.append((reqId, code, msg))
 
     def tickByTickAllLast(self, reqId, tickType, time, price, size,

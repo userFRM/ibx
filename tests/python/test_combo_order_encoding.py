@@ -66,7 +66,7 @@ class SpreadWrapper(EWrapper):
     def tick_size(self, req_id, tick_type, size):
         pass
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         self.errors.append((req_id, error_code, error_string))
         if error_code not in (2104, 2106, 2119, 2158, 460, 202):
             print(f"  [error] reqId={req_id} code={error_code}: {error_string}")

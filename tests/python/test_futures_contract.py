@@ -120,7 +120,7 @@ class FuturesWrapper(EWrapper):
             self.order_statuses.setdefault(order_id, []).append(status)
         self.got_order_status.set()
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         self.errors.append((req_id, error_code, error_string))
         if error_code not in (2104, 2106, 2119, 2158, 460, 202):
             print(f"  [error] reqId={req_id} code={error_code}: {error_string}")

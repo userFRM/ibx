@@ -105,7 +105,7 @@ class FeatureWrapper(EWrapper):
     def open_order_end(self):
         self.got_open_order_end.set()
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         self.errors.append((req_id, error_code, error_string))
 
 

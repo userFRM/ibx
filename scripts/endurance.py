@@ -93,7 +93,7 @@ class Counters(EWrapper):
     def historical_data(self, *rest):
         self._note("bars")
 
-    def error(self, req_id, code, message, advanced=""):
+    def error(self, req_id, error_time, code, message, advanced=""):
         if code in CONNECTION_NOTICES:
             return
         with self.lock:

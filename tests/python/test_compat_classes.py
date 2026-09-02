@@ -415,7 +415,7 @@ def test_auto_binding_is_refused_only_for_a_client_that_is_not_zero():
             super().__init__()
             self.errors = []
 
-        def error(self, req_id, code, msg, advanced=""):
+        def error(self, req_id, error_time, code, msg, advanced=""):
             self.errors.append((code, msg))
 
     w = W()
@@ -455,7 +455,7 @@ def test_solving_an_option_answers_rather_than_refusing():
                                     theta, und_price):
             self.computed.append((req_id, implied_vol, opt_price))
 
-        def error(self, req_id, code, msg, advanced=""):
+        def error(self, req_id, error_time, code, msg, advanced=""):
             self.errors.append((code, msg))
 
     w = W()
@@ -503,7 +503,7 @@ def test_a_question_kept_for_a_model_does_not_outlive_its_session():
                                     theta, und_price):
             self.computed.append(req_id)
 
-        def error(self, req_id, code, msg, advanced=""):
+        def error(self, req_id, error_time, code, msg, advanced=""):
             pass
 
     w = W()
@@ -555,7 +555,7 @@ def test_a_calculation_asked_before_the_model_waits_for_it():
                                     theta, und_price):
             self.computed.append((req_id, implied_vol, opt_price))
 
-        def error(self, req_id, code, msg, advanced=""):
+        def error(self, req_id, error_time, code, msg, advanced=""):
             self.errors.append((code, msg))
 
     w = W()

@@ -41,7 +41,7 @@ class L2Wrapper(EWrapper):
         if req_id in self.books:
             self.books[req_id].apply(position, market_maker, operation, side, price, size)
 
-    def error(self, req_id, code, msg, advanced=""):
+    def error(self, req_id, error_time, code, msg, advanced=""):
         if code not in (2104, 2106, 2158):
             print(f"[error] {code}: {msg}")
 

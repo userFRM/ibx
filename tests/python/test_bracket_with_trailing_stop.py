@@ -76,7 +76,7 @@ class BracketWrapper(EWrapper):
     def open_order_end(self):
         self.got_open_order_end.set()
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         if error_code not in (2104, 2106, 2158, 202):
             print(f"  [error] oid={req_id} code={error_code}: {error_string}")
 

@@ -58,7 +58,7 @@ class DepthWrapper(EWrapper):
         self.depth_exchanges = list(depth_mkt_data_descriptions)
         self.got_depth_exchanges.set()
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         self.errors.append((req_id, error_code, error_string))
         print(f"  error({req_id}, {error_code}, {error_string})")
 

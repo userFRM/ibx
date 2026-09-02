@@ -44,7 +44,7 @@ class RecordingWrapper(EWrapper):
     def exec_details(self, req_id, contract, execution):
         self.events.append(("exec_details", req_id, contract, execution))
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         self.events.append(("error", req_id, error_code, error_string))
 
     def next_valid_id(self, order_id):

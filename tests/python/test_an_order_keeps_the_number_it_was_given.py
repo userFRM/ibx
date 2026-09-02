@@ -16,7 +16,7 @@ def _client():
             super().__init__()
             self.errors = []
 
-        def error(self, reqId, code, msg, advanced=""):
+        def error(self, reqId, errorTime, code, msg, advanced=""):
             self.errors.append((reqId, code, msg))
 
     w = W()

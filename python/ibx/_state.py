@@ -176,7 +176,7 @@ class LiveState(EWrapper):
 
     # -- what the venue tells us -----------------------------------------
 
-    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+    def error(self, reqId, errorTime, errorCode, errorString, advancedOrderRejectJson=""):
         with self._lock:
             self._updates += 1
             self.errors.append((reqId, errorCode, errorString, advancedOrderRejectJson))

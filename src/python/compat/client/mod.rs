@@ -783,7 +783,7 @@ impl EClient {
         let _ = self.wrapper.call_method(
             py,
             "error",
-            (req_id, refusal.code, refusal.message, ""),
+            (req_id, raised_now(), refusal.code, refusal.message, ""),
             None,
         );
         Ok(())
@@ -807,7 +807,7 @@ impl EClient {
                     let _ = self.wrapper.call_method(
                         py,
                         "error",
-                        (req_id, NOT_CONNECTED_CODE, "Not connected", ""),
+                        (req_id, raised_now(), NOT_CONNECTED_CODE, "Not connected", ""),
                         None,
                     );
                 });
@@ -1538,4 +1538,16 @@ w = W()",
             assert_eq!(ended, 1, "the request ends once");
         });
     }
+}
+
+/// When this client raised something itself, in milliseconds.
+///
+/// The reference client stamps the trouble it raises before anything reaches
+/// the venue — a call made with no session, a request it will not send — and
+/// leaves the field at zero for trouble the venue stated.
+pub(crate) fn raised_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }

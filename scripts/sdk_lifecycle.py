@@ -30,7 +30,7 @@ def main() -> int:
         paper=True,
     )
     said: list[str] = []
-    ib.wrapper.error = lambda r, code, m, a="": (
+    ib.wrapper.error = lambda r, when, code, m, a="": (
         said.append(f"{code}: {m[:70]}") if code not in (2104, 2106, 2158, 2100) else None
     )
 

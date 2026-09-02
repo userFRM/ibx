@@ -93,7 +93,7 @@ class Wrapper(EWrapper):
     def commission_and_fees_report(self, commission_and_fees_report):
         pass
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         if error_code not in (2104, 2106, 2158, 202):
             print(f"  [error] {error_code}: {error_string}")
 

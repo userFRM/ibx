@@ -40,7 +40,7 @@ def test_disconnect_from_the_1100_handler_does_not_deadlock():
             self.client = None
             self.saw = 0
 
-        def error(self, req_id, code, msg, advanced=""):
+        def error(self, req_id, error_time, code, msg, advanced=""):
             if code == 1100:
                 self.saw += 1
                 self.client.disconnect()
@@ -66,7 +66,7 @@ def test_reconnect_from_the_1100_handler_leaves_the_new_session_connected():
             super().__init__()
             self.client = None
 
-        def error(self, req_id, code, msg, advanced=""):
+        def error(self, req_id, error_time, code, msg, advanced=""):
             if code == 1100:
                 self.client.disconnect()
                 self.client._test_connect("T2")
@@ -93,7 +93,7 @@ def test_two_disconnects_in_one_batch_fire_one_1100():
             self.client = None
             self.saw = 0
 
-        def error(self, req_id, code, msg, advanced=""):
+        def error(self, req_id, error_time, code, msg, advanced=""):
             if code == 1100:
                 self.saw += 1
                 if self.saw == 1:
@@ -126,7 +126,7 @@ def test_a_session_the_caller_ends_is_not_a_session_that_was_lost():
             super().__init__()
             self.codes = []
 
-        def error(self, req_id, code, msg, advanced=""):
+        def error(self, req_id, error_time, code, msg, advanced=""):
             self.codes.append(code)
 
     w = W()
@@ -181,7 +181,7 @@ def test_a_request_before_connect_can_answer_from_its_own_error_handler():
             self.client = None
             self.codes = []
 
-        def error(self, req_id, code, msg, advanced=""):
+        def error(self, req_id, error_time, code, msg, advanced=""):
             self.codes.append(code)
             if len(self.codes) == 1:
                 # Re-enters the control channel this call is deciding on.

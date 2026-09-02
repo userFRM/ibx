@@ -31,7 +31,7 @@ class ConnectionWrapper(EWrapper):
     def managed_accounts(self, accounts_list):
         self.events.append(("managed_accounts", accounts_list))
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         self.events.append(("error", req_id, error_code, error_string))
 
     def current_time(self, time):
@@ -64,14 +64,17 @@ def test_managed_accounts_callback():
 
 def test_error_callback():
     w = ConnectionWrapper()
-    w.error(-1, 2104, "Market data farm connection is OK", "")
+    # Second, as the reference client's wrapper has it. Zero is what it passes
+    # for trouble the venue stated on a session speaking a protocol older than
+    # the one that added the field.
+    w.error(-1, 0, 2104, "Market data farm connection is OK", "")
     assert w.events == [("error", -1, 2104, "Market data farm connection is OK")]
 
 
 def test_error_callback_default_json():
     """Error() advanced_order_reject_json defaults to empty string."""
     w = ConnectionWrapper()
-    w.error(-1, 2104, "test")
+    w.error(-1, 0, 2104, "test")
     assert len(w.events) == 1
 
 
@@ -132,7 +135,7 @@ def test_ewrapper_base_connect_ack_noop():
     w.connection_closed()
     w.next_valid_id(1)
     w.managed_accounts("DU12345")
-    w.error(-1, 0, "test", "")
+    w.error(-1, 0, 504, "test", "")
     w.current_time(0)
 
 

@@ -49,7 +49,7 @@ impl EWrapper {
     /// for most logins; an advisor has several.
     fn managed_accounts(&self, _accounts_list: &str) {}
 
-    #[pyo3(signature = (_req_id, _error_code, _error_string, _advanced_order_reject_json=""))]
+    #[pyo3(signature = (_req_id, _error_time, _error_code, _error_string, _advanced_order_reject_json=""))]
     /// What the venue said about a request, under the number it says it
     /// with. Codes from 2100 to 2200 are notices about a connection rather than
     /// failures. `req_id` is -1 for anything that answers no particular request.
@@ -58,7 +58,22 @@ impl EWrapper {
     /// numbers the reference client uses: 321 for a request that fails
     /// validation, 200 for a contract description that matches nothing, 504
     /// for a call made with no session.
-    fn error(&self, _req_id: i64, _error_code: i64, _error_string: &str, _advanced_order_reject_json: &str) {}
+    ///
+    /// `error_time` is the reference client's second parameter and is stated
+    /// wherever it states one. It carries a clock reading in milliseconds for
+    /// trouble this client raises before anything reached the venue, and zero
+    /// for trouble the venue stated — which is what that client passes for a
+    /// session speaking a protocol older than the one that added the field,
+    /// and this one says it speaks an older protocol than that.
+    fn error(
+        &self,
+        _req_id: i64,
+        _error_time: i64,
+        _error_code: i64,
+        _error_string: &str,
+        _advanced_order_reject_json: &str,
+    ) {
+    }
 
     /// The venue clock, in seconds since the epoch.
     fn current_time(&self, _time: i64) {}

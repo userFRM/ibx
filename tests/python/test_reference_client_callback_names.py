@@ -25,7 +25,7 @@ def test_a_wrapper_named_the_reference_way_is_called():
                         mktCapPrice=0.0):
             self.seen.append(("orderStatus", orderId, status))
 
-        def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+        def error(self, reqId, errorTime, errorCode, errorString, advancedOrderRejectJson=""):
             self.seen.append(("error", errorCode))
 
     w = ReferenceStyle()

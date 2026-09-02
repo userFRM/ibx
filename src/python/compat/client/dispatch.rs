@@ -110,7 +110,7 @@ impl EClient {
                 // there ever used.
                 self.pending_option_calcs.lock().unwrap().clear();
             }
-            call_wrapper!(self.wrapper, py, "error", (-1i64, 1100i64, "Connectivity between client and server has been lost", ""));
+            call_wrapper!(self.wrapper, py, "error", (-1i64, 0i64, 1100i64, "Connectivity between client and server has been lost", ""));
         }
         // A session the caller ended is not a session that was lost, and is
         // not announced here: the dispatch loop ends and answers with
@@ -151,7 +151,7 @@ impl EClient {
         // client that stood down on 1100 and never saw this stayed down.
         if events.iter().any(|e| matches!(e, Event::Reconnected)) {
             self.connected.store(true, Ordering::Release);
-            call_wrapper!(self.wrapper, py, "error", (-1i64, 1102i64, "Connectivity between client and server has been restored - data maintained", ""));
+            call_wrapper!(self.wrapper, py, "error", (-1i64, 0i64, 1102i64, "Connectivity between client and server has been restored - data maintained", ""));
         }
 
         // One of the connections the venue keeps data on went away or came
@@ -163,7 +163,7 @@ impl EClient {
             if let Event::VenueData { which, up } = event {
                 let (broken, ok) = which.codes();
                 call_wrapper!(self.wrapper, py, "error",
-                    (-1i64, if *up { ok } else { broken }, which.says(*up), ""));
+                    (-1i64, 0i64, if *up { ok } else { broken }, which.says(*up), ""));
             }
         }
 
@@ -441,12 +441,12 @@ impl EClient {
         }
 
         for text in shared.market.drain_venue_errors() {
-            call_wrapper!(self.wrapper, py, "error", (-1i64, 321i64, text, ""));
+            call_wrapper!(self.wrapper, py, "error", (-1i64, super::raised_now(), 321i64, text, ""));
         }
 
         for (instrument, reason) in shared.market.drain_subscription_failures() {
             let req_id = self.core.req_id_for_instrument(instrument);
-            call_wrapper!(self.wrapper, py, "error", (req_id, 200i64, reason, ""));
+            call_wrapper!(self.wrapper, py, "error", (req_id, 0i64, 200i64, reason, ""));
         }
 
         // A calculation asked for before the venue had stated a model waited on
@@ -486,12 +486,12 @@ impl EClient {
         let rejects = shared.orders.drain_cancel_rejects();
         for reject in rejects {
             let (code, msg) = self.core.retire_rejected(&reject);
-            call_wrapper!(self.wrapper, py, "error", (reject.order_id as i64, code, msg.as_str(), ""));
+            call_wrapper!(self.wrapper, py, "error", (reject.order_id as i64, 0i64, code, msg.as_str(), ""));
         }
 
         // Drain inactive-order reasons -> error
         for (order_id, code, msg) in shared.orders.drain_order_inactive() {
-            call_wrapper!(self.wrapper, py, "error", (order_id as i64, code as i64, msg.as_str(), ""));
+            call_wrapper!(self.wrapper, py, "error", (order_id as i64, 0i64, code as i64, msg.as_str(), ""));
         }
 
         // Poll quotes for changes -> tickPrice/tickSize
@@ -673,7 +673,7 @@ impl EClient {
         // failures (e.g. "Invalid time length") that previously vanished silently.
         for (req_id, code, msg) in shared.reference.drain_historical_errors_for_dispatch() {
             let req_id = crate::bridge::ReferenceState::request_id_reported(req_id);
-            call_wrapper!(self.wrapper, py, "error", (req_id, code as i64, msg.as_str(), ""));
+            call_wrapper!(self.wrapper, py, "error", (req_id, 0i64, code as i64, msg.as_str(), ""));
         }
 
         // Drain historical data -> historicalData + historicalDataEnd /
@@ -903,7 +903,7 @@ impl EClient {
                     dropped.get(),
                 );
                 call_wrapper!(self.wrapper, py, "error",
-                    (req_id as i64, crate::error_codes::Refusal::VALIDATION as i64, why.as_str(), ""));
+                    (req_id as i64, super::raised_now(), crate::error_codes::Refusal::VALIDATION as i64, why.as_str(), ""));
             }
         }
 

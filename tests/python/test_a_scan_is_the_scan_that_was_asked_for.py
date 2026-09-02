@@ -16,7 +16,7 @@ class Errors(ibx.EWrapper):
         super().__init__()
         self.errors = []
 
-    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+    def error(self, reqId, errorTime, errorCode, errorString, advancedOrderRejectJson=""):
         self.errors.append((errorCode, errorString))
 
 

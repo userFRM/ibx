@@ -1706,11 +1706,12 @@ Every account this login may act for, separated by commas. One for most logins; 
 
 #### `error`
 
-What the venue said about a request, under the number it says it with. Codes from 2100 to 2200 are notices about a connection rather than failures. `req_id` is -1 for anything that answers no particular request.  A request this client will not send is reported here too, under the same numbers the reference client uses: 321 for a request that fails validation, 200 for a contract description that matches nothing, 504 for a call made with no session.
+What the venue said about a request, under the number it says it with. Codes from 2100 to 2200 are notices about a connection rather than failures. `req_id` is -1 for anything that answers no particular request.  A request this client will not send is reported here too, under the same numbers the reference client uses: 321 for a request that fails validation, 200 for a contract description that matches nothing, 504 for a call made with no session.  `error_time` is the reference client's second parameter and is stated wherever it states one. It carries a clock reading in milliseconds for trouble this client raises before anything reached the venue, and zero for trouble the venue stated — which is what that client passes for a session speaking a protocol older than the one that added the field, and this one says it speaks an older protocol than that.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `req_id` | `int` | Request identifier. Used to match responses to requests. |
+| `error_time` | `int` |  |
 | `error_code` | `int` | Error code. |
 | `error_string` | `str` | Error message. |
 | `advanced_order_reject_json` | `str` | JSON with advanced rejection details. |

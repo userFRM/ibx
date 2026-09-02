@@ -72,7 +72,7 @@ class Wrapper(EWrapper):
     def managed_accounts(self, accounts_list):
         pass
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         with self.lock:
             self.events.append(("error", req_id, error_code, error_string))
 

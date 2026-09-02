@@ -73,7 +73,7 @@ class CollectorWrapper(EWrapper):
                      perm_id, parent_id, last_fill_price, client_id, why_held, mkt_cap_price):
         self.statuses.append((order_id, status))
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         if error_code in (2104, 2106, 2158, 202):
             # 202 is the cancel-reject under test; record it but also keep
             # the noise filters in sync with the other tests.

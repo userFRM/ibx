@@ -75,7 +75,7 @@ class NewsWrapper(EWrapper):
             self.bulletins.append((msg_id, msg_type, message, orig_exchange))
         self.got_bulletin.set()
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         if error_code not in (2104, 2106, 2158):
             print(f"  [error] reqId={req_id} code={error_code}: {error_string}")
 

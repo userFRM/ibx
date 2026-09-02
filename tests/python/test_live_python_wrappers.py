@@ -103,7 +103,7 @@ class FullWrapper(EWrapper):
     def managed_accounts(self, accounts_list):
         self._record(("managed_accounts", accounts_list))
 
-    def error(self, req_id, error_code, error_string, advanced_order_reject_json=""):
+    def error(self, req_id, error_time, error_code, error_string, advanced_order_reject_json=""):
         self._record(("error", req_id, error_code, error_string))
 
     # ── Market Data ──
