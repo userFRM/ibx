@@ -12,6 +12,8 @@ methods that send a question and hand the answer back. It is a facade over
 ``EClient``, not a second client, so the two see the same session.
 """
 
+import inspect
+
 from .ibx import *  # noqa: F401,F403
 from .ibx import __doc__ as _ext_doc  # noqa: F401
 
@@ -22,6 +24,50 @@ from ._ib import Client  # noqa: F401
 #: class either way.
 IB = Client
 from ._settings import UNAVAILABLE, configure, describe, settings  # noqa: F401
+
+# The plain objects and constants a program written against the reference
+# client imports on its first line. Read by attribute here, so the shape is the
+# whole of what they are.
+from ._reference_shapes import (  # noqa: F401
+    DOUBLE_INFINITY,
+    INFINITY_STR,
+    MAX_MSG_LEN,
+    NO_VALID_ID,
+    UNSET_DECIMAL,
+    UNSET_DOUBLE,
+    UNSET_INTEGER,
+    UNSET_LONG,
+    AccountSummaryTags,
+    ComboLeg,
+    DeltaNeutralContract,
+    ExecutionFilter,
+    HistogramDataList,
+    ListOfContractDescription,
+    ListOfDepthExchanges,
+    ListOfFamilyCode,
+    ListOfHistoricalSessions,
+    ListOfHistoricalTick,
+    ListOfHistoricalTickBidAsk,
+    ListOfHistoricalTickLast,
+    ListOfNewsProviders,
+    ListOfPriceIncrements,
+    OrderCancel,
+    OrderComboLeg,
+    OrderId,
+    ScannerSubscription,
+    SetOfFloat,
+    SetOfString,
+    SmartComponentMap,
+    TagValueList,
+    TickerId,
+    TickType,
+    WshEventData,
+    decimalMaxString,
+    floatMaxString,
+    intMaxString,
+    iswrapper,
+    longMaxString,
+)
 
 
 def _reference_name(ours: str) -> str:
@@ -76,6 +122,49 @@ def _answer_to_both_spellings(cls) -> None:
         setattr(cls, theirs, _standing_in_front_of(under_ours, cls, theirs))
 
 
+def _one_word(name: str) -> str:
+    """A parameter name with nothing in it but its letters, in lower case.
+
+    `useRTH` and `use_rth` are the same parameter, and so are `acctCode` and
+    `acct_code`; the underscores and the capitals are the only difference, and
+    an acronym makes the capitals unguessable in either direction.
+    """
+    return name.replace("_", "").lower()
+
+
+#: Parameters this client names something else entirely, by letters alone. The
+#: rest of the reference client's names differ from ours only in underscores and
+#: capitals, which `_one_word` settles; these three are different words, so
+#: nothing but a list of them will do. A name absent from the method it is
+#: passed to is handed on untouched, and the method refuses it as before.
+_THEIR_WORD_FOR_IT = {
+    "tickerid": "req_id",
+    "fadata": "fa_data_type",
+    "implvoloptions": "implied_vol_options",
+}
+
+
+def _under_our_names(method):
+    """What each of this method's parameters is called, by its letters alone.
+
+    Read off the method itself rather than composed from a rule: a rule that
+    turns `use_rth` into `useRth` misses `useRTH`, which is what the reference
+    client calls it and therefore what a caller writes.
+
+    Empty where the method states no parameters this can read, in which case a
+    keyword is passed on untouched and the method itself refuses it.
+    """
+    try:
+        params = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return {}
+    ours = {_one_word(name): name for name in params if name != "self"}
+    for theirs, mine in _THEIR_WORD_FOR_IT.items():
+        if mine in params:
+            ours[theirs] = mine
+    return ours
+
+
 def _standing_in_front_of(method, cls, theirs: str):
     """The reference spelling, as a function that calls the method.
 
@@ -85,9 +174,21 @@ def _standing_in_front_of(method, cls, theirs: str):
     answer from the caller's to pass it over. A bound Python function carries
     `__func__` and the method's own bound form carries nothing that names it,
     so the function is what makes the two tellable apart.
+
+    It also takes a keyword under the reference client's spelling of it. A
+    program written against that client passes them by name — its own
+    documentation gives ten of them for one request — and every one of those
+    names was refused, so calling the reference spelling of a method with the
+    reference spelling of its arguments raised.
     """
+    ours_by_letters = _under_our_names(method)
 
     def theirs_calls_ours(self, *args, **kwargs):
+        if kwargs:
+            kwargs = {
+                ours_by_letters.get(_one_word(given), given): value
+                for given, value in kwargs.items()
+            }
         return method(self, *args, **kwargs)
 
     theirs_calls_ours.__name__ = theirs
