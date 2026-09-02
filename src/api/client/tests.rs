@@ -4570,8 +4570,8 @@ fn process_msgs_dispatches_scanner_data() {
     shared.reference.push_scanner_data(3, ScannerResult {
         con_ids: vec![265598, 756733],
         entries: vec![
-            ScannerEntry { con_id: 265598, ..Default::default() },
-            ScannerEntry { con_id: 756733, ..Default::default() },
+            ScannerEntry { con_id: 265598 },
+            ScannerEntry { con_id: 756733 },
         ],
         scan_time: "2026-03-13".into(),
         error_text: String::new(),

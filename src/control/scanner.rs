@@ -25,15 +25,12 @@ pub struct ScannerSubscription {
 #[derive(Debug, Clone, Default)]
 pub struct ScannerEntry {
     /// The venue's id for the contract.
+    ///
+    /// A row is this and the time the contract entered the scan, and nothing
+    /// else — the response carries no ticker, kind, venue or currency, so
+    /// everything else a caller reads about the contract is resolved against
+    /// the trading connection before the row is handed over.
     pub con_id: u32,
-    /// Its ticker.
-    pub symbol: String,
-    /// What kind of contract it is.
-    pub sec_type: String,
-    /// Which venue.
-    pub exchange: String,
-    /// What currency that is in.
-    pub currency: String,
 }
 
 /// Parsed scanner subscription response.
@@ -133,7 +130,7 @@ pub fn parse_scanner_response(xml: &str) -> Option<ScannerResult> {
         if con_id != 0 {
             con_ids.push(con_id);
         }
-        entries.push(ScannerEntry { con_id, ..Default::default() });
+        entries.push(ScannerEntry { con_id });
         search_start = c_end;
     }
 
