@@ -13,7 +13,7 @@ mod test_helpers;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use std::sync::mpsc::SyncSender;
@@ -50,9 +50,9 @@ use super::contract::Contract;
 /// state so that a subsequent `connect()` on the same instance works correctly.
 #[pyclass(frozen, subclass)]
 pub struct EClient {
-    /// Reference to the EWrapper (which is typically `self` in the `App(EWrapper,
-    /// EClient)` pattern).
-    pub(crate) wrapper: Py<PyAny>,
+    /// The EWrapper the callbacks go to, from the moment `__init__` says which
+    /// (typically `self` in the `App(EWrapper, EClient)` pattern).
+    pub(crate) wrapper: OnceLock<Py<PyAny>>,
     /// Set by connect(), cleared by disconnect.
     pub(crate) shared: Mutex<Option<Arc<SharedState>>>,
     /// Set by connect(), cleared by disconnect.
@@ -284,14 +284,19 @@ fn code_provider_from_py(cb: Py<PyAny>) -> CodeProvider {
 #[pymethods]
 impl EClient {
 
+    /// Takes whatever the caller passed, `_args` and `_kwargs`, and binds
+    /// nothing with them: the interpreter hands the same arguments to
+    /// `__init__`, which is where the wrapper is bound — and a program built
+    /// the way the reference sample is, `App()` with
+    /// `EClient.__init__(self, wrapper=self)` inside, reaches this with none.
     #[new]
-    #[pyo3(signature = (wrapper))]
-    fn new(wrapper: Py<PyAny>) -> Self {
+    #[pyo3(signature = (*_args, **_kwargs))]
+    fn __new__(_args: &Bound<'_, pyo3::types::PyTuple>, _kwargs: Option<&Bound<'_, pyo3::types::PyDict>>) -> Self {
         Self {
             client_id: AtomicI32::new(0),
             auth_host: Mutex::new(None),
             logged_in_at: Mutex::new(None),
-            wrapper,
+            wrapper: OnceLock::new(),
             shared: Mutex::new(None),
             control_tx: Mutex::new(None),
             next_order_id: AtomicU64::new(0),
@@ -315,6 +320,22 @@ impl EClient {
             completed: Mutex::new(Vec::new()),
             core: ClientCore::new(),
         }
+    }
+
+    /// Bind the wrapper the callbacks are delivered to.
+    ///
+    /// `EClient(wrapper)` lands here through the interpreter; a subclass with a
+    /// constructor of its own calls `EClient.__init__(self, wrapper)`, as the
+    /// reference sample does with `wrapper=self`. Bound once: a second,
+    /// different wrapper is refused, since callbacks may already be on their
+    /// way to the first.
+    fn __init__(&self, wrapper: Py<PyAny>) -> PyResult<()> {
+        if let Err(again) = self.wrapper.set(wrapper)
+            && !self.wrapper.get().is_some_and(|bound| bound.is(&again))
+        {
+            return Err(pyo3::exceptions::PyTypeError::new_err("EClient already has a wrapper"));
+        }
+        Ok(())
     }
 
     /// Connect to IB and start the engine.
@@ -556,15 +577,7 @@ impl EClient {
     /// Only reached when the attribute was not found, so it costs nothing on
     /// the name this client has always used.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
-        // The two the reference client opens with an `e`. Its `eConnect` takes
-        // a host, a port and a client id, which are this call's first three
-        // arguments in that order, so a program written against it reaches the
-        // same call the same way.
-        super::contract::by_reference_name(
-            slf.as_any(),
-            name,
-            &[("eConnect", "connect"), ("eDisconnect", "disconnect")],
-        )
+        super::contract::by_reference_name(slf.as_any(), name, REFERENCE_ALIASES)
     }
 
     /// Disconnect from IB.
@@ -836,17 +849,28 @@ impl EClient {
     }
 }
 
+/// The names the reference client opens with an `e`, and what they reach here.
+/// Its `eConnect` takes a host, a port and a client id, which are `connect`'s
+/// first three arguments in that order, so a program written against it
+/// reaches the same call the same way.
+pub(super) const REFERENCE_ALIASES: &[(&str, &str)] =
+    &[("eConnect", "connect"), ("eDisconnect", "disconnect")];
+
 /// Call a callback on a wrapper under the reference client's name for it where
-/// the caller defined one, and under this client's name otherwise.
+/// the caller defined one, and under this client's name otherwise. A client
+/// whose `__init__` was never reached has no wrapper, and says so.
 pub(crate) fn call_named<'py, A>(
     py: Python<'py>,
-    wrapper: &Py<PyAny>,
+    wrapper: &OnceLock<Py<PyAny>>,
     name: &str,
     args: A,
 ) -> PyResult<()>
 where
     A: pyo3::call::PyCallArgs<'py> + Clone,
 {
+    let Some(wrapper) = wrapper.get() else {
+        return Err(PyRuntimeError::new_err("EClient has no wrapper: EClient.__init__ was not called"));
+    };
     let alias = ibapi_name(name);
     if alias != name
         && let Ok(f) = wrapper.getattr(py, alias.as_str())
@@ -999,12 +1023,7 @@ impl EClient {
         req_id: i64,
         refusal: crate::error_codes::Refusal,
     ) -> PyResult<()> {
-        let _ = self.wrapper.call_method(
-            py,
-            "error",
-            (req_id, raised_now(), refusal.code, refusal.message, ""),
-            None,
-        );
+        let _ = call_named(py, &self.wrapper, "error", (req_id, raised_now(), refusal.code, refusal.message, ""));
         Ok(())
     }
 
@@ -1023,12 +1042,7 @@ impl EClient {
             Some(tx) => Some(tx),
             None => {
                 Python::attach(|py| {
-                    let _ = self.wrapper.call_method(
-                        py,
-                        "error",
-                        (req_id, raised_now(), NOT_CONNECTED_CODE, "Not connected", ""),
-                        None,
-                    );
+                    let _ = call_named(py, &self.wrapper, "error", (req_id, raised_now(), NOT_CONNECTED_CODE, "Not connected", ""));
                 });
                 None
             }
@@ -1338,7 +1352,7 @@ mod tests {
     fn eclient_default_state() {
         Python::initialize();
         Python::attach(|py| {
-            let client = Py::new(py, EClient::new(recording_wrapper(py))).unwrap();
+            let client = Py::new(py, client_with(py, recording_wrapper(py))).unwrap();
             assert!(!client.get().connected.load(Ordering::Relaxed));
             assert_eq!(client.get().account(), "");
             assert!(client.get().accounts.lock().unwrap().is_empty());
@@ -1362,7 +1376,7 @@ mod tests {
     fn conn_state_is_connecting_for_the_length_of_connect() {
         Python::initialize();
         Python::attach(|py| {
-            let client = EClient::new(recording_wrapper(py));
+            let client = client_with(py, recording_wrapper(py));
             assert_eq!(client.conn_state(), EClient::DISCONNECTED);
             client.connected.store(true, Ordering::Release);
             assert_eq!(client.conn_state(), EClient::CONNECTING);
@@ -1464,12 +1478,19 @@ w = W()",
         ns.get_item("w").unwrap().unwrap().unbind()
     }
 
+    /// A client bound to `wrapper`, as `EClient(wrapper)` leaves one.
+    fn client_with(py: Python<'_>, wrapper: Py<PyAny>) -> EClient {
+        let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+        client.wrapper.set(wrapper).unwrap();
+        client
+    }
+
     /// A connected client whose engine is a channel the test reads.
     fn wired_client(
         py: Python<'_>,
     ) -> (Py<EClient>, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>, Py<PyAny>) {
         let w = recording_wrapper(py);
-        let client = EClient::new(w.clone_ref(py));
+        let client = client_with(py, w.clone_ref(py));
         let shared = Arc::new(SharedState::new());
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         *client.shared.lock().unwrap() = Some(shared.clone());

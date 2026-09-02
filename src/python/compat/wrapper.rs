@@ -5,7 +5,14 @@ use pyo3::prelude::*;
 /// ibapi-compatible EWrapper base class.
 /// Users subclass this in Python and override callbacks they care about.
 /// All methods are no-ops by default.
-#[pyclass(subclass)]
+///
+/// Holds nothing and is frozen, so an instance is laid out exactly as
+/// `object`'s are. The reference client's own sample program is
+/// `class App(EWrapper, EClient)`, and the interpreter refuses a class whose
+/// bases lay an instance out two different ways — so with a field or a borrow
+/// flag here, that class cannot be defined at all. `EClient` carries the
+/// state; this class must go on carrying none.
+#[pyclass(frozen, subclass)]
 pub struct EWrapper;
 
 #[pymethods]
@@ -28,8 +35,13 @@ impl EWrapper {
     /// Only reached when the attribute was not found, so it costs nothing on
     /// the names this class defines, and a name that names no callback is still
     /// refused rather than answered with a do-nothing.
+    ///
+    /// Carries the client's aliases as well: in `App(EWrapper, EClient)` the
+    /// interpreter takes this hook for the whole instance and never asks the
+    /// client's, so `app.eConnect` has to be answered from here. On a wrapper
+    /// alone they name nothing and are refused as before.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
-        super::contract::by_reference_name(slf.as_any(), name, &[])
+        super::contract::by_reference_name(slf.as_any(), name, super::client::REFERENCE_ALIASES)
     }
 
     // ── Connection ──

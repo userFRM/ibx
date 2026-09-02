@@ -592,7 +592,8 @@ def parse_pymethods(path: Path) -> list[dict]:
             impl_body,
         ):
             preamble, name, args_str = fm.group(1), fm.group(2), fm.group(3)
-            if name.startswith("__"):
+            # `__init__` is the constructor a caller reaches as `EClient(wrapper)`.
+            if name.startswith("__") and name != "__init__":
                 continue
             doc_lines = []
             pyo3_sig = ""
