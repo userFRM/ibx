@@ -3,8 +3,6 @@
 use super::common::*;
 use ibx::control::contracts;
 use ibx::protocol::fix;
-use ibx::protocol::fixcomp;
-use ibx::protocol::connection::Frame;
 
 pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     phase!("--- Phase 98: Forex Order Lifecycle (EUR.USD) ---");
@@ -140,15 +138,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
             Ok(_) => {}
         }
         for frame in ccp.extract_frames() {
-            let messages = match frame {
-                Frame::FixComp(raw) => {
-                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
-                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
-                }
-                Frame::Fix(raw) => vec![raw],
-                _ => continue,
-            };
-            for msg in messages {
+            for msg in messages_in(&mut ccp, &frame) {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
                     && let Some(def) = contracts::parse_secdef_response(&msg, true)
@@ -276,15 +266,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
         }
         let mut got_end = false;
         for frame in ccp.extract_frames() {
-            let messages = match frame {
-                Frame::FixComp(raw) => {
-                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
-                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
-                }
-                Frame::Fix(raw) => vec![raw],
-                _ => continue,
-            };
-            for msg in messages {
+            for msg in messages_in(&mut ccp, &frame) {
                 let tags = fix::fix_parse(&msg);
                 let msg_type = tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()).unwrap_or("?");
                 if msg_type == "d" {
@@ -531,15 +513,7 @@ pub(super) fn phase_global_venues(conns: Conns) -> Conns {
             Ok(_) => {}
         }
         for frame in ccp.extract_frames() {
-            let messages = match frame {
-                Frame::FixComp(raw) => {
-                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
-                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
-                }
-                Frame::Fix(raw) => vec![raw],
-                _ => continue,
-            };
-            for msg in messages {
+            for msg in messages_in(&mut ccp, &frame) {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
                     && let Some(def) = contracts::parse_secdef_response(&msg, true)
@@ -645,15 +619,7 @@ pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
             Ok(_) => {}
         }
         for frame in ccp.extract_frames() {
-            let messages = match frame {
-                Frame::FixComp(raw) => {
-                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
-                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
-                }
-                Frame::Fix(raw) => vec![raw],
-                _ => continue,
-            };
-            for msg in messages {
+            for msg in messages_in(&mut ccp, &frame) {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
                     && let Some(def) = contracts::parse_secdef_response(&msg, true)

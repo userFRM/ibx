@@ -308,10 +308,13 @@ class TestSessionFeatures:
         # TSLA ~$300-400 range, AAPL ~$150-250 range — detect cross-contamination
         assert all(u["req_id"] == 5010 for u in updates_b), "Wrong req_id in updates"
 
-        # If price ranges are distinguishable, verify no A prices leaked into B
-        if prices_a and prices_b and not prices_a & prices_b:
+        # No price seen for ticker A may appear among ticker B's updates. The
+        # guard was that the two sets do not intersect, which made the check
+        # below true by construction and unreachable in the one case it exists
+        # to catch.
+        if prices_a and prices_b:
             stale = prices_a & prices_b
-            assert len(stale) == 0, f"Stale ticker A prices found in B updates: {stale}"
+            assert not stale, f"Stale ticker A prices found in B updates: {stale}"
             print("No stale price cross-contamination detected")
 
     def test_l2_depth_resubscribe_different_req_id(self):

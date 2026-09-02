@@ -1136,15 +1136,7 @@ fn routing_table_probe() {
                 Ok(_) => {}
             }
             for frame in ccp.extract_frames() {
-                let messages = match frame {
-                    Frame::FixComp(raw) => {
-                        let Some(unsigned) = ccp.unsign(&raw) else { continue };
-                        fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
-                    }
-                    Frame::Fix(raw) => vec![raw],
-                    _ => continue,
-                };
-                for msg in messages {
+                for msg in messages_in(ccp, &frame) {
                     let tags = fix::fix_parse(&msg);
                     // Count every message type, not only the one a reply was
                     // expected on. A refusal that arrives as something else is
@@ -1597,15 +1589,7 @@ fn european_fill_books_what_the_venue_reported_live() {
             Ok(_) => {}
         }
         for frame in ccp.extract_frames() {
-            let messages = match frame {
-                Frame::FixComp(raw) => {
-                    let Some(unsigned) = ccp.unsign(&raw) else { continue };
-                    fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default()
-                }
-                Frame::Fix(raw) => vec![raw],
-                _ => continue,
-            };
-            for msg in messages {
+            for msg in messages_in(&mut ccp, &frame) {
                 let tags = fix::fix_parse(&msg);
                 if tags.get(&fix::TAG_MSG_TYPE).map(|s| s.as_str()) == Some("d")
                     && let Some(def) = ibx::control::contracts::parse_secdef_response(&msg, true)
