@@ -72,6 +72,34 @@ def _body(text: str, at: int) -> str:
     return text[start:]
 
 
+def _one_line_attributes(text: str) -> str:
+    """The same source with every wrapped attribute joined onto one line.
+
+    A long `#[pyo3(signature = ...)]` runs over two lines, and the pattern that
+    finds a call reads attributes a line at a time — so a wrapped one hid the
+    doc comment above it and the call read as having none. Seven arguments were
+    invisible to this check that way. Joining first is what keeps the pattern
+    itself simple: written to match a wrapped attribute directly it nests one
+    repetition inside another, which on this source does not finish.
+    """
+    out, joining, depth = [], "", 0
+    for line in text.splitlines(keepends=True):
+        if not joining and line.lstrip().startswith("#["):
+            depth = line.count("[") - line.count("]")
+            if depth > 0:
+                joining = line.rstrip("\n")
+                continue
+        elif joining:
+            depth += line.count("[") - line.count("]")
+            joining += " " + line.strip()
+            if depth <= 0:
+                out.append(joining + "\n")
+                joining = ""
+            continue
+        out.append(line)
+    return "".join(out) + joining
+
+
 def _params(raw: str) -> list[str]:
     """Parameter names, less the ones that are not a caller's data.
 
@@ -182,7 +210,7 @@ def collect() -> list[tuple[str, str, str, str]]:
         for path in sorted(directory.glob("*.rs")):
             if path.stem == "tests":
                 continue
-            text = path.read_text()
+            text = _one_line_attributes(path.read_text())
             for m in CALL.finditer(text):
                 doc, call, raw = m.group(1), m.group(2), m.group(3)
                 # The constructor by name, not by prefix: `news_headlines` starts with it.
