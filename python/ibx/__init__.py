@@ -211,6 +211,15 @@ for _surface in (EWrapper, EClient):  # noqa: F405
     _answer_to_both_spellings(_surface)
 del _surface
 
+# The reference client's own module names, laid over what this package
+# publishes, so its import lines resolve under the one rename a person would
+# guess at. Bound as attributes as well as registered, because a program writes
+# both `from ibx import wrapper` and `from ibx.wrapper import EWrapper`.
+from . import _layout as _layout_module  # noqa: E402
+
+globals().update(_layout_module.install(dict(globals())))
+del _layout_module
+
 # The extension module is bound on this package by the star-import above, so
 # `dir()` names it too. Left in, `from ibx import *` rebinds the caller's own
 # `ibx` to that submodule and `ibx.IB` stops existing.
