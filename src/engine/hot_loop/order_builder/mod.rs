@@ -1866,15 +1866,13 @@ fn push_order_attrs(
         fields.push((6115, attrs.trigger_method.to_string()));
     }
     if attrs.cash_qty > 0 {
-        // 152, not 5920. The vendor's attribute declares `super(152, …, 5920, …)`
-        // — the same shape as all-or-none's `super(18, …, 3570, …)`, where 18 is
-        // the tag this already sends and 3570 is a selector for its own screens.
-        // 5920 is that selector, and it is written by no encoder anywhere; 152
-        // is CashOrderQty. An order by cash amount was naming a field the venue
-        // does not read.
+        // 152, not 5920. 5920 is not a tag this venue reads on an order, and
+        // 152 is CashOrderQty — the same pairing all-or-none has, where 18 is
+        // the tag that carries it. An order by cash amount was naming a field
+        // the venue does not read.
         fields.push((152, format_price(attrs.cash_qty).to_string()));
     }
-    // Condition tags. The vendor's audit renderer names the whole set:
+    // Condition tags:
     // 6123 conid, 6124 exchange, 6125 price, 6126 operator, 6128 cancel-on-condition,
     // 6136 list size, 6137 conjunction, 6166 strike, 6168 expiry, 6169
     // security type, 6220 multiplier, 6222 type, 6223 time, 6224 send-email,
@@ -1886,11 +1884,10 @@ fn push_order_attrs(
         let cond_strs = build_condition_strings(&attrs.conditions);
         fields.push((6136, cond_strs[0].clone())); // first element is count
         // 6128 cancels the order when its condition fails; 6151 lets the
-        // conditions ignore regular hours. The audit renderer names 6128
-        // "CondIgnoreRth" and 6151 "StockRefPrice" — both names belong to
-        // other messages. The order serializer writes these two, for these two
-        // flags, in this order. Swapping them to match the renderer was tried
-        // and was wrong.
+        // conditions ignore regular hours. Both tag numbers carry different
+        // fields on other messages, so the meaning they have elsewhere does not
+        // apply here. This pairing and this order are what an order message
+        // takes; the other way round was tried and was wrong.
         if attrs.conditions_cancel_order {
             fields.push((6128, "1".to_string()));
         }

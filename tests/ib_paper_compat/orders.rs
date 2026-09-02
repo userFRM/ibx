@@ -1085,10 +1085,8 @@ pub(super) fn phase_price_condition_order(conns: Conns) -> Conns {
 // ─── Phase 58: Time Condition Order ───
 //
 // After, not before. A lone time condition reading "before or exactly" is the
-// one shape the venue refuses, and the terminal refuses to build it too — the
-// check is called hasStandaloneLessEqualTimeCondition and its message is
-// "Standalone time condition <= is not allowed." The encoding was never the
-// problem; the order asked for something nobody accepts.
+// one shape the venue refuses. The encoding was never the problem; the order
+// asked for something nobody accepts.
 
 pub(super) fn phase_time_condition_order(conns: Conns) -> Conns {
     let oid = next_order_id();
