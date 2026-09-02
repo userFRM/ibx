@@ -15,12 +15,12 @@
 
 ## Connection
 
-#### `new`
+#### `__init__`
 
-Create a new EClient (or EWrapper) instance.
+Bind the wrapper the callbacks are delivered to.  `EClient(wrapper)` lands here through the interpreter; a subclass with a constructor of its own calls `EClient.__init__(self, wrapper)`, as the reference sample does with `wrapper=self`. Bound once: a second, different wrapper is refused, since callbacks may already be on their way to the first.
 
 ```python
-def new(wrapper)
+def __init__(wrapper)
 ```
 
 | Parameter | Type | Description |
@@ -305,7 +305,7 @@ def corporate_actions(contract, start_date, end_date)
 
 #### `historical_data`
 
-Bars for a contract over a period, handed back rather than delivered a bar at a time to a callback.  `ADJUSTED_LAST` is served here and refused by `reqHistoricalData`. The venue has no adjusted series to pass through: an adjusted one is built from the raw trades and the contract's actions, which means holding both before a bar is handed over. A call that waits can; one that answers on a callback would have to hand over raw bars under an adjusted name.
+Bars for a contract over a period, handed back rather than delivered a bar at a time to a callback.  `ADJUSTED_LAST` is served here and by `reqHistoricalData` alike. The venue has no adjusted series to pass through: an adjusted one is built from the raw trades and the contract's actions, which means holding both before a bar is handed over. This call waits and hands the folded series back in one piece; `reqHistoricalData` holds the raw bars until the actions arrive and then delivers them folded, bar by bar on its callbacks. Both are asked for by the venue's id for the contract, which the actions need.
 
 ```python
 def historical_data(contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth=1)
@@ -690,10 +690,10 @@ def place_order(order_id, contract, order)
 
 #### `exercise_options`
 
-Exercise or lapse a long option position.  `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused.  `_override` is taken and not sent, because no tag carries it: it names a check made before the order is built, not one the venue makes. The check it names is real — it is what stops an exercise of an option out of the money and a lapse of one in it — and this client does not make it, because what it rests on is the venue's word on where the option stands, which this client does not ask for. An instruction is sent as given; passing `0` says so in the log and changes nothing else.
+Exercise or lapse a long option position.
 
 ```python
-def exercise_options(req_id, contract, exercise_action, exercise_quantity, account, _override)
+def exercise_options(req_id, contract, exercise_action, exercise_quantity, account, _override, manual_order_time, customer_account, professional_customer)
 ```
 
 | Parameter | Type | Description |
@@ -704,21 +704,24 @@ def exercise_options(req_id, contract, exercise_action, exercise_quantity, accou
 | `exercise_quantity` | `int` | Number of contracts to exercise. |
 | `account` | `str` | Account ID. |
 | `override` | `int` | Override flag for exercise. |
+| `manual_order_time` | `str` |  |
+| `customer_account` | `str` |  |
+| `professional_customer` | `bool` |  |
 
 ---
 
 #### `cancel_order`
 
-Cancel an order.  `manual_order_cancel_time` is taken and not applied. A cancel on this wire names five fields and no time among them.
+Cancel an order.  The second argument is what the reference client states about the withdrawal itself — when a person entered it, on whose authority, and whether a person entered it at all. It is taken as that object or as the time alone, which is how this client took it before.  A cancel on this wire names five fields and none of those is among them, so a withdrawal that states one is refused rather than sent without it: taken and dropped, the order was withdrawn under nobody's name while the caller had given one.
 
 ```python
-def cancel_order(order_id, manual_order_cancel_time="")
+def cancel_order(order_id, order_cancel=None)
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `order_id` | `int` | Order identifier. Must be unique per session. |
-| `manual_order_cancel_time` | `str` | Manual cancel time (empty for immediate). |
+| `order_cancel` | `Py<PyAny> or None` |  |
 
 ---
 
@@ -741,8 +744,12 @@ def cancel_order_by_perm_id(perm_id)
 Cancel all orders globally.
 
 ```python
-def req_global_cancel()
+def req_global_cancel(order_cancel=None)
 ```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `order_cancel` | `Py<PyAny> or None` |  |
 
 ---
 
@@ -963,7 +970,7 @@ def last_rtt_ms()
 
 #### `req_market_data_type`
 
-Name the kind of data every subscription after this one asks for: 1 live, 2 frozen, 3 delayed, 4 delayed-frozen.  The type is carried on each subscription that follows, and the `market_data_type` callback reports the type that subscription was made under. A type this client does not know is logged and leaves subscriptions live. `req_mkt_data_ex` states the type per request, which allows two feeds on one contract at once.
+Name the kind of data every subscription after this one asks for: 1 live, 2 frozen, 3 delayed, 4 delayed-frozen.  The type is carried on each subscription that follows, and the `market_data_type` callback reports the type that subscription was made under. A type this client does not know is logged and leaves subscriptions live. `req_mkt_data_ex` states the type per request, which allows two feeds on one contract at once.  Answered under 504 with no session, as every request is, and the type is then not kept. It used to be: set before `connect`, it applied to the session that followed. The reference client's sends and stores nothing, so a program written against it sets the type after connecting, having never had another way; what a caller loses here is only a setting the reference never let it make.
 
 ```python
 def req_market_data_type(market_data_type)

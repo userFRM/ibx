@@ -259,7 +259,7 @@ pub fn session(&self) -> &crate::auth::resume::ResumableSession
 
 #### `historical_data`
 
-Bars for a contract, as `req_historical_data` asks for them. `ADJUSTED_LAST` is served here and refused by `req_historical_data`, and the difference is not arbitrary. The venue has no adjusted series to pass through: what it serves is raw, and adjusting it needs the contract's actions in hand before a bar can be handed to anyone. A call that waits can hold both; one that answers on a callback cannot, and would have to hand over raw bars under an adjusted name.
+Bars for a contract, as `req_historical_data` asks for them. `ADJUSTED_LAST` is served here and by `req_historical_data` alike. The venue has no adjusted series to pass through: what it serves is raw, and adjusting it needs the contract's actions in hand before a bar can be handed to anyone. This call waits and hands back the folded series in one piece; `req_historical_data` holds the raw bars until the actions arrive and then delivers them folded, bar by bar on its callbacks. Both require the venue's id for the contract, which the actions are asked for by.
 
 ```rust
 pub fn historical_data( &self, contract: &Contract, end_date_time: &str, duration: &str, bar_size: &str, what_to_show: &str, use_rth: bool, ) -> Result<Vec<BarData>, Refusal>
@@ -915,7 +915,7 @@ pub fn place_order(&self, order_id: i64, contract: &Contract, order: &Order) -> 
 Exercise or lapse a long option position. `exercise_action` is 1 to exercise and 2 to lapse; anything else is refused. `override_` is taken and not sent, because there is no tag for it: it names a check made before the order is built, not one the venue makes. The check it names is a real one — it is what stops an exercise of an option that is out of the money and a lapse of one that is in it — and this client does not make it, because what it rests on is the venue's word on where the option stands, which this client does not ask for. So an instruction is sent as given, and `override_ = false` buys no protection here. Passing `true` is the honest description of what happens either way; passing `false` says so in the log.
 
 ```rust
-pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_action: i32, exercise_quantity: i32, account: &str, override_: bool, ) -> Result<(), Refusal>
+pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_action: i32, exercise_quantity: i32, account: &str, override_: bool, stated: crate::client_core::ExerciseStates, ) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -926,6 +926,7 @@ pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_actio
 | `exercise_quantity` | `i32` | Number of contracts to exercise. |
 | `account` | `&str` | Account ID. |
 | `override_` | `bool` |  |
+| `stated` | `crate::client_core::ExerciseStates` |  |
 
 **Returns:** `Result<(), Refusal>`
 
