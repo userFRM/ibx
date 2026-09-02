@@ -44,11 +44,15 @@ def test_no_two_names_read_the_same_with_the_underscores_taken_out(surface):
 
     Two names differing only in where the underscores fall would leave that
     undecided, and the one answered would be whichever the listing named first.
+
+    Only the names this client gives things. The reference client's spellings
+    sit beside them on the class deliberately, and each reads the same as the
+    name it was put there for, which is the point of it.
     """
     obj = surface(EWrapper()) if surface is EClient else surface()
     seen: dict[str, str] = {}
     for name in dir(obj):
-        if name.startswith("_"):
+        if name.startswith("_") or any(c.isupper() for c in name):
             continue
         flat = name.replace("_", "").lower()
         assert flat not in seen, (
@@ -91,3 +95,36 @@ def test_a_callback_answers_to_the_name_the_other_client_gives_it(ours, theirs):
         f"a wrapper written against the reference client declares {theirs}, "
         f"and this client declares it as {ours}"
     )
+
+
+def test_a_call_answers_to_the_other_spelling_from_the_class_as_well():
+    """Looked up on an instance alone, `super()` never finds it.
+
+    `super` walks the remaining classes' own contents and never asks an
+    instance hook, and a program written against the reference client calls
+    `super()` first in most of its overrides.
+    """
+    assert hasattr(EClient, "reqMktData")
+    assert hasattr(EClient, "req_mkt_data")
+
+
+def test_the_attribute_objects_answer_to_both_spellings():
+    """The reference client's own sample reads these camel-cased.
+
+    Answering to neither, the callback raised inside the dispatch loop, the
+    loop logged it and carried on, and the tick reached nobody — no exception,
+    no missing method, no tick.
+    """
+    from ibx import TickAttrib, TickAttribBidAsk, TickAttribLast
+
+    attrib = TickAttrib()
+    assert attrib.canAutoExecute == attrib.can_auto_execute
+    assert attrib.pastLimit == attrib.past_limit
+    assert attrib.preOpen == attrib.pre_open
+
+    last = TickAttribLast()
+    assert last.pastLimit == last.past_limit
+
+    quote = TickAttribBidAsk()
+    assert quote.bidPastLow == quote.bid_past_low
+    assert quote.askPastHigh == quote.ask_past_high

@@ -2,6 +2,8 @@
 
 use pyo3::prelude::*;
 
+use super::{camel_aliases_copy};
+
 // ── Tick type constants matching ibapi's TickTypeEnum ──
 
 pub const TICK_BID_SIZE: i32 = 0;
@@ -317,5 +319,33 @@ impl HistoricalTickBidAsk {
     fn __repr__(&self) -> String {
         format!("HistoricalTickBidAsk(time={}, bid={}, ask={})",
             self.time, self.price_bid, self.price_ask)
+    }
+}
+
+// The reference client's spelling for the three attribute objects. Its own
+// sample reads `attrib.canAutoExecute`, `tickAttribLast.pastLimit` and
+// `tickAttribBidAsk.bidPastLow`, and every other class here answers to both
+// spellings. These answered to neither camel name, so the callback raised
+// inside the dispatch loop, the loop logged it and carried on, and the tick
+// never reached the program — no exception, no missing method, no tick.
+camel_aliases_copy! {
+    TickAttrib {
+        get_can_auto_execute_alias set_can_auto_execute_alias
+            canAutoExecute can_auto_execute bool;
+        get_past_limit_alias set_past_limit_alias pastLimit past_limit bool;
+        get_pre_open_alias set_pre_open_alias preOpen pre_open bool;
+    }
+}
+
+camel_aliases_copy! {
+    TickAttribLast {
+        get_past_limit_alias set_past_limit_alias pastLimit past_limit bool;
+    }
+}
+
+camel_aliases_copy! {
+    TickAttribBidAsk {
+        get_bid_past_low_alias set_bid_past_low_alias bidPastLow bid_past_low bool;
+        get_ask_past_high_alias set_ask_past_high_alias askPastHigh ask_past_high bool;
     }
 }
