@@ -40,7 +40,13 @@ def test_the_rest_of_the_answer_and_its_end_still_arrive():
     # The answer is what comes before its end. The feed follows on the same
     # pass with what moved before the ask, which is these holdings again —
     # see `req_positions`.
-    assert wrapper.heard[:3] == [10.0, 20.0, "end"], (
+    # What is owed is both holdings and the end that closes them. Which
+    # holding comes first is not: they are read out of a map keyed by
+    # contract, so the venue's own order is not kept and asserting one makes
+    # the test pass or fail on where a hash happened to put them.
+    answer, closed = wrapper.heard[:2], wrapper.heard[2:3]
+    assert sorted(answer) == [10.0, 20.0], (
         f"the answer behind the raise is still owed, got {wrapper.heard}"
     )
+    assert closed == ["end"], f"and the end that closes it, got {wrapper.heard}"
     assert wrapper.heard.count("end") == 1, "and the end that closes the batch arrives once"

@@ -453,6 +453,13 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "error", (-1i64, super::raised_now(), 321i64, text, ""));
         }
 
+        // A lookup that named a contract another slot already holds. One
+        // subscription per contract exists on the wire, so the callers given
+        // the second slot read the first — otherwise their quotes arrive on a
+        // slot nothing is watching.
+        for (from, into) in shared.market.drain_subscription_moves() {
+            self.core.move_watchers(from, into);
+        }
         for (instrument, reason) in shared.market.drain_subscription_failures() {
             let req_id = self.core.req_id_for_instrument(instrument);
             call_wrapper!(self.wrapper, py, "error", (req_id, 0i64, 200i64, reason, ""));

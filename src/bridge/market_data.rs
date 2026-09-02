@@ -64,6 +64,9 @@ pub struct MarketDataState {
     last_option_model: Mutex<std::collections::HashMap<crate::types::InstrumentId, crate::types::OptionComputation>>,
     /// Subscriptions the venue was never able to be asked for, and why.
     subscription_failures: Mutex<Vec<(crate::types::InstrumentId, String)>>,
+    /// Lookups that named a contract another slot already holds: the slot the
+    /// caller was given, and the one the contract lives in.
+    subscription_moves: Mutex<Vec<(crate::types::InstrumentId, crate::types::InstrumentId)>>,
     /// What the venue has said went wrong, in its own words.
     venue_errors: Mutex<Vec<String>>,
     /// The venue's clock, from the last message it sent.
@@ -94,6 +97,7 @@ impl MarketDataState {
             option_computations: Mutex::new(Vec::with_capacity(16)),
             last_option_model: Mutex::new(std::collections::HashMap::new()),
             subscription_failures: Mutex::new(Vec::new()),
+            subscription_moves: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
             venue_time: Mutex::new(None),
             unread_wire: Mutex::new(Vec::new()),
@@ -216,6 +220,23 @@ impl MarketDataState {
     }
 
     /// Take every subscription failures waiting, leaving none.
+    /// Where a caller's slot has to follow, because the contract it named is
+    /// already held by another. Read the way a refusal is.
+    pub fn drain_subscription_moves(
+        &self,
+    ) -> Vec<(crate::types::InstrumentId, crate::types::InstrumentId)> {
+        self.subscription_moves.lock().unwrap().drain(..).collect()
+    }
+
+    #[doc(hidden)]
+    pub fn push_subscription_move(
+        &self,
+        from: crate::types::InstrumentId,
+        into: crate::types::InstrumentId,
+    ) {
+        self.subscription_moves.lock().unwrap().push((from, into));
+    }
+
     pub fn drain_subscription_failures(&self) -> Vec<(crate::types::InstrumentId, String)> {
         self.subscription_failures.lock().unwrap().drain(..).collect()
     }

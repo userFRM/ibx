@@ -444,6 +444,43 @@ impl HotLoop {
         hl.hmds_conn = hmds_conn;
         (hl, tx)
     }
+    /// Subscriptions the venue can now be asked for: named by symbol, and the
+    /// lookup has come back with the contract's own id.
+    fn send_resolved_subscriptions(&mut self) {
+        for (con_id, p) in std::mem::take(&mut self.ccp.resolved_md_subscribe) {
+                // The slot keeps the id so a reconnect resubscribes by it
+                // rather than starting the lookup again. Where another slot
+                // already holds the contract — one caller naming it by id
+                // and another by symbol — this one cannot: the venue
+                // answers a second subscription on a contract with the
+                // number it is already streaming under, which lands on the
+                // first slot and freezes it. So the caller follows the slot
+                // the contract lives in, and nothing is asked for twice.
+                let instrument = if self.context.market.adopt_con_id(p.instrument, con_id) {
+                    p.instrument
+                } else {
+                    match self.context.market.instrument_by_con_id(con_id) {
+                        Some(owner) if owner != p.instrument => {
+                            self.shared.market.push_subscription_move(p.instrument, owner);
+                            owner
+                        }
+                        _ => p.instrument,
+                    }
+                };
+                if self.farm.holds_market_data(instrument) {
+                    continue;
+                }
+                let (sec_type, exchange) =
+                    self.described_as(con_id, &p.sec_type, &p.exchange);
+                self.farm.send_mktdata_subscribe(
+                    con_id, &p.symbol, &exchange, &sec_type,
+                    &p.last_trade_date, p.strike, &p.right, &p.multiplier,
+                    instrument, p.mode_9887, p.regulatory_snapshot,
+                    &mut self.farm_conn,
+                    &mut self.hb,
+                );
+        }    }
+
 
     /// Register a contract, or say why it could not be.
     ///
@@ -471,7 +508,13 @@ impl HotLoop {
         ) != Some(con_id);
         match self.context.market.try_register_contract(con_id, &symbol, sec_type, exchange, option_key) {
             Some(id) => {
-                self.context.market.set_symbol(id, symbol);
+                // The symbol is written by the registration itself, under a
+                // guard that keeps the one the slot has. Written again here
+                // without one, a registration naming no symbol — which is
+                // every registration made by contract id, as orders, positions
+                // and fills all are — blanked a slot already registered under
+                // its name, and the order built from it went out with an empty
+                // symbol tag.
                 self.context.market.set_routing(id, sec_type, exchange);
                 // The account states what it holds before a caller subscribes
                 // to anything, and that statement had nowhere to land: with no
@@ -656,24 +699,7 @@ impl HotLoop {
                 &mut self.ccp_conn, &mut self.context, &self.shared,
                 &self.event_tx, &mut self.hb, &self.account_id,
             );
-            // A subscription the venue can now be asked for: its contract was
-            // named by symbol and the lookup has come back with an id.
-            if !self.ccp.resolved_md_subscribe.is_empty() {
-                for (con_id, p) in std::mem::take(&mut self.ccp.resolved_md_subscribe) {
-                    // The slot keeps the id so a reconnect resubscribes by it
-                    // rather than starting the lookup again.
-                    self.context.market.adopt_con_id(p.instrument, con_id);
-                    let (sec_type, exchange) =
-                        self.described_as(con_id, &p.sec_type, &p.exchange);
-                    self.farm.send_mktdata_subscribe(
-                        con_id, &p.symbol, &exchange, &sec_type,
-                        &p.last_trade_date, p.strike, &p.right, &p.multiplier,
-                        p.instrument, p.mode_9887, p.regulatory_snapshot,
-                        &mut self.farm_conn,
-                        &mut self.hb,
-                    );
-                }
-            }
+            self.send_resolved_subscriptions();
 
             // A holding that has since been closed releases the slot the
             // caller already asked to free.
@@ -3533,6 +3559,75 @@ mod tests {
     /// every such contract resolves to whichever one registered first: quotes
     /// land in one slot and an order built from it goes out under the first
     /// contract's symbol.
+    /// A lookup naming a contract another slot holds follows that slot.
+    ///
+    /// One caller names a contract by its id, another by its symbol, and the
+    /// lookup resolves the second to the first's contract. Subscribed anyway,
+    /// the venue answers with the number it is already streaming under, which
+    /// lands on the first slot and freezes it — and withdrawing the second
+    /// gives that number up, so the first caller's stream is dropped for good.
+    #[test]
+    fn a_lookup_naming_a_held_contract_follows_its_slot() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let by_id = hl.context.market.register(756733);
+        let by_name = hl
+            .context
+            .market
+            .try_register_contract(0, "SPY", "STK", "SMART", "")
+            .expect("a slot for the contract named by symbol");
+        assert_ne!(by_id, by_name, "two callers, two slots, one contract");
+
+        hl.ccp.resolved_md_subscribe.push((
+            756733,
+            crate::engine::hot_loop::ccp::PendingSubscribe {
+                instrument: by_name,
+                con_id: 0,
+                symbol: "SPY".into(),
+                exchange: "SMART".into(),
+                sec_type: "STK".into(),
+                currency: "USD".into(),
+                last_trade_date: String::new(),
+                strike: 0.0,
+                right: String::new(),
+                multiplier: String::new(),
+                mode_9887: 0,
+                regulatory_snapshot: false,
+            },
+        ));
+        hl.send_resolved_subscriptions();
+
+        assert_eq!(
+            shared.market.drain_subscription_moves(),
+            vec![(by_name, by_id)],
+            "the caller given the second slot is told to read the first",
+        );
+    }
+
+    /// A registration naming no symbol keeps the one the slot has.
+    ///
+    /// Orders, positions and fills all register by contract id with no symbol.
+    /// Written unconditionally, that blanked the name of a slot already
+    /// registered under one, and the order built from it went out with an
+    /// empty symbol tag.
+    #[test]
+    fn a_registration_naming_no_symbol_keeps_the_one_the_slot_has() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let id = hl
+            .register_or_reject(756733, "SPY".into(), "STK", "SMART", "", &None)
+            .expect("registered under its name");
+        assert_eq!(
+            hl.register_or_reject(756733, String::new(), "", "", "", &None),
+            Some(id),
+            "the same contract is the same slot",
+        );
+        assert_eq!(
+            hl.context.market.symbol(id),
+            "SPY",
+            "a registration by id alone blanked the name tag 55 reads",
+        );
+    }
+
     /// Asking for news on a contract does not decide where its orders go.
     ///
     /// The command carries no exchange, and the security type was passed in
