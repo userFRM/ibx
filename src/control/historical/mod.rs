@@ -111,13 +111,6 @@ impl BarDataType {
     /// answers "no historical market data" — which reads as a series that does
     /// not exist rather than a name it does not know. Asked and answered
     /// against a session; see `probe_midpoint`.
-    ///
-    /// A week and a month are the two that are not their API spelling. Sent as
-    /// `1 week` the venue answers six months with a hundred and twenty-four
-    /// bars — one a day — and sent as `1 month` it answers with one a minute;
-    /// sent as `1W` and `1M` it answers twenty-six and six, and restates the
-    /// step it used in the reply. So the API spelling was being answered at a
-    /// size nobody asked for and handed on under the size they did.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Trades => "Last",
@@ -225,8 +218,8 @@ impl BarSize {
                     "Unsupported bar_size '{other}': expected one of 1 secs, 5 secs, \
                      10 secs, 15 secs, 30 secs, 1 min, 2 mins, 3 mins, 4 mins, \
                      5 mins, 10 mins, 15 mins, 20 mins, 30 mins, 1 hour, \
-                     2 hours, 3 hours, 4 hours, 8 hours, 1 day, 1 week, \
-                     1 month, 3 months, 1 year (case-sensitive)",
+                     2 hours, 3 hours, 4 hours, 8 hours, 1 day, 1 week or \
+                     1 month, in any casing",
                 ));
             }
         })
@@ -241,13 +234,22 @@ impl BarSize {
     /// five-second bar as a one-second one and handed the caller five times
     /// the volume under a size it never traded in.
     ///
+    /// A week and a month are out for a second reason: the fold opens a bar on
+    /// a whole multiple of its own length counted from the epoch, and neither
+    /// of those lands where the venue's does. Epoch day zero was a Thursday, so
+    /// a folded week opens on one; a folded month is thirty days counted from
+    /// 1970 and coincides with no calendar month. The venue states the bounds
+    /// of the bars it aggregated — `date` and `endDate` — and they are Monday
+    /// to Friday and the first of the month to the last. A day still opens at
+    /// midnight, which is a boundary, and is documented as the one it is.
+    ///
     /// This is what this client can form, not what the venue accepts — nothing
     /// on the wire says a size may not be kept up to date. The list it replaces
     /// named five sizes, refusing sixteen that fold exactly and admitting the
     /// one that cannot.
     pub fn supports_keep_up_to_date(&self) -> bool {
         let seconds = self.seconds();
-        seconds >= 5 && seconds.is_multiple_of(5)
+        seconds >= 5 && seconds.is_multiple_of(5) && seconds <= 86_400
     }
 
     /// How long one of these lasts.
@@ -283,11 +285,13 @@ impl BarSize {
 
     /// The name the venue knows this by.
     ///
-    /// Not the name the reference client uses, and not always the obvious
-    /// casing: the midpoint is `MidPoint`, and sent as `Midpoint` the venue
-    /// answers "no historical market data" — which reads as a series that does
-    /// not exist rather than a name it does not know. Asked and answered
-    /// against a session; see `probe_midpoint`.
+    /// A week and a month are the two that are not their API spelling. Sent as
+    /// `1 week` the venue answers six months with a hundred and twenty-four
+    /// bars — one a day — and sent as `1 month` it answers with one a minute;
+    /// sent as `1W` and `1M` it answers twenty-six and six, and restates the
+    /// step it used in the reply. So the API spelling was being answered at a
+    /// size nobody asked for and handed on under the size they did. Everything
+    /// shorter goes out under the name a caller wrote.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Sec1 => "1 secs",
@@ -702,8 +706,11 @@ pub fn tick_data_type(what_to_show: &str) -> Result<&'static str, String> {
         "" | "TRADES" => "AllLast",
         "MIDPOINT" => "MidPoint",
         "BID_ASK" => "BidAsk",
-        // The rate the venue prices options at, which it serves as a series of
-        // its own rather than on any tick.
+        // The rate the venue prices options at. A tick type, not a bar one:
+        // asked for as bars the venue answers that the query type is not
+        // supported for it, and names the tick type back. Every window asked
+        // for so far has come back empty, so what it takes and what it holds
+        // are two different questions and only the first is answered here.
         "OPTION_EXERCISE_INTEREST_RATE" => "OptExInterestRate",
         other => {
             return Err(format!(

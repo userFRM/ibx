@@ -50,6 +50,23 @@ fn bar_size_from_api_str_rejects_what_is_not_a_size_and_reads_any_casing() {
     assert_eq!(BarSize::from_api_str("4 MINS").unwrap(), BarSize::Min4);
     assert_eq!(BarSize::from_api_str("1 Day").unwrap(), BarSize::Day1);
     assert_eq!(BarSize::from_api_str("30 SECS").unwrap(), BarSize::Sec30);
+    // And what it names as expected is what it takes. Named two the table has
+    // no arm for, a caller retrying with one was refused under the same text.
+    let refusal = BarSize::from_api_str("nonsense").unwrap_err();
+    let named = refusal.split(": expected one of ").nth(1).expect("it names them");
+    for size in named
+        .trim_end_matches(", in any casing")
+        .replace(" or ", ", ")
+        .split(", ")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+    {
+        assert!(
+            BarSize::from_api_str(size).is_ok(),
+            "the refusal names {size}, which it then refuses: {refusal}",
+        );
+    }
 }
 
 /// A week and a month are asked for under a name of their own.
@@ -1026,4 +1043,19 @@ fn a_bar_is_kept_up_to_date_when_it_folds_from_the_five_second_stream() {
         !second.supports_keep_up_to_date(),
         "a second is shorter than what arrives, so nothing can form it",
     );
+    // A week and a month fold exactly and still cannot be formed: the fold
+    // opens a bar on a multiple of its own length counted from the epoch, and
+    // epoch day zero was a Thursday. The venue's own aggregate bars state
+    // Monday to Friday and the first of a month to the last.
+    for asked in ["1 week", "1 month"] {
+        let size = BarSize::from_api_str(asked).expect("a size this client reads");
+        assert!(
+            size.seconds().is_multiple_of(5),
+            "{asked} folds exactly, which is why the length rule alone admitted it",
+        );
+        assert!(
+            !size.supports_keep_up_to_date(),
+            "{asked} would open where the venue's never does",
+        );
+    }
 }

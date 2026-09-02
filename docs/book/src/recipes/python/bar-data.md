@@ -45,8 +45,10 @@ compete for the answer. Pick the callbacks or pick this.
 
 `bar_size_setting` and `what_to_show` are checked before anything is sent, so a
 misspelling is refused here rather than answered with a different series. With
-`keep_up_to_date=True` the size must be one that supports it: 1 secs, 5 secs,
-5 mins, 1 hour, 1 day.
+`keep_up_to_date=True` the size must be one this client can form from
+the five-second bars the venue keeps sending: five seconds up to a day, in
+whole multiples of five seconds. A second is shorter than what arrives; a week
+and a month would open where the venue's own never do.
 
 How far back a series goes, and which bar sizes pair with which durations, are
 the venue's rules. A request outside them comes back as a stated refusal on the

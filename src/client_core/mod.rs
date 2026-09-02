@@ -3275,7 +3275,10 @@ impl ClientCore {
                 "bar_size '{bar_size}' cannot be kept up to date: what the venue \
                  keeps sending is five-second bars and a bar still forming is folded \
                  from those, so a size that is a whole number of them can be formed \
-                 and one shorter than five seconds cannot",
+                 and one shorter than five seconds cannot. A week and a month are \
+                 out too: the fold opens a bar on a multiple of its own length from \
+                 the epoch, and the venue's week runs Monday to Friday and its month \
+                 is a calendar one",
             ));
         }
         Ok(())
