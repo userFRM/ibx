@@ -897,3 +897,16 @@ fn an_expired_contract_is_asked_about_as_expired() {
     assert!(ticks(true).contains("<expired>yes</expired>"));
     assert!(ticks(false).contains("<expired>no</expired>"));
 }
+
+/// The two volatility series ask under the names the venue answers to.
+///
+/// They asked under `HV` and `IV`, which came in with the first import and are
+/// names this venue does not know: measured against a paper session, both drew
+/// no bars and the venue said "No historical market data ... NoType", where
+/// trades on the same contract drew five. Under the names below the same two
+/// requests drew four bars and five.
+#[test]
+fn the_volatility_series_ask_under_names_the_venue_answers_to() {
+    assert_eq!(BarDataType::HistoricalVolatility.as_str(), "HistVol");
+    assert_eq!(BarDataType::ImpliedVolatility.as_str(), "OptionImpliedVol");
+}

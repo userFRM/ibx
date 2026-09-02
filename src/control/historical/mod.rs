@@ -93,8 +93,8 @@ impl BarDataType {
             Self::Bid => "Bid",
             Self::Ask => "Ask",
             Self::BidAsk => "BidAsk",
-            Self::HistoricalVolatility => "HV",
-            Self::ImpliedVolatility => "IV",
+            Self::HistoricalVolatility => "HistVol",
+            Self::ImpliedVolatility => "OptionImpliedVol",
             Self::OptionInterestRate => "OptExInterestRate",
         }
     }
