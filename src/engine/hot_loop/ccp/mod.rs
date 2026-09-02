@@ -1,13 +1,32 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-/// How long a matching-symbols request waits for its reply. Matches the
-/// historical-request idle timeout: both are one round trip to the gateway.
-const MATCHING_SYMBOLS_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a matching-symbols request is held here before it is given up on.
+///
+/// Shorter than the caller's own wait, which is the rule every deadline the
+/// engine keeps has to follow and the reason `NAMING_TIMEOUT` below is written
+/// the same way. Held longer, as these two were, the caller gives up first and
+/// is told nothing arrived; the reply then arrives, is matched to the entry the
+/// caller abandoned, and is delivered under a number it never issued — while
+/// the retry it made in the meantime waits behind that entry and is given up on
+/// in its turn. A single timeout left the request unanswerable for as long as
+/// the difference lasted.
+const MATCHING_SYMBOLS_TIMEOUT: Duration =
+    Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 3);
 
-/// How long an option chain request waits for its reply. Also one round trip,
-/// for a reply that carries every class of an underlying at once.
-const OPTION_CHAIN_TIMEOUT: Duration = Duration::from_secs(60);
+/// The same, for an option chain: a reply carrying every class of an
+/// underlying at once, and the same caller's wait behind it.
+const OPTION_CHAIN_TIMEOUT: Duration =
+    Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 3);
+
+/// Neither may outlive the wait the caller keeps. Stated here so a change to
+/// either constant, or to the caller's wait, stops the build rather than
+/// quietly making a whole request unanswerable again.
+const _: () = assert!(
+    MATCHING_SYMBOLS_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS
+        && OPTION_CHAIN_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS,
+    "an engine deadline must be shorter than the wait the caller keeps",
+);
 
 use crate::bridge::{Event, SharedState};
 use crate::engine::context::Context;

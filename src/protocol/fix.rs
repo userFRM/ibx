@@ -564,6 +564,18 @@ pub fn fix_read_deadline<R: Read>(
         if let Some(total) = frame_end(buf) {
             return Ok(buf.drain(..total).collect());
         }
+        // Before the read, not only where a read came back empty. Tested only
+        // there, a peer that keeps sending bytes which never finish a frame is
+        // never once measured against the deadline: every read succeeds, the
+        // arm that checks is never taken, and this waits for as long as the
+        // bytes keep coming while what has arrived grows without bound. It runs
+        // on every logon and on every reconnect.
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out reading FIX message",
+            ));
+        }
         match reader.read(&mut tmp) {
             Ok(0) => return Err(io::Error::new(
                 io::ErrorKind::ConnectionReset,
@@ -573,13 +585,8 @@ pub fn fix_read_deadline<R: Read>(
             Err(e) if e.kind() == io::ErrorKind::WouldBlock
                 || e.kind() == io::ErrorKind::TimedOut =>
             {
-                if std::time::Instant::now() >= deadline {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "timed out reading FIX message",
-                    ));
-                }
-                // Poll timeout with budget left: keep waiting.
+                // Nothing came. The deadline is measured at the top of the
+                // loop, so this waits for the next poll.
             }
             Err(e) => return Err(e),
         }
@@ -1057,6 +1064,32 @@ mod tests {
 #[cfg(test)]
 mod hostile_frame_tests {
     use super::*;
+
+    /// A peer that keeps sending, and never finishes a frame, is given up on.
+    ///
+    /// The deadline was measured only where a read came back empty, so bytes
+    /// that never complete a frame were never measured against it at all: every
+    /// read succeeded, the arm that checked was never taken, and this waited for
+    /// as long as the bytes kept coming while what had arrived grew without
+    /// bound. It runs on every logon and on every reconnect.
+    #[test]
+    fn a_peer_that_never_finishes_a_frame_is_given_up_on() {
+        /// Always has one more byte, and never a whole frame.
+        struct Dribbles;
+        impl std::io::Read for Dribbles {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                buf[0] = b'8';
+                Ok(1)
+            }
+        }
+
+        let mut buf = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+        let out = fix_read_deadline(&mut Dribbles, &mut buf, deadline);
+
+        let err = out.expect_err("a frame that never ends is not a frame");
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    }
 
     /// A frame whose only `9=` lies inside the signature field is refused
     /// rather than panicking.

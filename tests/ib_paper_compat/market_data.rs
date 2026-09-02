@@ -980,12 +980,26 @@ pub(super) fn phase_tick_stress_test(conns: Conns) -> Conns {
     );
     println!("  Monotonic violations: {monotonic_violations}");
 
-    // At least 2 instruments should have received ticks
+    // Whether one session carries several streams at once. These three are US
+    // stocks, so outside the regular session a quiet one is the hour and not
+    // the client: measured after hours, the liquid one drew thirty-two ticks
+    // in thirty seconds and the other two drew none. Asked of three instruments
+    // that quote around the clock — three currency pairs on the same session —
+    // all three answered, at over a hundred and fifty ticks each. So the
+    // question this asks is only answerable while these three trade.
     let instruments_with_ticks = per_instrument.iter().filter(|&&c| c > 0).count();
-    assert!(
-        instruments_with_ticks >= 2,
-        "At least 2 instruments should receive ticks, got {instruments_with_ticks}"
-    );
+    let (session, _) = market_session();
+    if session == MarketSession::Regular {
+        assert!(
+            instruments_with_ticks >= 2,
+            "one session must carry more than one stream, got {instruments_with_ticks}"
+        );
+    } else if instruments_with_ticks < 2 {
+        skipped!(
+            "  SKIP: {session:?} — {instruments_with_ticks} of three quoted; \
+             these three are US stocks\n",
+        );
+    }
     assert_eq!(
         monotonic_violations, 0,
         "Timestamps should be monotonically increasing"

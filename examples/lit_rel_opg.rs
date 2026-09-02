@@ -130,10 +130,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(Mutex::new(State::default()));
     let mut wrapper = ProbeWrapper { state: state.clone() };
 
-    let next_id = || -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as i64
-    };
+    // From the session, as every other example here does. A clock reading in
+    // microseconds is about four hundred thousand times the largest number an
+    // order id can be, and the venue keeps the highest one an account has used
+    // — so one of these raises that mark for good, and every later program
+    // that numbers its own requests from the same counter is handed something
+    // it cannot carry.
+    let next_id = || -> i64 { client.next_order_id() };
 
     // 1) LIT — Buy 1 AAPL, lmt=$300, trigger=$280
     let lit = Order {
