@@ -4,6 +4,7 @@
 use super::{class_contracts::*, class_conditions::*};
 use super::contract::{by_reference_name, set_from_keywords};
 use pyo3::prelude::*;
+use pyo3::types::PyList;
 
 use super::{camel_aliases_copy, camel_aliases_owned};
 use crate::types::*;
@@ -45,7 +46,7 @@ pub struct Order {
     #[pyo3(get, set)]
     pub algo_strategy: String,
     #[pyo3(get, set)]
-    pub algo_params: Vec<TagValue>,
+    pub algo_params: ListField,
     #[pyo3(get, set)]
     pub what_if: bool,
     #[pyo3(get, set)]
@@ -71,7 +72,7 @@ pub struct Order {
     #[pyo3(get, set)]
     pub adjusted_stop_limit_price: f64,
     #[pyo3(get, set)]
-    pub conditions: Vec<Py<PyAny>>,
+    pub conditions: ListField,
     #[pyo3(get, set)]
     pub conditions_ignore_rth: bool,
     #[pyo3(get, set)]
@@ -215,9 +216,9 @@ pub struct Order {
     #[pyo3(get, set)]
     pub opt_out_smart_routing: bool,
     #[pyo3(get, set)]
-    pub order_combo_legs: Vec<Py<PyAny>>,
+    pub order_combo_legs: ListField,
     #[pyo3(get, set)]
-    pub order_misc_options: Vec<Py<PyAny>>,
+    pub order_misc_options: ListField,
     #[pyo3(get, set)]
     pub order_ref: String,
     #[pyo3(get, set)]
@@ -295,7 +296,7 @@ pub struct Order {
     #[pyo3(get, set)]
     pub sl_order_type: String,
     #[pyo3(get, set)]
-    pub smart_combo_routing_params: Vec<TagValue>,
+    pub smart_combo_routing_params: ListField,
     #[pyo3(get, set)]
     pub soft_dollar_tier_name: String,
     #[pyo3(get, set)]
@@ -359,7 +360,7 @@ impl Clone for Order {
             trigger_price: self.trigger_price,
             adjusted_stop_price: self.adjusted_stop_price,
             adjusted_stop_limit_price: self.adjusted_stop_limit_price,
-            conditions: Vec::new(),
+            conditions: self.conditions.clone(),
             conditions_ignore_rth: self.conditions_ignore_rth,
             conditions_cancel_order: self.conditions_cancel_order,
             // New fields
@@ -430,8 +431,8 @@ impl Clone for Order {
             oca_type: self.oca_type,
             open_close: self.open_close.clone(),
             opt_out_smart_routing: self.opt_out_smart_routing,
-            order_combo_legs: Vec::new(),
-            order_misc_options: Vec::new(),
+            order_combo_legs: self.order_combo_legs.clone(),
+            order_misc_options: self.order_misc_options.clone(),
             order_ref: self.order_ref.clone(),
             origin: self.origin,
             override_percentage_constraints: self.override_percentage_constraints,
@@ -509,7 +510,7 @@ impl Default for Order {
             oca_group: String::new(),
             trailing_percent: 0.0,
             algo_strategy: String::new(),
-            algo_params: Vec::new(),
+            algo_params: ListField::new(),
             what_if: false,
             cash_qty: 0.0,
             parent_id: 0,
@@ -522,7 +523,7 @@ impl Default for Order {
             trigger_price: 0.0,
             adjusted_stop_price: 0.0,
             adjusted_stop_limit_price: 0.0,
-            conditions: Vec::new(),
+            conditions: ListField::new(),
             conditions_ignore_rth: false,
             conditions_cancel_order: false,
             // New fields
@@ -593,8 +594,8 @@ impl Default for Order {
             oca_type: 0,
             open_close: String::new(),
             opt_out_smart_routing: false,
-            order_combo_legs: Vec::new(),
-            order_misc_options: Vec::new(),
+            order_combo_legs: ListField::new(),
+            order_misc_options: ListField::new(),
             order_ref: String::new(),
             origin: 0,
             override_percentage_constraints: false,
@@ -633,7 +634,7 @@ impl Default for Order {
             short_sale_slot: 0,
             sl_order_id: i32::MAX,
             sl_order_type: String::new(),
-            smart_combo_routing_params: Vec::new(),
+            smart_combo_routing_params: ListField::new(),
             soft_dollar_tier_name: String::new(),
             soft_dollar_tier_val: String::new(),
             soft_dollar_tier_display_name: String::new(),
@@ -704,7 +705,6 @@ impl Order {
             oca_group,
             trailing_percent,
             algo_strategy,
-            algo_params: Vec::new(),
             what_if,
             cash_qty,
             parent_id,
@@ -732,32 +732,36 @@ impl Order {
     fn get_active_start_time_alias(&self) -> String { self.active_start_time.clone() }
     #[setter(activeStartTime)]
     fn set_active_start_time_alias(&mut self, v: String) { self.active_start_time = v; }
-    #[getter(algoParams)]
-    fn get_algo_params_alias(&self) -> Vec<TagValue> { self.algo_params.clone() }
+    // Each list the order holds, itself, under the name the reference client
+    // uses. Handed back as a copy, every parameter, leg price and option
+    // appended by that name was lost, and the order went out without it.
     // Writable as well as readable. Readable only, parameters set under the
     // reference client's name for them do not reach the order, and it goes out
     // on the venue's default settings for that algo.
+    #[getter(algoParams)]
+    fn get_algo_params_alias<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
+        self.algo_params.bound(py)
+    }
     #[setter(algoParams)]
-    fn set_algo_params_alias(&mut self, v: Vec<TagValue>) { self.algo_params = v; }
-    // What the order holds, rather than an empty list whatever it holds: read
-    // by the name the reference client uses, a combination priced per leg
-    // reported no legs at all, and the same for the miscellaneous options.
+    fn set_algo_params_alias(&mut self, v: ListField) { self.algo_params = v; }
     #[getter(orderComboLegs)]
-    fn get_order_combo_legs_alias(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
-        self.order_combo_legs.iter().map(|l| l.clone_ref(py)).collect()
+    fn get_order_combo_legs_alias<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
+        self.order_combo_legs.bound(py)
     }
     #[setter(orderComboLegs)]
-    fn set_order_combo_legs_alias(&mut self, v: Vec<Py<PyAny>>) { self.order_combo_legs = v; }
+    fn set_order_combo_legs_alias(&mut self, v: ListField) { self.order_combo_legs = v; }
     #[getter(orderMiscOptions)]
-    fn get_order_misc_options_alias(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
-        self.order_misc_options.iter().map(|o| o.clone_ref(py)).collect()
+    fn get_order_misc_options_alias<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
+        self.order_misc_options.bound(py)
     }
     #[setter(orderMiscOptions)]
-    fn set_order_misc_options_alias(&mut self, v: Vec<Py<PyAny>>) { self.order_misc_options = v; }
+    fn set_order_misc_options_alias(&mut self, v: ListField) { self.order_misc_options = v; }
     #[getter(smartComboRoutingParams)]
-    fn get_smart_combo_routing_params_alias(&self) -> Vec<TagValue> { self.smart_combo_routing_params.clone() }
+    fn get_smart_combo_routing_params_alias<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
+        self.smart_combo_routing_params.bound(py)
+    }
     #[setter(smartComboRoutingParams)]
-    fn set_smart_combo_routing_params_alias(&mut self, v: Vec<TagValue>) {
+    fn set_smart_combo_routing_params_alias(&mut self, v: ListField) {
         self.smart_combo_routing_params = v;
     }
     #[getter(softDollarTier)]
@@ -798,8 +802,7 @@ impl Order {
     /// which is the opposite of what a condition is for. The six the venue
     /// carries are price, time, margin, execution, volume and percent change.
     pub fn convert_conditions(&self, py: Python<'_>) -> Result<Vec<OrderCondition>, String> {
-        self.conditions.iter().enumerate().map(|(at, obj)| {
-            let any = obj.bind(py);
+        self.conditions.bound(py).iter().enumerate().map(|(at, any)| {
             if let Ok(c) = any.cast::<PriceCondition>() { return Ok(c.borrow().to_internal()); }
             if let Ok(c) = any.cast::<TimeCondition>() { return Ok(c.borrow().to_internal()); }
             if let Ok(c) = any.cast::<MarginCondition>() { return Ok(c.borrow().to_internal()); }
@@ -822,11 +825,11 @@ impl Order {
     /// priced by the caller went out at whatever the venue struck it at.
     pub fn convert_order_combo_legs(&self, py: Python<'_>) -> Result<Vec<f64>, String> {
         self.order_combo_legs
+            .bound(py)
             .iter()
             .enumerate()
             .map(|(at, leg)| {
-                leg.bind(py)
-                    .getattr("price")
+                leg.getattr("price")
                     .and_then(|v| v.extract::<f64>())
                     .map_err(|e| {
                         format!(
@@ -848,22 +851,29 @@ impl Order {
     pub fn convert_misc_options(
         &self, py: Python<'_>,
     ) -> Result<Vec<crate::types::model::TagValue>, String> {
-        self.order_misc_options
-            .iter()
-            .enumerate()
-            .map(|(at, obj)| {
-                let any = obj.bind(py);
-                let read = |name: &str| -> Result<String, String> {
-                    any.getattr(name)
-                        .and_then(|v| v.extract())
-                        .map_err(|e| format!("option {at} states no readable {name}: {e}"))
-                };
-                Ok(crate::types::model::TagValue {
-                    tag: read("tag")?,
-                    value: read("value")?,
-                })
-            })
-            .collect()
+        tag_values(&self.order_misc_options.bound(py), "option")
+    }
+
+    /// The parameters of the algo the order runs under.
+    ///
+    /// A Python list, so reading it needs the interpreter, which the
+    /// conversion does not hold. Dropped, an algo ran on the venue's default
+    /// settings in place of every one the caller stated.
+    pub fn convert_algo_params(
+        &self, py: Python<'_>,
+    ) -> Result<Vec<crate::types::model::TagValue>, String> {
+        tag_values(&self.algo_params.bound(py), "algo parameter")
+    }
+
+    /// How a combination routed through the smart router is to be handled.
+    ///
+    /// This protocol carries no field for them, so an order stating any is
+    /// refused rather than sent without them — which is what the refusal needs
+    /// them read for.
+    pub fn convert_smart_combo_routing_params(
+        &self, py: Python<'_>,
+    ) -> Result<Vec<crate::types::model::TagValue>, String> {
+        tag_values(&self.smart_combo_routing_params.bound(py), "routing parameter")
     }
 
 
@@ -914,14 +924,7 @@ impl Order {
             oca_group: a.oca_group.clone(),
             trailing_percent: a.trailing_percent,
             algo_strategy: a.algo_strategy.clone(),
-            algo_params: a
-                .algo_params
-                .iter()
-                .map(|tv| super::class_contracts::TagValue {
-                    tag: tv.tag.clone(),
-                    value: tv.value.clone(),
-                })
-                .collect(),
+            algo_params: ListField::of(py, a.algo_params.iter().map(TagValue::from_api))?,
             what_if: a.what_if,
             cash_qty: a.cash_qty,
             parent_id: a.parent_id,
@@ -934,11 +937,13 @@ impl Order {
             trigger_price: a.trigger_price,
             adjusted_stop_price: a.adjusted_stop_price,
             adjusted_stop_limit_price: a.adjusted_stop_limit_price,
-            conditions: a
-                .conditions
-                .iter()
-                .map(|held| super::class_conditions::condition_from_internal(py, held))
-                .collect::<PyResult<Vec<_>>>()?,
+            conditions: ListField::of(
+                py,
+                a.conditions
+                    .iter()
+                    .map(|held| super::class_conditions::condition_from_internal(py, held))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?,
             conditions_ignore_rth: a.conditions_ignore_rth,
             conditions_cancel_order: a.conditions_cancel_order,
             account: a.account.clone(),
@@ -1008,8 +1013,8 @@ impl Order {
             oca_type: a.oca_type,
             open_close: a.open_close.clone(),
             opt_out_smart_routing: a.opt_out_smart_routing,
-            order_combo_legs: Vec::new(),
-            order_misc_options: Vec::new(),
+            order_combo_legs: ListField::new(),
+            order_misc_options: ListField::new(),
             order_ref: a.order_ref.clone(),
             origin: a.origin,
             override_percentage_constraints: a.override_percentage_constraints,
@@ -1048,14 +1053,10 @@ impl Order {
             short_sale_slot: a.short_sale_slot,
             sl_order_id: a.sl_order_id,
             sl_order_type: a.sl_order_type.clone(),
-            smart_combo_routing_params: a
-                .smart_combo_routing_params
-                .iter()
-                .map(|tv| super::class_contracts::TagValue {
-                    tag: tv.tag.clone(),
-                    value: tv.value.clone(),
-                })
-                .collect(),
+            smart_combo_routing_params: ListField::of(
+                py,
+                a.smart_combo_routing_params.iter().map(TagValue::from_api),
+            )?,
             soft_dollar_tier_name: a.soft_dollar_tier_name.clone(),
             soft_dollar_tier_val: a.soft_dollar_tier_val.clone(),
             soft_dollar_tier_display_name: a.soft_dollar_tier_display_name.clone(),
@@ -1092,10 +1093,10 @@ impl Order {
             oca_group: self.oca_group.clone(),
             trailing_percent: self.trailing_percent,
             algo_strategy: self.algo_strategy.clone(),
-            algo_params: self.algo_params.iter().map(|tv| crate::types::model::TagValue {
-                tag: tv.tag.clone(),
-                value: tv.value.clone(),
-            }).collect(),
+            // A Python list, so reading it needs the interpreter this does
+            // not hold. Filled at the call site from `convert_algo_params`,
+            // beside the conditions.
+            algo_params: Vec::new(),
             what_if: self.what_if,
             cash_qty: self.cash_qty,
             parent_id: self.parent_id,
@@ -1227,14 +1228,9 @@ impl Order {
             short_sale_slot: self.short_sale_slot,
             sl_order_id: self.sl_order_id,
             sl_order_type: self.sl_order_type.clone(),
-            smart_combo_routing_params: self
-                .smart_combo_routing_params
-                .iter()
-                .map(|tv| crate::types::model::TagValue {
-                    tag: tv.tag.clone(),
-                    value: tv.value.clone(),
-                })
-                .collect(),
+            // As `algo_params`: filled at the call site from
+            // `convert_smart_combo_routing_params`.
+            smart_combo_routing_params: Vec::new(),
             soft_dollar_tier_name: self.soft_dollar_tier_name.clone(),
             soft_dollar_tier_val: self.soft_dollar_tier_val.clone(),
             soft_dollar_tier_display_name: self.soft_dollar_tier_display_name.clone(),
@@ -1252,6 +1248,30 @@ impl Order {
         }
     }
 
+}
+
+/// The tag-value pairs a list holds, read as the reference client sends
+/// them: `str()` of each half, off any object carrying the two names.
+///
+/// One carrying neither is refused rather than dropped, under `what` and its
+/// place in the list: the caller put it there, and an algo run without a
+/// parameter the caller stated runs on the venue's default for it with
+/// nothing said.
+fn tag_values(
+    list: &Bound<'_, PyList>,
+    what: &str,
+) -> Result<Vec<crate::types::model::TagValue>, String> {
+    list.iter()
+        .enumerate()
+        .map(|(at, obj)| {
+            let read = |name: &str| -> Result<String, String> {
+                obj.getattr(name)
+                    .and_then(|v| Ok(v.str()?.to_cow()?.into_owned()))
+                    .map_err(|e| format!("{what} {at} states no readable {name}: {e}"))
+            };
+            Ok(crate::types::model::TagValue { tag: read("tag")?, value: read("value")? })
+        })
+        .collect()
 }
 
 /// ibapi-compatible OrderAllocation class.
@@ -1508,6 +1528,59 @@ impl SoftDollarTierPy {
     fn get_display_name_alias(&self) -> String { self.display_name.clone() }
     #[setter(displayName)]
     fn set_display_name_alias(&mut self, v: String) { self.display_name = v; }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyDict;
+
+    /// The parameters appended the way the reference samples append them are
+    /// the parameters the algo goes out with.
+    ///
+    /// Handed back as a fresh list on every read, the field took each append
+    /// on a copy and dropped it, and an algo built the way every one of those
+    /// samples builds one ran on the venue's defaults.
+    #[test]
+    fn parameters_appended_as_the_reference_samples_append_them_reach_the_algo() {
+        Python::initialize();
+        Python::attach(|py| {
+            let order = Py::new(py, Order::default()).expect("an order");
+            let locals = PyDict::new(py);
+            locals.set_item("order", &order).expect("named for the sample");
+            locals.set_item("TagValue", py.get_type::<TagValue>()).expect("the class the sample imports");
+            py.run(
+                c"
+order.action = 'BUY'
+order.orderType = 'LMT'
+order.totalQuantity = 100
+order.lmtPrice = 400.0
+order.algoStrategy = 'Twap'
+order.algoParams = []
+order.algoParams.append(TagValue('startTime', '09:00:00 US/Eastern'))
+order.algoParams.append(TagValue('endTime', '16:00:00 US/Eastern'))
+order.algoParams.append(TagValue('allowPastEndTime', int(True)))
+",
+                None,
+                Some(&locals),
+            )
+            .expect("built as the sample builds it");
+            let held = order.borrow(py);
+            let mut api = held.to_api();
+            api.algo_params = held.convert_algo_params(py).expect("the parameters read");
+            let ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::Algo { algo, .. }, .. }) =
+                crate::client_core::ClientCore::build_order_request(&api, 1, 0, None)
+                    .expect("an algo order builds")
+            else {
+                panic!("an algo order builds an Algo request")
+            };
+            let AlgoParams::Twap { allow_past_end_time, start_time, end_time } = algo else {
+                panic!("a Twap runs as a Twap, got {algo:?}")
+            };
+            assert!(allow_past_end_time, "the flag the sample hands over as an int");
+            assert_eq!((start_time.as_str(), end_time.as_str()), ("09:00:00 US/Eastern", "16:00:00 US/Eastern"));
+        });
+    }
 }
 
 #[cfg(test)]

@@ -3,8 +3,92 @@
 // The other families, and the two helpers every class here uses.
 use super::contract::{by_reference_name, set_from_keywords};
 use pyo3::prelude::*;
+use pyo3::types::PyList;
+use std::sync::OnceLock;
 
 use super::{camel_aliases_copy, camel_aliases_owned};
+
+/// A list a Python program holds by reference.
+///
+/// The reference client's classes carry plain lists, and its own samples
+/// build every combination, algo and conditional order by appending to one.
+/// A field handed back as a fresh list on every read took the append on a
+/// copy and dropped it: the order went to the venue without its legs, its
+/// parameters or its conditions, and nothing said so. So the field is the
+/// list itself. Two reads hand back the same object, an append is kept, and
+/// what is read at send time is what the list holds then.
+///
+/// Made on the first read rather than at construction, because these classes
+/// are also built from Rust — `Default`, `Clone`, `from_api` — with no
+/// interpreter token to hand. Unset reads as empty.
+#[derive(Default)]
+pub struct ListField(OnceLock<Py<PyList>>);
+
+impl ListField {
+    pub const fn new() -> Self {
+        Self(OnceLock::new())
+    }
+
+    /// The list itself, made empty if nothing has read or set it yet.
+    pub fn bound<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
+        self.0.get_or_init(|| PyList::empty(py).unbind()).bind(py).clone()
+    }
+
+    /// One holding these, in this order.
+    pub fn of<'py, T: IntoPyObject<'py>>(
+        py: Python<'py>,
+        items: impl IntoIterator<Item = T>,
+    ) -> PyResult<Self> {
+        let list = PyList::empty(py);
+        for item in items {
+            list.append(item)?;
+        }
+        Ok(Self(OnceLock::from(list.unbind())))
+    }
+}
+
+impl Clone for ListField {
+    /// The same list, as Python assignment shares it. A set slot proves an
+    /// interpreter exists, so attaching here attaches to one that is there;
+    /// an unset slot needs none.
+    fn clone(&self) -> Self {
+        match self.0.get() {
+            None => Self::new(),
+            Some(list) => Self(OnceLock::from(Python::attach(|py| list.clone_ref(py)))),
+        }
+    }
+}
+
+impl<'py> IntoPyObject<'py> for &ListField {
+    type Target = PyList;
+    type Output = Bound<'py, PyList>;
+    type Error = std::convert::Infallible;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        Ok(self.bound(py))
+    }
+}
+
+impl FromPyObject<'_, '_> for ListField {
+    type Error = PyErr;
+
+    /// The list assigned, itself: a name the caller keeps for it goes on
+    /// appending to the field's list, as it does on the reference client.
+    /// `None` is that client's own default for four of these and holds
+    /// nothing. Anything else is copied into a list as `list(...)` would be,
+    /// and what `list` refuses is refused.
+    fn extract(obj: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        let py = obj.py();
+        let list = if obj.is_none() {
+            PyList::empty(py)
+        } else if let Ok(list) = obj.cast::<PyList>() {
+            list.to_owned()
+        } else {
+            py.get_type::<PyList>().call1((obj,))?.cast_into::<PyList>()?
+        };
+        Ok(Self(OnceLock::from(list.unbind())))
+    }
+}
 
 /// ibapi-compatible Contract class.
 #[pyclass(from_py_object)]
@@ -48,7 +132,7 @@ pub struct Contract {
     #[pyo3(get, set)]
     pub combo_legs_descrip: String,
     #[pyo3(get, set)]
-    pub combo_legs: Vec<Py<PyAny>>,
+    pub combo_legs: ListField,
     #[pyo3(get, set)]
     pub delta_neutral_contract: Option<Py<PyAny>>,
 }
@@ -75,10 +159,7 @@ impl Clone for Contract {
             description: self.description.clone(),
             issuer_id: self.issuer_id.clone(),
             combo_legs_descrip: self.combo_legs_descrip.clone(),
-            // Legs are Python objects here; reading them needs the interpreter,
-            // which `to_api` does not take. `combo_legs_api` does that, and the
-            // order path calls it.
-            combo_legs: Vec::new(),
+            combo_legs: self.combo_legs.clone(),
             delta_neutral_contract: None,
         }
     }
@@ -111,7 +192,7 @@ impl Default for Contract {
             description: String::new(),
             issuer_id: String::new(),
             combo_legs_descrip: String::new(),
-            combo_legs: Vec::new(),
+            combo_legs: ListField::new(),
             delta_neutral_contract: None,
         }
     }
@@ -130,12 +211,13 @@ impl Contract {
     /// that is present and cannot be read is a value the caller stated and
     /// this cannot carry, and is refused.
     pub fn combo_legs_api(&self, py: Python<'_>) -> Result<Vec<crate::types::model::ComboLeg>, String> {
-        let mut out = Vec::with_capacity(self.combo_legs.len());
-        for (i, obj) in self.combo_legs.iter().enumerate() {
+        let legs = self.combo_legs.bound(py);
+        let mut out = Vec::with_capacity(legs.len());
+        for (i, obj) in legs.iter().enumerate() {
             // Absent takes the default; stated and unreadable is refused.
             macro_rules! read {
                 ($name:literal, $default:expr) => {
-                    match obj.getattr(py, $name) {
+                    match obj.getattr($name) {
                         // Absent is the default the reference client would
                         // have used. An attribute that raises this from inside
                         // itself is indistinguishable from one that is not
@@ -151,7 +233,7 @@ impl Contract {
                         Err(e) => {
                             return Err(format!("combo leg {i} states a {} that cannot be read: {e}", $name))
                         }
-                        Ok(v) => v.extract(py).map_err(|e| {
+                        Ok(v) => v.extract().map_err(|e| {
                             format!("combo leg {i} states a {} that cannot be read: {e}", $name)
                         })?,
                     }
@@ -182,8 +264,7 @@ impl Contract {
     /// The whole contract the engine holds, not the handful of fields a
     /// callback happens to print: an option with no strike, right or expiry
     /// names nothing the caller can act on. Combo legs and the delta-neutral
-    /// contract need a `Python` token to build and are dropped here exactly as
-    /// `Clone` drops them.
+    /// contract need a `Python` token to build and are left empty here.
     pub(crate) fn from_api(c: &crate::types::model::Contract) -> Self {
         Self {
             con_id: c.con_id,
@@ -205,15 +286,16 @@ impl Contract {
             description: c.description.clone(),
             issuer_id: c.issuer_id.clone(),
             combo_legs_descrip: c.combo_legs_descrip.clone(),
-            combo_legs: Vec::new(),
+            combo_legs: ListField::new(),
             delta_neutral_contract: None,
         }
     }
 
     /// The same contract in the shape the rest of the client uses.
     ///
-    /// Combo legs and the delta-neutral contract are dropped, exactly as
-    /// `from_api` drops them: they need a `Python` token to read.
+    /// Combo legs and the delta-neutral contract are left out: they need a
+    /// `Python` token to read. `combo_legs_api` reads the legs, and the order
+    /// path calls it.
     pub(crate) fn to_api(&self) -> crate::types::model::Contract {
         crate::types::model::Contract {
             con_id: self.con_id,
@@ -290,15 +372,15 @@ impl Contract {
     fn get_con_id_alias(&self) -> i64 { self.con_id }
     #[setter(conId)]
     fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
-    // What the contract holds, rather than an empty list whatever it holds: a
-    // combination read by the name the reference client uses reported no legs,
-    // and a delta-neutral contract reported none.
+    // The list the contract holds, itself, under the name the reference client
+    // uses: read by that name a combination reported no legs, and handed back
+    // as a copy it lost every leg appended to it.
     #[getter(comboLegs)]
-    fn get_combo_legs_alias(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
-        self.combo_legs.iter().map(|l| l.clone_ref(py)).collect()
+    fn get_combo_legs_alias<'py>(&self, py: Python<'py>) -> Bound<'py, PyList> {
+        self.combo_legs.bound(py)
     }
     #[setter(comboLegs)]
-    fn set_combo_legs_alias(&mut self, v: Vec<Py<PyAny>>) { self.combo_legs = v; }
+    fn set_combo_legs_alias(&mut self, v: ListField) { self.combo_legs = v; }
     #[getter(deltaNeutralContract)]
     fn get_delta_neutral_alias(&self, py: Python<'_>) -> Option<Py<PyAny>> {
         self.delta_neutral_contract.as_ref().map(|c| c.clone_ref(py))
@@ -321,13 +403,27 @@ pub struct TagValue {
 
 #[pymethods]
 impl TagValue {
+    /// `str()` of each, as the reference client keeps them: its own samples
+    /// hand over a float or an int, and the venue reads text.
     #[new]
-    fn new(tag: String, value: String) -> Self {
-        Self { tag, value }
+    #[pyo3(signature = (tag=None, value=None))]
+    fn new(py: Python<'_>, tag: Option<Bound<'_, PyAny>>, value: Option<Bound<'_, PyAny>>) -> PyResult<Self> {
+        let text = |given: Option<Bound<'_, PyAny>>| -> PyResult<String> {
+            let given = given.unwrap_or_else(|| py.None().into_bound(py).into_any());
+            Ok(given.str()?.to_cow()?.into_owned())
+        };
+        Ok(Self { tag: text(tag)?, value: text(value)? })
     }
 
     fn __repr__(&self) -> String {
         format!("TagValue(tag='{}', value='{}')", self.tag, self.value)
+    }
+}
+
+impl TagValue {
+    /// The same pair, as the Python side names it.
+    pub(crate) fn from_api(tv: &crate::types::model::TagValue) -> Self {
+        Self { tag: tv.tag.clone(), value: tv.value.clone() }
     }
 }
 
@@ -1008,10 +1104,73 @@ mod tests {
                     None,
                 )
                 .expect("a leg naming a contract and nothing else");
-            let contract = Contract { combo_legs: vec![leg.unbind()], ..Default::default() };
+            let contract = Contract {
+                combo_legs: ListField::of(py, [leg]).expect("one leg"),
+                ..Default::default()
+            };
             let built = contract.combo_legs_api(py).expect("the leg reads");
             assert_eq!(built[0].ratio, 0, "no ratio stated, so none is invented");
             assert_eq!(built[0].con_id, 756733);
+        });
+    }
+
+    /// The legs appended the way the reference samples append them are the
+    /// legs the order goes out with.
+    ///
+    /// Handed back as a fresh list on every read, the field took each append
+    /// on a copy and dropped it, and a combination built the way every one of
+    /// those samples builds one went to the venue with no legs at all.
+    #[test]
+    fn legs_appended_as_the_reference_samples_append_them_reach_the_order() {
+        use crate::types::{ControlCommand, OrderRequest};
+        Python::initialize();
+        Python::attach(|py| {
+            let contract = Py::new(py, Contract::default()).expect("a contract");
+            let locals = pyo3::types::PyDict::new(py);
+            locals.set_item("contract", &contract).expect("named for the sample");
+            py.run(
+                c"
+class ComboLeg:
+    pass
+contract.secType = 'BAG'
+leg1 = ComboLeg()
+leg1.conId = 43645865
+leg1.ratio = 1
+leg1.action = 'BUY'
+leg1.exchange = 'SMART'
+leg2 = ComboLeg()
+leg2.conId = 9408
+leg2.ratio = 1
+leg2.action = 'SELL'
+leg2.exchange = 'SMART'
+contract.comboLegs = []
+contract.comboLegs.append(leg1)
+contract.comboLegs.append(leg2)
+",
+                None,
+                Some(&locals),
+            )
+            .expect("built as the sample builds it");
+            let legs = contract.borrow(py).combo_legs_api(py).expect("the legs read");
+            let on_the_wire = crate::types::model::Contract { combo_legs: legs, ..Default::default() };
+            let order = crate::types::model::Order {
+                action: "BUY".into(),
+                total_quantity: 1.0,
+                order_type: "LMT".into(),
+                lmt_price: 10.0,
+                ..Default::default()
+            };
+            let ControlCommand::Order(OrderRequest::SubmitEx { attrs, .. }) =
+                crate::client_core::ClientCore::build_order_request(&order, 1, 0, Some(&on_the_wire))
+                    .expect("a combination order builds")
+            else {
+                panic!("a limit order builds a SubmitEx")
+            };
+            assert_eq!(
+                attrs.combo_legs.iter().map(|l| (l.con_id, l.ratio, l.is_sell)).collect::<Vec<_>>(),
+                [(43645865, 1, false), (9408, 1, true)],
+                "both legs, as appended, on the request",
+            );
         });
     }
 }

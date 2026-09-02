@@ -376,7 +376,7 @@ mod tests {
         Python::attach(|py| {
             let back = super::super::class_orders::Order::from_api(py, &held, 7)
                 .expect("the order comes back");
-            assert_eq!(back.conditions.len(), sent.len(), "each one comes back");
+            assert_eq!(back.conditions.bound(py).len(), sent.len(), "each one comes back");
             assert_eq!(
                 back.convert_conditions(py).expect("and reads as itself"),
                 sent,

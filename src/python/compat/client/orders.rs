@@ -37,17 +37,26 @@ impl EClient {
             Ok(conditions) => conditions,
             Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
         };
-        // The three fields whose Python value is an object: the conversion
+        // The fields whose Python value is a list of objects: the conversion
         // cannot read one without the interpreter, so they are filled here.
         // An object this client cannot read is a refusal, not an empty value:
-        // read as absent, a leg goes out unpriced and a tag the protocol does
-        // not carry stops being refused for stating it.
+        // read as absent, a leg goes out unpriced, an algo runs on the venue's
+        // defaults, and a tag the protocol does not carry stops being refused
+        // for stating it.
         api_order.order_combo_legs = match order.convert_order_combo_legs(py) {
             Ok(legs) => legs,
             Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
         };
         api_order.order_misc_options = match order.convert_misc_options(py) {
             Ok(options) => options,
+            Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
+        };
+        api_order.algo_params = match order.convert_algo_params(py) {
+            Ok(params) => params,
+            Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
+        };
+        api_order.smart_combo_routing_params = match order.convert_smart_combo_routing_params(py) {
+            Ok(params) => params,
             Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
         };
         // What the order path reads off a contract: where it is listed, its
