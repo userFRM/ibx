@@ -241,3 +241,84 @@ def decimalMaxString(value):
     if value is None or value == UNSET_DECIMAL:
         return ""
     return str(value)
+
+class Object:
+    """The base the reference client's plain objects are written on.
+
+    A program subclasses it for objects of its own — its own sample does — so
+    it has to exist before that class body runs. It adds nothing.
+    """
+
+    def __str__(self):
+        return type(self).__name__
+
+    def __repr__(self):
+        return f"{id(self)}: {self}"
+
+
+class ScanData:
+    """One row of a scan, as a callback hands it over."""
+
+    def __init__(self, contract=None, rank=0, distance="", benchmark="",
+                 projection="", legsStr=""):
+        self.contract = contract
+        self.rank = rank
+        self.distance = distance
+        self.benchmark = benchmark
+        self.projection = projection
+        self.legsStr = legsStr
+
+
+class OrderCondition:
+    """What kind of thing an order's condition watches.
+
+    The numbers the venue gives each kind, which a program compares against
+    `condType` and passes when it builds one.
+    """
+
+    Price = 1
+    Time = 3
+    Margin = 4
+    Execution = 5
+    Volume = 6
+    PercentChange = 7
+
+
+class MarketDataTypeEnum:
+    """Which feed a subscription asks for, by the venue's numbering."""
+
+    REALTIME = 1
+    FROZEN = 2
+    DELAYED = 3
+    DELAYED_FROZEN = 4
+
+
+class FaDataTypeEnum:
+    """Which advisor document a request is asking for."""
+
+    GROUPS = 1
+    ALIASES = 3
+
+
+#: A mid-offset that means "up to the midpoint" rather than a distance.
+COMPETE_AGAINST_BEST_OFFSET_UP_TO_MID = DOUBLE_INFINITY
+
+
+def getTimeStrFromMillis(time):
+    """A millisecond clock reading written for a person, and nothing for none."""
+    if not time or time <= 0:
+        return ""
+    import datetime
+
+    stamp = datetime.datetime.fromtimestamp(time / 1000.0)
+    return stamp.strftime("%b %d, %Y %H:%M:%S.%f")[:-3]
+
+
+def getEnumTypeName(cls, value):
+    """The name a numbered kind goes by, or the first one where it names none."""
+    for name, held in vars(cls).items():
+        if not name.startswith("_") and held == value:
+            return name
+    named = [n for n in vars(cls) if not n.startswith("_")]
+    return named[0] if named else ""
+

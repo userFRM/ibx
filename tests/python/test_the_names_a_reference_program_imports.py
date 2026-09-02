@@ -113,3 +113,36 @@ def test_the_account_figures_are_named():
     named = tags.AllTags.split(",")
     assert "NetLiquidation" in named and "DayTradesRemaining" in named
     assert len(named) == len(set(named)), "each figure named once"
+
+
+def test_the_numbered_kinds_a_program_names():
+    # A program asks for a feed and an advisor document by name, and compares
+    # a condition's kind against these.
+    assert ibx.MarketDataTypeEnum.REALTIME == 1
+    assert ibx.MarketDataTypeEnum.DELAYED == 3
+    assert ibx.MarketDataTypeEnum.DELAYED_FROZEN == 4
+    assert ibx.FaDataTypeEnum.GROUPS == 1
+    assert ibx.FaDataTypeEnum.ALIASES == 3
+    assert ibx.OrderCondition.Price == 1
+    assert ibx.OrderCondition.PercentChange == 7
+    assert ibx.getEnumTypeName(ibx.MarketDataTypeEnum, 3) == "DELAYED"
+
+
+def test_the_base_a_program_writes_its_own_objects_on():
+    # Evaluated as a base class, so it has to exist before that class body runs.
+    class Activity(ibx.Object):
+        pass
+
+    assert str(Activity()) == "Activity"
+
+
+def test_a_scan_row_and_a_mid_offset_that_means_the_midpoint():
+    row = ibx.ScanData(rank=1, distance="", benchmark="", projection="", legsStr="")
+    assert row.rank == 1 and row.contract is None
+    # Not a distance: the offset that says "up to the midpoint" is unbounded.
+    assert ibx.COMPETE_AGAINST_BEST_OFFSET_UP_TO_MID == float("inf")
+
+
+def test_a_clock_reading_written_for_a_person():
+    assert ibx.getTimeStrFromMillis(0) == ""
+    assert ibx.getTimeStrFromMillis(1772202600000).endswith(".000")
