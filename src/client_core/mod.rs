@@ -562,8 +562,8 @@ pub struct HeldOrder {
 
 /// What one historical request asked for.
 ///
-/// Kept because the reply states neither: the counterpart writes the request's
-/// own range beside the last bar, and writes the bar times in the form the
+/// Kept because the reply states neither. The range written beside the last
+/// bar is the request's own, and the bar times are written in the form the
 /// request named.
 #[derive(Clone, Default)]
 pub struct HistoricalAsk {
@@ -695,17 +695,15 @@ pub struct ClientCore {
     /// kept per request rather than for the session.
     /// What each historical request asked for: the form its bar times are
     /// wanted in, and the end and duration its range is derived from. The
-    /// reply states neither — the counterpart states the request's own range
-    /// beside the last bar, so the request is what has to be kept.
+    /// reply states neither, and the range stated beside the last bar is the
+    /// request's own, so the request is what has to be kept.
     historical_asks: Mutex<HashMap<i64, HistoricalAsk>>,
     /// Orders built and not sent, waiting for one that transmits.
     ///
-    /// The counterpart holds these itself: the field saying whether an order
-    /// goes now is one the reference client sends to it, not one the venue
-    /// reads, and its own words for an order held back are that it is created
-    /// and not transmitted. This client stands where it stood, so the holding
-    /// is this client's. Kept in the order they were placed, which is the
-    /// order they go out in.
+    /// The field saying whether an order goes now is written into the
+    /// reference client's own message and never reaches the venue, so nothing
+    /// on the wire can hold an order back and this client holds it instead.
+    /// Kept in the order they were placed, which is the order they go out in.
     held_orders: Mutex<Vec<HeldOrder>>,
 
     // Historical data keepUpToDate: req_ids that have completed initial batch.
@@ -905,9 +903,8 @@ impl ClientCore {
     /// Forget everything this session held, so the next one starts clean.
     pub fn reset(&self) {
         self.req_to_instrument.lock().unwrap().clear();
-        // An order held back never reached the venue, and the counterpart
-        // loses its own held orders when it stops. Carried into the next
-        // session they would go out under an id that session never issued.
+        // An order held back never reached the venue. Carried into the next
+        // session it would go out under an id that session never issued.
         self.held_orders.lock().unwrap().clear();
         self.instrument_to_req.lock().unwrap().clear();
         self.tbt_to_instrument.lock().unwrap().clear();
@@ -3159,8 +3156,8 @@ impl ClientCore {
         ask.duration = duration.to_string();
     }
 
-    /// The range a finished request covered, as the counterpart states it
-    /// beside the last bar. Empty where nothing was asked under the id.
+    /// The range a finished request covered, as stated beside the last bar.
+    /// Empty where nothing was asked under the id.
     pub fn historical_range_for(&self, req_id: i64, zone: &str) -> (String, String) {
         let ask = self.historical_asks.lock().unwrap().get(&req_id).cloned();
         ask.filter(|a| !a.duration.is_empty())

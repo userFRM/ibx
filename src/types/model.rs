@@ -179,17 +179,18 @@ pub struct Order {
     pub parent_id: i64,
     /// Whether the order goes to the venue now.
     ///
-    /// **Held here.** The venue has no word for an order held back — the field is one the
-    /// reference client sends to its counterpart, not one that reaches the
-    /// venue, and that counterpart's own words for an order set this way are
-    /// that it is created and not transmitted. So it is held here instead:
-    /// nothing is sent until an order that transmits releases it, which is
-    /// either this one placed again or another in the same family. The
-    /// reference client's own bracket sample places a parent and a take-profit
-    /// held back and lets the stop-loss send all three.
+    /// **Held here.** No tag carries it: the reference client writes it into
+    /// its own message, between the order reference and the parent id, and it
+    /// does not reach the venue. Its own words for a false value are that the
+    /// order is created and not transmitted.
     ///
-    /// A held order never reached the venue, so it is dropped when the session
-    /// ends, as the counterpart drops its own.
+    /// So it is held here instead. Nothing is sent until an order that
+    /// transmits releases it — this one placed again, or another in the same
+    /// family. The reference client's own bracket sample places a parent and a
+    /// take-profit held back and lets the stop-loss send all three.
+    ///
+    /// A held order never reached the venue, so it goes when the session
+    /// does.
     pub transmit: bool,
     /// How far past the limit the order may reach, unshown.
     pub discretionary_amt: f64,

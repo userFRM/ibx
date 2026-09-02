@@ -1401,32 +1401,13 @@ fn flush_session(
     }
 }
 
-/// The clock a venue names, resolved against a time-zone database.
-///
-/// The machine's own copy first, so a zone the host has been updated for is
-/// the host's. The venue names its exchanges the way the database's own
-/// `backward` file names them — `US/Eastern`, `GB-Eire`, `Japan` — and a
-/// machine's copy may carry only the current names, which is why the complete
-/// copy answers where the host does not. Both are the database's statements
-/// about zones, neither is a table kept here.
-pub(crate) fn clock_named(named: &str) -> Option<jiff::tz::TimeZone> {
-    if let Ok(zone) = jiff::tz::TimeZone::get(named) {
-        return Some(zone);
-    }
-    static COMPLETE: std::sync::OnceLock<jiff::tz::TimeZoneDatabase> = std::sync::OnceLock::new();
-    COMPLETE
-        .get_or_init(jiff::tz::TimeZoneDatabase::bundled)
-        .get(named)
-        .ok()
-}
-
 /// Whether the hours can be stated on the clock the venue names.
 ///
 /// False where no database answers to that name, in which case the hours stay
 /// as the wire carried them and the zone reported beside them is the UTC they
 /// are actually on.
 pub fn sessions_are_stated_on(named: &str) -> bool {
-    clock_named(named).is_some()
+    crate::protocol::datetime::clock_named(named).is_some()
 }
 
 /// Move a session's endpoints out of the clock the wire states them on and
@@ -1464,7 +1445,7 @@ fn stated_on(endpoint: &str, zone: &jiff::tz::TimeZone) -> Option<String> {
 /// the official-API convention.
 /// Returns an empty string if `sessions` is empty.
 pub fn format_sessions_string(sessions: &[ScheduleSession], zone_named: &str) -> String {
-    let zone = clock_named(zone_named);
+    let zone = crate::protocol::datetime::clock_named(zone_named);
     let mut out = String::with_capacity(sessions.len() * 32);
     for (i, s) in sessions.iter().enumerate() {
         if i > 0 { out.push(';'); }

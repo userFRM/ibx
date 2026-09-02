@@ -356,6 +356,25 @@ pub fn days_to_ymd(days: u64) -> (u64, u64, u64) {
 }
 
 
+/// The clock a venue names, resolved against a time-zone database.
+///
+/// The machine's own copy first, so a zone the host has been updated for is
+/// the host's. The venue names its exchanges the way the database's own
+/// `backward` file names them — `US/Eastern`, `GB-Eire`, `Japan` — and a
+/// machine's copy may carry only the current names, which is why the complete
+/// copy answers where the host does not. Both are the database's statements
+/// about zones, neither is a table kept here.
+pub fn clock_named(named: &str) -> Option<jiff::tz::TimeZone> {
+    if let Ok(zone) = jiff::tz::TimeZone::get(named) {
+        return Some(zone);
+    }
+    static COMPLETE: std::sync::OnceLock<jiff::tz::TimeZoneDatabase> = std::sync::OnceLock::new();
+    COMPLETE
+        .get_or_init(jiff::tz::TimeZoneDatabase::bundled)
+        .get(named)
+        .ok()
+}
+
 /// A bar's stamp, written the way the request asked for it.
 ///
 /// The venue stamps a bar in UTC, `YYYYMMDD-HH:MM:SS`, and names the exchange's
@@ -377,7 +396,7 @@ pub fn bar_date_as_asked(stated: &str, format_date: i32, zone: &str) -> String {
         return secs.to_string();
     }
     let (Some(clock), Ok(at)) = (
-        crate::control::contracts::clock_named(zone),
+        clock_named(zone),
         jiff::Timestamp::from_second(secs),
     ) else {
         return stated.to_string();
@@ -402,13 +421,13 @@ pub fn historical_range(
     duration: &str,
     zone: &str,
 ) -> Option<(String, String)> {
-    let clock = crate::control::contracts::clock_named(zone)?;
+    let clock = clock_named(zone)?;
     let end = match end_date_time.trim() {
         "" => jiff::Zoned::now(),
         given => {
             // A zone may be named after the stamp. Where none is, one joined
             // by a dash is UTC and one joined by a space is on this machine's
-            // clock, which is how the counterpart reads them.
+            // clock, which is how each is read.
             let (stamp, named) = match given.rsplit_once(' ') {
                 Some((stamp, named)) if named.bytes().any(|b| b.is_ascii_alphabetic()) => {
                     (stamp, Some(named))
@@ -416,7 +435,7 @@ pub fn historical_range(
                 _ => (given, None),
             };
             let on = match (named, stamp.as_bytes().get(8)) {
-                (Some(named), _) => crate::control::contracts::clock_named(named)?,
+                (Some(named), _) => clock_named(named)?,
                 (None, Some(b'-')) => jiff::tz::TimeZone::UTC,
                 (None, _) => jiff::tz::TimeZone::system(),
             };
@@ -479,9 +498,9 @@ mod bar_date_tests {
 
     /// A day back is the same time of day, not twenty-four hours.
     ///
-    /// The counterpart counts the range on a calendar. Counted in seconds
-    /// instead, every range spanning a clock change is an hour out at one end,
-    /// and a caller paging backwards walks an hour further off with each page.
+    /// The range is counted on a calendar. Counted in seconds instead, every
+    /// range spanning a clock change is an hour out at one end, and a caller
+    /// paging backwards walks an hour further off with each page.
     #[test]
     fn a_range_is_counted_on_a_calendar_and_not_in_seconds() {
         // The eighth of March 2026 is when the US clocks go forward.

@@ -215,11 +215,11 @@ fn a_tick_by_tick_stream_checks_the_number_it_was_given() {
 /// A bracket built the way the reference client's own sample builds one.
 ///
 /// It places a parent and a take-profit held back and lets the stop-loss send
-/// all three, with a comment saying so: the field is one that client sends to
-/// its counterpart, not one the venue reads, and the counterpart holds the
-/// order rather than working it. Refused here, the sample's parent and
-/// take-profit never went and the stop-loss went alone, carrying a link to an
-/// order the venue had never been given.
+/// all three, with a comment saying so. The field is written into that client's
+/// own message and no tag carries it, so holding the order is the client's
+/// side of the protocol. Refused here, the sample's parent and take-profit
+/// never went and the stop-loss went alone, carrying a link to an order the
+/// venue had never been given.
 #[test]
 fn a_bracket_held_back_goes_out_when_its_last_leg_transmits() {
     let (client, rx, _shared) = test_client();
