@@ -34,7 +34,7 @@ def new(wrapper)
 Connect to IB and start the engine.  Live logins (``paper=False``) enter a second-factor approval window and **block** until the factor is approved (mobile push) or the deadline fires (``ib_key_timeout_secs``, default ~18 min). This is a human approval gate, not a hang. To bound or avoid it: use ``paper=True``, pass a smaller ``ib_key_timeout_secs``, or run ``connect()`` on a worker thread with your own timeout. Paper logins skip the gate entirely. Set ``RUST_LOG=info`` to see a log line when the wait begins.  ``code_provider`` answers that factor with a typed code instead: ``code_provider(factor, display_id, avth_url) -> str``, where ``factor`` is ``"ibkey"`` (return the code shown for ``display_id``) or ``"authenticator"`` (return the account's current code; ``display_id`` and ``avth_url`` are empty). An authenticator account has no push to fall back to and cannot log in without this. It is called once, on a thread of its own, and holds the GIL while it runs — return the code, don't block on input. It is asked once and the login carries whatever it returns; what the venue does with a wrong code has not been exercised from here.  Multiple ``EClient`` instances can run concurrently in one process; each owns its own state, sockets, and engine thread, and ``connect()`` does not serialize across instances. If you pin engines via ``core_id``, give each a distinct value.  `port` is taken and not applied. The session connects to the venue directly, so there is no local socket to name a port on.
 
 ```python
-def connect(host, port=0, client_id=0, username="", password="", paper=True, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=False, settings=None, session_file=None)
+def connect(host, port=0, client_id=0, username="", password="", paper=True, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=False, settings=None, session_file=None, *, clientId=None)
 ```
 
 | Parameter | Type | Description |
@@ -69,6 +69,130 @@ Check if connected.
 
 ```python
 def is_connected()
+```
+
+---
+
+#### `conn_state`
+
+Which of `DISCONNECTED`, `CONNECTING` and `CONNECTED` this client is in.  `CONNECTING` is the span of `connect`, as read from another thread: the connection is claimed at the top of that call and the session's state handed over at the bottom, and `is_connected` reads true for the whole of it. A session that ended without being closed is connecting again from the moment `connect` is called on it, though what it held stays in place until the logon answers.
+
+```python
+client.conn_state  # read-only attribute
+```
+
+---
+
+#### `client_id`
+
+The number this session connected under, as the caller gave it, and `None` when there is no session.
+
+```python
+client.client_id  # read-only attribute
+```
+
+---
+
+#### `host`
+
+The auth server this session logged in through, and `None` when there is no session.  Where the venue sent it, which is not always where it knocked: the venue answers the first message by naming the server the account belongs on, and the session follows. The reference client holds the machine its gateway runs on here. There is no gateway, and of the servers the venue names for a session this is the one it logged in through.
+
+```python
+client.host  # read-only attribute
+```
+
+---
+
+#### `port`
+
+`None`: there is no port. The reference client's is the one its gateway listens on for it. This session speaks to the venue's servers on the ports the venue names, one per connection, and none of them is a number the caller gave — `connect` takes one and does not apply it.
+
+```python
+client.port  # read-only attribute
+```
+
+---
+
+#### `conn`
+
+`None`: there is no socket to hold. The reference client keeps the one to its gateway here and shares it with its reader thread. This client's connections are opened, read and kept alive inside its engine, and a caller has no hand on any of them.
+
+```python
+client.conn  # read-only attribute
+```
+
+---
+
+#### `asynchronous`
+
+`False`: there is no asynchronous mode. The reference client sets this nowhere either; its sample program reads it in `connect_ack` to decide whether to start the exchange itself. Here `connect` returns with the session up and its engine running, and `connect_ack` is announced from inside it, so there is nothing left for a caller to start.
+
+```python
+client.asynchronous  # read-only attribute
+```
+
+---
+
+#### `server_version`
+
+`None`: no protocol version was stated. The reference client reads one off its gateway's greeting and gates what it sends on it. This session is opened against the venue itself, whose answer to the logon names no such number — the build and version on that exchange are the ones this client announces. Not a number in its place: a comparison against one, which is what the reference client uses this for, would be deciding on something nothing said.
+
+```python
+def server_version()
+```
+
+---
+
+#### `tws_connection_time`
+
+When the venue says this session logged in, by its own clock and in its own spelling; `None` when there is no session.  The reference client answers the time its gateway stamped on its greeting. The venue stamps every message it sends with the time it sent it, the answer to the logon included, and this is that stamp — the clock `competing_session` reads the other session's logon off. Where the venue stamped none, `connect` holds this machine's clock instead and says so in the log.
+
+```python
+def tws_connection_time()
+```
+
+---
+
+#### `set_connect_options`
+
+Taken and not applied. The reference client carries these on its greeting to its gateway, which reads them; there is no gateway between this client and the venue to read them.
+
+```python
+def set_connect_options(opts)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `opts` | `str` | Connect options, as the reference client takes them. Not applied. |
+
+---
+
+#### `start_api`
+
+Nothing to start, once there is a session. The reference client sends its client id here and its gateway begins the exchange on receiving it. Here the id is kept on the client and never sent — one session holds the account — and `connect` announces `connect_ack`, the accounts and the next order id itself before it returns. Before a session exists this is reported the way the reference client reports it: on `error`, under 504.
+
+```python
+def start_api()
+```
+
+---
+
+#### `check_connected`
+
+Raises when there is a session, as the reference client's does, with the message `connect` refuses a second call under. Nothing otherwise.
+
+```python
+def check_connected()
+```
+
+---
+
+#### `reset`
+
+Forget the session — which here is closing it. The reference client drops its hold on the socket and leaves the socket to its reader thread; a session here is an engine that stays logged in at the venue until it is stopped, so this is `disconnect`. Nothing to forget is fine.
+
+```python
+def reset()
 ```
 
 ---

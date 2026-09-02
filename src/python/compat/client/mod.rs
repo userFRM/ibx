@@ -126,6 +126,12 @@ pub struct EClient {
     /// It is kept because some calls are answered by client id: binding orders
     /// entered elsewhere is refused for any client id but 0.
     pub(crate) client_id: AtomicI32,
+    /// The server this session connected to: the one it knocked on, which is
+    /// the one the caller named. Held only while there is a session.
+    pub(crate) auth_host: Mutex<Option<String>>,
+    /// When the venue says this session logged in, by its own clock and in
+    /// its own spelling. Held only while there is a session.
+    pub(crate) logged_in_at: Mutex<Option<String>>,
     /// Receiver for engine events (disconnects, etc.).
     pub(crate) event_rx: Mutex<Option<std::sync::mpsc::Receiver<Event>>>,
     /// What this session's event channel discarded because it was full.
@@ -244,6 +250,19 @@ pub(crate) fn wire_u32(what: &str, value: i64) -> PyResult<u32> {
     })
 }
 
+/// The client id, given under this client's spelling or the reference
+/// client's. Given under both, the caller has said two things, and is told so
+/// rather than having one of them picked.
+fn client_id_under_either_spelling(client_id: i32, reference_spelling: Option<i32>) -> PyResult<i32> {
+    match reference_spelling {
+        Some(_) if client_id != 0 => Err(pyo3::exceptions::PyTypeError::new_err(
+            "connect() was given the client id under both spellings, client_id and clientId",
+        )),
+        Some(id) => Ok(id),
+        None => Ok(client_id),
+    }
+}
+
 /// Adapt a Python callable to the second-factor [`CodeProvider`] the login gate
 /// calls. The gate runs it on a thread of its own, so it takes the GIL itself;
 /// `connect` has released it for the whole login. A raising callback becomes an
@@ -270,6 +289,8 @@ impl EClient {
     fn new(wrapper: Py<PyAny>) -> Self {
         Self {
             client_id: AtomicI32::new(0),
+            auth_host: Mutex::new(None),
+            logged_in_at: Mutex::new(None),
             wrapper,
             shared: Mutex::new(None),
             control_tx: Mutex::new(None),
@@ -324,7 +345,7 @@ impl EClient {
     ///
     /// `port` is taken and not applied. The session connects to the venue
     /// directly, so there is no local socket to name a port on.
-    #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None))]
+    #[pyo3(signature = (host=crate::config::CCP_HOSTS[0].to_string(), port=0, client_id=0, username="".to_string(), password="".to_string(), paper=true, core_id=None, ib_key_timeout_secs=None, ib_key_token_sub_type=None, code_provider=None, readonly=false, settings=None, session_file=None, *, clientId=None))]
     fn connect(
         &self,
         py: Python<'_>,
@@ -349,7 +370,12 @@ impl EClient {
         // approval and does not count as a new login. Owner-only, sealed with
         // the password, and bound to this account and this kind of session.
         session_file: Option<String>,
+        // The reference client's spelling, so a program written against it
+        // keeps its connect line. The lint allowance is on this one name: the
+        // spelling is the whole of what the parameter is for.
+        #[allow(non_snake_case)] clientId: Option<i32>,
     ) -> PyResult<()> {
+        let client_id = client_id_under_either_spelling(client_id, clientId)?;
         let username_for_resume = username.clone();
         let username_for_session = username.clone();
         let password_for_resume = password.clone();
@@ -379,6 +405,9 @@ impl EClient {
         // going cannot write into what the new session has been given.
         self.stop_engine(py);
         self.forget_last_session();
+        // Stated before the logon rather than after it, so a caller reading it
+        // during `connect` reads this session's number and not the last one's.
+        self.client_id.store(client_id, Ordering::Release);
 
         // Set before anything is sent, so there is no window in which the
         // session is open and the refusal is not yet in force.
@@ -432,6 +461,9 @@ impl EClient {
 
         *self.account_id.lock().unwrap() = Some(gw.account_id.clone());
         *self.accounts.lock().unwrap() = gw.accounts.clone();
+        *self.auth_host.lock().unwrap() = gw.auth_hosts.first().cloned();
+        *self.logged_in_at.lock().unwrap() =
+            Some(gw.logged_in_at.clone()).filter(|stamp| !stamp.is_empty());
         let shared = Arc::new(SharedState::new());
         shared.set_settings(config.settings.clone());
         self.core.set_registration_timeout(config.settings.registration_timeout);
@@ -489,7 +521,6 @@ impl EClient {
         self.close_notified.store(false, Ordering::Release);
         claim.kept = true;
 
-        self.client_id.store(client_id, Ordering::Release);
         let _ = port; // kept for the reference client's signature
 
         // Fire initial callbacks synchronously, matching official Python ibapi
@@ -552,6 +583,153 @@ impl EClient {
     /// Check if connected.
     fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
+    }
+
+    // ── What the reference client holds after connecting ──
+    //
+    // Each answers what this client has. Where the reference client's value is
+    // its gateway's — the process it speaks to, of which there is none here,
+    // the session being opened against the venue itself — the answer is `None`
+    // and the doc says why. Not a stand-in: a number nothing stated is worse
+    // than a clear absence, because a program decides on it.
+
+    /// No session: before `connect`, after `disconnect`, and after a loss.
+    #[classattr]
+    const DISCONNECTED: i32 = 0;
+    /// The length of `connect`: the connection is claimed before the logon and
+    /// the session's state handed over after it.
+    #[classattr]
+    const CONNECTING: i32 = 1;
+    /// A session, with its engine running.
+    #[classattr]
+    const CONNECTED: i32 = 2;
+
+    /// Which of `DISCONNECTED`, `CONNECTING` and `CONNECTED` this client is in.
+    ///
+    /// `CONNECTING` is the span of `connect`, as read from another thread: the
+    /// connection is claimed at the top of that call and the session's state
+    /// handed over at the bottom, and `is_connected` reads true for the whole
+    /// of it. A session that ended without being closed is connecting again
+    /// from the moment `connect` is called on it, though what it held stays in
+    /// place until the logon answers.
+    #[getter]
+    fn conn_state(&self) -> i32 {
+        if !self.connected.load(Ordering::Acquire) {
+            Self::DISCONNECTED
+        } else if self.session_ended.load(Ordering::Acquire)
+            || self.shared.lock().unwrap().is_none()
+        {
+            Self::CONNECTING
+        } else {
+            Self::CONNECTED
+        }
+    }
+
+    /// The number this session connected under, as the caller gave it, and
+    /// `None` when there is no session.
+    #[getter]
+    fn client_id(&self) -> Option<i32> {
+        if self.is_connected() { Some(self.client_id.load(Ordering::Acquire)) } else { None }
+    }
+
+    /// The server this session connected to, and `None` when there is no
+    /// session.
+    ///
+    /// The one it knocked on, which is the one the caller named — the venue
+    /// may then send it elsewhere, and the rest of that list is where. The
+    /// reference client holds what its caller passed here too.
+    #[getter]
+    fn host(&self) -> Option<String> {
+        if self.is_connected() { self.auth_host.lock().unwrap().clone() } else { None }
+    }
+
+    /// `None`: there is no port. The reference client's is the one its gateway
+    /// listens on for it. This session speaks to the venue's servers on the
+    /// ports the venue names, one per connection, and none of them is a number
+    /// the caller gave — `connect` takes one and does not apply it.
+    #[getter]
+    fn port(&self) -> Option<i32> {
+        None
+    }
+
+    /// `None`: there is no socket to hold. The reference client keeps the one
+    /// to its gateway here and shares it with its reader thread. This client's
+    /// connections are opened, read and kept alive inside its engine, and a
+    /// caller has no hand on any of them.
+    #[getter]
+    fn conn(&self) -> Option<Py<PyAny>> {
+        None
+    }
+
+    /// `False`: there is no asynchronous mode. The reference client sets this
+    /// nowhere either; its sample program reads it in `connect_ack` to decide
+    /// whether to start the exchange itself. Here `connect` returns with the
+    /// session up and its engine running, and `connect_ack` is announced from
+    /// inside it, so there is nothing left for a caller to start.
+    #[getter]
+    fn asynchronous(&self) -> bool {
+        false
+    }
+
+    /// `None`: no protocol version was stated. The reference client reads one
+    /// off its gateway's greeting and gates what it sends on it. This session
+    /// is opened against the venue itself, whose answer to the logon names no
+    /// such number — the build and version on that exchange are the ones this
+    /// client announces. Not a number in its place: a comparison against one,
+    /// which is what the reference client uses this for, would be deciding on
+    /// something nothing said.
+    fn server_version(&self) -> Option<i32> {
+        None
+    }
+
+    /// When the venue says this session logged in, by its own clock and in its
+    /// own spelling; `None` when there is no session.
+    ///
+    /// The reference client answers the time its gateway stamped on its
+    /// greeting. The venue stamps every message it sends with the time it sent
+    /// it, the answer to the logon included, and this is that stamp — the
+    /// clock `competing_session` reads the other session's logon off. Where
+    /// the venue stamped none, `connect` holds this machine's clock instead
+    /// and says so in the log.
+    fn tws_connection_time(&self) -> Option<String> {
+        if self.is_connected() { self.logged_in_at.lock().unwrap().clone() } else { None }
+    }
+
+    /// Taken and not applied. The reference client carries these on its
+    /// greeting to its gateway, which reads them; there is no gateway between
+    /// this client and the venue to read them.
+    fn set_connect_options(&self, opts: &str) {
+        let _ = opts;
+    }
+
+    /// Nothing to start, once there is a session. The reference client sends
+    /// its client id here and its gateway begins the exchange on receiving it.
+    /// Here the id is kept on the client and never sent — one session holds
+    /// the account — and `connect` announces `connect_ack`, the accounts and
+    /// the next order id itself before it returns. Before a session exists
+    /// this is reported the way the reference client reports it: on `error`,
+    /// under 504.
+    fn start_api(&self) -> PyResult<()> {
+        let _ = self.tx_or_report(-1);
+        Ok(())
+    }
+
+    /// Raises when there is a session, as the reference client's does, with
+    /// the message `connect` refuses a second call under. Nothing otherwise.
+    fn check_connected(&self) -> PyResult<()> {
+        if self.is_connected() {
+            return Err(PyRuntimeError::new_err("Already connected"));
+        }
+        Ok(())
+    }
+
+    /// Forget the session — which here is closing it. The reference client
+    /// drops its hold on the socket and leaves the socket to its reader
+    /// thread; a session here is an engine that stays logged in at the venue
+    /// until it is stopped, so this is `disconnect`. Nothing to forget is
+    /// fine.
+    fn reset(&self, py: Python<'_>) -> PyResult<()> {
+        self.disconnect(py)
     }
 
     /// How many engine events this session's channel discarded.
@@ -790,6 +968,8 @@ impl EClient {
     fn forget_last_session(&self) {
         *self.account_id.lock().unwrap() = None;
         self.accounts.lock().unwrap().clear();
+        *self.auth_host.lock().unwrap() = None;
+        *self.logged_in_at.lock().unwrap() = None;
         self.positions_requested.store(false, Ordering::Release);
         self.positions_multi_requested.lock().unwrap().clear();
         self.deferred_evictions.lock().unwrap().clear();
@@ -1170,6 +1350,57 @@ mod tests {
             client.call_method0(py, "poll").unwrap();
             let err = client.call_method0(py, "run").unwrap_err();
             assert!(err.to_string().contains("Not connected"), "got {err}");
+        });
+    }
+
+    /// `conn_state` is `CONNECTING` for the length of `connect`: the flag is
+    /// claimed at the top of that call and the session's state handed over at
+    /// the bottom. A session that ended without being closed is connecting
+    /// again from the moment `connect` is called on it, with what it held
+    /// still in place.
+    #[test]
+    fn conn_state_is_connecting_for_the_length_of_connect() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = EClient::new(recording_wrapper(py));
+            assert_eq!(client.conn_state(), EClient::DISCONNECTED);
+            client.connected.store(true, Ordering::Release);
+            assert_eq!(client.conn_state(), EClient::CONNECTING);
+            *client.shared.lock().unwrap() = Some(Arc::new(SharedState::new()));
+            assert_eq!(client.conn_state(), EClient::CONNECTED);
+            client.session_ended.store(true, Ordering::Release);
+            assert_eq!(client.conn_state(), EClient::CONNECTING);
+            client.connected.store(false, Ordering::Release);
+            assert_eq!(client.conn_state(), EClient::DISCONNECTED);
+        });
+    }
+
+    /// The venue's stamp on the logon is the connection time, and nothing is
+    /// answered without a session.
+    #[test]
+    fn the_connection_time_is_the_venues_stamp_on_the_logon() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, _shared, _w) = wired_client(py);
+            let client = client.get();
+            assert_eq!(client.tws_connection_time(), None);
+            *client.logged_in_at.lock().unwrap() = Some("20260902-13:30:00".into());
+            assert_eq!(client.tws_connection_time().as_deref(), Some("20260902-13:30:00"));
+            client.connected.store(false, Ordering::Release);
+            assert_eq!(client.tws_connection_time(), None);
+        });
+    }
+
+    /// The client id is taken under either spelling, and a call giving both is
+    /// told so rather than having one picked.
+    #[test]
+    fn the_client_id_is_taken_under_either_spelling() {
+        assert_eq!(client_id_under_either_spelling(0, Some(3)).unwrap(), 3);
+        assert_eq!(client_id_under_either_spelling(2, None).unwrap(), 2);
+        Python::initialize();
+        Python::attach(|py| {
+            let err = client_id_under_either_spelling(2, Some(3)).unwrap_err();
+            assert!(err.is_instance_of::<pyo3::exceptions::PyTypeError>(py), "got {err}");
         });
     }
 

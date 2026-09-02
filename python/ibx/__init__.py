@@ -62,8 +62,18 @@ def _answer_to_both_spellings(cls) -> None:
         if ours.startswith("_"):
             continue
         theirs = _reference_name(ours)
-        if theirs != ours and not hasattr(cls, theirs):
-            setattr(cls, theirs, _standing_in_front_of(getattr(cls, ours), cls, theirs))
+        if theirs == ours or hasattr(cls, theirs):
+            continue
+        under_ours = getattr(cls, ours)
+        # A value read off the instance, not a call: `clientId` is what
+        # `client_id` answers. Wrapped as a call, reading it handed back the
+        # wrapper itself.
+        if not callable(under_ours):
+            setattr(cls, theirs, property(
+                lambda self, ours=ours: getattr(self, ours), doc=under_ours.__doc__,
+            ))
+            continue
+        setattr(cls, theirs, _standing_in_front_of(under_ours, cls, theirs))
 
 
 def _standing_in_front_of(method, cls, theirs: str):

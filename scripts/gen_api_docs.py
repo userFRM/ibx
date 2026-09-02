@@ -39,6 +39,8 @@ SECTION_NAMES = {
 
 PARAM_DOCS: dict[str, str] = {
     "req_id": "Request identifier. Used to match responses to requests.",
+    "clientId": "`client_id` under the reference client's spelling. Give one or the other.",
+    "opts": "Connect options, as the reference client takes them. Not applied.",
     "order_id": "Order identifier. Must be unique per session.",
     "contract": "Contract specification (symbol, secType, exchange, currency, etc.).",
     "order": "Order parameters (action, quantity, type, price, TIF, etc.).",
@@ -409,7 +411,7 @@ def parse_rust_params(args_str: str) -> list[dict]:
 
     result = []
     for p in params:
-        p = p.strip()
+        p = re.sub(r"^#\[[^\]]*\]\s*", "", p.strip())
         if not p or p in ("&self", "&mut self"):
             continue
         m = re.match(r'_?(\w+)\s*:\s*(.+)', p)
@@ -594,12 +596,15 @@ def parse_pymethods(path: Path) -> list[dict]:
                 continue
             doc_lines = []
             pyo3_sig = ""
+            attribute = False
             for line in preamble.strip().splitlines():
                 line = line.strip()
                 if line.startswith("///"):
                     doc_lines.append(line.removeprefix("///").strip())
                 elif line.startswith("#[pyo3(signature"):
                     pyo3_sig = line
+                elif line.startswith("#[getter]"):
+                    attribute = True
             doc = " ".join(doc_lines)
             doc = re.sub(r"\s*Matches `[^`]+` in C\+\+\.?", "", doc)
             doc = plain_intra_doc_links(doc)
@@ -609,7 +614,7 @@ def parse_pymethods(path: Path) -> list[dict]:
             py_sig = _build_py_sig(name, args_str, pyo3_sig)
             results.append({
                 "name": name, "signature": py_sig, "doc": doc,
-                "params": params, "return_type": "",
+                "params": params, "return_type": "", "attribute": attribute,
             })
     return results
 
@@ -751,7 +756,12 @@ def render_method_python(m: dict) -> list[str]:
     if m["doc"]:
         out.append(m["doc"])
         out.append("")
-    if m.get("signature"):
+    if m.get("attribute"):
+        out.append("```python")
+        out.append(f"client.{m['name']}  # read-only attribute")
+        out.append("```")
+        out.append("")
+    elif m.get("signature"):
         out.append("```python")
         out.append(f"def {m['signature']}")
         out.append("```")
