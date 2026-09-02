@@ -116,30 +116,40 @@ def test_an_order_lives_its_whole_life_through_their_api():
 def test_a_bar_is_dated_the_way_their_parser_reads_one():
     """Their own first documented example is `util.df(bars)`.
 
-    ib_async parses the date itself, and decides the shape from the string: a
+    ib_async parses the date itself and decides the shape from the string: a
     day from eight digits, a moment in seconds from all digits, and an aware
-    moment from a date, a time and a zone separated by single spaces. Anything
-    else it reads as naive, and their frame conversion refuses a naive one.
-    This engine states the date and time joined by a dash, with the zone beside
-    them.
+    moment from a date, a time and a zone separated by single spaces.
+
+    The venue stamps a bar in UTC and names the exchange's zone beside it. Put
+    together by writing one after the other — as the bridge did — their parser
+    reads the UTC time as a time on the exchange's clock, and every bar is out
+    by whatever that zone is from UTC.
     """
     from ib_async.util import parseIBDatetime
 
-    from ibx.ib_async import _as_their_moment
+    import ibx
 
-    day = _as_their_moment("20260812", "US/Eastern")
-    assert parseIBDatetime(day).isoformat() == "2026-08-12"
+    seen = []
 
-    minute = _as_their_moment("20260812-13:30:00", "US/Eastern")
-    read = parseIBDatetime(minute)
+    class W(ibx.EWrapper):
+        def historical_data(self, req_id, bar):
+            seen.append(bar.date)
+
+        def error(self, *a):
+            pass
+
+    c = ibx.EClient(W())
+    c._test_connect("T")
+    c._test_push_historical_data(
+        1, [("20260812-13:30:00", 1.0, 2.0, 0.5, 1.5, 100)], True, "US/Eastern"
+    )
+    c._test_dispatch_once()
+
+    read = parseIBDatetime(seen[0])
     assert read.tzinfo is not None, "a naive moment cannot be converted to a zone"
-    assert read.isoformat() == "2026-08-12T13:30:00-04:00"
-
-    # A moment stated in seconds, and anything not a date, are handed over as
-    # they stand.
-    assert _as_their_moment("1786109400", "") == "1786109400"
-    assert _as_their_moment("", "US/Eastern") == ""
-
+    assert read.isoformat() == "2026-08-12T09:30:00-04:00", seen[0]
+    # The same instant the venue stamped, which is the whole point.
+    assert int(read.timestamp()) == 1786541400
 
 def test_ending_a_session_is_not_a_session_that_went_away():
     """Their wrapper's `connectionClosed` fails every waiting request and

@@ -50,6 +50,8 @@ impl EClient {
         // How this request wants its bar times written. The venue states one
         // form; whichever the caller asked for is what is written.
         self.core.note_date_format(req_id, format_date);
+        // And what its range is counted from, which the reply does not state.
+        self.core.note_historical_span(req_id, end_date_time, duration);
         let wire = wire_req_id(req_id)?;
         // Whatever finished under this id before, this is a new request. The
         // other surface said so and this one did not: the id stayed marked

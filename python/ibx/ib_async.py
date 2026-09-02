@@ -308,29 +308,6 @@ _OUR_NAME = {
 }
 
 
-def _as_their_moment(stated, zone):
-    """A bar's moment, spelled the way ib_async reads one.
-
-    Their own parser decides the shape from the string: eight digits is a day,
-    all digits is a moment in seconds since the epoch, and a date, a time and a
-    zone separated by single spaces is an aware moment. Anything else it reads
-    as naive — and their frame conversion, which is in the first example of
-    their documentation, refuses a naive one.
-
-    This engine states the date and time joined by a dash and carries the zone
-    beside them, so the two are put in the form their parser reads.
-    """
-    if not isinstance(stated, str) or not stated:
-        return stated
-    if stated.isdigit():
-        return stated
-
-    moment = stated.replace("-", " ", 1) if "-" in stated[:9] else stated
-    if not zone or " " not in moment:
-        return moment
-    return f"{moment} {zone}"
-
-
 def _our_name_for(their_name, carrier):
     """What this engine calls the request they call `their_name`.
 
@@ -388,12 +365,7 @@ def _their_type(name):
     return None
 
 
-def zone_of(value):
-    """The time zone a record states for itself, where it states one."""
-    return getattr(value, "timezone", "")
-
-
-def _field_of(value, name, zone):
+def _field_of(value, name):
     """One field of an ibx record, under whichever name it goes by.
 
     A moment is handed over as their own, because their records declare it as
@@ -411,7 +383,11 @@ def _field_of(value, name, zone):
         from ib_async.util import parseIBDatetime
 
         return parseIBDatetime(str(got))
-    return _as_their_moment(got, zone)
+    # A string is handed over as it stands. The engine writes a bar the way
+    # their parser reads one — the instant on the exchange's clock with the
+    # zone after it — and composing one here from the venue's own stamp, which
+    # is UTC, put every bar out by whatever that zone is from UTC.
+    return got
 
 
 def _as_theirs(value):
@@ -439,20 +415,17 @@ def _as_theirs(value):
     # no setters, so the field-by-field walk below cannot be used on one.
     if _is_named_tuple(theirs):
         return theirs(*[
-            _as_theirs(_field_of(value, name, zone_of(value)))
+            _as_theirs(_field_of(value, name))
             for name in theirs._fields
         ])
 
     made = theirs()
-    zone = getattr(value, "timezone", "")
     for field in dataclasses.fields(theirs):
         ours = getattr(value, field.name, None)
         if ours is None:
             ours = getattr(value, _OUR_NAME.get(field.name, field.name), None)
         if ours is None:
             continue
-        if field.name == "date":
-            ours = _as_their_moment(ours, zone)
         try:
             setattr(made, field.name, _as_theirs(ours))
         except (TypeError, ValueError, AttributeError):

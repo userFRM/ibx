@@ -1409,7 +1409,7 @@ fn flush_session(
 /// machine's copy may carry only the current names, which is why the complete
 /// copy answers where the host does not. Both are the database's statements
 /// about zones, neither is a table kept here.
-fn clock_named(named: &str) -> Option<jiff::tz::TimeZone> {
+pub(crate) fn clock_named(named: &str) -> Option<jiff::tz::TimeZone> {
     if let Ok(zone) = jiff::tz::TimeZone::get(named) {
         return Some(zone);
     }

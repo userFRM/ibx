@@ -550,6 +550,21 @@ pub enum GroupEvent {
 
 /// What both client surfaces share: which request is on which
 /// contract, what the venue last said, and what is still subscribed.
+/// What one historical request asked for.
+///
+/// Kept because the reply states neither: the counterpart writes the request's
+/// own range beside the last bar, and writes the bar times in the form the
+/// request named.
+#[derive(Clone, Default)]
+pub struct HistoricalAsk {
+    /// 2 for seconds since the epoch, anything else for the venue's spelling.
+    pub format_date: i32,
+    /// The end the caller named, or empty for the moment of asking.
+    pub end_date_time: String,
+    /// How far back from that end, in the venue's own units.
+    pub duration: String,
+}
+
 pub struct ClientCore {
     /// How long a caller waits for the engine to name an instrument.
     ///
@@ -668,7 +683,11 @@ pub struct ClientCore {
     /// caller. A caller handed the other form is reading a date as a number or
     /// a number as a date. Only the request that asked is affected, so this is
     /// kept per request rather than for the session.
-    epoch_dates_by_req: Mutex<HashSet<i64>>,
+    /// What each historical request asked for: the form its bar times are
+    /// wanted in, and the end and duration its range is derived from. The
+    /// reply states neither — the counterpart states the request's own range
+    /// beside the last bar, so the request is what has to be kept.
+    historical_asks: Mutex<HashMap<i64, HistoricalAsk>>,
 
     // Historical data keepUpToDate: req_ids that have completed initial batch.
     // Subsequent bars for these req_ids dispatch as historical_data_update.
@@ -787,7 +806,7 @@ impl ClientCore {
             market_data_type: AtomicI32::new(1),
             mdt_sent: Mutex::new(HashSet::new()),
             mdt_by_req: Mutex::new(HashMap::new()),
-            epoch_dates_by_req: Mutex::new(HashSet::new()),
+            historical_asks: Mutex::new(HashMap::new()),
             hist_initial_complete: Mutex::new(HashSet::new()),
             // Empty until something states them. Which providers an account
             // may read is the venue's answer, given at logon; a pair of codes
@@ -847,7 +866,7 @@ impl ClientCore {
         self.market_data_type.store(1, Ordering::Relaxed);
         self.mdt_sent.lock().unwrap().clear();
         self.mdt_by_req.lock().unwrap().clear();
-        self.epoch_dates_by_req.lock().unwrap().clear();
+        self.historical_asks.lock().unwrap().clear();
         self.hist_initial_complete.lock().unwrap().clear();
         self.news_providers.lock().unwrap().clear();
         self.news_askers.lock().unwrap().clear();
@@ -3068,11 +3087,27 @@ impl ClientCore {
     /// spelling, 2 for seconds since the epoch. Anything else is 1, which is
     /// what that client does with a number it does not know.
     pub fn note_date_format(&self, req_id: i64, format_date: i32) {
-        if format_date == 2 {
-            self.epoch_dates_by_req.lock().unwrap().insert(req_id);
-        } else {
-            self.epoch_dates_by_req.lock().unwrap().remove(&req_id);
-        }
+        self.historical_asks.lock().unwrap().entry(req_id).or_default().format_date = format_date;
+    }
+
+    /// The end and the duration a bar request named, which its range is
+    /// counted from once its bars have all arrived.
+    pub fn note_historical_span(&self, req_id: i64, end_date_time: &str, duration: &str) {
+        let mut asks = self.historical_asks.lock().unwrap();
+        let ask = asks.entry(req_id).or_default();
+        ask.end_date_time = end_date_time.to_string();
+        ask.duration = duration.to_string();
+    }
+
+    /// The range a finished request covered, as the counterpart states it
+    /// beside the last bar. Empty where nothing was asked under the id.
+    pub fn historical_range_for(&self, req_id: i64, zone: &str) -> (String, String) {
+        let ask = self.historical_asks.lock().unwrap().get(&req_id).cloned();
+        ask.filter(|a| !a.duration.is_empty())
+            .and_then(|a| {
+                crate::protocol::datetime::historical_range(&a.end_date_time, &a.duration, zone)
+            })
+            .unwrap_or_default()
     }
 
     /// A bar's time, written the way the request that asked for it wanted.
@@ -3080,13 +3115,14 @@ impl ClientCore {
     /// Where the stamp cannot be read back to an instant it is handed over as
     /// it came: a time nobody can parse is still what the venue said, and
     /// replacing it with a zero would state an instant in 1970.
-    pub fn bar_time_for(&self, req_id: i64, stated: &str) -> String {
-        if !self.epoch_dates_by_req.lock().unwrap().contains(&req_id) {
-            return stated.to_string();
-        }
-        crate::protocol::datetime::ib_datetime_to_unix(stated)
-            .map(|secs| secs.to_string())
-            .unwrap_or_else(|| stated.to_string())
+    pub fn bar_time_for(&self, req_id: i64, stated: &str, zone: &str) -> String {
+        let format_date = self
+            .historical_asks
+            .lock()
+            .unwrap()
+            .get(&req_id)
+            .map_or(1, |ask| ask.format_date);
+        crate::protocol::datetime::bar_date_as_asked(stated, format_date, zone)
     }
 
     /// Validate historical-request arguments before anything reaches the

@@ -580,3 +580,34 @@ def test_every_call_and_callback_says_what_it_does():
         assert len(public) > 50, f"{named} should carry a substantial surface"
         silent = [n for n in public if not (getattr(cls, n).__doc__ or "").strip()]
         assert not silent, f"{named} says nothing about: {sorted(silent)}"
+
+
+def test_the_end_of_a_series_names_the_range_it_covered():
+    """A caller pages backwards by feeding the start in as its next end.
+
+    Given two empty strings, as it was, every page asked for was the page
+    already held. The counterpart states the range the request named — not one
+    read off the reply, which carries a range of its own that it reads only for
+    ticks.
+    """
+    ends = []
+
+    class W(EWrapper):
+        def historical_data_end(self, req_id, start, end):
+            ends.append((start, end))
+
+        def error(self, *a):
+            pass
+
+    c = EClient(W())
+    c._test_connect("T")
+    spy = Contract(symbol="SPY", secType="STK", exchange="SMART", currency="USD", conId=756733)
+    c.req_historical_data(
+        7, spy, "20260227 16:00:00 US/Eastern", "1 D", "5 mins", "TRADES", 1, 1, False, []
+    )
+    c._test_push_historical_data(
+        7, [("20260227-14:30:00", 1.0, 2.0, 0.5, 1.5, 100)], True, "US/Eastern"
+    )
+    c._test_dispatch_once()
+
+    assert ends == [("20260226 16:00:00 US/Eastern", "20260227 16:00:00 US/Eastern")]

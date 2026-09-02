@@ -683,7 +683,7 @@ impl EClient {
             let is_update = self.core.hist_initial_complete.lock().unwrap().contains(&req_id);
             for bar in &response.bars {
                 let bar_obj = BarData::new(
-                    self.core.bar_time_for(req_id as i64, &bar.time),
+                    self.core.bar_time_for(req_id as i64, &bar.time, &response.timezone),
                     bar.open, bar.high, bar.low, bar.close,
                     bar.volume, bar.wap, bar.count as i32,
                     response.timezone.clone(),
@@ -697,7 +697,13 @@ impl EClient {
             }
             if response.is_complete && !is_update {
                 self.core.hist_initial_complete.lock().unwrap().insert(req_id);
-                call_wrapper!(self.wrapper, py, "historical_data_end", (req_id as i64, "", ""));
+                // The range the request covered. A caller paging backwards
+                // feeds the start in as its next end; given two empty strings,
+                // as it was, every page it asked for was the page it had.
+                let (from, to) =
+                    self.core.historical_range_for(req_id as i64, &response.timezone);
+                call_wrapper!(self.wrapper, py, "historical_data_end",
+                    (req_id as i64, from.as_str(), to.as_str()));
             }
         }
 

@@ -355,6 +355,163 @@ pub fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
+
+/// A bar's stamp, written the way the request asked for it.
+///
+/// The venue stamps a bar in UTC, `YYYYMMDD-HH:MM:SS`, and names the exchange's
+/// zone beside it. A request for seconds since the epoch is given that instant
+/// as a number. Any other is given the instant on the named zone's clock with
+/// the zone after it — `20260227 09:30:00 US/Eastern` — which is the form the
+/// reference client's callers read as a moment that knows its offset. Handed
+/// the UTC stamp with the exchange's zone written beside it instead, they read
+/// an instant out by whatever that zone is from UTC.
+///
+/// A day-only stamp is a day either way, and a stamp that cannot be read, or a
+/// zone no database answers to, is handed over as it came: what the venue said
+/// beats a guess at what it meant.
+pub fn bar_date_as_asked(stated: &str, format_date: i32, zone: &str) -> String {
+    let Some(secs) = ib_datetime_to_unix(stated) else {
+        return stated.to_string();
+    };
+    if format_date == 2 {
+        return secs.to_string();
+    }
+    let (Some(clock), Ok(at)) = (
+        crate::control::contracts::clock_named(zone),
+        jiff::Timestamp::from_second(secs),
+    ) else {
+        return stated.to_string();
+    };
+    format!("{} {zone}", at.to_zoned(clock).strftime("%Y%m%d %H:%M:%S"))
+}
+
+/// The range a bar request named, as stated once its bars have all arrived.
+///
+/// Not read off the reply. The reply carries a range of its own and the
+/// counterpart reads that one only for ticks; for bars it states what the
+/// request asked. So this is the caller's end — or the moment of asking, where
+/// it named none — and that end less the duration, counted on a calendar
+/// rather than in seconds, so a day back across a clock change is the same
+/// time of day and not twenty-four hours.
+///
+/// Both are written on the zone the venue named beside the bars. A caller
+/// paging backwards feeds the start in as its next end; given nothing, as it
+/// was, every page it asked for was the page it already had.
+pub fn historical_range(
+    end_date_time: &str,
+    duration: &str,
+    zone: &str,
+) -> Option<(String, String)> {
+    let clock = crate::control::contracts::clock_named(zone)?;
+    let end = match end_date_time.trim() {
+        "" => jiff::Zoned::now(),
+        given => {
+            // A zone may be named after the stamp. Where none is, one joined
+            // by a dash is UTC and one joined by a space is on this machine's
+            // clock, which is how the counterpart reads them.
+            let (stamp, named) = match given.rsplit_once(' ') {
+                Some((stamp, named)) if named.bytes().any(|b| b.is_ascii_alphabetic()) => {
+                    (stamp, Some(named))
+                }
+                _ => (given, None),
+            };
+            let on = match (named, stamp.as_bytes().get(8)) {
+                (Some(named), _) => crate::control::contracts::clock_named(named)?,
+                (None, Some(b'-')) => jiff::tz::TimeZone::UTC,
+                (None, _) => jiff::tz::TimeZone::system(),
+            };
+            let civil = jiff::civil::DateTime::strptime(
+                "%Y%m%d %H:%M:%S",
+                stamp.replacen('-', " ", 1),
+            )
+            .ok()?;
+            civil.to_zoned(on).ok()?
+        }
+    };
+    let (count, unit) = duration
+        .trim()
+        .split_once(' ')
+        .unwrap_or((duration.trim(), "S"));
+    let count: i64 = count.parse().ok()?;
+    let span = jiff::Span::new();
+    let span = match unit.to_ascii_uppercase().as_str() {
+        "S" => span.try_seconds(count),
+        "D" => span.try_days(count),
+        "W" => span.try_weeks(count),
+        "M" => span.try_months(count),
+        "Y" => span.try_years(count),
+        _ => return None,
+    }
+    .ok()?;
+    let start = end.checked_sub(span).ok()?;
+    let stated = |at: &jiff::Zoned| {
+        format!(
+            "{} {zone}",
+            at.with_time_zone(clock.clone()).strftime("%Y%m%d %H:%M:%S")
+        )
+    };
+    Some((stated(&start), stated(&end)))
+}
+
+#[cfg(test)]
+mod bar_date_tests {
+    use super::*;
+
+    /// The stamp is UTC and the zone beside it is the exchange's, so the two
+    /// have to be put together rather than written down side by side.
+    #[test]
+    fn a_bar_is_stated_on_the_clock_the_venue_named() {
+        assert_eq!(
+            bar_date_as_asked("20260227-14:30:00", 1, "US/Eastern"),
+            "20260227 09:30:00 US/Eastern",
+        );
+        // The same instant, asked for as a number.
+        assert_eq!(bar_date_as_asked("20260227-14:30:00", 2, "US/Eastern"), "1772202600");
+        // A day is a day on either.
+        assert_eq!(bar_date_as_asked("20260227", 1, "US/Eastern"), "20260227");
+        // Nothing to read, and no zone to read it on: what the venue said.
+        assert_eq!(bar_date_as_asked("not a stamp", 1, "US/Eastern"), "not a stamp");
+        assert_eq!(
+            bar_date_as_asked("20260227-14:30:00", 1, "Mars/Olympus"),
+            "20260227-14:30:00",
+        );
+    }
+
+    /// A day back is the same time of day, not twenty-four hours.
+    ///
+    /// The counterpart counts the range on a calendar. Counted in seconds
+    /// instead, every range spanning a clock change is an hour out at one end,
+    /// and a caller paging backwards walks an hour further off with each page.
+    #[test]
+    fn a_range_is_counted_on_a_calendar_and_not_in_seconds() {
+        // The eighth of March 2026 is when the US clocks go forward.
+        assert_eq!(
+            historical_range("20260314 20:00:00 US/Eastern", "2 W", "US/Eastern"),
+            Some((
+                "20260228 20:00:00 US/Eastern".into(),
+                "20260314 20:00:00 US/Eastern".into(),
+            )),
+        );
+        assert_eq!(
+            historical_range("20260227 16:00:00 US/Eastern", "1 D", "US/Eastern"),
+            Some((
+                "20260226 16:00:00 US/Eastern".into(),
+                "20260227 16:00:00 US/Eastern".into(),
+            )),
+        );
+        // Joined by a dash and with no zone named, the end is UTC.
+        assert_eq!(
+            historical_range("20260227-21:00:00", "1 D", "US/Eastern"),
+            Some((
+                "20260226 16:00:00 US/Eastern".into(),
+                "20260227 16:00:00 US/Eastern".into(),
+            )),
+        );
+        // A duration in no unit this reads is not a duration.
+        assert_eq!(historical_range("20260227 16:00:00 US/Eastern", "1 Q", "US/Eastern"), None);
+    }
+}
+
 #[cfg(test)]
 mod expiry_tests {
     use super::*;

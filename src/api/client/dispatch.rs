@@ -536,7 +536,7 @@ impl EClient {
             let is_update = self.core.hist_initial_complete.lock().unwrap().contains(&req_id);
             for bar in &response.bars {
                 let bd = BarData {
-                    date: self.core.bar_time_for(req_id as i64, &bar.time),
+                    date: self.core.bar_time_for(req_id as i64, &bar.time, &response.timezone),
                     open: bar.open,
                     high: bar.high,
                     low: bar.low,
@@ -554,7 +554,11 @@ impl EClient {
             }
             if response.is_complete && !is_update {
                 self.core.hist_initial_complete.lock().unwrap().insert(req_id);
-                wrapper.historical_data_end(req_id as i64, "", "");
+                // As on the other surface: the range the request covered, which
+                // is what a caller pages backwards with.
+                let (from, to) =
+                    self.core.historical_range_for(req_id as i64, &response.timezone);
+                wrapper.historical_data_end(req_id as i64, &from, &to);
             }
         }
 
@@ -562,7 +566,7 @@ impl EClient {
         for (req_id, response) in self.shared.reference.drain_head_timestamps() {
             // Returned in the form `format_date` asked for. The wire carries one
             // form; `bar_time_for` converts it. 2 = seconds since the epoch.
-            let stated = self.core.bar_time_for(req_id as i64, &response.head_timestamp);
+            let stated = self.core.bar_time_for(req_id as i64, &response.head_timestamp, "");
             wrapper.head_timestamp(req_id as i64, &stated);
         }
 
