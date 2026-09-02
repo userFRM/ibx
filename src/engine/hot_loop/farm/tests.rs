@@ -191,7 +191,7 @@ mod decode_publish_tests {
     use crate::protocol::tick_decoder;
     use crate::types::QTY_SCALE;
 
-    fn push_bits(bits: &mut Vec<u8>, val: u64, n: usize) {
+    pub(super) fn push_bits(bits: &mut Vec<u8>, val: u64, n: usize) {
         for i in (0..n).rev() {
             bits.push(((val >> i) & 1) as u8);
         }
@@ -199,7 +199,7 @@ mod decode_publish_tests {
 
     /// One 35=P body carrying `ticks` for `server_tag`, framed as the farm
     /// connection delivers it.
-    fn framed_35p(server_tag: u32, ticks: &[(u64, u64, u64)]) -> Vec<u8> {
+    pub(super) fn framed_35p(server_tag: u32, ticks: &[(u64, u64, u64)]) -> Vec<u8> {
         let mut bits: Vec<u8> = Vec::new();
         push_bits(&mut bits, 0, 1);
         push_bits(&mut bits, server_tag as u64, 31);
@@ -350,35 +350,6 @@ mod resub_tests {
     /// A disconnect clears `instrument_md_reqs` and keeps `md_resub_info`.
     /// Selecting the reconnect's work from the cleared list re-subscribed
     /// nothing, so the farm came back healthy and delivered no ticks for the
-    /// Everything the connection's own numbers key is dropped with it.
-    ///
-    /// Seven maps were cleared and three keyed the same way were not. What
-    /// removes an entry from those three looks it up by an id the reconnect
-    /// has already replaced, so an entry left behind is never named again —
-    /// and both of the lists are scanned in full on a path that runs per
-    /// acknowledgement and per withdrawal.
-    #[test]
-    fn nothing_keyed_by_the_old_connection_survives_a_disconnect() {
-        let mut farm = FarmState::new();
-        let mut context = Context::new();
-        let mut hb = HeartbeatState::new();
-        let shared = SharedState::new();
-        let _instrument = context.market.register(756733);
-
-        farm.send_depth_subscribe(
-            5, 756733, "SMART", "ISLAND", "STK", 10, true, &mut None, &mut hb, &shared,
-        );
-        farm.handle_disconnect(&mut context, &None);
-
-        assert!(
-            farm.depth_fanout_exchange.is_empty(),
-            "left behind, no later withdrawal names it: {:?}",
-            farm.depth_fanout_exchange,
-        );
-        assert!(farm.greeks_subs.is_empty(), "same, keyed by a replaced id");
-        assert!(farm.quotes_for_no_one.is_empty(), "server tags start again");
-    }
-
     /// rest of the session.
     ///
     /// Drives the real `handle_disconnect` rather than simulating what it does
@@ -411,6 +382,53 @@ mod resub_tests {
             con_id, &sym, &exch, &st, &ltd, k, &r, &m, id, mode, false, &mut None, &mut hb,
         );
         assert_eq!(farm.md_resub_info.len(), 1, "the record must survive an absent connection");
+    }
+
+    /// Everything the connection's own numbers key is dropped with it.
+    ///
+    /// Seven maps were cleared and three keyed the same way were not. What
+    /// removes an entry from those three looks it up by an id the reconnect
+    /// has already replaced, so an entry left behind is never named again —
+    /// and both of the lists are scanned in full on a path that runs per
+    /// acknowledgement and per withdrawal.
+    #[test]
+    fn nothing_keyed_by_the_old_connection_survives_a_disconnect() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+
+        farm.send_depth_subscribe(
+            5, 756733, "SMART", "ISLAND", "STK", 10, true, &mut None, &mut hb, &shared,
+        );
+        // An option is the one kind the venue is asked to model, so it is the
+        // one kind that records a modelling request to cancel later.
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "OPT", "20261218", 700.0, "C", "100",
+            instrument, 0, false, &mut None, &mut hb,
+        );
+        // And a quote under a number no contract holds, which is remembered so
+        // the warning is said once.
+        farm.handle_tick_data(
+            &super::decode_publish_tests::framed_35p(
+                4242, &[(crate::protocol::tick_decoder::O_BID_PRICE, 2, 15000)],
+            ),
+            &mut context, &shared, &None,
+        );
+        assert!(!farm.depth_fanout_exchange.is_empty(), "the depth ask is recorded");
+        assert!(!farm.greeks_subs.is_empty(), "so is the modelling ask");
+        assert!(!farm.quotes_for_no_one.is_empty(), "so is the unclaimed number");
+
+        farm.handle_disconnect(&mut context, &None);
+
+        assert!(
+            farm.depth_fanout_exchange.is_empty(),
+            "left behind, no later withdrawal names it: {:?}",
+            farm.depth_fanout_exchange,
+        );
+        assert!(farm.greeks_subs.is_empty(), "same, keyed by a replaced id");
+        assert!(farm.quotes_for_no_one.is_empty(), "server tags start again");
     }
 
     /// An unsubscribe issued while the farm is down must still cancel. The
