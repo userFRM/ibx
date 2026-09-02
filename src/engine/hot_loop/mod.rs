@@ -1003,7 +1003,11 @@ impl HotLoop {
                     self.try_reclaim_instrument(instrument);
                 }
                 ControlCommand::SubscribeNews { con_id, symbol, sec_type, providers, reply_tx } => {
-                    if let Some(id) = self.register_or_reject(con_id, symbol, "", &sec_type, "", &reply_tx) {
+                    // The command carries no exchange. Given the security
+                    // type in that slot instead, it was recorded as where the
+                    // contract trades, and every order on the contract went
+                    // out routed to a destination of that name.
+                    if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, "", "", &reply_tx) {
                         // Allocate req_id from farm's counter (shared ID space)
                         let req_id = self.farm.next_md_req_id;
                         self.farm.next_md_req_id += 1;
@@ -3520,6 +3524,41 @@ mod tests {
     /// every such contract resolves to whichever one registered first: quotes
     /// land in one slot and an order built from it goes out under the first
     /// contract's symbol.
+    /// Asking for news on a contract does not decide where its orders go.
+    ///
+    /// The command carries no exchange, and the security type was passed in
+    /// that slot. Recorded as where the contract trades, it came back out as
+    /// the destination on tags 100 and 6210 of every order, replace and
+    /// bracket leg on that contract — routed to a venue of that name, which is
+    /// no venue.
+    #[test]
+    fn asking_for_news_does_not_route_orders_to_the_security_type() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(ControlCommand::SubscribeNews {
+            con_id: 265598,
+            symbol: "AAPL".into(),
+            sec_type: "STK".into(),
+            providers: String::new(),
+            reply_tx: None,
+        })
+        .expect("the engine is holding the other end");
+        hl.poll_control_commands();
+
+        let id = hl
+            .context
+            .market
+            .instrument_by_con_id(265598)
+            .expect("the subscription registers the contract");
+        let (sec_type, destination) = hl.context.market.order_routing(id);
+        assert_eq!(sec_type, "CS", "the security type belongs in its own slot");
+        assert_eq!(
+            destination, "BEST",
+            "an unnamed venue is the smart one, and a security type is not a venue",
+        );
+    }
+
     /// Two conId-less options on one underlying differ only by strike and right,
     /// which the descriptor did not carry: both landed in one slot, so the put's
     /// quotes and its minTick overwrote the call's — and minTick is what snaps an

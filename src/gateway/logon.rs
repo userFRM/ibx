@@ -551,7 +551,14 @@ pub(super) fn has_complete_response_frame(buf: &[u8]) -> bool {
                 let soh_pos = tag9_pos + soh_off;
                 if let Ok(s) = std::str::from_utf8(&buf[tag9_pos + 2..soh_pos])
                     && let Ok(body_len) = s.parse::<usize>() {
-                        return soh_pos + 1 + body_len <= buf.len();
+                        // Same as the framer below: a stated length that does
+                        // not fit is not a length. Wrapped, it reads as a frame
+                        // already complete and the drain stops early, leaving
+                        // the routing table unread for the whole session.
+                        return match soh_pos.checked_add(1).and_then(|n| n.checked_add(body_len)) {
+                            Some(total) => total <= buf.len(),
+                            None => false,
+                        };
                     }
             }
         }
@@ -932,7 +939,11 @@ pub(super) fn try_frame_farm_msg(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
     let val_start = tag9_pos + 3;
     let soh_pos = buf[val_start..].iter().position(|&b| b == SOH)? + val_start;
     let body_len: usize = std::str::from_utf8(&buf[val_start..soh_pos]).ok()?.parse().ok()?;
-    let total = soh_pos + 1 + body_len + 7; // +7 for "10=XXX\x01"
+    // The peer states the length, so a total that does not fit is a length no
+    // frame can have. Added unchecked it aborts the thread this runs on, and
+    // the join for it turns that into the process; where overflow is not
+    // checked it wraps small and this returns part of a frame as a whole one.
+    let total = soh_pos.checked_add(8)?.checked_add(body_len)?; // +1 SOH, +7 for "10=XXX\x01"
     if buf.len() < total {
         return None;
     }
@@ -1087,6 +1098,23 @@ pub(super) fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stated length no frame can have is not a length to add.
+    ///
+    /// Both of these read the peer's tag 9 off a raw socket before anything is
+    /// verified. Added unchecked the sum aborts the thread it runs on, and the
+    /// join for that thread makes it the process; where overflow is not checked
+    /// it wraps small, so one returns part of a frame as a whole one and the
+    /// other calls a frame complete that is not, leaving the routing table
+    /// unread for the session.
+    #[test]
+    fn a_stated_length_that_cannot_fit_is_not_a_frame() {
+        let farm = format!("8=FIX.4.1\x019={}\x0135=A\x01", usize::MAX);
+        assert!(try_frame_farm_msg(farm.as_bytes()).is_none());
+
+        let response = format!("8=O\x019={}\x01", usize::MAX);
+        assert!(!has_complete_response_frame(response.as_bytes()));
+    }
     use crate::protocol::fix::fix_parse;
     use std::collections::HashMap;
 
