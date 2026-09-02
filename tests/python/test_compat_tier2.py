@@ -96,6 +96,7 @@ def test_req_news_providers_fires_callback():
     c = EClient(w)
     c._test_connect()
     c.req_news_providers()
+    c._test_dispatch_once()
     assert len(calls) == 1
 
 
@@ -109,6 +110,7 @@ def test_req_news_providers_returns_list():
     c = EClient(w)
     c._test_connect()
     c.req_news_providers()
+    c._test_dispatch_once()
     assert result[0] == "list"
 
 
@@ -287,6 +289,7 @@ def test_req_managed_accts_fires_callback():
     c = EClient(w)
     c._test_connect("DU0000000")
     c.req_managed_accts()
+    c._test_dispatch_once()
     assert len(calls) == 1
     assert calls[0] == "DU0000000"
 
@@ -464,6 +467,7 @@ def test_full_ibapi_app_pattern_with_tier2():
     # The point of this pattern is that the tier's calls work through it.
     app.client.req_news_providers()
     app.client.req_managed_accts()
+    app.client._test_dispatch_once()
     app.client.req_news_bulletins()
     app.client.cancel_news_bulletins()
 
@@ -533,6 +537,7 @@ def test_full_news_sequence():
     app = App()
     app.client._test_connect()
     app.client.req_news_providers()
+    app.client._test_dispatch_once()
     assert app.providers is not None
     assert isinstance(app.providers, list)
 

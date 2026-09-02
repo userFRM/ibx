@@ -51,6 +51,7 @@ def test_open_orders_reach_a_reference_wrapper():
     w, c = _connected()
     c._test_track_order(7, 1, "SPY", "BUY", 5.0, 10.0, 0)
     c.req_open_orders()
+    c._test_dispatch_once()
     assert ("openOrder", 7) in w.seen, f"the open order reached nothing: {w.seen}"
     assert ("orderStatus", 7) in w.seen, f"its status reached nothing: {w.seen}"
 
@@ -59,6 +60,7 @@ def test_account_updates_multi_reach_a_reference_wrapper():
     w, c = _connected()
     c._test_note_account_value("NetLiquidation", "1.00", "USD")
     c.req_account_updates_multi(3, "DU1", "", False)
+    c._test_dispatch_once()
     keys = [key for name, key in w.seen if name == "accountUpdateMulti"]
     assert keys, f"the account figures reached nothing: {w.seen}"
 
@@ -68,6 +70,7 @@ def test_positions_multi_reach_a_reference_wrapper():
     c._test_note_account_value("NetLiquidation", "1.00", "USD")
     c._test_set_position(756733, 10.0, 100.0)
     c.req_positions_multi(4, "DU1", "")
+    c._test_dispatch_once()
     assert ("positionMulti", 4) in w.seen, f"the holding reached nothing: {w.seen}"
 
 
@@ -78,6 +81,7 @@ def test_executions_reach_a_reference_wrapper():
     c._test_dispatch_once()
     w.seen.clear()
     c.req_executions(9)
+    c._test_dispatch_once()
     assert ("execDetails", 9) in w.seen, f"the fill reached nothing: {w.seen}"
 
 
@@ -99,4 +103,5 @@ def test_open_orders_wait_for_what_the_venue_is_still_naming():
 
     threading.Thread(target=name_it_late, daemon=True).start()
     c.req_open_orders()
+    c._test_dispatch_once()
     assert ("openOrder", 7) in w.seen, f"answered before the venue had finished: {w.seen}"

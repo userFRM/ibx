@@ -430,6 +430,7 @@ impl EClient {
 
     /// Request market rule details.
     fn req_market_rule(&self, py: Python<'_>, market_rule_id: i32) -> PyResult<()> {
+        let Some(_connected) = self.tx_or_report(market_rule_id as i64) else { return Ok(()) };
         // Released before the callback below — see the note in
         // req_completed_orders.
         let shared = self.shared.lock().unwrap().clone();
@@ -451,21 +452,15 @@ impl EClient {
         // Answered, not logged. A caller waiting on a callback that will never
         // come cannot tell that apart from a slow venue, and the other client
         // here has answered this all along.
-        self.callback(
+        self.report_refusal(
             py,
-            "error",
-            (
-                market_rule_id as i64,
-                321i64,
-                format!(
-                    "market rule {market_rule_id} has not been seen on this session. Rules \
-                     arrive with the details of a contract that uses them, so ask for such a \
-                     contract first"
-                ),
-                "",
-            ),
-        )?;
-        Ok(())
+            market_rule_id as i64,
+            crate::error_codes::Refusal::validation(format!(
+                "market rule {market_rule_id} has not been seen on this session. Rules \
+                 arrive with the details of a contract that uses them, so ask for such a \
+                 contract first"
+            )),
+        )
     }
 
     /// Request histogram data.

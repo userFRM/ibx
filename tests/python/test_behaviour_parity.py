@@ -35,6 +35,8 @@ _ONE_SIDED_ON_THE_REQUEST_SURFACE = {
     "req_ids",
     "req_managed_accts",
     "req_current_time",
+    "req_current_time_in_millis",
+    "req_executions",
     "req_auto_open_orders",
 }
 

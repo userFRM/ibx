@@ -41,18 +41,21 @@ def _client_with_one_execution():
 def test_an_unfiltered_request_still_replays():
     c, w = _client_with_one_execution()
     c.req_executions(1, _Filter())
+    c._test_dispatch_once()
     assert w.rows == 1, "the baseline request must replay the stored execution"
 
 
 def test_a_foreign_client_id_filters_everything_out():
     c, w = _client_with_one_execution()
     c.req_executions(1, _Filter(clientId=999999))
+    c._test_dispatch_once()
     assert w.rows == 0, f"another client's request must replay nothing, got {w.rows}"
 
 
 def test_a_cutoff_after_the_execution_filters_it_out():
     c, w = _client_with_one_execution()
     c.req_executions(1, _Filter(time="20990101-00:00:00"))
+    c._test_dispatch_once()
     assert w.rows == 0, f"a future cutoff must replay nothing, got {w.rows}"
 
 
@@ -61,7 +64,9 @@ def test_a_side_filter_states_the_order_action():
     it the way the venue does. The two vocabularies must still meet."""
     c, w = _client_with_one_execution()
     c.req_executions(1, _Filter(side="BUY"))
+    c._test_dispatch_once()
     assert w.rows == 1, f"a buy filter must replay the buy, got {w.rows}"
     w.rows = 0
     c.req_executions(2, _Filter(side="SELL"))
+    c._test_dispatch_once()
     assert w.rows == 0, f"a sell filter must replay nothing, got {w.rows}"

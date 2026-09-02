@@ -218,6 +218,7 @@ def test_req_open_orders_empty():
     client = EClient(w)
     client._test_connect()
     client.req_open_orders()
+    client._test_dispatch_once()
     assert ("open_order_end",) in w.events
 
 
@@ -227,6 +228,7 @@ def test_req_open_orders_only_open_order_end():
     client = EClient(w)
     client._test_connect()
     client.req_open_orders()
+    client._test_dispatch_once()
     # Should only have open_order_end, no order_status
     assert len([e for e in w.events if e[0] == "order_status"]) == 0
     assert len([e for e in w.events if e[0] == "open_order_end"]) == 1
@@ -238,6 +240,7 @@ def test_req_all_open_orders_empty():
     client = EClient(w)
     client._test_connect()
     client.req_all_open_orders()
+    client._test_dispatch_once()
     assert ("open_order_end",) in w.events
 
 
@@ -249,7 +252,9 @@ def test_req_executions_empty():
     """Req_executions delivers exec_details_end when no executions exist."""
     w = Tier1Wrapper()
     client = EClient(w)
+    client._test_connect()
     client.req_executions(1)
+    client._test_dispatch_once()
     assert ("exec_details_end", 1) in w.events
 
 
@@ -257,7 +262,9 @@ def test_req_executions_only_end():
     """With no fills, only exec_details_end is fired."""
     w = Tier1Wrapper()
     client = EClient(w)
+    client._test_connect()
     client.req_executions(1)
+    client._test_dispatch_once()
     assert len([e for e in w.events if e[0] == "exec_details"]) == 0
     assert len([e for e in w.events if e[0] == "exec_details_end"]) == 1
 
@@ -266,8 +273,19 @@ def test_req_executions_with_filter():
     """Req_executions accepts a filter parameter."""
     w = Tier1Wrapper()
     client = EClient(w)
+    client._test_connect()
     client.req_executions(1, None)  # filter=None is valid
+    client._test_dispatch_once()
     assert ("exec_details_end", 1) in w.events
+
+
+def test_req_executions_before_connecting_is_reported():
+    """An answer waits for a dispatch pass, and with no session there is
+    nothing to make one: answered, the caller heard nothing at all."""
+    probe = NotConnectedProbe()
+    client = EClient(probe)
+    client.req_executions(1)
+    assert probe.not_connected, "the call reports rather than answering"
 
 
 # ═══════════════════════════════════════
@@ -394,6 +412,14 @@ def test_req_current_time_before_connecting_is_reported():
     assert probe.not_connected, "the call reports rather than answering"
 
 
+def test_req_current_time_in_millis_before_connecting_is_reported():
+    """The same clock, reported the same way before there is one to read."""
+    probe = NotConnectedProbe()
+    client = EClient(probe)
+    client.req_current_time_in_millis()
+    assert probe.not_connected, "the call reports rather than answering"
+
+
 def test_req_current_time_in_millis_fires_callback_and_agrees_with_seconds():
     """The millisecond clock answers, and answers the same clock.
 
@@ -407,6 +433,7 @@ def test_req_current_time_in_millis_fires_callback_and_agrees_with_seconds():
     client._test_connect("DU0000000")
     client.req_current_time()
     client.req_current_time_in_millis()
+    client._test_dispatch_once()
 
     heard = dict(w.events)
     assert "current_time" in heard and "current_time_in_millis" in heard, w.events
@@ -425,6 +452,7 @@ def test_req_current_time_fires_callback():
     client = EClient(w)
     client._test_connect("DU0000000")
     client.req_current_time()
+    client._test_dispatch_once()
     assert len(w.events) == 1
     assert w.events[0][0] == "current_time"
     ts = w.events[0][1]
@@ -440,6 +468,7 @@ def test_req_current_time_reasonable_value():
     client._test_connect("DU0000000")
     before = int(time.time())
     client.req_current_time()
+    client._test_dispatch_once()
     after = int(time.time())
     ts = w.events[0][1]
     assert before <= ts <= after
@@ -453,6 +482,7 @@ def test_req_current_time_multiple_calls():
     client.req_current_time()
     client.req_current_time()
     client.req_current_time()
+    client._test_dispatch_once()
     assert len(w.events) == 3
     assert all(e[0] == "current_time" for e in w.events)
 
@@ -632,6 +662,7 @@ def test_full_ibapi_app_pattern_with_tier1():
     app.client.req_current_time()
     app.client.req_open_orders()
     app.client.req_executions(1)
+    app.client._test_dispatch_once()
 
     assert len(app.events) == 3
     assert app.events[0][0] == "current_time"

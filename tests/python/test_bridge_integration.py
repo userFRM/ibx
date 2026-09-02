@@ -600,6 +600,7 @@ class TestReqOpenOrdersOrderState:
             action="BUY", total_quantity=100.0, lmt_price=400.0,
         )
         c.req_open_orders()
+        c._test_dispatch_once()
 
         open_events = [e for e in w.events if e[0] == "open_order"]
         assert len(open_events) == 1, f"expected 1 open_order, got {open_events}"
@@ -631,6 +632,7 @@ class TestReqCompletedOrdersOrderState:
             commission_and_fees=2.50,
         )
         c.req_completed_orders(False)
+        c._test_dispatch_once()
 
         completed_events = [e for e in w.events if e[0] == "completed_order"]
         assert len(completed_events) == 1, f"expected 1 completed_order, got {completed_events}"
@@ -663,8 +665,10 @@ class TestReqCompletedOrdersOrderState:
             commission_and_fees=2.50,
         )
         c.req_completed_orders(False)
+        c._test_dispatch_once()
         w.events.clear()
         c.req_completed_orders(False)
+        c._test_dispatch_once()
 
         again = [e for e in w.events if e[0] == "completed_order"]
         assert len(again) == 1, f"the second request answered with {len(again)} orders"
@@ -925,8 +929,13 @@ class TestAccountDispatch:
         w, c = make_test_client("DU12345")
         c._test_set_position(265598, 100, 150.50)
         c.req_positions()
+        c._test_dispatch_once()
 
-        pos_events = [e for e in w.events if e[0] == "position"]
+        # The answer is what comes before its end. The feed follows on the
+        # same pass with what moved before the ask, which is this holding
+        # again — see `req_positions`.
+        answer = w.events[: w.events.index(("position_end",))]
+        pos_events = [e for e in answer if e[0] == "position"]
         end_events = [e for e in w.events if e[0] == "position_end"]
         assert len(pos_events) == 1
         assert pos_events[0][1] == "DU12345"

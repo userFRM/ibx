@@ -148,7 +148,13 @@ class LiveState(EWrapper):
         self._fills: list[Fill] = []
         self._completed: list[CompletedOrder] = []
         self._completed_done = False
-        self._fill_ids: set[str] = set()
+        self._fill_by_id: dict[str, Fill] = {}
+        # The fills each execution request named, by its request id.
+        self._executions: dict[int, list[Fill]] = {}
+        # How many answers of each kind have ended. An answer arrives on the
+        # pump, never inside the call that asked, so a caller reads this before
+        # asking and waits for it to move.
+        self._ended: dict[object, int] = {}
         self._accounts: list[str] = []
         self._tickers: dict[int, Ticker] = {}
         self._pnl: dict[int, tuple] = {}
@@ -181,10 +187,21 @@ class LiveState(EWrapper):
             self._updates += 1
             self.errors.append((reqId, errorCode, errorString, advancedOrderRejectJson))
 
-    def managedAccounts(self, accountsList):
+    def _end(self, kind) -> None:
+        """One more answer of this kind has ended."""
         with self._lock:
             self._updates += 1
+            self._ended[kind] = self._ended.get(kind, 0) + 1
+
+    def ended(self, kind) -> int:
+        """How many answers of this kind have ended so far."""
+        with self._lock:
+            return self._ended.get(kind, 0)
+
+    def managedAccounts(self, accountsList):
+        with self._lock:
             self._accounts = [a for a in accountsList.split(",") if a]
+            self._end("managed_accounts")
 
     def position(self, account, contract, position, avgCost):
         with self._lock:
@@ -194,6 +211,9 @@ class LiveState(EWrapper):
                 self._positions.pop(key, None)
             else:
                 self._positions[key] = Position(account, contract, position, avgCost)
+
+    def positionEnd(self):
+        self._end("positions")
 
     def updatePortfolio(
         self, contract, position, marketPrice, marketValue,
@@ -277,6 +297,9 @@ class LiveState(EWrapper):
             trade.orderState = orderState
             trade.orderStatus.orderId = orderId
 
+    def openOrderEnd(self):
+        self._end("open_orders")
+
     def completedOrder(self, contract, order, orderState):
         """An order the venue has finished with.
 
@@ -314,12 +337,17 @@ class LiveState(EWrapper):
         with self._lock:
             self._updates += 1
             trade = self._trades.setdefault(orderId, Trade())
-            before = trade.orderStatus.status
+            before = trade.orderStatus
+            # Zero is unstated on a report, for the average and for the
+            # permanent id alike: a status arriving after a fill can state no
+            # average, and a later report carrying no permId would otherwise
+            # erase the name this order is known by across sessions.
             trade.orderStatus = OrderStatus(
-                orderId, status, filled, remaining, avgFillPrice, permId,
+                orderId, status, filled, remaining,
+                avgFillPrice or before.avgFillPrice, permId or before.permId,
                 parentId, lastFillPrice, clientId, whyHeld, mktCapPrice,
             )
-            if status != before:
+            if status != before.status:
                 trade.log.append(status)
 
     def execDetails(self, reqId, contract, execution):
@@ -331,19 +359,33 @@ class LiveState(EWrapper):
         twice the quantity it held, and asking for its executions a second time
         doubled them again. An execution with no id is kept as it comes, since
         there is nothing to recognise it by.
+
+        The answer to a request still names every fill the request matched,
+        seen before or not: that is what was asked. A fill arriving live names
+        no request.
         """
         with self._lock:
             self._updates += 1
             exec_id = getattr(execution, "execId", "")
-            if exec_id and exec_id in self._fill_ids:
-                return
-            fill = Fill(contract, execution, None, getattr(execution, "time", ""))
-            if exec_id:
-                self._fill_ids.add(exec_id)
-            self._fills.append(fill)
-            order_id = getattr(execution, "orderId", None)
-            if order_id is not None and order_id in self._trades:
-                self._trades[order_id].fills.append(fill)
+            fill = self._fill_by_id.get(exec_id) if exec_id else None
+            if fill is None:
+                fill = Fill(contract, execution, None, getattr(execution, "time", ""))
+                if exec_id:
+                    self._fill_by_id[exec_id] = fill
+                self._fills.append(fill)
+                order_id = getattr(execution, "orderId", None)
+                if order_id is not None and order_id in self._trades:
+                    self._trades[order_id].fills.append(fill)
+            if reqId >= 0:
+                self._executions.setdefault(reqId, []).append(fill)
+
+    def execDetailsEnd(self, reqId):
+        self._end(("executions", reqId))
+
+    def take_executions(self, req_id) -> list[Fill]:
+        """The fills a request named, handed over once."""
+        with self._lock:
+            return self._executions.pop(req_id, [])
 
     def commissionAndFeesReport(self, report):
         """Attach the cost to the fill it belongs to.
@@ -357,10 +399,9 @@ class LiveState(EWrapper):
             return
         with self._lock:
             self._updates += 1
-            for fill in reversed(self._fills):
-                if getattr(fill.execution, "execId", None) == exec_id:
-                    fill.commissionReport = report
-                    return
+            fill = self._fill_by_id.get(exec_id)
+            if fill is not None:
+                fill.commissionReport = report
 
     def register_order(self, order_id, contract, order) -> Trade:
         """Record an order as it is sent, so the caller holds the object the

@@ -199,7 +199,7 @@ class Client:
         the calls that answer take their replies by request id and are left
         alone by it, so the two run together rather than competing.
         """
-        if self._pump is not None and self._pump.is_alive():
+        if self._pumping():
             return
         self._stop.clear()
 
@@ -215,6 +215,24 @@ class Client:
 
         self._pump = threading.Thread(target=pump, name="ibx-pump", daemon=True)
         self._pump.start()
+
+    def _pumping(self) -> bool:
+        return self._pump is not None and self._pump.is_alive()
+
+    def _answered(self, ask, kind) -> None:
+        """Ask, and wait for the answer to end.
+
+        Every answer arrives on the pump, in the order asked, and never inside
+        the call that asked: read straight after asking, the state held what
+        it held before the question. A session whose pump has ended is not
+        waited on — the answer is not coming, and the caller gets what stands.
+        """
+        before = self.wrapper.ended(kind)
+        ask()
+        _wait_until(
+            lambda: self.wrapper.ended(kind) > before or not self._pumping(),
+            self._timeout,
+        )
 
     def disconnect(self) -> None:
         self._stop.set()
@@ -892,7 +910,7 @@ class Client:
     # -- asking the venue to start sending it ----------------------------
 
     def reqPositions(self):
-        self.client.req_positions()
+        self._answered(self.client.req_positions, "positions")
         return self.positions()
 
     def reqAccountUpdates(self, account=""):
@@ -900,11 +918,11 @@ class Client:
         return self.accountValues()
 
     def reqOpenOrders(self):
-        self.client.req_open_orders()
+        self._answered(self.client.req_open_orders, "open_orders")
         return self.openTrades()
 
     def reqAllOpenOrders(self):
-        self.client.req_all_open_orders()
+        self._answered(self.client.req_all_open_orders, "open_orders")
         return self.trades()
 
     def reqExecutions(self, execFilter=None):
@@ -922,12 +940,15 @@ class Client:
         is not among these — an empty answer means this session has seen none,
         not that the account has none.
         """
-        before = len(self.wrapper.snapshot_fills())
-        self.client.req_executions(self._next_req_id(), execFilter)
-        return self.wrapper.snapshot_fills()[before:]
+        req_id = self._next_req_id()
+        self._answered(
+            lambda: self.client.req_executions(req_id, execFilter),
+            ("executions", req_id),
+        )
+        return self.wrapper.take_executions(req_id)
 
     def reqManagedAccts(self):
-        self.client.req_managed_accts()
+        self._answered(self.client.req_managed_accts, "managed_accounts")
         return self.managedAccounts()
 
     def isConnected(self) -> bool:

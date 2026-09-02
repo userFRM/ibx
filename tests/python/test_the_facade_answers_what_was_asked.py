@@ -186,5 +186,6 @@ def test_a_fill_replayed_names_the_client_that_placed_it():
 
     seen.clear()
     c.req_executions(9, Filter())
+    c._test_dispatch_once()
     assert seen, "a request filtered by the client that placed it matched nothing"
     assert seen[0].clientId == 3

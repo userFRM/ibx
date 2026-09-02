@@ -123,6 +123,7 @@ def test_eclient_req_ids_with_num():
     client = EClient(w)
     client._test_connect("DU0000000")
     client.req_ids(5)
+    client._test_dispatch_once()
     assert w.events[0][0] == "next_valid_id"
 
 

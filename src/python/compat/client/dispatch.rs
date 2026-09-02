@@ -75,6 +75,14 @@ impl EClient {
     /// Single iteration of event dispatch: drain all shared queues and fire Python
     /// callbacks.
     pub(crate) fn dispatch_once(&self, py: Python<'_>, shared: &Arc<SharedState>) -> PyResult<()> {
+        // What requests answered on the caller's thread, handed over here.
+        // The reference client answers every request from its own loop, so a
+        // program written against it may hold a lock across a request and take
+        // it again in the callback; answered inside the request, that program
+        // stops there. Oldest first, and before the engine's own events, so a
+        // caller reads them in the order it asked.
+        self.hand_over_what_is_waiting(py)?;
+
         // Drain engine events — surface disconnects as error callbacks.
         //
         // Collect under a short lock and dispatch after releasing it. Binding

@@ -43,6 +43,7 @@ def test_a_figure_keeps_the_currency_the_venue_stated_it_in():
     w, c = _connected()
     c._test_note_account_value("NetLiquidation", "12345.67", "EUR")
     c.req_account_updates_multi(3, "DU1", "", False)
+    c._test_dispatch_once()
     assert ("NetLiquidation", "12345.67", "EUR") in w.multi, w.multi
 
 
@@ -50,6 +51,7 @@ def test_a_figure_the_venue_never_stated_is_not_reported():
     w, c = _connected()
     c._test_note_account_value("NetLiquidation", "1.00", "USD")
     c.req_account_updates_multi(3, "DU1", "", False)
+    c._test_dispatch_once()
     keys = [key for key, _, _ in w.multi]
     assert keys == ["NetLiquidation"], f"figures nobody stated were reported: {w.multi}"
 

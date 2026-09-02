@@ -103,6 +103,16 @@ pub struct EClient {
     /// never reaches the end of `run`, which is where the notice used to be
     /// sent — so it was never told the session had ended at all.
     pub(crate) close_notified: AtomicBool,
+    /// Answers built on the caller's thread, waiting for a dispatch pass.
+    ///
+    /// The reference client answers every request from its own loop, so a
+    /// program written against it may hold a lock across a request and take it
+    /// again in the callback. Answered inside the request, as these were, that
+    /// program stops there and neither side ever moves. What is answered is
+    /// built when the request is made, so it states what was true then; it
+    /// reaches the wrapper on the next pass, in the order the answers were
+    /// made.
+    pub(crate) waiting_answers: Mutex<std::collections::VecDeque<(&'static str, Py<pyo3::types::PyTuple>)>>,
     /// Whether this session has already waited out the replay once.
     ///
     /// An account with nothing working never sees the replay end, so the wait
@@ -273,6 +283,7 @@ impl EClient {
             positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
             session_ended: AtomicBool::new(false),
             close_notified: AtomicBool::new(false),
+            waiting_answers: Mutex::new(std::collections::VecDeque::new()),
             replay_waited: AtomicBool::new(false),
             event_rx: Mutex::new(None),
             events_lost: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -789,6 +800,10 @@ impl EClient {
         // session lost rather than a total carried over from the last.
         self.events_lost.store(0, Ordering::Relaxed);
         self.replay_waited.store(false, Ordering::Relaxed);
+        // Answers owed to the session that ended. Left queued, the next
+        // session's first pass would hand over another session's positions and
+        // orders under request numbers nobody there gave out.
+        self.waiting_answers.lock().unwrap().clear();
         self.core.reset();
     }
 
@@ -1008,17 +1023,46 @@ impl EClient {
     ///
     /// Not an ordinary exception — an interrupt, the interpreter going down —
     /// still ends the call, because nothing here can carry on through that.
-    pub(crate) fn deliver<'py, A>(&self, py: Python<'py>, name: &str, args: A) -> PyResult<()>
+    pub(crate) fn deliver<'py, A>(
+        &self,
+        py: Python<'py>,
+        name: &'static str,
+        args: A,
+    ) -> PyResult<()>
     where
-        A: pyo3::call::PyCallArgs<'py> + Clone,
+        A: IntoPyObject<'py, Target = pyo3::types::PyTuple, Output = Bound<'py, pyo3::types::PyTuple>>,
+        PyErr: From<A::Error>,
     {
-        if let Err(e) = self.callback(py, name, args) {
-            if !e.is_instance_of::<pyo3::exceptions::PyException>(py) {
-                return Err(e);
-            }
-            log::error!("Python callback {name}() raised: {e}");
-        }
+        self.waiting_answers
+            .lock()
+            .unwrap()
+            .push_back((name, args.into_pyobject(py)?.unbind()));
         Ok(())
+    }
+
+    /// Hand over everything a request answered, oldest first.
+    ///
+    /// A callback that raises is logged and the rest still go, which is how the
+    /// dispatch loop already treats one: what the caller wrote is the caller's
+    /// problem and the answers behind it are still owed. An interrupt ends the
+    /// pass, because nothing can carry on through one — what is left stays
+    /// queued for the pass after it.
+    pub(crate) fn hand_over_what_is_waiting(&self, py: Python<'_>) -> PyResult<()> {
+        loop {
+            // Taken out before it is handed over: the callback is the caller's
+            // code and may issue another request, which queues behind what is
+            // left rather than being lost or handed over twice.
+            let Some((name, args)) = self.waiting_answers.lock().unwrap().pop_front() else {
+                return Ok(());
+            };
+            let out = self.callback(py, name, args.bind(py).clone());
+            if let Err(e) = out {
+                if !e.is_instance_of::<pyo3::exceptions::PyException>(py) {
+                    return Err(e);
+                }
+                log::error!("Python callback {name}() raised: {e}");
+            }
+        }
     }
 
     pub(crate) fn notify<'py, A>(&self, py: Python<'py>, name: &str, args: A)
@@ -1303,6 +1347,31 @@ w = W()",
         });
     }
 
+    /// Backfill and then stream on one number is the ordinary way to write
+    /// it. The finished lookup left the number marked as one whose bars are
+    /// updates to it, and every bar of the stream was routed to
+    /// `historical_data_update` — so a caller that overrode `real_time_bar`
+    /// read the stream as dead.
+    #[test]
+    fn a_stream_taking_a_finished_lookups_number_is_delivered_as_a_stream() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            client.get().core.hist_initial_complete.lock().unwrap().insert(1);
+            let contract = Py::new(py, Contract { con_id: 756733, ..Default::default() }).unwrap();
+            client.call_method1(py, "req_real_time_bars", (1i64, &contract)).unwrap();
+            shared.market.push_real_time_bar(1, RealTimeBar { timestamp: 1_700_000_000, ..Default::default() });
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let names: Vec<String> = py
+                .eval(c"[c[0] for c in w.calls]", Some(&g), None)
+                .unwrap().extract().unwrap();
+            assert_eq!(names, ["realtimeBar"], "the stream's bar went somewhere else");
+        });
+    }
+
     /// The reference client sends a book request's secType and exchange
     /// straight off the contract. Filling them in here subscribes a contract
     /// naming only an id to the book of a US stock on SMART, under the
@@ -1385,6 +1454,7 @@ w = W()",
             };
             shared.portfolio.set_position_info(held(1.0));
             client.call_method0(py, "req_positions").unwrap();
+            client.call_method0(py, "_test_dispatch_once").unwrap();
 
             let g = pyo3::types::PyDict::new(py);
             g.set_item("w", &w).unwrap();
@@ -1392,17 +1462,25 @@ w = W()",
                 py.eval(c"len([c for c in w.calls if c[0] == 'position'])", Some(&g), None)
                     .unwrap().extract().unwrap()
             };
-            assert_eq!(reported(), 1, "the holding held when it was asked for");
+            // The answer comes first in the pass: the holding, then the end.
+            // The feed follows it on the same pass with what moved before the
+            // ask, which is the same holding again — see `req_positions` —
+            // so what moves after is counted from here.
+            let opening: Vec<String> = py
+                .eval(c"[c[0] for c in w.calls][:2]", Some(&g), None)
+                .unwrap().extract().unwrap();
+            assert_eq!(opening, ["position", "positionEnd"], "the holding held when it was asked for");
+            let asked = reported();
 
             shared.portfolio.set_position_info(held(3.0));
             client.call_method0(py, "_test_dispatch_once").unwrap();
-            assert_eq!(reported(), 2, "and the holding once it moves");
+            assert_eq!(reported(), asked + 1, "and the holding once it moves");
 
             // Withdrawn, so what moves after is no longer reported.
             client.call_method0(py, "cancel_positions").unwrap();
             shared.portfolio.set_position_info(held(5.0));
             client.call_method0(py, "_test_dispatch_once").unwrap();
-            assert_eq!(reported(), 2, "a withdrawn ask is not answered further");
+            assert_eq!(reported(), asked + 1, "a withdrawn ask is not answered further");
         });
     }
 
@@ -1429,6 +1507,7 @@ w = W()",
 
             client.call_method0(py, "req_positions").unwrap();
             client.call_method1(py, "req_positions_multi", (1i64, "DU123", "")).unwrap();
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
 
             let g = pyo3::types::PyDict::new(py);
             g.set_item("w", &w).unwrap();

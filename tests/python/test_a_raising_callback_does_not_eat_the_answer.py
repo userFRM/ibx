@@ -16,16 +16,15 @@ from ibx import EClient, EWrapper
 class RaisesOnTheFirstPosition(EWrapper):
     def __init__(self):
         super().__init__()
-        self.positions = []
-        self.ends = 0
+        self.heard = []
 
     def position(self, account, contract, position, avg_cost):
-        self.positions.append(position)
-        if len(self.positions) == 1:
+        self.heard.append(position)
+        if len(self.heard) == 1:
             raise RuntimeError("what the caller wrote is the caller's problem")
 
     def position_end(self):
-        self.ends += 1
+        self.heard.append("end")
 
 
 def test_the_rest_of_the_answer_and_its_end_still_arrive():
@@ -36,8 +35,12 @@ def test_the_rest_of_the_answer_and_its_end_still_arrive():
     client._test_set_position(222, 20.0, 6.0)
 
     client.req_positions()
+    client._test_dispatch_once()
 
-    assert len(wrapper.positions) == 2, (
-        f"the answer behind the raise is still owed, got {wrapper.positions}"
+    # The answer is what comes before its end. The feed follows on the same
+    # pass with what moved before the ask, which is these holdings again —
+    # see `req_positions`.
+    assert wrapper.heard[:3] == [10.0, 20.0, "end"], (
+        f"the answer behind the raise is still owed, got {wrapper.heard}"
     )
-    assert wrapper.ends == 1, "and the end that closes the batch still arrives"
+    assert wrapper.heard.count("end") == 1, "and the end that closes the batch arrives once"

@@ -692,7 +692,7 @@ def req_auto_open_orders(b_auto_bind)
 
 #### `req_executions`
 
-Request execution reports.
+Request execution reports.  Before a session exists this is reported on the error callback, as every other request made before connecting is. Answered instead, the answer waits for a dispatch pass no session is there to make, and the caller hears nothing at all.
 
 ```python
 def req_executions(req_id, exec_filter=None)
@@ -1429,7 +1429,7 @@ def req_current_time()
 
 #### `req_current_time_in_millis`
 
-Ask the venue for its own clock in milliseconds. Answered on `current_time_in_millis`.  The same clock `req_current_time` reports and read the same way. What differs is the precision kept: the venue sometimes stamps a fraction of a second, and asking in seconds throws it away. A stamp with no fraction lands on a whole second, which is the precision the venue stated rather than a rounding of something finer.  Answered whether or not a session is up, which is what the request surface does and so what a caller of either client gets. Before anything has been stamped there is nothing to report but this machine's clock, and the log says so rather than leaving a caller waiting on a callback that is not coming.
+Ask the venue for its own clock in milliseconds. Answered on `current_time_in_millis`.  The same clock `req_current_time` reports and read the same way. What differs is the precision kept: the venue sometimes stamps a fraction of a second, and asking in seconds throws it away. A stamp with no fraction lands on a whole second, which is the precision the venue stated rather than a rounding of something finer.  Before a session exists this is reported on `error`, as `req_current_time` is: an answer waits for a dispatch pass, and with no session there is nothing to make one. Before anything has been stamped there is nothing to report but this machine's clock, and the log says so.
 
 ```python
 def req_current_time_in_millis()

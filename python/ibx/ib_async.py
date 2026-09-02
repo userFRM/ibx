@@ -131,6 +131,10 @@ class IbxClient:
         # is the first one — so an advisor with several saw one, standing for
         # all of them.
         self._client.req_managed_accts()
+        # Answered on the next pass of dispatch, as every request is, and the
+        # pump that makes those passes is not running yet: one pass here, so
+        # the answer is in hand before it is read.
+        self._pass_once()
         self._accounts = list(getattr(self.wrapper, "accounts", []))
         # Their wrapper's `nextValidId` does nothing; their client seeds the
         # counter itself when it sees one on the wire. `placeOrder` takes its
@@ -167,6 +171,21 @@ class IbxClient:
         self._client.disconnect()
         self.apiEnd.emit()
 
+    def _pass_once(self):
+        """One dispatch, then the boundary ib_async flushes on.
+
+        Their wrapper holds ticker updates until the batch of messages ends,
+        and emits their events there. Their own transport calls this after
+        each socket read; here it is after each pass of dispatch.
+        """
+        arrived = getattr(self.wrapper, "tcpDataArrived", None)
+        if arrived:
+            arrived()
+        self._client.poll()
+        processed = getattr(self.wrapper, "tcpDataProcessed", None)
+        if processed:
+            processed()
+
     def _start_pump(self):
         """Drive dispatch, and land every callback on ib_async's own loop.
 
@@ -175,24 +194,9 @@ class IbxClient:
         """
         self._stop.clear()
 
-        def pass_once():
-            """One dispatch, then the boundary ib_async flushes on.
-
-            Their wrapper holds ticker updates until the batch of messages
-            ends, and emits their events there. Their own transport calls this
-            after each socket read; here it is after each pass of dispatch.
-            """
-            arrived = getattr(self.wrapper, "tcpDataArrived", None)
-            if arrived:
-                arrived()
-            self._client.poll()
-            processed = getattr(self.wrapper, "tcpDataProcessed", None)
-            if processed:
-                processed()
-
         def run():
             while not self._stop.is_set():
-                self._loop.call_soon_threadsafe(pass_once)
+                self._loop.call_soon_threadsafe(self._pass_once)
                 self._stop.wait(0.01)
 
         self._pump = threading.Thread(target=run, daemon=True)

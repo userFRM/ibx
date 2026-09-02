@@ -225,12 +225,13 @@ impl EClient {
     /// fraction lands on a whole second, which is the precision the venue
     /// stated rather than a rounding of something finer.
     ///
-    /// Answered whether or not a session is up, which is what the request
-    /// surface does and so what a caller of either client gets. Before
-    /// anything has been stamped there is nothing to report but this machine's
-    /// clock, and the log says so rather than leaving a caller waiting on a
-    /// callback that is not coming.
+    /// Before a session exists this is reported on `error`, as
+    /// `req_current_time` is: an answer waits for a dispatch pass, and with
+    /// no session there is nothing to make one. Before anything has been
+    /// stamped there is nothing to report but this machine's clock, and the
+    /// log says so.
     fn req_current_time_in_millis(&self, py: Python<'_>) -> PyResult<()> {
+        let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
         let from_venue = self
             .shared
             .lock()

@@ -114,6 +114,9 @@ def test_every_account_the_login_holds_crosses_over():
         def req_managed_accts(self):
             c._callbacks.managed_accounts("DU1,DU2,DU3")
 
+        def poll(self):
+            pass
+
         def next_order_id(self):
             return 1
 

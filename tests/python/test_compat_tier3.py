@@ -99,9 +99,29 @@ def test_display_group_signatures():
 # ═══════════════════════════════════════════════════════════
 
 def test_req_market_rule_not_connected():
-    """Without connection, req_market_rule has no shared state — logs warning."""
+    """Reported, as every other request made before connecting is."""
     c, w = make_client()
-    c.req_market_rule(26)  # no shared state → logs warning, no crash
+    c.req_market_rule(26)
+    assert w.not_connected, "the call reports rather than answering"
+
+
+def test_a_rule_never_seen_is_refused_in_the_slots_a_refusal_goes_in():
+    """The refusal reached `error` with four arguments, so the code landed in
+    the time slot and the message in the code slot — and a wrapper reading
+    the code as a number raised inside the request."""
+    heard = []
+
+    class Records(EWrapper):
+        def error(self, reqId, errorTime, errorCode, errorString, advancedOrderRejectJson=""):
+            heard.append((reqId, errorTime, errorCode, errorString))
+
+    c = EClient(Records())
+    c._test_connect()
+    c.req_market_rule(26)
+    (req_id, error_time, code, message), = heard
+    assert (req_id, code) == (26, 321), heard
+    assert "market rule 26" in message
+    assert error_time > 1_700_000_000_000, f"a clock reading in milliseconds, got {error_time}"
 
 
 def test_req_market_rule_signature():
@@ -129,6 +149,7 @@ def test_req_smart_components_fires_callback():
     c = EClient(w)
     c._test_connect()
     c.req_smart_components(1, "a]AMEX")
+    c._test_dispatch_once()
     assert w.req_id == 1
     assert len(w.components) == 0  # Empty map (gateway-local data not available)
 
@@ -158,6 +179,7 @@ def test_req_soft_dollar_tiers_fires_callback():
     c = EClient(w)
     c._test_connect()
     c.req_soft_dollar_tiers(42)
+    c._test_dispatch_once()
     assert w.req_id == 42
     assert len(w.tiers) == 0  # Paper accounts return empty
 
@@ -185,6 +207,7 @@ def test_req_family_codes_fires_callback():
     c = EClient(w)
     c._test_connect()
     c.req_family_codes()
+    c._test_dispatch_once()
     assert w.codes is not None
     assert isinstance(w.codes, list)
     # Each entry is (accountID, familyCodeStr)
@@ -279,6 +302,7 @@ def test_req_user_info_fires_callback():
     c._test_connect()
     c._test_note_reference_data(3, "NYSE", "N", "Research", "0.5", "brand-1")
     c.req_user_info(7)
+    c._test_dispatch_once()
     assert w.req_id == 7
     assert w.white_branding_id == "brand-1"
 

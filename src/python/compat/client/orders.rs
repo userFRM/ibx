@@ -485,8 +485,14 @@ impl EClient {
     }
 
     /// Request execution reports.
+    ///
+    /// Before a session exists this is reported on the error callback, as
+    /// every other request made before connecting is. Answered instead, the
+    /// answer waits for a dispatch pass no session is there to make, and the
+    /// caller hears nothing at all.
     #[pyo3(signature = (req_id, exec_filter=None))]
     fn req_executions(&self, py: Python<'_>, req_id: i64, exec_filter: Option<Py<PyAny>>) -> PyResult<()> {
+        let Some(_connected) = self.tx_or_report(req_id) else { return Ok(()) };
         let filter = if let Some(ref fobj) = exec_filter {
             let get = |attr: &str| -> String {
                 fobj.getattr(py, pyo3::types::PyString::new(py, attr))

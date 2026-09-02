@@ -48,6 +48,18 @@ def test_a_trade_changes_under_the_caller_as_its_status_moves():
     assert trade.log == ["Submitted", "Filled"]
 
 
+def test_a_report_stating_no_perm_id_keeps_the_one_already_learned():
+    """Zero is unstated on a report. Rebuilt from whatever arrived, a later
+    report carrying none erased the name the order is known by across
+    sessions, and the average a fill had stated went the same way."""
+    s = LiveState()
+    s.orderStatus(7, "Filled", 5.0, 0.0, 10.0, 77, 0, 10.0, 1, "")
+    s.orderStatus(7, "Filled", 5.0, 0.0, 0.0, 0, 0, 0.0, 1, "")
+    status = s.trade_for(7).orderStatus
+    assert status.permId == 77, status
+    assert status.avgFillPrice == 10.0, status
+
+
 def test_a_fill_is_attached_to_the_order_it_belongs_to():
     s = LiveState()
     s.openOrder(7, FakeContract(1), object(), object())
