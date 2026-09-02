@@ -38,11 +38,6 @@ _ONE_SIDED_ON_THE_REQUEST_SURFACE = {
     "req_current_time_in_millis",
     "req_executions",
     "req_auto_open_orders",
-    # Answered under 504 by the binding. The request surface's twins sit in
-    # reference.rs and take the same guard as the others once that file is
-    # free; listed here until then.
-    "req_news_bulletins",
-    "cancel_news_bulletins",
 }
 
 
