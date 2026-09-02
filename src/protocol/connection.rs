@@ -409,27 +409,35 @@ impl Connection {
                 continue;
             }
 
-            // 8=O binary protocol: length-delimited via tag 9
-            if self.buf.starts_with(b"8=O\x01") {
+            // 8=O binary and 8=1 / 8=X control: one framing, length-delimited
+            // via tag 9 with no checksum trailer. They differ only in what the
+            // frame is called downstream, where control frames are ignored.
+            if self.buf.starts_with(b"8=O\x01")
+                || self.buf.starts_with(b"8=1\x01")
+                || self.buf.starts_with(b"8=X\x01")
+            {
+                let binary = self.buf.starts_with(b"8=O\x01");
                 if let Some(total) = binary_msg_length(&self.buf)
                     && self.buf.len() >= total {
                         let msg: Vec<u8> = self.buf.drain(..total).collect();
-                        frames.push(Frame::Binary(msg));
+                        frames.push(if binary { Frame::Binary(msg) } else { Frame::Control(msg) });
                         continue;
                     }
-                break; // incomplete
-            }
-
-            // 8=1 / 8=X control protocol: same length-delimited framing as 8=O
-            // (body length in tag 9, no checksum trailer). Extracted as Control
-            // frames and ignored downstream.
-            if self.buf.starts_with(b"8=1\x01") || self.buf.starts_with(b"8=X\x01") {
-                if let Some(total) = binary_msg_length(&self.buf)
-                    && self.buf.len() >= total {
-                        let msg: Vec<u8> = self.buf.drain(..total).collect();
-                        frames.push(Frame::Control(msg));
-                        continue;
-                    }
+                // As on the FIX branch below: a length that is there and
+                // unreadable is not a length still arriving. These three
+                // headers are resynchronisation targets, so four such bytes
+                // inside a payload put one at the front of the buffer with
+                // something other than a length behind it. Waited on, it stays
+                // there and every acknowledgement and fill behind it is never
+                // extracted, on a connection that goes on reading as alive.
+                if tag9_is_unreadable(&self.buf) {
+                    log::warn!(
+                        "extract_frames: a header states an unreadable body \
+                         length; resynchronising past it",
+                    );
+                    self.buf.drain(..1);
+                    continue;
+                }
                 break; // incomplete
             }
 
@@ -1433,6 +1441,36 @@ mod wedge_tests {
             frames.iter().any(|f| matches!(f, Frame::Binary(_))),
             "the intact binary frame behind the corrupt one survives: {frames:?}",
         );
+    }
+
+    /// A binary or control header whose length does not read is stepped past,
+    /// not waited on.
+    ///
+    /// All three of these headers are resynchronisation targets, so four such
+    /// bytes inside a payload leave one at the front of the buffer with
+    /// something other than a length behind it. Waited on, it stays there and
+    /// every acknowledgement and fill behind it goes unextracted, on a
+    /// connection that reads as alive because bytes keep arriving.
+    #[test]
+    fn a_binary_header_with_an_unreadable_length_does_not_hold_the_stream() {
+        for header in [&b"8=O\x01"[..], &b"8=1\x01"[..], &b"8=X\x01"[..]] {
+            let mut conn = Connection::for_test().0;
+            let body = b"35=P\x01data";
+            let mut good = format!("8=O\x019={}\x01", body.len()).into_bytes();
+            good.extend_from_slice(body);
+
+            let mut buf = header.to_vec();
+            buf.extend_from_slice(b"9=not-a-number\x01");
+            buf.extend_from_slice(&good);
+            conn.inject_buf(&buf);
+
+            let frames = conn.extract_frames();
+            assert!(
+                frames.iter().any(|f| matches!(f, Frame::Binary(_))),
+                "{:?}: the intact frame behind the unreadable header survives, got {frames:?}",
+                std::str::from_utf8(header),
+            );
+        }
     }
 
     /// A stated length no frame can have is not a length to add.

@@ -184,7 +184,12 @@ pub fn fixcomp_frame_length(data: &[u8]) -> FrameLength {
     let Some(body_len) = std::str::from_utf8(&data[tag9 + 2..soh2]).ok().and_then(|t| t.parse::<usize>().ok()) else {
         return FrameLength::Unreadable;
     };
-    let total = soh2 + 1 + body_len;
+    // The length is whatever the peer wrote, so a total that does not fit is
+    // a length no frame can have rather than something to add anyway. The two
+    // readers on the plain socket guard this for the same reason.
+    let Some(total) = soh2.checked_add(1).and_then(|n| n.checked_add(body_len)) else {
+        return FrameLength::Unreadable;
+    };
     if data.len() < total {
         FrameLength::Incomplete
     } else {
@@ -263,7 +268,14 @@ fn split_messages(buf: &[u8]) -> (Vec<Vec<u8>>, usize) {
                         },
                         Err(_) => break,
                     };
-                    let total = soh9 + 1 + body_len;
+                    // Unchecked, a stated length near the width of the type
+                    // wraps to zero, an empty message is pushed, and the scan
+                    // advances by nothing — the loop over this buffer never
+                    // ends.
+                    let Some(total) = soh9.checked_add(1).and_then(|n| n.checked_add(body_len))
+                    else {
+                        break;
+                    };
                     if total > chunk.len() {
                         break;
                     }
@@ -342,6 +354,22 @@ fn split_messages(buf: &[u8]) -> (Vec<Vec<u8>>, usize) {
 mod tests {
     use super::*;
     use crate::protocol::fix::{fix_build, fix_parse};
+
+    /// A stated length no frame can have is not a length to add.
+    ///
+    /// The two readers on the plain socket guard the same addition. Added
+    /// unchecked here it aborts where overflow is checked, and where it is not
+    /// it wraps to a small total that frames the stream from an offset the peer
+    /// chose. Framing runs on raw socket bytes, so the peer needs nothing but
+    /// the socket.
+    #[test]
+    fn a_stated_length_that_cannot_fit_is_not_a_frame() {
+        let huge = format!("8=FIXCOMP\x019={}\x01body", usize::MAX);
+        assert!(matches!(
+            fixcomp_frame_length(huge.as_bytes()),
+            FrameLength::Unreadable
+        ));
+    }
 
     /// A raw-data length that counts more bytes than followed it drops the
     /// frame rather than reading past the end of it.
