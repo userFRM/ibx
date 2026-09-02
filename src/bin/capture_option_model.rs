@@ -14,10 +14,6 @@ use ibx::control::option_model::{implied_volatility, option_price, OptionTerms, 
 
 fn main() {
     let _ = ibx::logging::try_init_from_env("error");
-    // Keep every message the historical connection carries, so a reply this
-    // client does not yet read still shows itself.
-    // Safety: set before the engine starts, single-threaded here.
-    unsafe { std::env::set_var("IBX_CAPTURE_WIRE", "1") };
     let username = std::env::var("IB_USERNAME").unwrap_or_default();
     if username.trim().is_empty() {
         eprintln!("IB_USERNAME/IB_PASSWORD unset. This reads from real servers.");
@@ -120,122 +116,6 @@ fn main() {
             println!("  this client says: vol={ours:.6}  ({off:.6} from the venue's)");
         }
         None => println!("  this client could not solve it from the venue's numbers"),
-    }
-
-    // The same rate, asked for as a series. A tick states one too — this is
-    // the other way it is served, and having both is how the two are compared.
-    #[derive(Default)]
-    struct Heard { bars: Vec<(String, f64)>, said: Vec<String> }
-    impl ibx::api::wrapper::Wrapper for Heard {
-        fn historical_data(&mut self, _req: i64, bar: &ibx::api::types::BarData) {
-            self.bars.push((bar.date.clone(), bar.close));
-        }
-        fn error(&mut self, _req: i64, code: i64, message: &str, _adv: &str) {
-            self.said.push(format!("{code}: {message}"));
-        }
-    }
-    let mut heard = Heard::default();
-    // Asked as a tick series rather than as bars: the venue's refusal named
-    // the query type, and a tick type is served under a tick query.
-    println!("  asking for it as a tick series");
-    // The venue wants two of start, end and length. Give it start and end.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let stamp = |secs: u64| {
-        let days = secs / 86_400;
-        let (mut y, mut m, mut d) = (1970i64, 1i64, days as i64 + 1);
-        loop {
-            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-            let feb = if leap { 29 } else { 28 };
-            let len = [31, feb, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][(m - 1) as usize];
-            if d <= len { break }
-            d -= len; m += 1;
-            if m > 12 { m = 1; y += 1 }
-        }
-        let rest = secs % 86_400;
-        format!("{y:04}{m:02}{d:02} {:02}:{:02}:{:02}", rest / 3600, (rest % 3600) / 60, rest % 60)
-    };
-    let (from, to) = (stamp(now - 5 * 86_400), stamp(now));
-    println!("    from {from} to {to}");
-    // Asked of the option and of the underlying: a rate belongs to what the
-    // option is written on at least as plausibly as to the option itself.
-    let underlying = Contract {
-        symbol: "SPY".to_string(),
-        sec_type: "STK".to_string(),
-        exchange: "SMART".to_string(),
-        currency: "USD".to_string(),
-        ..Default::default()
-    };
-    let under = client.qualify_contract(&underlying).unwrap_or(underlying);
-    for (what, c) in [("the option", &resolved), ("the underlying", &under)] {
-        println!("    of {what}");
-        let _ = client.req_historical_ticks(
-            if what == "the option" { 90 } else { 91 },
-            c, &from, &to, 10, "OptExInterestRate", false,
-        );
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline {
-            client.process_msgs(&mut heard);
-            std::thread::sleep(Duration::from_millis(200));
-        }
-    }
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while Instant::now() < deadline {
-        client.process_msgs(&mut heard);
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    for said in heard.said.drain(..).take(2) { println!("    the venue says: {said}"); }
-    for (kind, hex) in client.unread_wire() {
-        if kind != "hmds-msg" { continue }
-        let bytes: Vec<u8> = (0..hex.len() / 2)
-            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0))
-            .collect();
-        let text = String::from_utf8_lossy(&bytes);
-        if text.contains("OptExInterestRate") || text.contains("ResultSet") {
-            let shown: String = text.chars().map(|c| if c == '\u{1}' { '|' } else { c }).collect();
-            println!("    reply: {}", &shown[..shown.len().min(600)]);
-        }
-    }
-
-    let shapes: [(&str, &str); 0] = [];
-    let mut asked = 2;
-    for (duration, bar) in shapes {
-        asked += 1;
-        println!("  asking {duration} of {bar}");
-        let _ = client.req_historical_data(
-            asked, &resolved, "", duration, bar, "OPTION_EXERCISE_INTEREST_RATE", false, 1, false,
-        );
-        let deadline = Instant::now() + Duration::from_secs(8);
-        while Instant::now() < deadline {
-            client.process_msgs(&mut heard);
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        for (when, rate) in heard.bars.drain(..).take(3) { println!("    {when}  {rate}"); }
-        for said in heard.said.drain(..).take(1) { println!("    the venue says: {said}"); }
-    }
-    match client.req_historical_data(
-        2, &resolved, "", "5 D", "1 day", "OPTION_EXERCISE_INTEREST_RATE", false, 1, false,
-    ) {
-        Ok(()) => {
-            let deadline = Instant::now() + Duration::from_secs(20);
-            while Instant::now() < deadline {
-                client.process_msgs(&mut heard);
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            println!("\n  the venue's rate series:");
-            for (when, rate) in heard.bars.iter().take(5) {
-                println!("    {when}  {rate}");
-            }
-            for said in heard.said.iter().take(3) {
-                println!("    the venue says: {said}");
-            }
-            if heard.bars.is_empty() && heard.said.is_empty() {
-                println!("    nothing arrived");
-            }
-        }
-        Err(e) => println!("  the rate series could not be asked for: {e}"),
     }
 
     client.disconnect();

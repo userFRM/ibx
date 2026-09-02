@@ -728,6 +728,20 @@ mod duration_spelling_tests {
 mod tick_data_type_tests {
     use super::super::tick_data_type;
 
+    /// The rate is a tick series and not a bar series.
+    ///
+    /// Asked for it as bars the venue answers "QueryType BarData is not
+    /// supported for tick type OptExInterestRate", whatever the step and
+    /// whether the contract is the option or what it is written on. Offered as
+    /// a bar name it was a name that could only ever come back refused.
+    #[test]
+    fn the_rate_is_a_tick_series_and_is_not_offered_as_a_bar_one() {
+        assert!(crate::control::historical::BarDataType::from_api_str(
+            "OPTION_EXERCISE_INTEREST_RATE"
+        ).is_err());
+        assert_eq!(tick_data_type("OPTION_EXERCISE_INTEREST_RATE"), Ok("OptExInterestRate"));
+    }
+
     /// Each name a caller can use names a series the venue serves.
     #[test]
     fn each_known_name_maps_to_the_venues_own() {
