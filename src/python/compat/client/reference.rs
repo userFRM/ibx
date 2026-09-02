@@ -47,6 +47,20 @@ impl EClient {
         {
             return self.report_refusal(py, req_id, why.into());
         }
+        // The adjusted series folds the raw trades with the contract's own
+        // corporate actions, which are asked for by the venue's id for the
+        // contract. Named by anything else, that ask cannot be made, so a
+        // request that could not be folded is refused rather than answered with
+        // raw trades under an adjusted name — as the waiting call refuses it.
+        if crate::control::historical::what_to_show_is_adjusted(what_to_show)
+            && contract.con_id == 0
+        {
+            return self.report_refusal(py, req_id, crate::error_codes::Refusal::validation(
+                "ADJUSTED_LAST is folded from the contract's corporate actions, which are \
+                 asked for by the venue's id for the contract, and this one does not carry \
+                 it: qualify the contract first and pass what comes back".to_string(),
+            ));
+        }
         if what_to_show.eq_ignore_ascii_case("SCHEDULE") {
             Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
                 contract: contract.into(),

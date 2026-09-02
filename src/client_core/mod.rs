@@ -3286,6 +3286,23 @@ impl ClientCore {
         keep_up_to_date: bool,
     ) -> Result<(), String> {
         let bs = crate::control::historical::BarSize::from_api_str(bar_size)?;
+        // The adjusted series is folded from the whole raw series and the
+        // contract's actions, so it is served from a historical request and not
+        // named on the wire — its name is not in the table `from_api_str`
+        // checks. Kept up to date it never completes, so there is no whole
+        // series to fold and no bar this client could hand over adjusted;
+        // refused outright rather than at the first bar that cannot form.
+        if crate::control::historical::what_to_show_is_adjusted(what_to_show) {
+            if keep_up_to_date {
+                return Err(
+                    "ADJUSTED_LAST cannot be kept up to date: the adjusted series is \
+                     folded from the whole raw series and the contract's actions, and a \
+                     request that never completes has no whole series to fold"
+                        .to_string(),
+                );
+            }
+            return Ok(());
+        }
         crate::control::historical::BarDataType::from_api_str(what_to_show)?;
         if keep_up_to_date && !bs.supports_keep_up_to_date() {
             return Err(format!(
@@ -3544,7 +3561,13 @@ impl ClientCore {
             qty,
             kind: OrderKind::Limit { price: 0 },
             tif: b'0',
-            attrs: OrderAttrs { exercise_action: action, ..Default::default() },
+            attrs: OrderAttrs {
+                exercise_action: action,
+                manual_order_time: stated.manual_order_time,
+                customer_account: stated.customer_account,
+                professional_customer: stated.professional_customer,
+                ..Default::default()
+            },
         }
     }
 

@@ -1162,6 +1162,12 @@ impl HotLoop {
                         let (query_id, _) = self.hmds.pending_historical.remove(pos);
                         self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
                     }
+                    // The request's held pages go with the withdrawal, and so
+                    // does the actions query an adjusted one may have out under
+                    // this same number — or the pages are left for the life of
+                    // the session and the actions query keeps being served.
+                    self.hmds.held.retain(|a| a.req_id != req_id);
+                    self.hmds.send_adjustments_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
                 }
                 ControlCommand::FetchHeadTimestamp { contract, req_id, what_to_show, use_rth, .. } => {
                     let ContractRef { con_id, .. } = contract;

@@ -316,12 +316,14 @@ impl EClient {
 
     /// Bars for a contract, as `req_historical_data` asks for them.
     ///
-    /// `ADJUSTED_LAST` is served here and refused by `req_historical_data`,
-    /// and the difference is not arbitrary. The venue has no adjusted series
-    /// to pass through: what it serves is raw, and adjusting it needs the
-    /// contract's actions in hand before a bar can be handed to anyone. A call
-    /// that waits can hold both; one that answers on a callback cannot, and
-    /// would have to hand over raw bars under an adjusted name.
+    /// `ADJUSTED_LAST` is served here and by `req_historical_data` alike. The
+    /// venue has no adjusted series to pass through: what it serves is raw, and
+    /// adjusting it needs the contract's actions in hand before a bar can be
+    /// handed to anyone. This call waits and hands back the folded series in
+    /// one piece; `req_historical_data` holds the raw bars until the actions
+    /// arrive and then delivers them folded, bar by bar on its callbacks. Both
+    /// require the venue's id for the contract, which the actions are asked for
+    /// by.
     pub fn historical_data(
         &self, contract: &Contract, end_date_time: &str, duration: &str,
         bar_size: &str, what_to_show: &str, use_rth: bool,
@@ -390,11 +392,20 @@ impl EClient {
         let bars = self.historical_data(
             contract, end_date_time, duration, bar_size, "TRADES", use_rth,
         )?;
+        // The series arrives oldest first, as the reference client's callers
+        // read it, so its first bar is its earliest day.
         let Some(first) = bars.first() else { return Ok(bars) };
         let from: String = first.date.chars().take(8).collect();
         let today: String = crate::protocol::datetime::chrono_free_timestamp()
             .chars().take(8).collect();
         let actions = self.corporate_actions(contract, &from, &today)?;
+        // What the fold actually receives, over the range it asked. A series
+        // handed back unchanged under the adjusted name is either an empty
+        // answer here or a range that missed the action, and this says which.
+        log::debug!(
+            "adjusted_bars {}: {} bar(s) [{from}..{today}], {} action(s) to fold",
+            contract.symbol, bars.len(), actions.len(),
+        );
         if actions.is_empty() {
             return Ok(bars);
         }

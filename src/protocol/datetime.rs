@@ -387,7 +387,11 @@ pub fn clock_named(named: &str) -> Option<jiff::tz::TimeZone> {
 ///
 /// A day-only stamp is a day either way, and a stamp that cannot be read, or a
 /// zone no database answers to, is handed over as it came: what the venue said
-/// beats a guess at what it meant.
+/// beats a guess at what it meant. So is a series that states no zone on any
+/// of its pages — deliberately, not by falling through: with no zone named
+/// there is no clock to write the instant on, and inventing one would state an
+/// offset the venue never gave. A page that omits the zone a series stated on
+/// an earlier page is not that case; the engine files it on the series' zone.
 pub fn bar_date_as_asked(stated: &str, format_date: i32, zone: &str) -> String {
     let Some(secs) = ib_datetime_to_unix(stated) else {
         return stated.to_string();

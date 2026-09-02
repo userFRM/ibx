@@ -47,6 +47,21 @@ impl EClient {
         // are the venue's to say.
         let contract = &*self.named_by_the_venue(contract)?;
         ClientCore::validate_historical_args(bar_size, what_to_show, keep_up_to_date)?;
+        // The adjusted series folds the raw trades with the contract's own
+        // corporate actions, which are asked for by the venue's id for the
+        // contract. Named by anything else, that ask cannot be made — so a
+        // request that could not be folded is refused here rather than answered
+        // with raw trades under an adjusted name. The waiting call refuses the
+        // same request the same way.
+        if crate::control::historical::what_to_show_is_adjusted(what_to_show)
+            && contract.con_id == 0
+        {
+            return Err(Refusal::validation(
+                "ADJUSTED_LAST is folded from the contract's corporate actions, which are \
+                 asked for by the venue's id for the contract, and this one does not carry \
+                 it: qualify the contract first and pass what comes back".to_string(),
+            ));
+        }
         // How this request wants its bar times written. The venue states one
         // form; whichever the caller asked for is what is written.
         self.core.note_date_format(req_id, format_date);

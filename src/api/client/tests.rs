@@ -3142,6 +3142,54 @@ fn req_historical_data_accepts_streamable_keep_up_to_date_size() {
     assert!(matches!(rx.try_recv().unwrap(), ControlCommand::FetchHistorical { keep_up_to_date: true, .. }));
 }
 
+/// ADJUSTED_LAST is served on the callback path now, not refused: the request
+/// reaches the engine, which fetches raw trades and folds them with the
+/// contract's actions before a bar is handed over. The name goes out as it
+/// came — the engine reads it, the venue never sees it.
+#[test]
+fn req_historical_data_serves_adjusted_last() {
+    let (client, rx, _shared) = test_client();
+    client.req_historical_data(5, &spy(), "", "1 Y", "1 day", "ADJUSTED_LAST", true, 1, false)
+        .expect("the callback path serves ADJUSTED_LAST");
+    match rx.try_recv().expect("the request reaches the engine") {
+        ControlCommand::FetchHistorical { what_to_show, .. } => {
+            assert_eq!(what_to_show, "ADJUSTED_LAST", "the engine reads the name and folds");
+        }
+        other => panic!("expected a historical request, got {other:?}"),
+    }
+}
+
+/// The adjusted series is folded from the contract's corporate actions, which
+/// are asked for by the venue's id for the contract. Named by anything else the
+/// fold cannot be made, so the request is refused rather than answered with raw
+/// trades under an adjusted name — as the waiting call refuses it.
+#[test]
+fn req_historical_data_refuses_adjusted_last_without_the_venue_id() {
+    let (client, rx, _shared) = test_client();
+    let unqualified = Contract {
+        symbol: "SPY".into(), exchange: "SMART".into(), sec_type: "STK".into(),
+        ..Default::default()
+    };
+    let err = client
+        .req_historical_data(5, &unqualified, "", "1 Y", "1 day", "ADJUSTED_LAST", true, 1, false)
+        .unwrap_err();
+    assert!(err.message.contains("venue's id"), "got: {err}");
+    assert!(rx.try_recv().is_err(), "nothing may reach the engine");
+}
+
+/// A request kept up to date never completes, so there is no whole series to
+/// fold: ADJUSTED_LAST and keepUpToDate together are refused rather than
+/// answered with a series that can never be put on one scale.
+#[test]
+fn req_historical_data_refuses_adjusted_last_kept_up_to_date() {
+    let (client, rx, _shared) = test_client();
+    let err = client
+        .req_historical_data(5, &spy(), "", "1 D", "5 mins", "ADJUSTED_LAST", true, 1, true)
+        .unwrap_err();
+    assert!(err.message.contains("kept up to date"), "got: {err}");
+    assert!(rx.try_recv().is_err(), "nothing may reach the engine");
+}
+
 /// An engine that has gone is not a request that was malformed. A caller that
 /// branches on the code has to be able to tell a session it can reopen from a
 /// request it has to fix.

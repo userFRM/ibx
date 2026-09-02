@@ -296,11 +296,14 @@ impl EClient {
     /// Bars for a contract over a period, handed back rather than delivered a
     /// bar at a time to a callback.
     ///
-    /// `ADJUSTED_LAST` is served here and refused by `reqHistoricalData`. The
+    /// `ADJUSTED_LAST` is served here and by `reqHistoricalData` alike. The
     /// venue has no adjusted series to pass through: an adjusted one is built
     /// from the raw trades and the contract's actions, which means holding both
-    /// before a bar is handed over. A call that waits can; one that answers on
-    /// a callback would have to hand over raw bars under an adjusted name.
+    /// before a bar is handed over. This call waits and hands the folded series
+    /// back in one piece; `reqHistoricalData` holds the raw bars until the
+    /// actions arrive and then delivers them folded, bar by bar on its
+    /// callbacks. Both are asked for by the venue's id for the contract, which
+    /// the actions need.
     #[pyo3(signature = (contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth=1))]
     fn historical_data(
         &self,
@@ -316,9 +319,10 @@ impl EClient {
             let bars = self.historical_data(
                 py, contract, end_date_time, duration_str, bar_size_setting, "TRADES", use_rth,
             )?;
-            let Some(first) = bars.first() else { return Ok(bars) };
             // From the first bar to today rather than to the last: a split
-            // last month moves a series that ended last year.
+            // last month moves a series that ended last year. The series
+            // arrives oldest first, so its first bar is its earliest day.
+            let Some(first) = bars.first() else { return Ok(bars) };
             let from: String = first.date.chars().take(8).collect();
             let today: String = crate::protocol::datetime::chrono_free_timestamp()
                 .chars().take(8).collect();

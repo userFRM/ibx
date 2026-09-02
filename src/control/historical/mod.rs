@@ -9,6 +9,20 @@ use crate::protocol::fix;
 /// FIX tag 6118: the historical xml.
 pub const TAG_HISTORICAL_XML: u32 = 6118;
 
+/// Whether a bar request asks for the split- and dividend-adjusted series.
+///
+/// The venue carries no adjusted series to pass through: what it serves is raw
+/// trades, and an adjusted series is those trades folded with the contract's
+/// own corporate actions. So `ADJUSTED_LAST` is not a wire type — it is not in
+/// [`BarDataType::from_api_str`], which knows only what the venue streams — and
+/// the historical paths read it here to fetch raw trades and fold them rather
+/// than send a name the venue would answer "no historical market data" to. Read
+/// before the wire table, case folded, so the reference client's own spelling
+/// is taken whatever the casing.
+pub fn what_to_show_is_adjusted(what_to_show: &str) -> bool {
+    what_to_show.eq_ignore_ascii_case("ADJUSTED_LAST")
+}
+
 /// Bar data types for historical queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BarDataType {
@@ -56,21 +70,19 @@ impl BarDataType {
             "BID" => Self::Bid,
             "ASK" => Self::Ask,
             "BID_ASK" => Self::BidAsk,
-            // Not a name the venue answers to. Asked for it by name the venue
-            // states it has no such data, and what it does serve is raw. An
-            // adjusted series is built from those raw trades and the
-            // contract's own actions, which means holding both before a bar
-            // can be handed over — and this call answers on a callback, one
-            // bar at a time, with the actions possibly still in flight.
-            // `EClient::historical_data` waits, so it can hold both and does
-            // serve this. Refused here rather than answered with trade bars
-            // under an adjusted name.
+            // Not a name the venue answers to, and not a bar it streams: an
+            // adjusted series is built from the raw trades and the contract's
+            // own actions, not served ready-made. The bar requests fold the
+            // two — see [`what_to_show_is_adjusted`], which the historical
+            // paths read before this table — so a real-time bar, which has no
+            // history to fold and no actions in hand, is refused rather than
+            // answered with raw trades under an adjusted name.
             "ADJUSTED_LAST" => return Err(
                 "an adjusted series is built from the raw trades and the contract's own \
-                 actions, and a call that answers bar by bar on a callback cannot hold \
-                 both. Ask `EClient::historical_data` for ADJUSTED_LAST, which waits and \
-                 does. To do it by hand, ask here for TRADES and put them on one scale \
-                 with `EClient::corporate_actions` and \
+                 actions, so it is not a live bar the venue streams. Ask for it on a \
+                 historical bar request — `req_historical_data` and \
+                 `EClient::historical_data` both serve it — or build it by hand from \
+                 TRADES with `EClient::corporate_actions` and \
                  `control::adjustments::scale_bars`"
                     .to_string(),
             ),

@@ -113,6 +113,10 @@ pub(crate) struct HmdsState {
     /// Drained by the engine top-level after each hmds.poll, then handed to
     /// `CcpState::start_scanner_enrichment`.
     pub(crate) cold_scanner_results: Vec<(u32, crate::control::scanner::ScannerResult)>,
+    /// Every in-flight bar request's pages, held until the last is in so the
+    /// series is delivered oldest first and on one zone; one asked for adjusted
+    /// also waits there for the contract's actions.
+    pub(crate) held: Vec<HeldSeries>,
 }
 
 /// Wire security type for a historical query. Empty falls back to the stock
@@ -245,6 +249,50 @@ pub(crate) struct RtBarRequest {
     pub use_rth: bool,
 }
 
+/// A historical bar request's pages, held until the last is in.
+///
+/// The venue pages a long series and the pages arrive newest first, each
+/// ascending within itself, so a series filed page by page steps backwards at
+/// every boundary: a plot of it is a sawtooth, a return between consecutive
+/// bars is nonsense once per page, and its last bar is years old. The
+/// reference client hands bars over oldest first, so every request is held
+/// here until its last page, sorted on the bars' own stamps, and filed as one
+/// complete series for the dispatch pass to deliver bar by bar. The zone is the
+/// series' own: the first page that states one states it for the rest.
+///
+/// A request asked for adjusted also waits for the contract's corporate
+/// actions. The venue serves no adjusted series — what it sends is raw trades,
+/// and an adjusted one is those folded with the actions — and every bar dated
+/// before a split is on the wrong scale until the split is known, so the
+/// actions are asked for once the series is whole and ordered, from its first
+/// bar's day to today, and the fold is made before anything is filed.
+pub(crate) struct HeldSeries {
+    /// The caller's request, which the series is filed and delivered under.
+    pub(crate) req_id: u32,
+    /// Whether the series is to be folded with the contract's actions before
+    /// it is filed.
+    pub(crate) adjusted: bool,
+    /// The venue's id for the contract, which its corporate actions are asked
+    /// for by.
+    pub(crate) con_id: u32,
+    /// The contract's security type and venue, as the caller stated them, for
+    /// the corporate-actions query.
+    pub(crate) sec_type: String,
+    pub(crate) exchange: String,
+    /// The raw trade bars so far, in the order they arrived.
+    pub(crate) bars: Vec<crate::control::historical::HistoricalBar>,
+    /// The zone the bar times are stated in, as the reply states it.
+    pub(crate) timezone: String,
+    /// Whether the corporate-actions query has been sent. Sent when the last
+    /// page is in, from the earliest day the series holds: the venue pages a
+    /// long series newest first, so that day is not known until then.
+    pub(crate) actions_asked: bool,
+    /// The contract's actions, once the venue has stated them.
+    pub(crate) actions: Option<Vec<crate::control::adjustments::Adjustment>>,
+    /// Whether the raw series is complete — the last bar has arrived.
+    pub(crate) complete: bool,
+}
+
 impl HmdsState {
     pub(crate) fn new() -> Self {
         Self {
@@ -273,6 +321,7 @@ impl HmdsState {
             forming_bars: Vec::new(),
             rtbar_resub: Vec::new(),
             cold_scanner_results: Vec::new(),
+            held: Vec::new(),
         }
     }
 
@@ -305,10 +354,19 @@ impl HmdsState {
     /// Report every unanswered one-shot request as failed, and forget it.
     fn fail_pending(&mut self, why: &str, shared: &SharedState) {
         let mut stranded: Vec<(u32, bool)> = Vec::new();
+        // Every bar request holds its pages here, and it shares the caller's
+        // number with its query on `pending_historical` and, if adjusted, its
+        // actions query on `pending_adjustments`. Failed once, on the bar
+        // channels: its number is taken off the other two lists below so the
+        // caller is not told three times.
+        let adjusted_ids: std::collections::HashSet<u32> =
+            self.held.iter().map(|a| a.req_id).collect();
+        stranded.extend(self.held.drain(..).map(|a| (a.req_id, true)));
         // Bars are failed on the data channel as well as the error channel;
         // a caller blocked on the series needs the empty completion. Other
         // request kinds use the error channel alone.
-        stranded.extend(self.pending_historical.drain(..).map(|(_, rid)| (rid, true)));
+        stranded.extend(self.pending_historical.drain(..)
+            .filter(|(_, rid)| !adjusted_ids.contains(rid)).map(|(_, rid)| (rid, true)));
         stranded.extend(self.pending_head_ts.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_scanner.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_news.drain(..).map(|(_, rid)| (rid, false)));
@@ -319,7 +377,8 @@ impl HmdsState {
         self.answered_fundamental.clear();
         self.answered_news.clear();
         stranded.extend(self.pending_histogram.drain(..).map(|(_, rid)| (rid, false)));
-        stranded.extend(self.pending_adjustments.drain(..).map(|(_, rid, _)| (rid, false)));
+        stranded.extend(self.pending_adjustments.drain(..)
+            .filter(|(_, rid, _)| !adjusted_ids.contains(rid)).map(|(_, rid, _)| (rid, false)));
         stranded.extend(self.pending_schedule.drain(..).map(|(_, rid, _)| (rid, false)));
         stranded.extend(self.pending_ticks.drain(..).map(|(_, rid, _)| (rid, false)));
         if stranded.is_empty() {
@@ -590,12 +649,24 @@ impl HmdsState {
                                 "HMDS W matched: req_id={} query_id={:?} eoq={} bars={}",
                                 req_id, resp.query_id, is_complete, resp.bars.len()
                             );
-                            // Clone only when someone is listening on the event
-                            // channel — a bar batch is a deep copy.
-                            let for_event = clone_for_event(event_tx, &resp);
-                            shared.reference.push_historical_data(req_id, resp);
-                            if let Some(data) = for_event {
-                                emit(event_tx, Event::HistoricalData { req_id, data });
+                            // Every request holds its pages until the last is
+                            // in: the venue pages newest first and the series
+                            // is delivered oldest first. A page for a query
+                            // nothing holds is one that arrived after its
+                            // series was filed — a kept-up-to-date request
+                            // keeps its query open for the stream — and is
+                            // filed as it came.
+                            if self.held.iter().any(|a| a.req_id == req_id) {
+                                self.hold_bars(req_id, resp, hmds_conn, hb, shared, event_tx);
+                            } else {
+                                log::debug!("bars for req_id={req_id} with no series held; filed as they came");
+                                // Clone only when someone is listening on the event
+                                // channel — a bar batch is a deep copy.
+                                let for_event = clone_for_event(event_tx, &resp);
+                                shared.reference.push_historical_data(req_id, resp);
+                                if let Some(data) = for_event {
+                                    emit(event_tx, Event::HistoricalData { req_id, data });
+                                }
                             }
                             if is_complete && !self.keep_up_to_date_reqs.contains(&req_id) {
                                 self.pending_historical.remove(pos);
@@ -784,6 +855,19 @@ impl HmdsState {
                                 let sub = self.tbt_subscriptions.remove(pos);
                                 released_req_id = Some(sub.caller_req_id as u32);
                             }
+                        }
+                        // A bar request whose pages, or whose actions, the venue
+                        // refused is a bar request that failed: what was held is
+                        // dropped and the caller is answered on the bar channels,
+                        // terminal sentinel and all, rather than left waiting on
+                        // a series that will never complete. An adjusted
+                        // request's two queries share the caller's number, so
+                        // this catches a refusal of either.
+                        if let Some(rid) = released_req_id
+                            && self.held.iter().any(|a| a.req_id == rid)
+                        {
+                            self.held.retain(|a| a.req_id != rid);
+                            from_historical = true;
                         }
                         match released_req_id {
                             Some(req_id) => {
@@ -1015,13 +1099,28 @@ impl HmdsState {
                                                     "corporate actions for {}: {} stated",
                                                     contract.con_id, actions.len(),
                                                 );
-                                                shared.reference.note_adjustments(contract, actions, answers);
+                                                // A bar request waiting for
+                                                // these to fold its raw trades
+                                                // takes them and files the
+                                                // scaled series; the record
+                                                // against the contract is left
+                                                // as before, so a corporate
+                                                // actions call reads it too.
+                                                if let Some(apos) = self.held
+                                                    .iter().position(|a| a.req_id == answers)
+                                                {
+                                                    self.held[apos].actions = Some(actions.clone());
+                                                    shared.reference.note_adjustments(contract, actions, answers);
+                                                    self.try_file_held(answers, shared, event_tx);
+                                                } else {
+                                                    shared.reference.note_adjustments(contract, actions, answers);
+                                                }
                                             } else {
                                                 shared.market.note_unread_wire(
                                                     "historical",
                                                     format!(
-                                                        "6040=10022 named contract {} where {asked_about} was asked about",
-                                                        contract.con_id,
+                                                        "6040=10022 named contract {} where {asked_about} was asked about ({} action(s) dropped)",
+                                                        contract.con_id, actions.len(),
                                                     ),
                                                 );
                                             }
@@ -1035,8 +1134,8 @@ impl HmdsState {
                                         None => shared.market.note_unread_wire(
                                             "historical",
                                             format!(
-                                                "6040=10022 for {} answered no request this session is waiting on",
-                                                contract.con_id,
+                                                "6040=10022 for {} answered no request this session is waiting on ({} action(s) dropped, echoed id {:?})",
+                                                contract.con_id, actions.len(), echoed,
                                             ),
                                         ),
                                     }
@@ -1461,16 +1560,27 @@ fn build_tbt_query(
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
 
+        // The adjusted series is not a wire type: the venue has no such data,
+        // so what goes out asks for raw trades and the fold onto one scale
+        // happens once both the trades and the contract's actions are held.
+        // The client validates and requires the venue's id before this; this is
+        // the engine-side reading of the same name for a raw control-channel
+        // caller.
+        let adjusted = crate::control::historical::what_to_show_is_adjusted(what_to_show);
         // One shared table, rejection instead of a silent Min5/TRADES
         // fallback. The client validates synchronously before the
         // command is sent; this is the engine-side backstop for raw
         // control-channel callers.
-        let data_type = match crate::control::historical::BarDataType::from_api_str(what_to_show) {
-            Ok(dt) => dt,
-            Err(e) => {
-                log::error!("historical req_id={req_id}: {e}");
-                super::push_hmds_error(shared, req_id, e, true);
-                return;
+        let data_type = if adjusted {
+            crate::control::historical::BarDataType::Trades
+        } else {
+            match crate::control::historical::BarDataType::from_api_str(what_to_show) {
+                Ok(dt) => dt,
+                Err(e) => {
+                    log::error!("historical req_id={req_id}: {e}");
+                    super::push_hmds_error(shared, req_id, e, true);
+                    return;
+                }
             }
         };
         let bs = match crate::control::historical::BarSize::from_api_str(bar_size) {
@@ -1517,6 +1627,156 @@ fn build_tbt_query(
             hb.last_hmds_sent = Instant::now();
         }
         self.pending_historical.push((query_id, req_id));
+        // Every request's pages are held until the last is in, so the series
+        // goes up oldest first whatever order the venue sends the pages in. An
+        // adjusted one also waits there for the contract's actions.
+        self.held.push(HeldSeries {
+            req_id,
+            adjusted,
+            con_id: con_id as u32,
+            sec_type: sec_type.to_string(),
+            exchange: exchange.to_string(),
+            bars: Vec::new(),
+            timezone: String::new(),
+            actions_asked: false,
+            actions: None,
+            complete: false,
+        });
+    }
+
+    /// Hold one page of a series, and file the series once its last page is
+    /// in — ordered, on one zone, and folded if it was asked for adjusted.
+    fn hold_bars(
+        &mut self,
+        req_id: u32,
+        resp: crate::control::historical::HistoricalResponse,
+        hmds_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+        shared: &SharedState,
+        event_tx: &Option<EventSink>,
+    ) {
+        let Some(pos) = self.held.iter().position(|a| a.req_id == req_id) else {
+            return;
+        };
+        // The zone is stated once beside the bars; the first non-empty one is
+        // the series's own.
+        if self.held[pos].timezone.is_empty() && !resp.timezone.is_empty() {
+            self.held[pos].timezone = resp.timezone;
+        }
+        self.held[pos].bars.extend(resp.bars);
+        if resp.is_complete {
+            self.held[pos].complete = true;
+        }
+        // Oldest first, as the reference client delivers them. The venue pages
+        // a long series newest first, each page ascending within itself, so as
+        // the pages arrive the series steps backwards at every boundary.
+        // Nothing on the wire places a page; the bar's own stamp is the one
+        // thing to order on. Ordered here on the stamp as the venue wrote it,
+        // before any page's zone or the caller's format touches it — so this
+        // order does not depend on the zone being carried right. The venue
+        // stamps every bar of a series one way, `YYYYMMDD-HH:MM:SS` or a day,
+        // fixed-width and day-leading, which is what makes text order time
+        // order; a series that breaks that is said out loud rather than
+        // ordered wrong in silence. A stable sort keeps a page's own order.
+        if self.held[pos].complete {
+            let bars = &mut self.held[pos].bars;
+            if bars.windows(2).any(|w| w[0].time.len() != w[1].time.len()) {
+                log::warn!(
+                    "req_id={req_id}: bar stamps of more than one shape in one series; \
+                     ordered on their text",
+                );
+            }
+            bars.sort_by(|a, b| a.time.cmp(&b.time));
+            // Two bars on one stamp are the venue's to explain. Both are
+            // delivered, adjacent, and said so: dropping one picks a winner
+            // the venue did not name. Not seen — a three-year series came back
+            // with every day once — and checked so it is not missed if it is.
+            if bars.windows(2).any(|w| w[0].time == w[1].time) {
+                log::warn!(
+                    "req_id={req_id}: a bar stamp repeats across the series' pages; both \
+                     are delivered",
+                );
+            }
+        }
+        // An adjusted series asks for its actions once, when the last page is
+        // in and the first bar is the oldest. Asked on the first bar to arrive,
+        // the range began after a split the series crossed and came back
+        // without it, and the fold ran with nothing to apply — three years of
+        // a contract that split ten for one were handed back raw under the
+        // adjusted name, with no error. It runs to today rather than to the
+        // last bar, because a split after the last bar moves the whole series.
+        if self.held[pos].complete
+            && self.held[pos].adjusted
+            && !self.held[pos].actions_asked
+            && let Some(from) = self.held[pos].bars.first()
+                .map(|b| b.time.chars().take(8).collect::<String>())
+        {
+            let today: String =
+                chrono_free_timestamp().chars().take(8).collect();
+            let (con_id, sec_type, exchange) = {
+                let a = &self.held[pos];
+                (a.con_id, a.sec_type.clone(), a.exchange.clone())
+            };
+            self.held[pos].actions_asked = true;
+            self.send_adjustments_request(
+                req_id, con_id, &sec_type, &exchange, &from, &today, shared, hmds_conn, hb,
+            );
+        }
+        self.try_file_held(req_id, shared, event_tx);
+    }
+
+    /// File a held series once it is whole — and, if it was asked for
+    /// adjusted, once the contract's actions are in hand and it is folded.
+    ///
+    /// Filed as one complete response, which the dispatch pass delivers bar by
+    /// bar and then ends. A fold that cannot be made — an action this client
+    /// cannot classify, a factor it cannot read — is a stated refusal with the
+    /// terminal sentinel rather than the raw price handed back under the
+    /// adjusted name.
+    fn try_file_held(
+        &mut self, req_id: u32, shared: &SharedState, event_tx: &Option<EventSink>,
+    ) {
+        let Some(pos) = self.held.iter().position(|a| a.req_id == req_id) else {
+            return;
+        };
+        let entry = &self.held[pos];
+        if !entry.complete {
+            return;
+        }
+        // An adjusted series with bars waits for the actions those bars are
+        // scaled by. One with none needs no actions — there is nothing to
+        // scale, and the query is only sent for a first bar that never came —
+        // so it is filed empty rather than held for an answer nothing asked
+        // for, which is what the waiting call does with it.
+        if entry.adjusted && !entry.bars.is_empty() && entry.actions.is_none() {
+            return;
+        }
+        let entry = self.held.remove(pos);
+        let folded = if entry.adjusted {
+            let actions = entry.actions.unwrap_or_default();
+            crate::control::adjustments::scale_historical_bars(entry.bars, &actions)
+        } else {
+            Ok(entry.bars)
+        };
+        match folded {
+            Ok(bars) => {
+                let resp = crate::control::historical::HistoricalResponse {
+                    query_id: String::new(),
+                    timezone: entry.timezone,
+                    is_complete: true,
+                    bars,
+                };
+                let for_event = clone_for_event(event_tx, &resp);
+                shared.reference.push_historical_data(entry.req_id, resp);
+                if let Some(data) = for_event {
+                    emit(event_tx, Event::HistoricalData { req_id: entry.req_id, data });
+                }
+            }
+            Err(why) => {
+                log::warn!("adjusted req_id={} could not be folded: {why}", entry.req_id);
+                super::push_hmds_error(shared, entry.req_id, why, true);
+            }
+        }
     }
 
     /// Tell the venue to stop serving a query.

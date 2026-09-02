@@ -453,6 +453,35 @@ pub fn scale_bars(
         .collect()
 }
 
+/// Put the bars the historical connection carries on one scale, as
+/// [`scale_bars`] does for the bars the callbacks carry.
+///
+/// The wire bar and the callback bar hold the same numbers under other names,
+/// so the wire bar is lent to `scale_bars` and taken back rather than folded a
+/// second way: an adjusted series answered on a callback and one answered by a
+/// waiting call are then the same series, because one routine states the fold.
+/// `scale_bars` moves the prices and the volume and leaves the day it is dated
+/// and the count that made it alone, so the round trip carries those across
+/// untouched.
+pub fn scale_historical_bars(
+    bars: Vec<crate::control::historical::HistoricalBar>, actions: &[Adjustment],
+) -> Result<Vec<crate::control::historical::HistoricalBar>, String> {
+    let model = bars
+        .into_iter()
+        .map(|b| crate::types::model::BarData {
+            date: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
+            volume: b.volume, wap: b.wap, bar_count: b.count as i32, timezone: String::new(),
+        })
+        .collect();
+    Ok(scale_bars(model, actions)?
+        .into_iter()
+        .map(|b| crate::control::historical::HistoricalBar {
+            time: b.date, open: b.open, high: b.high, low: b.low, close: b.close,
+            volume: b.volume, wap: b.wap, count: b.bar_count as u32,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +702,37 @@ mod tests {
         assert!((out[0].close - 120.888).abs() < 1e-9, "before: {}", out[0].close);
         assert_eq!(out[0].volume, 1000);
         // The day of the split is already on the new scale and stays as it is.
+        assert!((out[1].close - 121.79).abs() < 1e-9, "after: {}", out[1].close);
+        assert_eq!(out[1].volume, 100);
+    }
+
+    /// The bars the historical connection carries fold the same way the ones
+    /// the callbacks carry do, because one routine states the fold. The
+    /// callback path scales these before it hands a bar over, so a split it
+    /// crosses steps its prices and its volume and leaves the day and the
+    /// count that made it alone.
+    #[test]
+    fn the_wire_bars_fold_the_same_way_the_callback_bars_do() {
+        use crate::control::historical::HistoricalBar;
+        let split = vec![Adjustment {
+            kind: Some(AdjustmentKind::Split),
+            date: "20240610".into(),
+            value: "10".into(),
+            ..Default::default()
+        }];
+        let bar = |time: &str, close: f64, volume: i64| HistoricalBar {
+            time: time.into(),
+            open: close, high: close, low: close, close, wap: close,
+            volume, count: 7,
+        };
+        let out = scale_historical_bars(
+            vec![bar("20240607", 1208.88, 100), bar("20240610", 121.79, 100)], &split,
+        )
+        .expect("both bars state a day");
+        assert!((out[0].close - 120.888).abs() < 1e-9, "before: {}", out[0].close);
+        assert_eq!(out[0].volume, 1000, "the shares before the split count for ten times as many");
+        assert_eq!(out[0].time, "20240607", "the day it is dated is untouched");
+        assert_eq!(out[0].count, 7, "and the count that made it");
         assert!((out[1].close - 121.79).abs() < 1e-9, "after: {}", out[1].close);
         assert_eq!(out[1].volume, 100);
     }
