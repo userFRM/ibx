@@ -661,12 +661,36 @@ where
     let alias = ibapi_name(name);
     if alias != name
         && let Ok(f) = wrapper.getattr(py, alias.as_str())
+        && !answered_by_the_base(py, &f, &alias)
     {
         f.call1(py, args.clone())?;
         return Ok(());
     }
     wrapper.call_method1(py, name, args)?;
     Ok(())
+}
+
+/// Whether what a wrapper answered under the reference client's name is the
+/// base class's own answer rather than the caller's.
+///
+/// The base answers to that name too, so that `super().tickPrice(...)` finds
+/// something — `super` reads each class's own contents and asks no hook, so the
+/// name has to be there. That answer also stands in front of a caller who
+/// overrode only this client's spelling, and taking it would report the
+/// callback delivered when nobody received it.
+///
+/// Known by `__func__`, which the base answers with a Python function to carry
+/// and which the do-nothing's own bound form has none of — that missing link is
+/// what an earlier guard here tried to read and never could. Anything else a
+/// wrapper answers with, its own method or something put on the instance, is
+/// the caller's.
+fn answered_by_the_base(py: Python<'_>, f: &Py<PyAny>, alias: &str) -> bool {
+    let Ok(func) = f.getattr(py, pyo3::intern!(py, "__func__")) else {
+        return false;
+    };
+    py.get_type::<super::wrapper::EWrapper>()
+        .getattr(alias)
+        .is_ok_and(|base| func.is(&base))
 }
 
 /// The reference client's spelling of a callback name: its words run together

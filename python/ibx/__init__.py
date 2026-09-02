@@ -35,6 +35,12 @@ def _reference_name(ours: str) -> str:
         "real_time_bar": "realtimeBar",
         "receive_fa": "receiveFA",
         "replace_fa_end": "replaceFAEnd",
+        "req_pnl": "reqPnL",
+        "cancel_pnl": "cancelPnL",
+        "req_pnl_single": "reqPnLSingle",
+        "cancel_pnl_single": "cancelPnLSingle",
+        "request_fa": "requestFA",
+        "replace_fa": "replaceFA",
     }
     if ours in run_together:
         return run_together[ours]
@@ -57,16 +63,34 @@ def _answer_to_both_spellings(cls) -> None:
             continue
         theirs = _reference_name(ours)
         if theirs != ours and not hasattr(cls, theirs):
-            setattr(cls, theirs, getattr(cls, ours))
+            setattr(cls, theirs, _standing_in_front_of(getattr(cls, ours), cls, theirs))
 
 
-# The client only. Putting them on the wrapper too breaks how a callback is
-# delivered: the engine looks the reference spelling up first, and with the
-# base class answering to it, a subclass that overrode the name this client
-# uses stopped being reached at all. Making `super().tickPrice(...)` work on
-# the wrapper needs the delivery to resolve against the subclass before the
-# base, which is a change to the engine rather than a name put on a class.
-_answer_to_both_spellings(EClient)  # noqa: F405
+def _standing_in_front_of(method, cls, theirs: str):
+    """The reference spelling, as a function that calls the method.
+
+    Not the method under a second name. Delivery tries the reference spelling
+    first, so a base class answering to it stands in front of a subclass that
+    overrode only this client's spelling — and the engine has to tell the base's
+    answer from the caller's to pass it over. A bound Python function carries
+    `__func__` and the method's own bound form carries nothing that names it,
+    so the function is what makes the two tellable apart.
+    """
+
+    def theirs_calls_ours(self, *args, **kwargs):
+        return method(self, *args, **kwargs)
+
+    theirs_calls_ours.__name__ = theirs
+    theirs_calls_ours.__qualname__ = f"{cls.__name__}.{theirs}"
+    theirs_calls_ours.__doc__ = method.__doc__
+    # What `inspect.signature` reads the method's own through.
+    theirs_calls_ours.__wrapped__ = method
+    return theirs_calls_ours
+
+
+for _surface in (EWrapper, EClient):  # noqa: F405
+    _answer_to_both_spellings(_surface)
+del _surface
 
 # The extension module is bound on this package by the star-import above, so
 # `dir()` names it too. Left in, `from ibx import *` rebinds the caller's own

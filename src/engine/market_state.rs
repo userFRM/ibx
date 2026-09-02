@@ -558,9 +558,20 @@ impl MarketState {
         q.ask - q.bid
     }
 
-    /// Clear server tag mappings (called on farm disconnect — old tags are invalid).
+    /// Forget the venue's numbers, which the connection they came on took with
+    /// it.
+    ///
+    /// Both halves. A number is given up so that an answer arriving after the
+    /// subscription it belonged to is over does not point a later request at a
+    /// number nothing comes on — and that is a question about one connection.
+    /// Across a new one the venue's numbers start again, so a number given up
+    /// on the old connection can be issued again on this one, and the answer
+    /// carrying it was refused: the subscription it belonged to was silently
+    /// dead for the rest of the session, on a connection reporting healthy.
+    /// Kept, the set also only ever grew.
     pub fn clear_server_tags(&mut self) {
         self.server_tag_to_instrument.clear();
+        self.retired_server_tags.clear();
     }
 
     /// Zero all quote data to prevent stale price trading after farm disconnect.
@@ -574,6 +585,30 @@ impl MarketState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A number given up on one connection is not held against the next.
+    ///
+    /// Numbers are given up so that an answer arriving after its subscription
+    /// is over does not point a later request at a number nothing comes on —
+    /// which is a question about one connection. The venue's numbers start
+    /// again on a new one, so a number it issues again was refused, and the
+    /// subscription it belonged to was silently dead for the rest of the
+    /// session on a connection reporting healthy. Kept, the set also only grew.
+    #[test]
+    fn a_number_given_up_is_forgotten_with_the_connection() {
+        let mut ms = MarketState::new();
+        let id = ms.register(1);
+        ms.register_server_tag(274555, id);
+        ms.clear_server_tags_for(id);
+        assert!(ms.retired_server_tags().contains(&274555), "given up on this one");
+
+        ms.clear_server_tags();
+        assert!(
+            ms.retired_server_tags().is_empty(),
+            "and not held against the next: {:?}",
+            ms.retired_server_tags(),
+        );
+    }
     use crate::types::PRICE_SCALE;
 
     #[test]
