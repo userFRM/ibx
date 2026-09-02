@@ -197,14 +197,17 @@ fn a_what_if_preview_reports_the_parent_the_child_was_given() {
     );
 }
 
-/// A quantity that is not a number, or is negative, or overflows the
-/// fixed-point form, all become a size the caller did not ask for.
+/// A quantity that is not a number, or overflows the fixed-point form, becomes
+/// a size the caller did not ask for.
+///
+/// Zero and negative are not here. Both encode exactly and the venue answers
+/// them itself, so refusing them was this client making up a rule about a
+/// request the venue was never asked about.
 #[test]
 fn an_unusable_quantity_is_refused() {
     for (qty, expect) in [
         (f64::NAN, "finite"),
         (f64::INFINITY, "finite"),
-        (-5.0, "negative"),
         (1e11, "too large"),
     ] {
         let (client, _rx, _shared) = test_client();
@@ -236,7 +239,8 @@ fn the_quantity_boundaries_are_exact() {
     let largest = crate::types::MAX_EXACT_QTY_SHARES;
     assert!(place(largest).is_ok(), "the largest carryable quantity still places");
     assert!(place(largest + 1.0).is_err(), "one past it does not");
-    assert!(place(-1.0).is_err(), "a small negative is refused, not just a large one");
+    assert!(place(-1.0).is_ok(), "a negative goes to the venue, which answers it");
+    assert!(place(0.0).is_ok(), "and so does a zero");
     assert!(place(1.25).is_ok(), "a fraction is carried, not refused");
     assert!(place(f64::NEG_INFINITY).is_err(), "negative infinity is not finite either");
 }
@@ -244,17 +248,14 @@ fn the_quantity_boundaries_are_exact() {
 /// A cash-quantity order states its size in currency and carries no shares, so
 /// zero is only wrong when nothing else says how much to buy.
 #[test]
-fn zero_shares_is_refused_unless_the_order_is_cash_sized() {
+fn zero_shares_reaches_the_venue_rather_than_a_refusal_written_here() {
     let (client, rx, _shared) = test_client();
     let bare = Order {
         action: "BUY".into(), total_quantity: 0.0, order_type: "MKT".into(),
         tif: "DAY".into(), ..Default::default()
     };
-    assert!(
-        client.place_order(9602, &spy(), &bare).is_err(),
-        "zero shares with no cash quantity is not an order",
-    );
-    assert!(rx.try_recv().is_err(), "and nothing reaches the wire");
+    client.place_order(9602, &spy(), &bare).expect("the venue is asked, not this client");
+    assert!(rx.try_recv().is_ok(), "and it reaches the wire to be asked");
 
     let cash = Order {
         action: "BUY".into(), total_quantity: 0.0, order_type: "LMT".into(),
@@ -2683,15 +2684,20 @@ fn place_order_rejects_nan_aux_price() {
     assert!(err.message.contains("aux_price"), "got: {err}");
 }
 
+/// A negative quantity is the venue's to refuse, and it does.
+///
+/// Tag 38 carries the sign, so the order goes out saying exactly what it was
+/// given. Refused here instead, a caller reading the venue's code for this was
+/// handed one this client made up.
 #[test]
-fn place_order_rejects_negative_quantity() {
-    let (client, _rx, shared) = test_client();
+fn a_negative_quantity_is_carried_to_the_venue() {
+    let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
     let order = Order {
         action: "BUY".into(), total_quantity: -100.0, order_type: "MKT".into(), ..Default::default()
     };
-    let err = client.place_order(1, &spy(), &order).unwrap_err();
-    assert!(err.message.contains("total_quantity"), "got: {err}");
+    client.place_order(1, &spy(), &order).expect("carried, not refused here");
+    assert!(rx.try_recv().is_ok(), "it reaches the wire");
 }
 
 #[test]

@@ -2729,18 +2729,14 @@ impl ClientCore {
         if !order.total_quantity.is_finite() {
             return Err("total_quantity must be a finite number".to_string());
         }
-        if order.total_quantity < 0.0 {
-            return Err(format!("total_quantity {} is negative", order.total_quantity));
-        }
         if order.total_quantity > crate::types::MAX_EXACT_QTY_SHARES {
             return Err(format!("total_quantity {} is too large", order.total_quantity));
         }
-        // A cash-quantity order legitimately carries no shares — the size is
-        // stated in currency instead — so zero is only wrong when nothing else
-        // says how much to buy.
-        if order.total_quantity == 0.0 && order.cash_qty <= 0.0 {
-            return Err("total_quantity is zero and no cash_qty was supplied".to_string());
-        }
+        // Zero and negative go out as they were given. Both encode exactly —
+        // tag 38 carries the sign and carries a zero — so the venue is asked
+        // and the venue answers, under its own code. Refused here instead, a
+        // caller reading that code was handed one this client made up for a
+        // request the venue was never asked about.
         if order.parent_id < 0 {
             return Err(format!("parent_id must not be negative, got {}", order.parent_id));
         }
