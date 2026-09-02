@@ -142,9 +142,9 @@ impl EClient {
         for pi in &positions {
             let c_py = Py::new(py, self.position_contract(pi, &shared))?.into_any();
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
-            self.callback(py, "position", (self.account().as_str(), &c_py, pi.position, avg_cost))?;
+            self.deliver(py, "position", (self.account().as_str(), &c_py, pi.position, avg_cost))?;
         }
-        self.callback(py, "position_end", ())?;
+        self.deliver(py, "position_end", ())?;
         // Reported from here, on the next holding to move. What was already
         // recorded is left standing rather than dropped: the record is kept by
         // contract and states what the holding is now, so at worst the caller
@@ -196,7 +196,7 @@ impl EClient {
     /// early.
     fn req_managed_accts(&self, py: Python<'_>) -> PyResult<()> {
         let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
-        self.callback(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
+        self.deliver(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
         Ok(())
     }
 
@@ -226,10 +226,10 @@ impl EClient {
         // any other currency as dollars, and drops every figure outside the
         // handful that copy carries.
         for (key, value, currency) in shared.portfolio.stated_account_values() {
-            self.callback(py, "account_update_multi",
+            self.deliver(py, "account_update_multi",
                 (req_id, acct_name, model_code, key.as_str(), value.as_str(), currency.as_str()))?;
         }
-        self.callback(py, "account_update_multi_end", (req_id,))?;
+        self.deliver(py, "account_update_multi_end", (req_id,))?;
         Ok(())
     }
 
@@ -256,10 +256,10 @@ impl EClient {
         for pi in &positions {
             let c_py = Py::new(py, self.position_contract(pi, &shared))?.into_any();
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
-            self.callback(py, "position_multi",
+            self.deliver(py, "position_multi",
                 (req_id, account, model_code, &c_py, pi.position, avg_cost))?;
         }
-        self.callback(py, "position_multi_end", (req_id,))?;
+        self.deliver(py, "position_multi_end", (req_id,))?;
         // Reported from here, on the next holding to move. The same live feed
         // as `position`, asked for under this request id.
         self.positions_multi_requested.lock().unwrap().insert(req_id);

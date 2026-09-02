@@ -342,9 +342,21 @@ impl EClient {
         let username_for_resume = username.clone();
         let username_for_session = username.clone();
         let password_for_resume = password.clone();
-        if self.connected.load(Ordering::Relaxed) {
+        // Claimed, not read. Read and then set, two callers racing here both
+        // find it clear and both build an engine — and the second replaces the
+        // first, which goes on running with a live socket and a second logon
+        // the account did not ask for. The venue bumps the older session when
+        // that happens, so a caller racing itself knocks over its own.
+        if self
+            .connected
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return Err(PyRuntimeError::new_err("Already connected"));
         }
+        // Given back on every way out that is not a session, including the
+        // ones a later edit adds.
+        let mut claim = Connecting { flag: &self.connected, kept: false };
         // Past that refusal there can still be an engine running: a
         // market-data farm that went away flips this flag while the trading
         // connection is healthy and the ladder is still climbing, and
@@ -464,7 +476,7 @@ impl EClient {
         *self._thread.lock().unwrap() = Some(handle);
         self.session_ended.store(false, Ordering::Release);
         self.close_notified.store(false, Ordering::Release);
-        self.connected.store(true, Ordering::Release);
+        claim.kept = true;
 
         self.client_id.store(client_id, Ordering::Release);
         let _ = port; // kept for the reference client's signature
@@ -686,6 +698,23 @@ fn ibapi_name(snake: &str) -> String {
     out
 }
 
+
+/// Holds the connected flag for the length of a connect that has not finished.
+///
+/// The refusal and the flag it reads are one step, so the flag is set before
+/// the session exists. Anything short of a session gives it back.
+struct Connecting<'a> {
+    flag: &'a AtomicBool,
+    kept: bool,
+}
+
+impl Drop for Connecting<'_> {
+    fn drop(&mut self) {
+        if !self.kept {
+            self.flag.store(false, Ordering::Release);
+        }
+    }
+}
 
 impl EClient {
     /// Stop the engine this client is running and wait for it.
@@ -942,6 +971,32 @@ impl EClient {
     ///
     /// The dispatch loop holds the same rule for the same reason, so one
     /// raising handler cannot take the loop down with it.
+    /// Hand a caller one of the answers to a call it made, and let the rest of
+    /// the answer through whatever it does with it.
+    ///
+    /// The dispatch loop already treats a raising callback this way: what the
+    /// caller wrote is the caller's problem, and the batch behind it is still
+    /// owed. Delivered with `?` instead, one raising callback abandoned the
+    /// answers behind it and the end-of-answer that closes it — so a program
+    /// waiting to be told the answer was complete waited for good, and the
+    /// exception came back out of a request call, which is somewhere the
+    /// reference client never raises one.
+    ///
+    /// Not an ordinary exception — an interrupt, the interpreter going down —
+    /// still ends the call, because nothing here can carry on through that.
+    pub(crate) fn deliver<'py, A>(&self, py: Python<'py>, name: &str, args: A) -> PyResult<()>
+    where
+        A: pyo3::call::PyCallArgs<'py> + Clone,
+    {
+        if let Err(e) = self.callback(py, name, args) {
+            if !e.is_instance_of::<pyo3::exceptions::PyException>(py) {
+                return Err(e);
+            }
+            log::error!("Python callback {name}() raised: {e}");
+        }
+        Ok(())
+    }
+
     pub(crate) fn notify<'py, A>(&self, py: Python<'py>, name: &str, args: A)
     where
         A: pyo3::call::PyCallArgs<'py> + Clone,

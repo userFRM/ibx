@@ -443,7 +443,7 @@ impl EClient {
                     }).map(|o| o.into_any()))
                     .collect::<PyResult<_>>()?;
                 let list = pyo3::types::PyList::new(py, steps)?;
-                self.callback(py, "market_rule", (market_rule_id as i64, list.as_any()))?;
+                self.deliver(py, "market_rule", (market_rule_id as i64, list.as_any()))?;
                 return Ok(());
             }
         // Answered, not logged. A caller waiting on a callback that will never

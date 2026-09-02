@@ -212,7 +212,7 @@ impl EClient {
                     .as_secs() as i64
             }
         };
-        self.callback(py, "current_time", (seconds,))?;
+        self.deliver(py, "current_time", (seconds,))?;
         Ok(())
     }
 
@@ -252,7 +252,7 @@ impl EClient {
                     .as_millis() as i64
             }
         };
-        self.callback(py, "current_time_in_millis", (millis,))?;
+        self.deliver(py, "current_time_in_millis", (millis,))?;
         Ok(())
     }
 
@@ -367,7 +367,7 @@ impl EClient {
             };
             map.set_item(c.bit_number, Py::new(py, obj)?)?;
         }
-        self.callback(py, "smart_components", (req_id, map.as_any()))?;
+        self.deliver(py, "smart_components", (req_id, map.as_any()))?;
         Ok(())
     }
 
@@ -384,7 +384,7 @@ impl EClient {
             providers.push(Py::new(py, obj)?);
         }
         let py_list = pyo3::types::PyList::new(py, providers)?;
-        self.callback(py, "news_providers", (py_list.as_any(),))?;
+        self.deliver(py, "news_providers", (py_list.as_any(),))?;
         Ok(())
     }
 
@@ -405,7 +405,7 @@ impl EClient {
             objs.push(Py::new(py, obj)?);
         }
         let py_list = pyo3::types::PyList::new(py, objs)?;
-        self.callback(py, "soft_dollar_tiers", (req_id, py_list.as_any()))?;
+        self.deliver(py, "soft_dollar_tiers", (req_id, py_list.as_any()))?;
         Ok(())
     }
 
@@ -422,7 +422,7 @@ impl EClient {
                 fc.family_code_str.as_str().into_pyobject(py).unwrap().into_any(),
             ]).unwrap()
         }))?;
-        self.callback(py, "family_codes", (py_list.as_any(),))?;
+        self.deliver(py, "family_codes", (py_list.as_any(),))?;
         Ok(())
     }
 
@@ -456,7 +456,7 @@ impl EClient {
     fn req_user_info(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let shared = self.shared_state()?;
         let id = shared.reference.white_branding_id();
-        self.callback(py, "user_info", (req_id, id))?;
+        self.deliver(py, "user_info", (req_id, id))?;
         Ok(())
     }
 

@@ -93,7 +93,13 @@ impl EClient {
     #[pyo3(signature = (account_id="TEST123".to_string(), readonly=false, replay_done=true))]
     fn _test_connect(&self, account_id: String, readonly: bool, replay_done: bool) -> PyResult<()> {
         self.core.set_readonly(readonly);
-        if self.connected.load(Ordering::Relaxed) {
+        // Claimed rather than read, as on the real connect: two callers
+        // racing here both found it clear and both built a session.
+        if self
+            .connected
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return Err(PyRuntimeError::new_err("Already connected"));
         }
         let shared = Arc::new(SharedState::new());
@@ -118,7 +124,6 @@ impl EClient {
         *self._test_control_rx.lock().unwrap() = Some(rx);
         self.next_order_id.store(1000, Ordering::Relaxed);
         self.session_ended.store(false, Ordering::Release);
-        self.connected.store(true, Ordering::Release);
         Ok(())
     }
 

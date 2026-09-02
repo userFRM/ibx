@@ -367,7 +367,7 @@ impl EClient {
         // As `take_order_id` does: the mark this is read off is raised by a
         // replay that lands after the connection does.
         self.wait_for_the_replay(py);
-        self.callback(py, "next_valid_id", (self.stated_order_id() as i64,))?;
+        self.deliver(py, "next_valid_id", (self.stated_order_id() as i64,))?;
         let _ = num_ids;
         Ok(())
     }
@@ -423,13 +423,13 @@ impl EClient {
                 ..Default::default()
             };
             let state_py = Py::new(py, state)?.into_any();
-            self.callback(py, "open_order", (*order_id as i64, &c_py, &o_py, &state_py))?;
-            self.callback(py, "order_status",
+            self.deliver(py, "open_order", (*order_id as i64, &c_py, &o_py, &state_py))?;
+            self.deliver(py, "order_status",
                 (*order_id as i64, tracked.status.as_str(), tracked.filled, tracked.remaining,
                  0.0f64, tracked.order.perm_id, tracked.order.parent_id, 0.0f64,
                  self.client_id.load(Ordering::Acquire) as i64, "", 0.0f64))?;
         }
-        self.callback(py, "open_order_end", ())?;
+        self.deliver(py, "open_order_end", ())?;
         Ok(())
     }
 
@@ -542,7 +542,7 @@ impl EClient {
             };
             let exec_py = Py::new(py, exec_obj)?.into_any();
 
-            self.callback(py, "exec_details", (req_id, &c_py, &exec_py))?;
+            self.deliver(py, "exec_details", (req_id, &c_py, &exec_py))?;
 
             let report = CommissionAndFeesReport {
                 exec_id: se.commission_and_fees.exec_id.clone(),
@@ -553,9 +553,9 @@ impl EClient {
                 yield_redemption_date: se.commission_and_fees.yield_redemption_date.clone(),
             };
             let report_py = Py::new(py, report)?.into_any();
-            self.callback(py, "commission_and_fees_report", (&report_py,))?;
+            self.deliver(py, "commission_and_fees_report", (&report_py,))?;
         }
-        self.callback(py, "exec_details_end", (req_id,))?;
+        self.deliver(py, "exec_details_end", (req_id,))?;
         Ok(())
     }
 
@@ -624,9 +624,9 @@ impl EClient {
                     Order::from_api(py, order, self.client_id.load(Ordering::Acquire))?,
                 )?.into_any();
                 let state_py = Py::new(py, OrderState::from_api(state))?.into_any();
-                self.callback(py, "completed_order", (&c_py, &o_py, &state_py))?;
+                self.deliver(py, "completed_order", (&c_py, &o_py, &state_py))?;
             }
-            self.callback(py, "completed_orders_end", ())?;
+            self.deliver(py, "completed_orders_end", ())?;
         }
         Ok(())
     }
