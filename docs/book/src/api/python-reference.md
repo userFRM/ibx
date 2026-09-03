@@ -756,7 +756,7 @@ def cancel_order_by_perm_id(perm_id)
 
 #### `req_global_cancel`
 
-Cancel every order the account is working.  This wire carries no request to withdraw everything, so it is composed here: one cancel for each order held, which is what a caller asking for everything back is asking for. What is held is what the venue named as working at connect and what this session placed since. The venue names the former after the connect returns, so a global cancel issued straight away waits for that naming, as asking for the open orders does, and covers what was named.
+Cancel every order the account is working.  This wire carries no request to withdraw everything, so it is composed here: one cancel for each order held, which is what a caller asking for everything back is asking for. What is held is what the venue named as working at connect and what this session placed since. The venue names the former after the connect returns, so a global cancel issued straight away waits for that naming, as asking for the open orders does, and covers what was named. Where the naming does not finish within the wait, what had been named is still withdrawn and the call says so rather than returning as though every order were covered: a partial cancel that reads as one beats the same cancel in silence, which reads as a complete answer.
 
 ```python
 def req_global_cancel(order_cancel=None)
