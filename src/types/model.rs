@@ -868,57 +868,6 @@ impl Order {
         }
     }
 
-    /// The byte a preview states this order's type as.
-    ///
-    /// A preview is a question about the order the caller described, so it
-    /// names every type this client can send. [`Order::ord_type_byte`] answers
-    /// a narrower question — which types a replace may restate — and reads no
-    /// byte as "leave the resting order's type alone", so it cannot be widened
-    /// without changing what a modify does to a live order.
-    ///
-    /// Sharing the narrow set meant a trailing stop, a relative, a midprice, a
-    /// snap and a pegged order were all previewed as limits. The margin comes
-    /// back the same either way, because margin follows the resulting position
-    /// rather than the instruction that reaches it; what does not is the
-    /// venue's judgement of whether the order is allowed at all, so a security
-    /// that refuses limits refused a preview of an order that was not one.
-    ///
-    /// A type with no byte here is still previewed as a limit, which is the
-    /// only thing left to ask. Placement refuses a type it does not name, so a
-    /// preview reaches this fallback only for a type this client would not have
-    /// sent in the first place.
-    pub fn what_if_byte(&self) -> u8 {
-        match self.order_type.to_uppercase().as_str() {
-            "MKT" => b'1',
-            "LMT" => b'2',
-            "STP" => b'3',
-            "STP LMT" => b'4',
-            "MOC" => b'5',
-            "LOC" => b'B',
-            "MIT" => b'J',
-            "MTL" | "BOX TOP" => b'K',
-            "LIT" => crate::types::ORD_LIT,
-            "MKT PRT" => b'U',
-            // A relative order is sent as a peg and told apart by its
-            // ExecInst; "R" is that instruction, not a type the venue reads
-            // on tag 40.
-            "REL" => b'P',
-            "TRAIL" => b'P',
-            "TRAIL LIMIT" => crate::types::ORD_TRAIL_LIMIT,
-            "STP PRT" => crate::types::ORD_STP_PRT,
-            // Both spellings, as the placement path takes them. Naming only
-            // one here previewed the other as a limit.
-            "MIDPX" | "MIDPRICE" => crate::types::ORD_MIDPX,
-            "SNAP MKT" => crate::types::ORD_SNAP_MKT,
-            "SNAP MID" | "SNAP MIDPT" => crate::types::ORD_SNAP_MID,
-            "SNAP PRI" | "SNAP PRIM" => crate::types::ORD_SNAP_PRI,
-            "PEG MKT" => crate::types::ORD_PEG_MKT,
-            "PEG MID" | "PEG MIDPT" => crate::types::ORD_PEG_MID,
-            "PEG BENCH" => crate::types::ORD_PEG_BENCH,
-            _ => b'2',
-        }
-    }
-
     /// How long the order lives, as the single byte the wire carries it in.
     pub fn tif_byte(&self) -> u8 {
         match self.tif.as_str() {
@@ -1091,6 +1040,7 @@ impl Order {
             // number of contracts and nothing else an order carries, so it has
             // a call of its own that builds the request directly.
             exercise_action: 0,
+            what_if: self.what_if,
         }
     }
 
@@ -1773,6 +1723,7 @@ impl Contract {
             trading_class: self.trading_class.clone(),
             sec_id: self.sec_id.clone(),
             sec_id_type: self.sec_id_type.clone(),
+            issuer_id: self.issuer_id.clone(),
         }
     }
 }
@@ -2168,6 +2119,10 @@ mod tests {
             // Reached by `exercise_options` rather than by an order, so there is
             // no setter to list above and nothing for the predicate to name.
             exercise_action: _,
+            // Asks the venue what the order would cost instead of placing it.
+            // It changes the question the message asks rather than what the
+            // order carries, so it is not one of the attributes above.
+            what_if: _,
         } = Order::default().attrs();
 
         assert!(

@@ -873,20 +873,41 @@ fn parse_algo_dark_ice_needs_a_display_size() {
     assert!(err.message.contains("displaySize"), "got: {err}");
 }
 
-/// A key the strategy does not carry is refused. A modelled strategy is encoded
-/// from the fields it names, so any other key would not reach the venue.
+/// A key the strategy does not model still reaches the venue.
+///
+/// A modelled strategy is re-encoded from the fields it names, and a key it
+/// does not name has no field to be re-encoded into — so it used to be
+/// refused, on the reasoning that it would not reach the venue. It would: a
+/// parameter travels as a name and a value in a repeating group and there is
+/// no tag per parameter, so the venue reads a name this client never modelled
+/// exactly as it reads one it did. The whole list goes as written instead.
+/// This is the reference client's own VWAP sample, which states six parameters
+/// where five are modelled here.
 #[test]
-fn parse_algo_says_when_a_parameter_would_not_be_carried() {
+fn an_algo_parameter_this_client_does_not_model_still_travels() {
     let params = vec![
-        TagValue { tag: "displaySize".into(), value: "100".into() },
+        TagValue { tag: "maxPctVol".into(), value: "0.1".into() },
+        TagValue { tag: "noTakeLiq".into(), value: "1".into() },
         TagValue { tag: "speedUp".into(), value: "1".into() },
     ];
-    let err = parse_algo_params("darkice", &params).unwrap_err();
-    assert!(err.message.contains("speedUp"), "got: {err}");
+    let algo = parse_algo_params("Vwap", &params).expect("the list is carried");
+    let crate::types::AlgoParams::Named { strategy, params: stated } = algo else {
+        panic!("a list with an unmodelled key is forwarded as written, not re-encoded");
+    };
+    assert_eq!(strategy, "Vwap", "the caller's own spelling reaches the venue");
+    assert_eq!(
+        stated,
+        ["maxPctVol", "0.1", "noTakeLiq", "1", "speedUp", "1"],
+        "every key the caller wrote, in the order they wrote it",
+    );
 
-    // A strategy this client does not model is handed over as written, so
-    // every key the caller set goes with it.
+    // A strategy this client does not model is handed over the same way.
     assert!(parse_algo_params("Balanced", &params).is_ok());
+
+    // And a list the strategy does model is still re-encoded from its own
+    // fields, so nothing that already worked changed shape.
+    let modelled = parse_algo_params("Vwap", &params[..2]).expect("a modelled list");
+    assert!(matches!(modelled, crate::types::AlgoParams::Vwap { .. }), "got: {modelled:?}");
 }
 
 #[test]
@@ -2309,8 +2330,10 @@ fn place_order_what_if() {
     client.place_order(1, &spy(), &order).unwrap();
 
     let cmd = rx.try_recv().unwrap();
+    // The order the caller described, asked about rather than placed.
     assert!(matches!(cmd, ControlCommand::Order(OrderRequest::SubmitEx {
-        kind: OrderKind::WhatIf { .. }, .. })));
+        kind: OrderKind::Limit { .. },
+        attrs: crate::types::OrderAttrs { what_if: true, .. }, .. })));
 }
 
 #[test]
@@ -6765,3 +6788,4 @@ fn a_global_cancel_waits_for_the_venue_to_name_the_working_orders() {
         "the order the venue named is withdrawn: {sent:?}",
     );
 }
+

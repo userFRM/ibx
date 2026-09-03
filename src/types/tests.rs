@@ -576,77 +576,29 @@ mod quantity_scale_tests {
     }
 }
 
-/// A preview names the order it was asked about.
+/// A replace still states only the types it can carry.
 ///
-/// The narrower set a replace may restate was shared with previews, so a
-/// trailing stop, a relative, a midprice, a snap and a pegged order all went
-/// out as limits. The margin is the same either way — it follows the position
-/// the order would leave, not the instruction that reaches it — but a security
-/// that refuses limits refused a preview of an order that was not one.
+/// A preview used to share this narrower set and went out as a limit for
+/// everything outside it; it is now built as the order itself, so the two no
+/// longer move together. Reading no byte here means "leave the resting order's
+/// type alone", which is why widening it is a change to modification.
 #[test]
-fn a_preview_states_the_type_it_was_asked_about() {
+fn a_replace_states_only_the_types_it_can_restate() {
     use crate::types::model::Order;
 
-    // What tag 40 carries, which is what the venue reads. Asserting the byte
-    // instead let a type whose value is more than one character pass while the
-    // wire got the discriminant itself — an unprintable byte, not a type.
-    let previewed = |kind: &str| {
+    let restated = |kind: &str| {
         let mut o = Order::limit("BUY", 1.0, 1.00);
         o.order_type = kind.to_string();
-        crate::types::ord_type_fix_str(o.what_if_byte())
+        o.ord_type_byte()
     };
 
-    // The types a replace also states, unchanged.
-    assert_eq!(previewed("MKT"), "1");
-    assert_eq!(previewed("LMT"), "2");
-    assert_eq!(previewed("STP LMT"), "4");
+    assert_eq!(restated("MKT"), b'1');
+    assert_eq!(restated("LMT"), b'2');
+    assert_eq!(restated("STP LMT"), b'4');
+    assert_eq!(restated("MTL"), b'K');
+    assert_eq!(restated("STP PRT"), crate::types::ORD_STP_PRT);
 
-    // The types a replace does not state. A preview states the same value the
-    // order itself would be sent as, so these are the strings the new-order
-    // path writes on tag 40.
-    // Trailing, relative and pegged orders are all sent as "P" and told apart
-    // by their ExecInst, so that is what a preview of one states.
-    assert_eq!(previewed("TRAIL"), "P");
-    assert_eq!(previewed("REL"), "P");
-    assert_eq!(previewed("PEG MID"), "P");
-    assert_eq!(previewed("TRAIL LIMIT"), "TSL");
-    assert_eq!(previewed("LIT"), "LT");
-    assert_eq!(previewed("MTL"), "K");
-    assert_eq!(previewed("MIDPRICE"), "MIDPX");
-    assert_eq!(previewed("SNAP MID"), "SMID");
-    assert_eq!(previewed("STP PRT"), "SP");
-    assert_eq!(previewed("PEG BENCH"), "PB");
-
-    // Spelled the way a caller spells it.
-    assert_eq!(previewed("peg mid"), previewed("PEG MID"));
-
-    // Every type a preview names is one the table spells out. A discriminant
-    // with no entry falls back to a limit, which reaches the venue as a
-    // preview of an order the caller did not describe.
-    for kind in [
-        "MKT", "LMT", "STP", "STP LMT", "MOC", "LOC", "MIT", "MTL", "BOX TOP",
-        "MKT PRT", "REL", "TRAIL", "TRAIL LIMIT", "LIT", "STP PRT", "MIDPRICE",
-        "SNAP MKT", "SNAP MID", "SNAP PRI", "PEG MKT", "PEG MID", "PEG BENCH",
-    ] {
-        let s = previewed(kind);
-        assert!(
-            s.is_ascii() && !s.is_empty() && s.bytes().all(|b| b.is_ascii_graphic()),
-            "{kind} previews as {s:?}, which is not a type the venue can read",
-        );
-    }
-
-    // A replace still states only what it can carry, and reads no byte as
-    // "leave the resting order's type alone" — widening that is a change to
-    // modification, not to previews.
-    let mut trailing = Order::limit("BUY", 1.0, 1.00);
-    trailing.order_type = "TRAIL".to_string();
-    assert_eq!(trailing.ord_type_byte(), 0, "a replace cannot restate a trailing stop");
-
-    // Both spellings of a midprice, since the placement path takes both.
-    assert_eq!(previewed("MIDPX"), "MIDPX");
-
-    // A type nobody here knows falls back to a limit, and validation refuses
-    // it before a preview gets this far — see
-    // `a_preview_is_refused_for_a_type_this_client_cannot_send`.
-    assert_eq!(previewed("SOMETHING NEW"), "2");
+    assert_eq!(restated("TRAIL"), 0, "a replace cannot restate a trailing stop");
+    assert_eq!(restated("PEG MID"), 0, "nor a midpoint peg");
+    assert_eq!(restated("SOMETHING NEW"), 0, "nor a type nobody here knows");
 }

@@ -1083,9 +1083,9 @@ fn conditions_are_joined_the_way_the_caller_joined_them() {
 #[test]
 fn what_if_wire_carries_the_attributes_and_keeps_its_preview_flag() {
     let msg = send_kind_for_test(
-        crate::types::OrderKind::WhatIf { price: 100 * crate::types::PRICE_SCALE, aux: 0, ord_type: b'2' },
+        crate::types::OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
         b'1',
-        bracket_child_attrs(),
+        crate::types::OrderAttrs { what_if: true, ..bracket_child_attrs() },
     );
     let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
 
@@ -1133,9 +1133,9 @@ fn a_market_preview_states_market_and_no_price() {
     // Previewing every order as a limit is refused outright by a security
     // that only trades at market.
     let msg = send_kind_for_test(
-        crate::types::OrderKind::WhatIf { price: 0, aux: 0, ord_type: b'1' },
+        crate::types::OrderKind::Market,
         b'1',
-        bracket_child_attrs(),
+        crate::types::OrderAttrs { what_if: true, ..bracket_child_attrs() },
     );
     let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
     assert_eq!(tag("40=").as_deref(), Some("1"), "a market preview: {msg}");
@@ -1483,9 +1483,9 @@ fn an_order_falls_back_to_the_currency_the_venue_states() {
 #[test]
 fn a_stop_preview_states_its_trigger_and_no_limit() {
     let msg = send_kind_for_test(
-        crate::types::OrderKind::WhatIf { price: 0, aux: 90 * crate::types::PRICE_SCALE, ord_type: b'3' },
+        crate::types::OrderKind::Stop { stop_price: 90 * crate::types::PRICE_SCALE },
         b'0',
-        crate::types::OrderAttrs::default(),
+        crate::types::OrderAttrs { what_if: true, ..Default::default() },
     );
     assert!(msg.contains("\u{1}99=90\u{1}"), "the trigger is stated: {msg}");
     assert!(!msg.contains("\u{1}44="), "no limit price is stated: {msg}");
@@ -3047,13 +3047,12 @@ fn an_adjustable_conversion_names_the_type_the_registry_names() {
 #[test]
 fn a_stop_limit_preview_states_both_of_its_prices() {
     let msg = send_kind_for_test(
-        crate::types::OrderKind::WhatIf {
+        crate::types::OrderKind::StopLimit {
             price: 95 * crate::types::PRICE_SCALE,
-            aux: 90 * crate::types::PRICE_SCALE,
-            ord_type: b'4',
+            stop_price: 90 * crate::types::PRICE_SCALE,
         },
         b'0',
-        crate::types::OrderAttrs::default(),
+        crate::types::OrderAttrs { what_if: true, ..Default::default() },
     );
     assert!(msg.contains("\u{1}44=95\u{1}"), "the limit is stated: {msg}");
     assert!(msg.contains("\u{1}99=90\u{1}"), "the trigger is stated: {msg}");
@@ -3255,4 +3254,103 @@ fn a_replace_naming_a_new_trail_puts_that_trail_on_the_wire() {
         "the replace carries the trail the caller named, not the one the order was \
          placed with: {msg}",
     );
+}
+
+
+/// A preview is the order it asks about, and nothing less.
+///
+/// It used to be encoded from the order type alone: tag 40 from a byte, tag 44
+/// for anything that was not a market order, no execution instruction at all.
+/// So a preview of an on-close, market-to-limit, market-with-protection or box
+/// top order stated a limit price on a type that carries none and came back
+/// "Invalid value in field # 44"; a limit-if-touched lost its trigger and came
+/// back "Message must contain field # 99"; a trailing stop with a limit lost
+/// its trail and came back "Message must contain field # 211"; and every
+/// trailing, relative and pegged order lost the one character that tells the
+/// four of them apart under the name they share, and came back "Invalid value
+/// in field # 18".
+#[test]
+fn a_preview_states_everything_the_order_states() {
+    use crate::types::OrderKind as K;
+    let scale = crate::types::PRICE_SCALE;
+    let kinds = [
+        K::Market,
+        K::Limit { price: 100 * scale },
+        K::Moc,
+        K::Mtl,
+        K::MktPrt,
+        K::Lit { price: 100 * scale, stop_price: 99 * scale },
+        K::TrailingStop { trail_amt: scale, trail_stop_price: 99 * scale },
+        K::TrailPct { trail_pct: 100, trail_stop_price: 99 * scale },
+        K::TrailingStopLimit { lmt_offset: scale, trail_amt: scale, trail_stop_price: 99 * scale },
+        K::Rel { offset: scale / 100 },
+        K::PegMkt { offset: scale / 100, price_cap: 0 },
+        K::PegMid { offset: scale / 100, price_cap: 0 },
+        K::StpPrt { stop_price: 99 * scale },
+        K::SnapMid { offset: scale / 100 },
+    ];
+    // The sending time is stamped per message, so the two differ in tag 52 and
+    // 60 whatever else happens; everything the order describes is compared.
+    let described = |msg: &str| -> Vec<String> {
+        msg.split('\u{1}')
+            .filter(|f| !f.starts_with("52=") && !f.starts_with("60=")
+                && !f.starts_with("9=") && !f.starts_with("10=") && !f.starts_with("6091="))
+            .map(str::to_string)
+            .collect()
+    };
+    for kind in kinds {
+        let placed = send_kind_for_test(kind.clone(), b'0', crate::types::OrderAttrs::default());
+        let preview = send_kind_for_test(
+            kind.clone(),
+            b'0',
+            crate::types::OrderAttrs { what_if: true, ..Default::default() },
+        );
+        assert_eq!(
+            described(&placed),
+            described(&preview),
+            "{kind:?} is previewed as a different order\nplaced:  {placed}\npreview: {preview}",
+        );
+        assert!(
+            preview.contains("\u{1}6091=1\u{1}"),
+            "{kind:?} is previewed without the flag that makes it one: {preview}",
+        );
+        assert!(
+            !placed.contains("\u{1}6091="),
+            "{kind:?} is placed carrying the preview flag: {placed}",
+        );
+    }
+
+    // The four the venue named a field for, stated one at a time so a
+    // regression says which one came back.
+    let preview = |kind: K| {
+        send_kind_for_test(kind, b'0', crate::types::OrderAttrs { what_if: true, ..Default::default() })
+    };
+    let stated = |msg: &str, t: &str| {
+        msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string))
+    };
+    for (name, msg) in [
+        ("MOC", preview(K::Moc)),
+        ("MTL", preview(K::Mtl)),
+        ("MKT PRT", preview(K::MktPrt)),
+    ] {
+        assert_eq!(stated(&msg, "44="), None, "{name} carries no limit price: {msg}");
+    }
+    let lit = preview(K::Lit { price: 100 * scale, stop_price: 99 * scale });
+    assert_eq!(stated(&lit, "99=").as_deref(), Some("99"), "a touch price is stated: {lit}");
+    let tsl = preview(K::TrailingStopLimit {
+        lmt_offset: scale, trail_amt: 2 * scale, trail_stop_price: 99 * scale,
+    });
+    assert_eq!(stated(&tsl, "211=").as_deref(), Some("2"), "a trail is stated: {tsl}");
+    for (name, kind, inst) in [
+        ("a trailing stop", K::TrailingStop { trail_amt: scale, trail_stop_price: 0 }, "a"),
+        ("a relative order", K::Rel { offset: scale / 100 }, "R"),
+        ("a market peg", K::PegMkt { offset: scale / 100, price_cap: 0 }, "P"),
+        ("a midpoint peg", K::PegMid { offset: scale / 100, price_cap: 0 }, "M"),
+    ] {
+        let msg = preview(kind);
+        assert_eq!(
+            stated(&msg, "18=").as_deref(), Some(inst),
+            "{name} is previewed without the instruction that names it: {msg}",
+        );
+    }
 }

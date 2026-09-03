@@ -534,6 +534,7 @@ impl Contract {
             trading_class: self.trading_class.clone(),
             sec_id: self.sec_id.clone(),
             sec_id_type: self.sec_id_type.clone(),
+            issuer_id: self.issuer_id.clone(),
         }
     }
 }

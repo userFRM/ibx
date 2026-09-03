@@ -280,7 +280,9 @@ fn parse_risk_aversion(raw: Option<&str>) -> Result<Option<RiskAversion>, Refusa
 /// The parameters a strategy this client models reads off the caller's list.
 ///
 /// A strategy that is not here is handed to the venue with the caller's list
-/// as written, so it has no set to state.
+/// as written, so it has no set to state. So is one that is here and was given
+/// a key outside its set: the set decides whether the list is re-encoded from
+/// named fields or forwarded whole, not whether the caller may state a key.
 fn algo_param_names(strategy: &str) -> Option<&'static [&'static str]> {
     Some(match strategy {
         "vwap" => &["maxPctVol", "noTakeLiq", "allowPastEndTime", "startTime", "endTime"],
@@ -309,10 +311,13 @@ fn algo_param_names(strategy: &str) -> Option<&'static [&'static str]> {
 /// dropped or defaulted: `riskAversion="Aggresive"` would otherwise submit an
 /// algo the caller did not describe, with no error.
 ///
-/// A strategy modelled here is re-encoded from the fields it names rather than
-/// forwarded as the caller wrote it, so a key it does not name would go no
-/// further. Said rather than dropped: the caller had set it for a reason and
-/// the order that reached the venue would not have carried it.
+/// A strategy modelled here is re-encoded from the fields it names, and a key
+/// it does not name has no field to be re-encoded into. That is a limit of the
+/// re-encoding, not of the protocol: there is no tag per parameter — a name and
+/// a value travel as a pair in a repeating group, and the venue reads a pair
+/// whose name this client never modelled exactly as it reads one it did. So a
+/// list carrying such a key is forwarded whole, as the caller wrote it and in
+/// the order they wrote it, rather than refused or quietly shortened.
 ///
 /// A value is checked, not re-spelled. A parameter is text on the wire, and
 /// the text the caller wrote is what reaches the venue, as the reference
@@ -321,15 +326,20 @@ fn algo_param_names(strategy: &str) -> Option<&'static [&'static str]> {
 /// it is read: a flag goes as `1`/`0`, and `riskAversion` as the venue names it.
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal> {
     let folded = strategy.to_lowercase();
+    // The caller's list as they wrote it: name then value, in their order. The
+    // caller's own spelling of the strategy too, since the venue is handed that
+    // name and does not know a lower-cased one.
+    let as_written = || AlgoParams::Named {
+        strategy: strategy.to_string(),
+        params: params
+            .iter()
+            .flat_map(|tv| [tv.tag.clone(), tv.value.clone()])
+            .collect(),
+    };
     if let Some(known) = algo_param_names(&folded)
-        && let Some(stray) = params.iter().find(|tv| !known.contains(&tv.tag.as_str()))
+        && params.iter().any(|tv| !known.contains(&tv.tag.as_str()))
     {
-        return Err(Refusal::validation(format!(
-            "algo parameter '{}' is not one {strategy} carries here, so it would \
-             not reach the venue. This strategy reads {}.",
-            stray.tag,
-            known.join(", "),
-        )));
+        return Ok(as_written());
     }
     let get = |key: &str| -> Option<String> {
         params.iter().find(|tv| tv.tag == key).map(|tv| tv.value.clone())
@@ -436,15 +446,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         // offered. Which ones an account may use is the venue's answer, stated
         // at logon and enforced by it, and the reference client does not
         // interpret these either.
-        // The caller's own spelling, not the one folded for matching: the
-        // venue is handed this name and does not know a lower-cased one.
-        _ => Ok(AlgoParams::Named {
-            strategy: strategy.to_string(),
-            params: params
-                .iter()
-                .flat_map(|tv| [tv.tag.clone(), tv.value.clone()])
-                .collect(),
-        }),
+        _ => Ok(as_written()),
     }
 }
 
@@ -3699,25 +3701,6 @@ impl ClientCore {
             let algo = crate::client_core::parse_algo_params(&order.algo_strategy, &order.algo_params)?;
             let price = crate::types::price_from_f64(order.lmt_price);
             return Ok(ControlCommand::Order(ex(OrderKind::Algo { price, algo })));
-        }
-
-        // What-if orders
-        if order.what_if {
-            let price = crate::types::price_from_f64(order.lmt_price);
-            // A preview states the type of the order being previewed. Sending
-            // every preview as a limit made a market-only security answer
-            // "The order type Limit is invalid for this combination of
-            // exchange and security type" — the venue was refusing an order
-            // the caller never asked for.
-            //
-            // The preview names every type this client sends, which is a wider
-            // set than a replace may restate; see `Order::what_if_byte`.
-            let ord_type = order.what_if_byte();
-            // The price the previewed type triggers at. A stop states it and
-            // no limit price at all, so a preview built from the limit price
-            // alone asked about a stop at zero.
-            let aux = crate::types::price_from_f64(order.aux_price);
-            return Ok(ControlCommand::Order(ex(OrderKind::WhatIf { price, aux, ord_type })));
         }
 
         // Adjustable stop: a base STP that converts to another order type when

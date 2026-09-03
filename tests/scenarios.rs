@@ -222,7 +222,7 @@ fn order_lifecycle_what_if_preview() {
     let mut found_what_if = false;
     while let Ok(cmd) = rx.try_recv() {
         if matches!(cmd, ControlCommand::Order(OrderRequest::SubmitEx {
-            kind: OrderKind::WhatIf { .. }, .. })) {
+            kind: OrderKind::Limit { .. }, attrs: OrderAttrs { what_if: true, .. }, .. })) {
             found_what_if = true;
         }
     }

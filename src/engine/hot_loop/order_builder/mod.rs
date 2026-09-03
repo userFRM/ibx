@@ -1240,7 +1240,6 @@ fn tracked_shape(kind: &crate::types::OrderKind) -> (u8, i64, i64) {
         K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', *price, 0),
             // Tracked under the what-if marker so the response is recognised as a
             // preview; it never becomes a live order.
-        K::WhatIf { price, aux, .. } => (crate::types::ORD_WHAT_IF, *price, *aux),
     }
 }
 
@@ -1415,26 +1414,6 @@ fn push_type_and_prices(fields: &mut Vec<(u32, String)>, kind: &crate::types::Or
             // without it is rejected with "Invalid value in field # 18", which
             // is also the answer to a wrong value, so the six algo types
             // were refused identically whether the field was absent or wrong.
-        }
-        K::WhatIf { price, aux, ord_type } => {
-            // Tag 40 as the order itself would state it. Multi-character types
-            // are held as discriminants below the printable range, so the byte
-            // cannot be written out as a character.
-            let ord_type_str = crate::types::ord_type_fix_str(*ord_type);
-            fields.push((40, ord_type_str.to_string()));
-            // A market preview has no price to state, and stating one is how a
-            // market-only security came to be refused as a limit.
-            //
-            // Each price on the tag its type carries it on. A trigger-only
-            // type states tag 99 and no tag 44; a stop limit states both.
-            if is_trigger_only(*ord_type) {
-                fields.push((99, format_price(*aux).to_string()));
-            } else if *ord_type == b'4' {
-                fields.push((44, format_price(*price).to_string()));
-                fields.push((99, format_price(*aux).to_string()));
-            } else if ord_type_str != "1" {
-                fields.push((44, format_price(*price).to_string()));
-            }
         }
     }
 }
@@ -2051,8 +2030,16 @@ fn push_order_attrs(
                 fields.push((5960, value.clone()));
             }
         }
-        K::WhatIf { .. } => fields.push((6091, "1".to_string())),
         _ => {}
+    }
+    // A preview asks about the order the caller described, so it states every
+    // field that order states and this tag besides. Encoded from the type
+    // alone it stated a limit price on types that carry none — refused with
+    // "Invalid value in field # 44" — and no execution instruction at all,
+    // which is what tells a trailing, relative or pegged order apart from the
+    // three others that share its name.
+    if attrs.what_if {
+        fields.push((6091, "1".to_string()));
     }
     order_type
 }

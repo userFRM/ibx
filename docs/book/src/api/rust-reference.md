@@ -946,10 +946,10 @@ pub fn exercise_options( &self, req_id: i64, contract: &Contract, exercise_actio
 
 #### `cancel_order`
 
-Cancel an order. `manual_order_cancel_time` is taken and not applied. A cancel names five fields on this wire and no time among them, as the protocol's cancel does.
+Cancel an order. A cancel names five fields on this wire and no time among them, so a stated `manual_order_cancel_time` cannot travel. The cancel goes anyway and the caller is told the record did not: a live order left standing because a regulatory annotation has nowhere to go is the worse of the two, and the client this one stands in for withdraws it — it states the time on every cancel it sends. Taken in silence, as this did, the order came back under nobody's name while the caller had given one.
 
 ```rust
-pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), Refusal>
+pub fn cancel_order(&self, order_id: i64, manual_order_cancel_time: &str) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
@@ -1090,7 +1090,7 @@ pub fn req_executions(&self, req_id: i64, filter: &ExecutionFilter, wrapper: &mu
 
 #### `parse_algo_params`
 
-Parse algo strategy and TagValue params into internal AlgoParams. A key the caller never set is not stated: the venue's own default for it is not known here, and a value sent in its place — `0`, an empty time, Neutral — is a claim the caller did not make. A key the caller *did* set — even to an empty string — is refused if it does not read, rather than dropped or defaulted: `riskAversion="Aggresive"` would otherwise submit an algo the caller did not describe, with no error. A strategy modelled here is re-encoded from the fields it names rather than forwarded as the caller wrote it, so a key it does not name would go no further. Said rather than dropped: the caller had set it for a reason and the order that reached the venue would not have carried it. A value is checked, not re-spelled. A parameter is text on the wire, and the text the caller wrote is what reaches the venue, as the reference client forwards it; the parse here is this client's own check that it reads. Two kinds are sent in the venue's spelling instead, each said where it is read: a flag goes as `1`/`0`, and `riskAversion` as the venue names it.
+Parse algo strategy and TagValue params into internal AlgoParams. A key the caller never set is not stated: the venue's own default for it is not known here, and a value sent in its place — `0`, an empty time, Neutral — is a claim the caller did not make. A key the caller *did* set — even to an empty string — is refused if it does not read, rather than dropped or defaulted: `riskAversion="Aggresive"` would otherwise submit an algo the caller did not describe, with no error. A strategy modelled here is re-encoded from the fields it names, and a key it does not name has no field to be re-encoded into. That is a limit of the re-encoding, not of the protocol: there is no tag per parameter — a name and a value travel as a pair in a repeating group, and the venue reads a pair whose name this client never modelled exactly as it reads one it did. So a list carrying such a key is forwarded whole, as the caller wrote it and in the order they wrote it, rather than refused or quietly shortened. A value is checked, not re-spelled. A parameter is text on the wire, and the text the caller wrote is what reaches the venue, as the reference client forwards it; the parse here is this client's own check that it reads. Two kinds are sent in the venue's spelling instead, each said where it is read: a flag goes as `1`/`0`, and `riskAversion` as the venue names it.
 
 ```rust
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal>

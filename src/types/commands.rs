@@ -30,6 +30,10 @@ pub struct SecDefFilters {
     pub sec_id: String,
     /// Which identifier `sec_id` is: ISIN, CUSIP or FIGI.
     pub sec_id_type: String,
+    /// Who issued it. A lookup that states one is answered under a fixed-income
+    /// security type whatever the caller named, so it narrows the lookup the
+    /// way an identifier does rather than describing the contract.
+    pub issuer_id: String,
 }
 
 /// The contract a request names.

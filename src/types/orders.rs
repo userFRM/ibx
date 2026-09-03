@@ -133,8 +133,6 @@ pub const ORD_LIT: u8 = 10;
 /// FIX "TSL" — Trailing Stop Limit
 pub const ORD_TRAIL_LIMIT: u8 = 11;
 
-/// Not a real OrdType — marker for what-if orders
-pub const ORD_WHAT_IF: u8 = 9;
 
 /// Convert an `ord_type` discriminant to the FIX tag 40 string.
 /// Single-char types (ASCII >= 32) are stored as-is; multi-char types use constants
@@ -624,6 +622,11 @@ pub struct OrderAttrs {
     /// 2 lapses, 0 is an ordinary order. There is no message of its own for an
     /// exercise, so it is an order carrying the action.
     pub exercise_action: u8,
+    /// Ask the venue what this order would cost rather than place it (tag
+    /// 6091). Carried beside the order rather than replacing it: a preview
+    /// that describes the order in fewer fields than the order itself is a
+    /// question about a different order.
+    pub what_if: bool,
 }
 
 impl Default for OrderAttrs {
@@ -717,6 +720,7 @@ impl Default for OrderAttrs {
             conditions_ignore_rth: Default::default(),
             oca_type: Default::default(),
             exercise_action: Default::default(),
+            what_if: Default::default(),
         }
     }
 }
@@ -1161,22 +1165,8 @@ pub enum OrderKind {
         /// Which algorithm runs it, and what it was given.
         algo: AlgoParams,
     },
-    /// Margin preview of an order of type `ord_type` (the wire character, tag
-    /// 40). Tag 6091=1; the order is tracked under `ORD_WHAT_IF` so the
-    /// response is recognised, and never becomes a live order.
-    WhatIf {
-        /// Fill at this price or better, scaled by `PRICE_SCALE`.
-        price: Price,
-        /// The price the previewed type triggers at, scaled by `PRICE_SCALE`,
-        /// where it has one. A preview is encoded as the order type it
-        /// previews: the limit price rides tag 44 and the trigger tag 99, so
-        /// one price cannot state both. A stop states only `aux`; a stop limit
-        /// states both.
-        aux: Price,
-        /// What kind of order is being previewed.
-        ord_type: u8,
-    },
 }
+
 
 /// A scale order's ladder: how much to show, how far apart, and how the price
 /// moves as it works.

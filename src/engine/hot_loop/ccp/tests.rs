@@ -3885,6 +3885,100 @@ fn a_lookup_states_both_the_symbol_and_the_local_symbol() {
     assert!(msg.contains("|6035=ESZ6|"), "and the contract's own name: {msg}");
 }
 
+/// A news feed states its provider where every other contract states a venue,
+/// and the protocol carries the provider under a field of its own. Sent as a
+/// venue instead, the whole message was refused: the venue answered that the
+/// field the provider rides was missing.
+#[test]
+fn a_news_feed_states_its_provider_not_a_venue() {
+    use std::io::Read;
+    // The exchange names the provider alone on one feed and provider and feed
+    // together on another; the feed is the half the provider field wants.
+    for (exchange, wanted) in [("BRFG", "BRFG"), ("BRF", "BRF"), ("BZ:BZ_ALL", "BZ_ALL")] {
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut ccp = CcpState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn = Some(conn);
+        let filters = crate::types::SecDefFilters {
+            trading_class: "BRF".to_string(),
+            ..Default::default()
+        };
+        ccp.send_secdef_request_by_symbol(
+            13, "BRF:BRF_ALL", "NEWS", exchange, "USD", &filters, &mut conn, &mut hb,
+        );
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+        assert!(msg.contains(&format!("|6825={wanted}|")), "the provider: {msg}");
+        // The provider having moved, no venue and no currency ride with it.
+        assert!(!msg.contains("|100="), "and no venue: {msg}");
+        assert!(!msg.contains("|15="), "and nothing it is priced in: {msg}");
+        // A feed has no class within a chain, so one stated on it narrows
+        // nothing and is not passed on.
+        assert!(!msg.contains("|6058="), "and no class: {msg}");
+    }
+}
+
+/// The protocol has no security type of its own for a continuous future. It is
+/// asked for as a future with a field saying the current lead month is wanted
+/// rather than a listed one; sent under its own name the message was refused
+/// outright. Its class rides a field of its own, because it is not being looked
+/// up by a listed month.
+#[test]
+fn a_continuous_future_is_a_future_that_names_its_lead_month() {
+    use std::io::Read;
+    for stated in ["CONTFUT", "FUT+CONTFUT"] {
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut ccp = CcpState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn = Some(conn);
+        let filters = crate::types::SecDefFilters {
+            trading_class: "GBL".to_string(),
+            local_symbol: "FGBL DEC 26".to_string(),
+            ..Default::default()
+        };
+        ccp.send_secdef_request_by_symbol(
+            14, "GBL", stated, "EUREX", "EUR", &filters, &mut conn, &mut hb,
+        );
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+        assert!(msg.contains("|167=FUT|"), "{stated} is asked for as a future: {msg}");
+        assert!(msg.contains("|6857=2|"), "{stated} states the lead month: {msg}");
+        assert!(msg.contains("|8362=GBL|"), "{stated} states its class: {msg}");
+        assert!(!msg.contains("|6058="), "{stated} states it once: {msg}");
+        // It is not being asked for by a listed month, so the name one listed
+        // month goes by does not narrow it.
+        assert!(!msg.contains("|6035="), "{stated} names no listed month: {msg}");
+    }
+}
+
+/// A contract named only by its issuer is answered as fixed income, whatever
+/// type the caller stated. Sent with the caller's own type the message was
+/// refused: the type a contract is looked up under is not the caller's to
+/// choose here.
+#[test]
+fn a_contract_named_by_its_issuer_is_asked_for_as_fixed_income() {
+    use std::io::Read;
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn = Some(conn);
+    let filters = crate::types::SecDefFilters {
+        issuer_id: "e1453318".to_string(),
+        ..Default::default()
+    };
+    ccp.send_secdef_request_by_symbol(15, "", "", "", "", &filters, &mut conn, &mut hb);
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(msg.contains("|6454=e1453318|"), "the issuer: {msg}");
+    assert!(msg.contains("|167=FIXED|"), "asked for as fixed income: {msg}");
+}
+
 /// A news stream is withdrawn by naming which tick and which contract, not
 /// only the request number. The option model beside it is withdrawn the same
 /// way. Naming only the request leaves the venue serving the subscription.

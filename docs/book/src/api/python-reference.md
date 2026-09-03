@@ -712,7 +712,7 @@ def exercise_options(req_id, contract, exercise_action, exercise_quantity, accou
 
 #### `cancel_order`
 
-Cancel an order.  The second argument is what the reference client states about the withdrawal itself — when a person entered it, on whose authority, and whether a person entered it at all. It is taken as that object or as the time alone, which is how this client took it before.  A cancel on this wire names five fields and none of those is among them, so a withdrawal that states one is refused rather than sent without it: taken and dropped, the order was withdrawn under nobody's name while the caller had given one.
+Cancel an order.  The second argument is what the reference client states about the withdrawal itself — when a person entered it, on whose authority, and whether a person entered it at all. It is taken as that object or as the time alone, which is how this client took it before.  A cancel on this wire names five fields and none of those is among them, so what the caller stated cannot travel. The cancel goes anyway and the caller is told the annotation did not: refused outright, a live order was left standing over a record the wire has no room for, and the client this one stands in for withdraws it — it states all three on every cancel it sends. Taken silently it would be withdrawn under nobody's name while the caller had given one, so it is said.
 
 ```python
 def cancel_order(order_id, order_cancel=None)
@@ -722,6 +722,21 @@ def cancel_order(order_id, order_cancel=None)
 |-----------|------|-------------|
 | `order_id` | `int` | Order identifier. Must be unique per session. |
 | `order_cancel` | `Py<PyAny> or None` |  |
+
+---
+
+#### `say_the_annotation_did_not_travel`
+
+Say that a withdrawal's annotation has nowhere to go, without stopping the withdrawal.  The order still comes back. A record of who withdrew it and when is a regulatory one, and losing it matters — but not as much as a live order left working because the record could not be filed, which is what refusing did.
+
+```python
+def say_the_annotation_did_not_travel(order_id, stated)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `order_id` | `int` | Order identifier. Must be unique per session. |
+| `stated` | `str` |  |
 
 ---
 

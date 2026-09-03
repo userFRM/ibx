@@ -696,13 +696,13 @@ fn submit_box_top_reuses_mtl() {
 #[test]
 fn submit_what_if_drains_correctly() {
     let mut ctx = Context::new();
-    let id = ctx.submit(0, Side::Buy, 100, OrderKind::WhatIf { price: 25620 * (PRICE_SCALE / 100), aux: 0, ord_type: b'2' },
-        b'0', OrderAttrs::default());
+    let id = ctx.submit(0, Side::Buy, 100, OrderKind::Limit { price: 25620 * (PRICE_SCALE / 100) },
+        b'0', OrderAttrs { what_if: true, ..Default::default() });
     let orders: Vec<_> = ctx.drain_pending_orders().collect();
     assert_eq!(orders.len(), 1);
     match &orders[0] {
         OrderRequest::SubmitEx {
-            order_id, instrument, side, qty, kind: OrderKind::WhatIf { price, .. }, ..
+            order_id, instrument, side, qty, kind: OrderKind::Limit { price }, ..
         } => {
             assert_eq!(*order_id, id);
             assert_eq!(*instrument, 0);

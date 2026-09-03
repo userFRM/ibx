@@ -1846,8 +1846,42 @@ impl CcpState {
             let req_id_str = req_id.to_string();
             let ts = chrono_free_timestamp();
             let fix_exchange = if exchange == "SMART" { "BEST" } else { exchange };
-            let fix_sec_type = match sec_type {
-                "STK" => "CS", "FUT" => "FUT", "OPT" => "OPT", "IND" => "IND", other => other,
+            // The protocol has no security type of its own for a continuous
+            // future. The contract goes out as a future and a separate field
+            // asks for the current lead month instead of a listed one; sent as
+            // its own type the whole message is refused. The spelling that
+            // asks for the expiring months as well asks for the continuous one
+            // the same way — the listed months are a second lookup, which this
+            // client does not yet make.
+            let continuous_future = matches!(sec_type, "CONTFUT" | "FUT+CONTFUT" | "CONTFUT+FUT");
+            // A contract named only by its issuer is answered as fixed income,
+            // whatever type the caller stated: the issuer rides a field of its
+            // own and the type it is looked up under is not the caller's to
+            // choose.
+            let issuer_id = filters.issuer_id.as_str();
+            let fix_sec_type = if continuous_future {
+                "FUT"
+            } else if !issuer_id.is_empty() {
+                "FIXED"
+            } else {
+                match sec_type {
+                    "STK" => "CS", "FUT" => "FUT", "OPT" => "OPT", "IND" => "IND", other => other,
+                }
+            };
+            // A news feed states its provider where every other contract states
+            // a venue, and the protocol carries the provider under a field of
+            // its own: without it the message is refused outright. Where the
+            // exchange names provider and feed together the feed is the half
+            // that is wanted. The provider having moved, neither a venue nor a
+            // currency rides with it, and a feed carries no trading class.
+            let news_source = if sec_type == "NEWS" {
+                match exchange.split(':').collect::<Vec<_>>()[..] {
+                    [_, feed] => feed,
+                    [provider, ..] => provider,
+                    [] => "",
+                }
+            } else {
+                ""
             };
             // A public identifier and the tags it rides on. Each kind has its
             // own: a CUSIP goes out as 454=1|455=<id>|456=1, and 22/48 carry an
@@ -1897,6 +1931,9 @@ impl CcpState {
                 (320, &req_id_str),
                 (321, "2"),
             ];
+            if !news_source.is_empty() {
+                fields.push((6825, news_source));
+            }
             if identifier_lookup {
                 // Identifier lookup: the identifier and its source replace the
                 // symbol/secType/filters; exchange and currency still ride.
@@ -1912,15 +1949,21 @@ impl CcpState {
                 if !symbol.is_empty() {
                     fields.push((55, symbol));
                 }
-                if !filters.local_symbol.is_empty() {
+                if !filters.local_symbol.is_empty() && !continuous_future {
                     fields.push((6035, &filters.local_symbol));
                 }
-                if !filters.trading_class.is_empty() {
-                    fields.push((6058, &filters.trading_class));
+                // A continuous future is not looked up by its listed months, so
+                // its class rides a field of its own; a news feed is not looked
+                // up by class at all.
+                if !filters.trading_class.is_empty() && news_source.is_empty() {
+                    fields.push((if continuous_future { 8362 } else { 6058 }, &filters.trading_class));
                 }
                 fields.push((167, fix_sec_type));
                 if let Some(tag) = maturity_tag(&filters.last_trade_date_or_contract_month) {
                     fields.push((tag, &filters.last_trade_date_or_contract_month));
+                }
+                if continuous_future {
+                    fields.push((6857, "2"));
                 }
                 if !right_code.is_empty() {
                     fields.push((201, right_code));
@@ -1932,11 +1975,18 @@ impl CcpState {
                     fields.push((231, &filters.multiplier));
                 }
             }
-            fields.push((100, fix_exchange));
+            if news_source.is_empty() {
+                fields.push((100, fix_exchange));
+            }
             if !identifier_lookup && !filters.primary_exchange.is_empty() {
                 fields.push((207, &filters.primary_exchange));
             }
-            fields.push((15, currency));
+            if news_source.is_empty() {
+                fields.push((15, currency));
+            }
+            if !issuer_id.is_empty() {
+                fields.push((6454, issuer_id));
+            }
             fields.push((6088, "Socket"));
             let _ = conn.send_fix(&fields);
             log::info!("Sent secdef lookup: req_id={req_id} symbol={symbol} sec_type={sec_type} identifier={identifier_lookup}");

@@ -1260,8 +1260,8 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
     let order_id = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
         order_id, instrument: inst_id, side: Side::Buy, qty: 100 * ibx::types::QTY_SCALE,
-        kind: OrderKind::WhatIf { price: 1_00_000_000, aux: 0, ord_type: b'2' },
-        tif: b'0', attrs: OrderAttrs::default(),
+        kind: OrderKind::Limit { price: 1_00_000_000 },
+        tif: b'0', attrs: OrderAttrs { what_if: true, ..Default::default() },
     })).unwrap();
     control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, regulatory_snapshot: false, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
