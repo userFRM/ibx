@@ -30,12 +30,13 @@ working order. It waits because answering before that replay lands reports none
 of them, and a caller who reads "nothing working" places the same order twice.
 `req_all_open_orders()` is the same call.
 
-`req_executions(req_id)` replays **this session's own record** of fills, then
-fires `exec_details_end`. The account's history is not in it. The venue names
-executions alongside the orders it replays when a session opens, and an
-execution whose order has since completed is not replayed. So an empty answer
-means this session has seen no fills, not that the account has none. The fill in
-step 6 happens inside this session, which is why the query finds it.
+`req_executions(req_id)` replays **the day's executions** — the fills this
+session has seen and the ones the venue restated when the session opened — then
+fires `exec_details_end`. A restarted program is answered with the fills it made
+before it restarted, including fills on orders that had already completed. What
+is not in it is the account's history: the venue restates a day, not a life, and
+this protocol has no question that asks for more. The fill in step 6 happens
+inside this session, which is why the query finds it either way.
 
 An `exec_filter` is read by attribute: `symbol`, `secType`, `exchange`, `side`.
 A `side` of `BUY` or `SELL` is translated to the venue's own word before
