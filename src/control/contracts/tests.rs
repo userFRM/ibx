@@ -95,13 +95,55 @@ fn build_secdef_by_conid() {
 
 #[test]
 fn build_secdef_by_symbol() {
-    let msg = build_secdef_request_by_symbol("R2", "AAPL", SecurityType::Stock, "SMART", "USD", 2);
+    let msg = build_secdef_request_by_symbol("R2", "AAPL", SecurityType::Stock, "SMART", "USD", "", 2);
     let tags = fix::fix_parse(&msg);
     assert_eq!(tags[&TAG_MSG_TYPE], "c");
     assert_eq!(tags[&TAG_SYMBOL], "AAPL");
     assert_eq!(tags[&TAG_SECURITY_TYPE], "CS");
     assert_eq!(tags[&TAG_EXCHANGE], "BEST"); // SMART→BEST
     assert_eq!(tags[&TAG_CURRENCY], "USD");
+    assert!(!tags.contains_key(&TAG_NEWS_TOPIC), "only a news feed states a topic");
+    assert!(!tags.contains_key(&TAG_ISSUER_ID), "no issuer was named");
+}
+
+/// A news feed is looked up under its topic, stated beside the security
+/// type; the venue refuses a news request without it. The topic is read off
+/// the exchange: the half after the colon where the exchange names two, the
+/// whole string where it names one. The unsplit exchange still rides tag
+/// 100, as usual.
+#[test]
+fn build_secdef_by_symbol_for_news_states_the_topic_code() {
+    let msg = build_secdef_request_by_symbol(
+        "R3", "BRF:BRF_ALL", SecurityType::News, "BRF:BRF_ALL", "USD", "", 3,
+    );
+    let tags = fix::fix_parse(&msg);
+    assert_eq!(tags.get(&TAG_NEWS_TOPIC).map(String::as_str), Some("BRF_ALL"));
+    assert_eq!(tags[&TAG_SECURITY_TYPE], "NEWS");
+    assert_eq!(tags[&TAG_EXCHANGE], "BRF:BRF_ALL", "the unsplit exchange still rides tag 100");
+
+    // An exchange with no colon states the whole string as the topic.
+    let msg = build_secdef_request_by_symbol(
+        "R4", "BRF:BRF_ALL", SecurityType::News, "BRF", "USD", "", 4,
+    );
+    let tags = fix::fix_parse(&msg);
+    assert_eq!(tags.get(&TAG_NEWS_TOPIC).map(String::as_str), Some("BRF"));
+    assert_eq!(tags[&TAG_EXCHANGE], "BRF");
+}
+
+/// A contract named by its issuer rides the issuer on a field of its own,
+/// and the lookup goes out as fixed income whatever type the request
+/// stated: stating the caller's own type was refused by the venue.
+#[test]
+fn build_secdef_by_symbol_for_an_issuer_names_the_issuer_and_fixed_income() {
+    let msg = build_secdef_request_by_symbol("R5", "", SecurityType::Other, "", "", "e1453318", 5);
+    let tags = fix::fix_parse(&msg);
+    assert_eq!(tags.get(&TAG_ISSUER_ID).map(String::as_str), Some("e1453318"));
+    assert_eq!(tags[&TAG_SECURITY_TYPE], "FIXED", "forced, whatever the caller stated");
+
+    // The forcing does not depend on the stated type.
+    let msg = build_secdef_request_by_symbol("R6", "", SecurityType::Stock, "", "", "e1453318", 6);
+    let tags = fix::fix_parse(&msg);
+    assert_eq!(tags[&TAG_SECURITY_TYPE], "FIXED");
 }
 
 #[test]

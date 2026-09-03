@@ -98,6 +98,12 @@ pub const TAG_REAL_EXPIRATION_DATE: u32 = 6614;
 pub const TAG_SETTLEMENT_METHOD: u32 = 6660;
 /// FIX tag 8077: the stock type.
 pub const TAG_IB_STOCK_TYPE: u32 = 8077;
+/// The topic a news feed is looked up under. Stated beside the security
+/// type; a request naming a news feed is refused without it.
+pub const TAG_NEWS_TOPIC: u32 = 6825;
+/// The issuer a contract is looked up by. A lookup that names one is
+/// answered as fixed income, whatever type the request stated.
+pub const TAG_ISSUER_ID: u32 = 6454;
 
 // Market rule tags.
 /// FIX tag 6019: value "1" opens a new rule block.
@@ -623,21 +629,46 @@ pub fn build_secdef_request_by_symbol(
     sec_type: SecurityType,
     exchange: &str,
     currency: &str,
+    issuer_id: &str,
     seq: u32,
 ) -> Vec<u8> {
-    fix::fix_build(
-        &[
-            (TAG_MSG_TYPE, "c"),
-            (TAG_SECURITY_REQ_ID, req_id),
-            (TAG_SECURITY_REQ_TYPE, "2"),
-            (TAG_SYMBOL, symbol),
-            (TAG_SECURITY_TYPE, sec_type.to_fix()),
-            (TAG_EXCHANGE, exchange_to_fix(exchange)),
-            (TAG_CURRENCY, currency),
-            (TAG_IB_SOURCE, "Socket"),
-        ],
-        seq,
-    )
+    // A contract named by its issuer is looked up as fixed income, whatever
+    // type the request stated: the venue answers it under that type alone,
+    // and stating another is refused.
+    let wire_sec_type = if issuer_id.is_empty() {
+        sec_type.to_fix()
+    } else {
+        SecurityType::FixedIncome.to_fix()
+    };
+    // A news feed is looked up under its topic, which the request states on
+    // the exchange: the half after the colon where the exchange names two,
+    // the whole string where it names one. The unsplit exchange still rides
+    // tag 100 as usual.
+    let news_topic = if sec_type == SecurityType::News {
+        let parts: Vec<&str> = exchange.split(':').collect();
+        if parts.len() == 2 { parts[1] } else { parts[0] }
+    } else {
+        ""
+    };
+    let mut fields: Vec<(u32, &str)> = vec![
+        (TAG_MSG_TYPE, "c"),
+        (TAG_SECURITY_REQ_ID, req_id),
+        (TAG_SECURITY_REQ_TYPE, "2"),
+        (TAG_SYMBOL, symbol),
+    ];
+    if !news_topic.is_empty() {
+        fields.push((TAG_NEWS_TOPIC, news_topic));
+    }
+    fields.push((TAG_SECURITY_TYPE, wire_sec_type));
+    fields.extend_from_slice(&[
+        (TAG_EXCHANGE, exchange_to_fix(exchange)),
+        (TAG_CURRENCY, currency),
+    ]);
+    if !issuer_id.is_empty() {
+        fields.push((TAG_ISSUER_ID, issuer_id));
+    }
+    fields.push((TAG_IB_SOURCE, "Socket"));
+    fix::fix_build(&fields, seq)
 }
 
 /// Parse a SecurityDefinition response into a ContractDefinition.

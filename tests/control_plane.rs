@@ -75,6 +75,7 @@ fn contract_symbol_lookup_roundtrip() {
         SecurityType::Stock,
         "SMART",
         "USD",
+        "",
         1,
     );
     let tags = fix::fix_parse(&req_msg);
@@ -93,6 +94,7 @@ fn option_contract_full_workflow() {
         SecurityType::Option,
         "SMART",
         "USD",
+        "",
         1,
     );
     let tags = fix::fix_parse(&req);

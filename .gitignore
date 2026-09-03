@@ -53,3 +53,4 @@ target/gates/
 # a working tree reads clean rather than listing them on every status.
 .pytest_cache/
 .venv/
+.claude/worktrees/
