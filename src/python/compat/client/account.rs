@@ -40,7 +40,7 @@ impl EClient {
     #[pyo3(signature = (req_id, account, model_code=""))]
     fn req_pnl(&self, py: Python<'_>, req_id: i64, account: &str, model_code: &str) -> PyResult<()> {
         self.core.subscribe_pnl(req_id);
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         let acct = if account.is_empty() { self.account() } else { account.to_string() };
         let _ = model_code;
         // Answered on the error callback and returned normally, as a request
@@ -58,7 +58,7 @@ impl EClient {
     /// Cancel P&L subscription.
     fn cancel_pnl(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         self.core.unsubscribe_pnl(req_id);
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         // A failed send is reported. Discarded, the subscription stays up and
         // the caller is told the cancel succeeded.
         if let Err(why) = Self::send_control(py, &tx, ControlCommand::CancelPnl { req_id }) {
@@ -75,7 +75,7 @@ impl EClient {
     /// portfolio to name.
     #[pyo3(signature = (req_id, account, model_code, con_id))]
     fn req_pnl_single(&self, req_id: i64, account: &str, model_code: &str, con_id: i64) -> PyResult<()> {
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.core.subscribe_pnl_single(req_id, con_id);
         let _ = (account, model_code);
         Ok(())
@@ -83,7 +83,7 @@ impl EClient {
 
     /// Cancel single-position P&L subscription.
     fn cancel_pnl_single(&self, req_id: i64) -> PyResult<()> {
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.core.unsubscribe_pnl_single(req_id);
         Ok(())
     }
@@ -95,7 +95,7 @@ impl EClient {
     /// asked which, so there is no second account or model portfolio to name.
     #[pyo3(signature = (req_id, group_name, tags))]
     fn req_account_summary(&self, req_id: i64, group_name: &str, tags: &str) -> PyResult<()> {
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.core.subscribe_account_summary(req_id, tags);
         let _ = group_name;
         Ok(())
@@ -103,7 +103,7 @@ impl EClient {
 
     /// Cancel account summary.
     fn cancel_account_summary(&self, req_id: i64) -> PyResult<()> {
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.core.unsubscribe_account_summary(req_id);
         Ok(())
     }
@@ -115,7 +115,7 @@ impl EClient {
     /// program written against the reference client has no exception handling
     /// around a request, because that client does not raise there.
     fn req_positions(&self, py: Python<'_>) -> PyResult<()> {
-        let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_connected) = self.tx_or_report(-1)? else { return Ok(()) };
         let shared = self.shared_state()?;
         // Wait for CCP init burst to complete (up to 10s).
         for _ in 0..1000 {
@@ -190,7 +190,7 @@ impl EClient {
     // stops, and reporting an error for withdrawing a subscription that was
     // never made would be wrong.
     fn cancel_positions(&self) -> PyResult<()> {
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.positions_requested.store(false, Ordering::Release);
         Ok(())
     }
@@ -207,7 +207,7 @@ impl EClient {
     /// that subscribed and then read the account got nothing.
     #[pyo3(signature = (subscribe, _acct_code=""))]
     fn req_account_updates(&self, py: Python<'_>, subscribe: bool, _acct_code: &str) -> PyResult<()> {
-        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.core.subscribe_account_updates(subscribe);
         if subscribe {
             let account = self.account();
@@ -226,7 +226,7 @@ impl EClient {
     /// list reads as a login holding none rather than as a question asked too
     /// early.
     fn req_managed_accts(&self, py: Python<'_>) -> PyResult<()> {
-        let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_connected) = self.tx_or_report(-1)? else { return Ok(()) };
         self.deliver(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
         Ok(())
     }
@@ -243,7 +243,7 @@ impl EClient {
         // Reported and returned, as `req_positions` above and every other
         // request before connecting. Raising made this one request out of the
         // set the caller had to guard.
-        let Some(_connected) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(_connected) = self.tx_or_report(req_id)? else { return Ok(()) };
         let shared = self.shared_state()?;
         let _ = ledger_and_nlv;
         for _ in 0..500 {
@@ -269,7 +269,7 @@ impl EClient {
     /// `req_id` reaches nothing, because there is nothing to withdraw: account
     /// values arrive with the session rather than by subscription.
     fn cancel_account_updates_multi(&self, req_id: i64) -> PyResult<()> {
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         let _ = req_id;
         Ok(())
     }
@@ -278,7 +278,7 @@ impl EClient {
     #[pyo3(signature = (req_id, account, model_code))]
     fn req_positions_multi(&self, py: Python<'_>, req_id: i64, account: &str, model_code: &str) -> PyResult<()> {
         // As above.
-        let Some(_connected) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(_connected) = self.tx_or_report(req_id)? else { return Ok(()) };
         let shared = self.shared_state()?;
         for _ in 0..500 {
             if shared.portfolio.account_data_received() { break; }
@@ -305,7 +305,7 @@ impl EClient {
     // `cancel_positions`. What stops is the reporting — a holding that moves
     // after this is no longer delivered on `position_multi` for this request.
     fn cancel_positions_multi(&self, req_id: i64) -> PyResult<()> {
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.positions_multi_requested.lock().unwrap().remove(&req_id);
         Ok(())
     }

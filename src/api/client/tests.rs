@@ -698,7 +698,7 @@ fn parse_algo_vwap() {
     let algo = parse_algo_params("vwap", &params).unwrap();
     match algo {
         AlgoParams::Vwap { max_pct_vol, start_time, end_time, .. } => {
-            assert_eq!(max_pct_vol, "0.1");
+            assert_eq!(max_pct_vol.as_deref(), Some("0.1"));
             assert_eq!(start_time, "09:30:00");
             assert_eq!(end_time, "16:00:00");
         }
@@ -721,7 +721,7 @@ fn parse_algo_arrival_price() {
     let algo = parse_algo_params("arrivalpx", &params).unwrap();
     match algo {
         AlgoParams::ArrivalPx { max_pct_vol, risk_aversion, .. } => {
-            assert_eq!(max_pct_vol, "0.25");
+            assert_eq!(max_pct_vol.as_deref(), Some("0.25"));
             assert!(matches!(risk_aversion, RiskAversion::Aggressive));
         }
         _ => panic!("wrong variant"),
@@ -753,7 +753,7 @@ fn parse_algo_pct_vol() {
     ];
     let algo = parse_algo_params("pctvol", &params).unwrap();
     match algo {
-        AlgoParams::PctVol { pct_vol, .. } => assert_eq!(pct_vol, "0.05"),
+        AlgoParams::PctVol { pct_vol, .. } => assert_eq!(pct_vol.as_deref(), Some("0.05")),
         _ => panic!("wrong variant"),
     }
 }

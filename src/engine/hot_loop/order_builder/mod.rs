@@ -2035,10 +2035,11 @@ fn push_order_attrs(
             // Tag 849 (maxPctVol) for the algos that use it, in the caller's
             // own spelling: a parameter is text on the wire, and what the
             // caller wrote is what goes. Written back out from a parsed
-            // number, `5.0` went as `5` and `1e-05` as `0.00001`.
-            if let AlgoParams::Vwap { max_pct_vol, .. }
-            | AlgoParams::ArrivalPx { max_pct_vol, .. }
-            | AlgoParams::ClosePx { max_pct_vol, .. } = algo
+            // number, `5.0` went as `5` and `1e-05` as `0.00001`. One the
+            // caller did not state is not sent; it used to go as `0`.
+            if let AlgoParams::Vwap { max_pct_vol: Some(max_pct_vol), .. }
+            | AlgoParams::ArrivalPx { max_pct_vol: Some(max_pct_vol), .. }
+            | AlgoParams::ClosePx { max_pct_vol: Some(max_pct_vol), .. } = algo
             {
                 fields.push((849, max_pct_vol.clone()));
             }
@@ -2131,19 +2132,15 @@ fn build_algo_tags(algo: &AlgoParams) -> (&str, Vec<String>) {
                 end_time.clone(),
             ],
         ),
-        AlgoParams::PctVol { pct_vol, no_take_liq, start_time, end_time } => (
-            "PctVol",
-            vec![
-                "noTakeLiq".into(),
-                if *no_take_liq { "1" } else { "0" }.into(),
-                "pctVol".into(),
-                pct_vol.clone(),
-                "startTime".into(),
-                start_time.clone(),
-                "endTime".into(),
-                end_time.clone(),
-            ],
-        ),
+        AlgoParams::PctVol { pct_vol, no_take_liq, start_time, end_time } => {
+            let mut params = vec!["noTakeLiq".into(), if *no_take_liq { "1" } else { "0" }.into()];
+            // A rate the caller did not state is not sent; it used to go as `0`.
+            if let Some(pct_vol) = pct_vol {
+                params.extend(["pctVol".into(), pct_vol.clone()]);
+            }
+            params.extend(["startTime".into(), start_time.clone(), "endTime".into(), end_time.clone()]);
+            ("PctVol", params)
+        }
     }
 }
 

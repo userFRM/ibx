@@ -68,7 +68,7 @@ impl EClient {
     /// raises there.
     fn place_order(&self, py: Python<'_>, order_id: i64, contract: &Contract, order: &Order) -> PyResult<()> {
         self.core.refuse_if_readonly("an order").map_err(PyRuntimeError::new_err)?;
-        let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(order_id)? else { return Ok(()) };
 
         if let Err(why) = ClientCore::validate_order_destination(&contract.exchange) {
             return self.report_refusal(py, order_id, why.into());
@@ -325,7 +325,7 @@ impl EClient {
         // against it. Without a session there is nothing to compare and nothing
         // to send, and the caller is told that rather than told about its
         // account.
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         let (action, qty) = match ClientCore::validate_exercise(
             exercise_action, exercise_quantity, account, &self.account(),
         ) {
@@ -378,7 +378,7 @@ impl EClient {
         if let Some(stated) = withdrawal_states(py, order_cancel.as_ref()) {
             return self.report_refusal(py, order_id, Refusal::validation(stated));
         }
-        let Some(tx) = self.tx_or_report(order_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(order_id)? else { return Ok(()) };
         // As `place_order`. A negative id read as unsigned is a number above
         // nine quintillion, and the cancel names it.
         let Some(oid) = u64::try_from(order_id).ok().filter(|id| *id > 0) else {
@@ -399,7 +399,7 @@ impl EClient {
                 "cancel_order_by_perm_id: perm_id must be non-zero",
             ));
         }
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         let shared = self.shared_state()?;
         let found = self.core.collect_open_orders(&shared)
             .into_iter()
@@ -420,7 +420,7 @@ impl EClient {
         if let Some(stated) = withdrawal_states(py, order_cancel.as_ref()) {
             return self.report_refusal(py, -1, Refusal::validation(stated));
         }
-        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
         let shared = self.shared_state()?;
         let count = shared.market.instrument_count();
         // Every failed send is counted and reported. A caller answered without
@@ -454,7 +454,7 @@ impl EClient {
     /// connecting.
     #[pyo3(signature = (num_ids=1))]
     fn req_ids(&self, py: Python<'_>, num_ids: i32) -> PyResult<()> {
-        let Some(_connected) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_connected) = self.tx_or_report(-1)? else { return Ok(()) };
         // As `take_order_id` does: the mark this is read off is raised by a
         // replay that lands after the connection does.
         self.wait_for_the_replay(py);
@@ -495,7 +495,7 @@ impl EClient {
 
     /// Request all open orders for this client.
     fn req_open_orders(&self, py: Python<'_>) -> PyResult<()> {
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         let shared = self.shared_state()?;
         // The venue names the working orders unprompted after a connect.
         // Answering before that replay lands reports none of them, and a
@@ -558,7 +558,7 @@ impl EClient {
         // but 0, and otherwise sets state that does not apply here: this
         // session is told about every order on the account whether or not it
         // placed them. The refusal is the only observable part.
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         if self.client_id.load(std::sync::atomic::Ordering::Acquire) != 0 {
             crate::python::compat::client::stubs::report_unserviceable_with(
                 self,
@@ -583,7 +583,7 @@ impl EClient {
     /// fields, and a window this client cannot apply would go unapplied.
     #[pyo3(signature = (req_id, exec_filter=None))]
     fn req_executions(&self, py: Python<'_>, req_id: i64, exec_filter: Option<Py<PyAny>>) -> PyResult<()> {
-        let Some(_connected) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(_connected) = self.tx_or_report(req_id)? else { return Ok(()) };
         let filter = if let Some(ref fobj) = exec_filter {
             let get = |attr: &str| -> String {
                 fobj.getattr(py, pyo3::types::PyString::new(py, attr))
@@ -671,7 +671,7 @@ impl EClient {
     #[pyo3(signature = (api_only=false))]
     fn req_completed_orders(&self, py: Python<'_>, api_only: bool) -> PyResult<()> {
         let _ = api_only;
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         // Bind the clone out of the guard first. A MutexGuard temporary in an
         // if-let scrutinee lives to the end of the body, so cloning alone does
         // not release it — a callback re-entering disconnect() would deadlock

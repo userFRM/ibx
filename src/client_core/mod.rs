@@ -296,11 +296,13 @@ fn algo_param_names(strategy: &str) -> Option<&'static [&'static str]> {
 
 /// Parse algo strategy and TagValue params into internal AlgoParams.
 ///
-/// A key the caller never set defaults the way IB's own algos do (0.0,
-/// false, or the documented default enum value). A key the caller *did*
-/// set — even to an empty string — is refused if it does not parse, rather
-/// than taking that same default: `riskAversion="Aggresive"` would otherwise
-/// submit a Neutral algo with no error, and `maxPctVol=""` would submit 0.0.
+/// A number the caller never set is not stated: the venue's own default for
+/// it is not known here, and a `0` sent in its place is a claim the caller
+/// did not make. A flag the caller never set defaults to false, and an enum to
+/// its documented default. A key the caller *did* set — even to an empty
+/// string — is refused if it does not parse, rather than taking a default:
+/// `riskAversion="Aggresive"` would otherwise submit a Neutral algo with no
+/// error, and `maxPctVol=""` would submit one the caller did not write.
 ///
 /// A strategy modelled here is re-encoded from the fields it names rather than
 /// forwarded as the caller wrote it, so a key it does not name would go no
@@ -327,10 +329,9 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         params.iter().find(|tv| tv.tag == key).map(|tv| tv.value.clone())
     };
     let get_str = |key: &str| -> String { get(key).unwrap_or_default() };
-    // An absent key stays the `0` this client has always stated for it.
-    let get_num = |key: &str| -> Result<String, Refusal> {
+    let get_num = |key: &str| -> Result<Option<String>, Refusal> {
         let raw = match get(key) {
-            None => return Ok("0".to_string()),
+            None => return Ok(None),
             Some(raw) => raw,
         };
         let v: f64 = raw.parse()
@@ -340,7 +341,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
                 format!("Invalid {key} '{raw}': must be a finite number"),
             ));
         }
-        Ok(raw)
+        Ok(Some(raw))
     };
     let get_bool = |key: &str| -> Result<bool, Refusal> {
         let raw = match get(key) {

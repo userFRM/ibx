@@ -69,7 +69,7 @@ impl EClient {
         regulatory_snapshot: bool,
         mode_9887: i32,
     ) -> PyResult<()> {
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
 
         // A contract's news is asked for by the venue's id for the contract,
         // and the caller may have stated a description instead. Resolved only
@@ -134,7 +134,7 @@ impl EClient {
 
     /// Cancel market data.
     pub fn cancel_mkt_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         self.withdraw_mkt_data(py, &tx, req_id)
     }
 
@@ -164,7 +164,7 @@ impl EClient {
         number_of_ticks: i32,
         ignore_size: bool,
     ) -> PyResult<()> {
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
 
         let tbt_type = match TbtType::named(tick_type) {
             Ok(named) => named,
@@ -225,7 +225,7 @@ impl EClient {
         // Removed before the send, not across it: the send is bounded and runs
         // detached from Python, so a guard spanning it blocks another thread
         // cancelling a different subscription.
-        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.tbt_kind.lock().unwrap().remove(&req_id);
         let instrument = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id);
         if let Some(instrument) = instrument {
@@ -239,7 +239,7 @@ impl EClient {
     /// contract caches, or pacing budgets. Poll `last_rtt_ms()` after a
     /// moment for the result.
     fn req_ping(&self, py: Python<'_>) -> PyResult<()> {
-        let Some(tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::Ping)?;
         Ok(())
     }
@@ -271,7 +271,7 @@ impl EClient {
         // and stores nothing, so a program written against it sets the type
         // after connecting, having never had another way; what a caller loses
         // here is only a setting the reference never let it make.
-        let Some(_tx) = self.tx_or_report(-1) else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.core.set_market_data_type(market_data_type);
         Ok(())
     }
@@ -296,7 +296,7 @@ impl EClient {
         // secType and exchange straight off the contract, so a contract naming
         // only an id was subscribed here to a US stock on SMART: a book for an
         // instrument nobody asked about, under their own request id.
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::SubscribeDepth {
             contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), exchange: contract.exchange.clone(), sec_type: contract.sec_type.clone(), currency: contract.currency.clone(), ..Default::default() },
             req_id: wire_req_id(req_id)?,
@@ -315,7 +315,7 @@ impl EClient {
     #[pyo3(signature = (req_id, is_smart_depth=false))]
     fn cancel_mkt_depth(&self, py: Python<'_>, req_id: i64, is_smart_depth: bool) -> PyResult<()> {
         let _ = is_smart_depth;
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::UnsubscribeDepth { req_id: wire_req_id(req_id)? })?;
         Ok(())
     }
@@ -336,7 +336,7 @@ impl EClient {
         use_rth: i32,
         real_time_bars_options: Vec<Py<PyAny>>,
     ) -> PyResult<()> {
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         let _ = (bar_size, real_time_bars_options);
         if let Err(why) = crate::control::historical::BarDataType::from_api_str(what_to_show) {
             return self.report_refusal(py, req_id, why.into());
@@ -361,7 +361,7 @@ impl EClient {
 
     /// Cancel real-time bars.
     fn cancel_real_time_bars(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
-        let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::CancelRealTimeBar { req_id: wire_req_id(req_id)? })?;
         Ok(())
     }

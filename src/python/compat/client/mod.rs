@@ -782,7 +782,7 @@ impl EClient {
     /// this is reported the way the reference client reports it: on `error`,
     /// under 504.
     fn start_api(&self) -> PyResult<()> {
-        let _ = self.tx_or_report(-1);
+        self.tx_or_report(-1)?;
         Ok(())
     }
 
@@ -1099,27 +1099,25 @@ impl EClient {
     /// and the call returns normally, which is what the reference client does.
     /// Raising instead made a caller written against that client take a
     /// different path here than it takes there. What the handler raises is
-    /// logged if ordinary, as `notify` logs it.
-    pub(crate) fn tx_or_report(&self, req_id: i64) -> Option<SyncSender<ControlCommand>> {
+    /// logged if ordinary, as `notify` logs it, and otherwise ends the call.
+    pub(crate) fn tx_or_report(&self, req_id: i64) -> PyResult<Option<SyncSender<ControlCommand>>> {
         // Taken before the arms run. The `None` arm calls user code, and a
         // handler that disconnects or issues another request would wait on
         // this same lock while holding the GIL.
         let tx = self.control_tx.lock().unwrap().clone();
         match tx {
-            Some(tx) => Some(tx),
+            Some(tx) => Ok(Some(tx)),
             None => {
+                // What the handler raised is handed back rather than logged
+                // and dropped: an ordinary exception is the caller's own
+                // business and is logged there, but an interrupt has to end
+                // the call it was raised in. Left set instead of returned, it
+                // comes out as a `SystemError` at whatever the interpreter
+                // calls next, nowhere near the handler.
                 Python::attach(|py| {
-                    // An interrupt the handler raised is lost here, and logged
-                    // as lost: this answers with the channel or nothing, so
-                    // there is nothing to hand it back through. Left set
-                    // instead, it comes out as a `SystemError` at whatever
-                    // call comes next. Handing it back is this answering
-                    // `PyResult<Option<_>>` and a `?` at each request's opening.
-                    if let Err(e) = self.notify(py, "error", (req_id, raised_now(), NOT_CONNECTED_CODE, "Not connected", "")) {
-                        log::error!("Python callback error() raised {e} on a request made with no session, and it was lost");
-                    }
-                });
-                None
+                    self.notify(py, "error", (req_id, raised_now(), NOT_CONNECTED_CODE, "Not connected", ""))
+                })?;
+                Ok(None)
             }
         }
     }

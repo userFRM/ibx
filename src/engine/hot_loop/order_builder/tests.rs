@@ -917,7 +917,7 @@ fn algo_wire_carries_the_attributes_and_keeps_its_algo_tags() {
         crate::types::OrderKind::Algo {
             price: 100 * crate::types::PRICE_SCALE,
             algo: AlgoParams::Vwap {
-                max_pct_vol: "0.25".into(),
+                max_pct_vol: Some("0.25".into()),
                 no_take_liq: true,
                 allow_past_end_time: false,
                 start_time: String::new(),
@@ -977,6 +977,36 @@ fn an_algo_number_reaches_the_wire_as_the_caller_wrote_it() {
     // The unmodelled path, which this now agrees with.
     let named = wire("Other", &[tv("maxPctVol", "5.0")]);
     assert!(named.contains(&pair("maxPctVol", "5.0")), "{named}");
+}
+
+/// A number the caller did not state is not sent.
+///
+/// A VWAP placed without `maxPctVol` went out with `849=0`, and a PctVol
+/// without `pctVol` with `pctVol=0`: a share of the volume the caller never
+/// named, on a field that says how much of it the order may take. What the
+/// venue makes of `0` there is not known here, and neither is its own
+/// default; the reference client sends only what the caller listed, and so
+/// does this now.
+#[test]
+fn an_algo_number_the_caller_did_not_state_is_not_sent() {
+    use crate::types::model::TagValue;
+    let wire = |strategy: &str, params: &[TagValue]| {
+        let algo = crate::client_core::parse_algo_params(strategy, params).unwrap();
+        send_kind_for_test(
+            crate::types::OrderKind::Algo { price: 100 * crate::types::PRICE_SCALE, algo },
+            b'1',
+            crate::types::OrderAttrs::default(),
+        )
+    };
+    let tag = |msg: &str, t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+
+    let vwap = wire("Vwap", &[]);
+    assert_eq!(tag(&vwap, "849="), None, "{vwap}");
+    assert_eq!(tag(&vwap, "847=").as_deref(), Some("Vwap"), "the order still names its strategy: {vwap}");
+
+    let pct = wire("PctVol", &[]);
+    assert!(!pct.contains("5958=pctVol\u{1}"), "{pct}");
+    assert_eq!(tag(&pct, "5957=").as_deref(), Some("3"), "the count is of what is sent: {pct}");
 }
 
 /// Conditions are joined the way the caller joined them.

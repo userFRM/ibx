@@ -867,10 +867,13 @@ pub enum AlgoParams {
     /// Tag 847=Vwap, 849=max_pct_vol.
     Vwap {
         /// The most of the market's volume the algorithm may take, as the
-        /// caller wrote it. A parameter is text on the wire and the venue is
-        /// handed the caller's own spelling; this client checks only that it
-        /// reads as a finite number. Sent as tag 849.
-        max_pct_vol: String,
+        /// caller wrote it, or nothing where the caller stated none. A
+        /// parameter is text on the wire and the venue is handed the caller's
+        /// own spelling; this client checks only that it reads as a finite
+        /// number. One the caller did not state is not sent: the venue's own
+        /// default for it is not known here, and `0` is a claim. Sent as tag
+        /// 849.
+        max_pct_vol: Option<String>,
         /// Don't take liquidity (0 or 1).
         no_take_liq: bool,
         /// Allow algo to continue past end time.
@@ -894,8 +897,9 @@ pub enum AlgoParams {
     /// Tag 847=ArrivalPx, 849=max_pct_vol.
     ArrivalPx {
         /// The most of the market's volume the algorithm may take, as the
-        /// caller wrote it (see [`AlgoParams::Vwap`]).
-        max_pct_vol: String,
+        /// caller wrote it, or nothing where the caller stated none (see
+        /// [`AlgoParams::Vwap`]).
+        max_pct_vol: Option<String>,
         /// How hard it works against the price to finish.
         risk_aversion: RiskAversion,
         /// Whether it may keep working past that.
@@ -911,8 +915,9 @@ pub enum AlgoParams {
     /// Tag 847=ClosePx, 849=max_pct_vol.
     ClosePx {
         /// The most of the market's volume the algorithm may take, as the
-        /// caller wrote it (see [`AlgoParams::Vwap`]).
-        max_pct_vol: String,
+        /// caller wrote it, or nothing where the caller stated none (see
+        /// [`AlgoParams::Vwap`]).
+        max_pct_vol: Option<String>,
         /// How hard it works against the price to finish.
         risk_aversion: RiskAversion,
         /// Whether it must finish within its window.
@@ -936,9 +941,10 @@ pub enum AlgoParams {
     /// Percentage of Volume: Participate at % of volume.
     /// Tag 847=PctVol.
     PctVol {
-        /// Target participation rate, as the caller wrote it. Sent as param
-        /// pctVol.
-        pct_vol: String,
+        /// Target participation rate, as the caller wrote it, or nothing
+        /// where the caller stated none (see [`AlgoParams::Vwap`]). Sent as
+        /// param pctVol.
+        pct_vol: Option<String>,
         /// Whether it may only add liquidity.
         no_take_liq: bool,
         /// When the algorithm should begin.
