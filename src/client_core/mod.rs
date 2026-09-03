@@ -3272,7 +3272,8 @@ impl ClientCore {
         match order_type.as_str() {
             "MKT" | "LMT" | "STP" | "STP LMT" | "TRAIL" | "TRAIL LIMIT"
             | "MOC" | "LOC" | "MIT" | "LIT" | "MTL" | "MKT PRT" | "STP PRT"
-            | "REL" | "PEG MKT" | "PEG MID" | "PEG MIDPT" | "MIDPX" | "MIDPRICE"
+            | "REL" | "PASSV REL" | "PEG MKT" | "PEG MID" | "PEG MIDPT" | "PEG BEST"
+            | "MIDPX" | "MIDPRICE"
             | "SNAP MKT" | "SNAP MID" | "SNAP MIDPT" | "SNAP PRI" | "SNAP PRIM"
             | "PEG BENCH" | "PEGBENCH" | "BOX TOP" => {}
             _ => return Err(format!("Unsupported order type: '{}'", order.order_type)),
@@ -3306,6 +3307,14 @@ impl ClientCore {
             "TRAIL LIMIT" if order.aux_price == 0.0 => {
                 return Err(
                     "TRAIL LIMIT order requires aux_price (trail amount) but got 0.0".into()
+                );
+            }
+            // This type's wire shape has one price and no second tag for it
+            // to move to, so an order sent without one is malformed rather
+            // than refused by the venue under a code a caller could expect.
+            "PEG BEST" if order.lmt_price == 0.0 => {
+                return Err(
+                    "PEG BEST order requires lmt_price (the order's price) but got 0.0".into()
                 );
             }
             _ => {}
@@ -3863,6 +3872,23 @@ impl ClientCore {
             "REL" => {
                 let offset = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::Rel { offset })
+            }
+            // Sits away from the best price and follows it, no further than
+            // the cap the caller states. The offset is the aux price, as it is
+            // for every relative type here.
+            "PASSV REL" => {
+                ex(OrderKind::PassiveRel {
+                    offset: crate::types::price_from_f64(order.aux_price),
+                    price_cap: Self::price_or_unset(order.lmt_price),
+                })
+            }
+            // Sits at the best bid or offer, filling no worse than the price
+            // the caller states. What it competes with, and how far it will
+            // go towards the midpoint, are stated on the order's attributes.
+            "PEG BEST" => {
+                ex(OrderKind::PegBest {
+                    price: crate::types::price_from_f64(order.lmt_price),
+                })
             }
             // Every reference field was already carried here and then read by
             // nobody: a caller setting all six got an order that mentioned none

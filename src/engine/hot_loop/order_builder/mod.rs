@@ -893,7 +893,9 @@ fn is_trigger_only(ord_type: u8) -> bool {
 /// tag 99 as a trigger, or has no price to state. A peg to benchmark states
 /// neither — its submit carries no tag 44, so its replace must not grow one.
 fn states_a_limit_price(ord_type: u8) -> bool {
-    matches!(ord_type, b'2' | b'4' | b'B') || ord_type == crate::types::ORD_LIT
+    matches!(ord_type, b'2' | b'4' | b'B')
+        || ord_type == crate::types::ORD_LIT
+        || ord_type == crate::types::ORD_PEG_BEST
 }
 
 /// The currency an order states for a contract (tag 15).
@@ -1164,6 +1166,8 @@ fn replace_needs_the_placed_record(ord_type: u8) -> bool {
                 | crate::types::ORD_SNAP_MKT
                 | crate::types::ORD_SNAP_MID
                 | crate::types::ORD_SNAP_PRI
+                | crate::types::ORD_PASSV_REL
+                | crate::types::ORD_PEG_BEST
         )
 }
 
@@ -1244,6 +1248,8 @@ fn tracked_shape(kind: &crate::types::OrderKind) -> (u8, i64, i64) {
         K::PegMkt { offset, .. } => (crate::types::ORD_PEG_MKT, 0, *offset),
         K::PegMid { offset, .. } => (crate::types::ORD_PEG_MID, 0, *offset),
         K::Rel { offset } => (b'P', 0, *offset),
+        K::PassiveRel { offset, .. } => (crate::types::ORD_PASSV_REL, 0, *offset),
+        K::PegBest { price } => (crate::types::ORD_PEG_BEST, *price, 0),
         K::AdjustableStop { stop_price, .. } => (b'3', 0, *stop_price),
         K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', *price, 0),
             // Tracked under the what-if marker so the response is recognised as a
@@ -1404,6 +1410,17 @@ fn push_type_and_prices(fields: &mut Vec<(u32, String)>, kind: &crate::types::Or
             // disambiguated by 18=R; peg offset on 211, no tag 44.
             fields.push((40, "P".to_string()));
             fields.push((211, format_price(*offset).to_string()));
+        }
+        // A passive relative order states no instruction beside its name, so
+        // the name is the whole of it here; the offset and the cap are
+        // appended after the attribute block, where the pegged kinds carry
+        // theirs.
+        K::PassiveRel { .. } => {
+            fields.push((40, "PSVR".to_string()));
+        }
+        K::PegBest { price } => {
+            fields.push((40, "E2M".to_string()));
+            fields.push((44, format_price(*price).to_string()));
         }
         K::Adaptive { price, .. } => {
             // Adaptive requires `18=e`. Without it the order is rejected with
@@ -1955,6 +1972,14 @@ fn push_order_attrs(
                 fields.push((44, format_price(*price_cap).to_string()));
             }
         }
+        // The offset rides the peg tag the way a relative order's does; the
+        // cap rides the limit-price tag, and a zero cap is no cap.
+        K::PassiveRel { offset, price_cap } => {
+            fields.push((211, format_price(*offset).to_string()));
+            if *price_cap > 0 {
+                fields.push((44, format_price(*price_cap).to_string()));
+            }
+        }
         K::PegMid { offset, price_cap } => {
             // A midpoint peg states its offset one of two ways: as one
             // continuous number on tag 211, or as a whole-tick part on tag 8403
@@ -1992,6 +2017,18 @@ fn push_order_attrs(
             // is not a price, so it is left off rather than stated as one.
             if *price_cap > 0 {
                 fields.push((44, format_price(*price_cap).to_string()));
+            }
+        }
+        // Stated up to the midpoint rather than against the best price, the
+        // order carries the mid offsets in place of a compete offset. Stated
+        // only where the caller set one: a compete-against-best order names
+        // neither, and zero on both is not the same as nothing on either.
+        K::PegBest { .. } => {
+            if attrs.mid_offset_at_whole != f64::MAX || attrs.mid_offset_at_half != f64::MAX {
+                let whole = if attrs.mid_offset_at_whole == f64::MAX { 0.0 } else { attrs.mid_offset_at_whole };
+                let half = if attrs.mid_offset_at_half == f64::MAX { 0.0 } else { attrs.mid_offset_at_half };
+                fields.push((8403, format!("{whole:.6}")));
+                fields.push((8404, format!("{half:.6}")));
             }
         }
         // Optional initial stop trigger.

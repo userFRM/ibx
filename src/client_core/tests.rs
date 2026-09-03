@@ -1255,6 +1255,62 @@ fn an_adjustable_stop_carries_what_the_contract_states() {
     assert_eq!(attrs.primary_exchange, "CBOE", "the listing exchange it names");
 }
 
+/// A passive relative order is taken as the caller states it: the offset on
+/// the auxiliary price, the cap on the limit price, which is the pair the
+/// venue's own shape for the type is built from.
+#[test]
+fn a_passive_relative_order_is_built_from_the_prices_it_states() {
+    let scale = crate::types::PRICE_SCALE;
+    let order = ApiOrder {
+        action: "BUY".into(),
+        total_quantity: 100.0,
+        order_type: "PASSV REL".into(),
+        aux_price: 0.01,
+        lmt_price: 150.0,
+        tif: "DAY".into(),
+        ..Default::default()
+    };
+    ClientCore::validate_order(&order, "DU123").unwrap();
+    let cmd = ClientCore::build_order_request(&order, 7, 0, None).unwrap();
+    let ControlCommand::Order(OrderRequest::SubmitEx { kind, .. }) = cmd else {
+        panic!("a passive relative order routes through the shared extended submission");
+    };
+    let crate::types::OrderKind::PassiveRel { offset, price_cap } = kind else {
+        panic!("built as the wrong kind: {kind:?}");
+    };
+    assert_eq!(offset, scale / 100, "the offset the caller stated");
+    assert_eq!(price_cap, 150 * scale, "the cap the caller stated");
+}
+
+/// A pegged-to-best order is taken as the caller states it: one price, on
+/// the limit-price field. Stated without one there is nothing to send, and
+/// the order is refused rather than sent malformed.
+#[test]
+fn a_peg_best_order_is_built_from_the_price_it_states() {
+    let scale = crate::types::PRICE_SCALE;
+    let order = ApiOrder {
+        action: "BUY".into(),
+        total_quantity: 100.0,
+        order_type: "PEG BEST".into(),
+        lmt_price: 150.0,
+        tif: "DAY".into(),
+        ..Default::default()
+    };
+    ClientCore::validate_order(&order, "DU123").unwrap();
+    let cmd = ClientCore::build_order_request(&order, 7, 0, None).unwrap();
+    let ControlCommand::Order(OrderRequest::SubmitEx { kind, .. }) = cmd else {
+        panic!("a pegged-to-best order routes through the shared extended submission");
+    };
+    let crate::types::OrderKind::PegBest { price } = kind else {
+        panic!("built as the wrong kind: {kind:?}");
+    };
+    assert_eq!(price, 150 * scale, "the price the caller stated");
+
+    let unpriced = ApiOrder { lmt_price: 0.0, ..order };
+    let err = ClientCore::validate_order(&unpriced, "DU123").unwrap_err();
+    assert!(err.contains("lmt_price"), "a pegged-to-best order with no price is refused: {err}");
+}
+
 /// A snapshot ends on the venue having stated what one is made of, or on the
 /// wait running out from when it was ASKED FOR. Waiting on the quiet instead
 /// ended one on a pause, and never ended one the venue said nothing about.

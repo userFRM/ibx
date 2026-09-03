@@ -132,6 +132,10 @@ pub const TIF_UNSTATED: u8 = 0;
 pub const ORD_LIT: u8 = 10;
 /// FIX "TSL" — Trailing Stop Limit
 pub const ORD_TRAIL_LIMIT: u8 = 11;
+/// FIX "PSVR" — Passive Relative
+pub const ORD_PASSV_REL: u8 = 12;
+/// FIX "E2M" — Pegged to Best
+pub const ORD_PEG_BEST: u8 = 13;
 
 
 /// Convert an `ord_type` discriminant to the FIX tag 40 string.
@@ -151,6 +155,8 @@ pub fn ord_type_fix_str(t: u8) -> &'static str {
         ORD_PEG_BENCH => "PB",
         ORD_LIT => "LT",
         ORD_TRAIL_LIMIT => "TSL",
+        ORD_PASSV_REL => "PSVR",
+        ORD_PEG_BEST => "E2M",
         b'1' => "1", b'2' => "2", b'3' => "3", b'4' => "4", b'5' => "5",
         b'B' => "B", b'E' => "E", b'J' => "J", b'K' => "K",
         b'P' => "P", b'R' => "R", b'U' => "U",
@@ -173,6 +179,7 @@ mod ord_type_round_trip {
         let every = [
             ORD_STP_PRT, ORD_MIDPX, ORD_SNAP_MKT, ORD_SNAP_MID, ORD_SNAP_PRI,
             ORD_PEG_MKT, ORD_PEG_MID, ORD_PEG_BENCH, ORD_LIT, ORD_TRAIL_LIMIT,
+            ORD_PASSV_REL, ORD_PEG_BEST,
             b'1', b'2', b'3', b'4', b'5', b'B', b'J', b'K', b'P', b'U',
         ];
         // The instruction the venue states beside the name, for the kinds that
@@ -226,6 +233,8 @@ pub fn ord_type_from_fix(ord_type: &str, exec_inst: &str) -> u8 {
         "PB" => ORD_PEG_BENCH,
         "LT" => ORD_LIT,
         "TSL" => ORD_TRAIL_LIMIT,
+        "PSVR" => ORD_PASSV_REL,
+        "E2M" => ORD_PEG_BEST,
         // Pegged to market, pegged to midpoint, a relative order and a
         // trailing stop all travel as `P`. The instruction names which.
         "P" if exec_inst.contains('P') => ORD_PEG_MKT,
@@ -1127,6 +1136,25 @@ pub enum OrderKind {
     Rel {
         /// How far from the reference it sits.
         offset: Price,
+    },
+    /// Sit on the passive side of the best bid or offer, by this offset.
+    /// Pegs the way a relative order does but travels under a name of its
+    /// own and states no instruction beside it: the offset rides the peg
+    /// tag, and the cap — the worst price it may reach — rides the
+    /// limit-price tag. Zero states no cap.
+    PassiveRel {
+        /// How far from the reference it sits.
+        offset: Price,
+        /// The furthest it will follow.
+        price_cap: Price,
+    },
+    /// Sit at the best bid or offer, no worse than this price. What it
+    /// competes with and how far it may improve ride the attribute tags;
+    /// stated up to the midpoint instead, the two mid-offset fields take the
+    /// compete offset's place.
+    PegBest {
+        /// Fill at this price or better, scaled by `PRICE_SCALE`.
+        price: Price,
     },
     /// Stop that converts to another order type once `trigger_price` is hit.
     /// Tags: 6257=1, 6261=adjusted type, 6258=trigger, 6259=adjusted stop,

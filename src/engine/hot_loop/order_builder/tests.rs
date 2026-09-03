@@ -3329,6 +3329,8 @@ fn a_preview_states_everything_the_order_states() {
         K::TrailPct { trail_pct: 100, trail_stop_price: 99 * scale },
         K::TrailingStopLimit { lmt_offset: scale, trail_amt: scale, trail_stop_price: 99 * scale },
         K::Rel { offset: scale / 100 },
+        K::PassiveRel { offset: scale / 100, price_cap: 0 },
+        K::PegBest { price: 100 * scale },
         K::PegMkt { offset: scale / 100, price_cap: 0 },
         K::PegMid { offset: scale / 100, price_cap: 0 },
         K::StpPrt { stop_price: 99 * scale },
@@ -3398,4 +3400,122 @@ fn a_preview_states_everything_the_order_states() {
             "{name} is previewed without the instruction that names it: {msg}",
         );
     }
+}
+
+/// A passive relative order pegs under a name of its own. The offset rides
+/// the peg tag the way a relative order's does, and no instruction rides
+/// tag 18 beside it: the name is what tells the venue which peg this is.
+#[test]
+fn a_passive_relative_order_states_its_offset_under_its_own_name() {
+    use crate::types::OrderKind as K;
+    let scale = crate::types::PRICE_SCALE;
+    let stated = |msg: &str, t: &str| {
+        msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string))
+    };
+
+    let msg = send_kind_for_test(
+        K::PassiveRel { offset: scale / 100, price_cap: 0 },
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    assert_eq!(stated(&msg, "40=").as_deref(), Some("PSVR"), "its own name: {msg}");
+    assert_eq!(stated(&msg, "211=").as_deref(), Some("0.01"), "the offset is stated: {msg}");
+    assert_eq!(stated(&msg, "44="), None, "no cap stated, none sent: {msg}");
+    assert_eq!(stated(&msg, "18="), None, "no instruction beside the name: {msg}");
+}
+
+/// The cap a passive relative order states rides the limit-price tag, the
+/// way the venue's own shape for the type carries it.
+#[test]
+fn a_passive_relative_order_states_its_cap_on_the_limit_price() {
+    use crate::types::OrderKind as K;
+    let scale = crate::types::PRICE_SCALE;
+    let stated = |msg: &str, t: &str| {
+        msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string))
+    };
+
+    let msg = send_kind_for_test(
+        K::PassiveRel { offset: scale / 100, price_cap: 100 * scale },
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    assert_eq!(stated(&msg, "40=").as_deref(), Some("PSVR"), "its own name: {msg}");
+    assert_eq!(stated(&msg, "211=").as_deref(), Some("0.01"), "the offset is stated: {msg}");
+    assert_eq!(stated(&msg, "44=").as_deref(), Some("100"), "the cap is stated: {msg}");
+}
+
+/// A pegged-to-best order states its price on the limit-price tag under its
+/// own name, and nothing beside it: no peg offset, no instruction.
+#[test]
+fn a_peg_best_order_states_its_price_under_its_own_name() {
+    use crate::types::OrderKind as K;
+    let scale = crate::types::PRICE_SCALE;
+    let stated = |msg: &str, t: &str| {
+        msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string))
+    };
+
+    let msg = send_kind_for_test(
+        K::PegBest { price: 100 * scale },
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    assert_eq!(stated(&msg, "40=").as_deref(), Some("E2M"), "its own name: {msg}");
+    assert_eq!(stated(&msg, "44=").as_deref(), Some("100"), "the price is stated: {msg}");
+    assert_eq!(stated(&msg, "211="), None, "no peg offset to state: {msg}");
+    assert_eq!(stated(&msg, "18="), None, "no instruction beside the name: {msg}");
+}
+
+/// What a caller sets on a pegged-to-best order beside its price reaches the
+/// wire: the smallest size worth competing for, the smallest size to compete
+/// against, how far past the best to compete, and whether the order is held
+/// by the desk rather than the book.
+#[test]
+fn a_peg_best_order_carries_what_competing_needs() {
+    use crate::types::OrderKind as K;
+    let scale = crate::types::PRICE_SCALE;
+    let stated = |msg: &str, t: &str| {
+        msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string))
+    };
+
+    let msg = send_kind_for_test(
+        K::PegBest { price: 100 * scale },
+        b'0',
+        crate::types::OrderAttrs {
+            min_trade_qty: 100,
+            min_compete_size: 500,
+            compete_against_best_offset: 0.01,
+            not_held: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(stated(&msg, "8415=").as_deref(), Some("100"), "the minimum trade size: {msg}");
+    assert_eq!(stated(&msg, "8411=").as_deref(), Some("500"), "the minimum compete size: {msg}");
+    assert_eq!(stated(&msg, "8412=").as_deref(), Some("0.010000"), "how far past the best: {msg}");
+    assert_eq!(stated(&msg, "6287=").as_deref(), Some("1"), "held by the desk: {msg}");
+    assert_eq!(stated(&msg, "8403="), None, "no mid offset where none was stated: {msg}");
+    assert_eq!(stated(&msg, "8404="), None, "no mid offset where none was stated: {msg}");
+}
+
+/// Stated up to the midpoint rather than against the best price, a
+/// pegged-to-best order carries the two mid offsets and no compete offset.
+#[test]
+fn a_peg_best_order_up_to_the_mid_states_its_mid_offsets() {
+    use crate::types::OrderKind as K;
+    let scale = crate::types::PRICE_SCALE;
+    let stated = |msg: &str, t: &str| {
+        msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string))
+    };
+
+    let msg = send_kind_for_test(
+        K::PegBest { price: 100 * scale },
+        b'0',
+        crate::types::OrderAttrs {
+            mid_offset_at_whole: 0.02,
+            mid_offset_at_half: 0.01,
+            ..Default::default()
+        },
+    );
+    assert_eq!(stated(&msg, "8403=").as_deref(), Some("0.020000"), "the offset at the whole spread: {msg}");
+    assert_eq!(stated(&msg, "8404=").as_deref(), Some("0.010000"), "the offset at half the spread: {msg}");
+    assert_eq!(stated(&msg, "8412="), None, "no compete offset beside them: {msg}");
 }
