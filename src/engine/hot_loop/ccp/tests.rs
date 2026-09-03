@@ -2305,6 +2305,12 @@ fn a_cancel_is_still_answered_when_rejections_cross_it() {
     // Working, then a cancel on the wire: that cancel is what the venue owes
     // an answer to.
     assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    // A replace went out and has not been answered — that is what makes the
+    // rejections below answers to something other than the cancel. Without one
+    // outstanding, a rejection behind a cancel is the venue's word on the
+    // order itself and must stand, or the order waits for ever.
+    let before = *context.order(42).expect("the order is tracked");
+    context.pre_replace.insert(42, before);
     assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
 
     let report = |exec_type: &str, ord_status: &str, text: &str| {
@@ -4883,4 +4889,39 @@ fn an_acknowledged_replace_spends_the_fallback() {
     assert_eq!(order.tif, b'1', "the accepted terms stand");
     assert_eq!(order.qty, 200 * QTY_SCALE, "the accepted quantity stands");
     assert_eq!(order.price, 105 * PRICE_SCALE, "the accepted price stands");
+}
+
+/// A rejection behind a cancel, with no replace outstanding, is the venue's
+/// last word and finishes the order.
+///
+/// The guard beside it holds an order in flight while the venue still owes the
+/// cancel an answer — but only where a replace is outstanding for the venue to
+/// be answering. Held on the status alone, an order the venue refused the
+/// cancel for waited for a verdict that was never coming: six paper phases
+/// placed an order, cancelled it, and were told it had never been cancelled.
+#[test]
+fn a_rejection_with_no_replace_outstanding_finishes_the_order() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
+    assert!(!context.pre_replace.contains_key(&42), "nothing was replaced");
+
+    ccp.process_ccp_message(
+        &crate::protocol::fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+            (11, "42"), (150, "8"), (39, "8"), (58, "the venue will not take this"),
+        ], 1),
+        &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+
+    assert!(
+        context.order(42).is_none(),
+        "the venue answered about the order itself, so it is finished and let go",
+    );
 }

@@ -1539,8 +1539,12 @@ impl CcpState {
             // would leave that verdict nothing to announce against when it
             // lands. The order stays in the book until a verdict the guard
             // accepts finishes it.
+            // As the guard beside the status: only where a replace is
+            // outstanding does a rejection behind a cancel answer something
+            // other than the cancel itself.
             let cancel_still_owed = status == crate::types::OrderStatus::Rejected
-                && tracked.is_some_and(|o| o.status == crate::types::OrderStatus::PendingCancel);
+                && tracked.is_some_and(|o| o.status == crate::types::OrderStatus::PendingCancel)
+                && context.pre_replace.contains_key(&clord_id);
             if !cancel_still_owed {
                 context.retire_order(clord_id);
             }

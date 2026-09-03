@@ -464,8 +464,16 @@ impl Context {
             // that raced the cancel, not the cancel itself: the venue still
             // owes the cancel its own verdict, and the order stands as
             // in-flight until that lands rather than being reported done.
+            // Only where a replace is actually outstanding. Without one, a
+            // rejection arriving behind a cancel IS the venue's word on the
+            // order — it will send nothing further, and holding the order
+            // in flight for a verdict that never comes leaves it pending for
+            // ever. The record of what the order held before a replace is the
+            // one thing that says whether the venue owes an answer to
+            // something other than the cancel.
             let cancel_still_owed = prev == OrderStatus::PendingCancel
-                && status == OrderStatus::Rejected;
+                && status == OrderStatus::Rejected
+                && self.pre_replace.contains_key(&order_id);
             if !resumes_working && (cancel_still_owed || prev.is_terminal() || status.rank() < prev.rank()) {
                 log::debug!(
                     "Order {order_id} status guard: keeping {prev:?}, dropping stale {status:?}",
