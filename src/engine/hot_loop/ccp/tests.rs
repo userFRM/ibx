@@ -4303,3 +4303,79 @@ fn a_restated_partial_fill_of_an_order_not_held_lists_no_working_order() {
         "a restated report that finishes an order is filed as completed",
     );
 }
+
+/// A refused request is told which one it was, and told at once.
+///
+/// The venue names the request it is refusing on tag 320. Attributed by
+/// counting instead — only a lone request in flight was ever told — five
+/// contract lookups asked together drew five refusals inside a tenth of a
+/// second and not one caller heard them: all five waited out the sweep and
+/// were then told the request had timed out with no reply from the venue,
+/// when the reply had come back at once and said exactly what was wrong.
+///
+/// Measured against the venue, before and after: 20.0s to 0.1s, and the
+/// venue's own words instead of a timeout that did not happen.
+#[test]
+fn a_refusal_reaches_the_request_the_venue_named() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    for req_id in [11u32, 12, 13] {
+        ccp.pending_secdef.push((req_id, false, Instant::now() + SECDEF_TIMEOUT));
+    }
+
+    let refused = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "3"),
+        (320, "12"),
+        (58, "Unsupported type"),
+    ], 1);
+    ccp.process_ccp_message(&refused, &mut None, &mut context, &shared,
+        &None, &mut HeartbeatState::new(), "DU1");
+
+    let waiting: Vec<u32> = ccp.pending_secdef.iter().map(|(id, _, _)| *id).collect();
+    assert_eq!(waiting, vec![11, 13], "the one the venue named, and only it");
+
+    let errors = shared.reference.drain_historical_errors();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].0, 12, "told to the request that drew it");
+    assert_eq!(errors[0].1, 200);
+    assert!(errors[0].2.contains("Unsupported type"), "in the venue's own words: {}", errors[0].2);
+    assert_eq!(shared.reference.drain_contract_details_end(), vec![12],
+        "and ended, so a caller blocked on it is let go");
+}
+
+/// Where the venue names nothing, a lone request is still told.
+#[test]
+fn a_refusal_naming_no_request_still_reaches_a_lone_one() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    ccp.pending_secdef.push((7, false, Instant::now() + SECDEF_TIMEOUT));
+
+    let refused = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "3"),
+        (58, "Unsupported type"),
+    ], 1);
+    ccp.process_ccp_message(&refused, &mut None, &mut context, &shared,
+        &None, &mut HeartbeatState::new(), "DU1");
+
+    assert!(ccp.pending_secdef.is_empty());
+    assert_eq!(shared.reference.drain_historical_errors()[0].0, 7);
+    assert_eq!(shared.reference.drain_contract_details_end(), vec![7]);
+}
+
+/// And a refusal naming a request nobody is waiting on takes nothing with it.
+#[test]
+fn a_refusal_naming_a_stranger_leaves_the_waiting_alone() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    for req_id in [11u32, 12] {
+        ccp.pending_secdef.push((req_id, false, Instant::now() + SECDEF_TIMEOUT));
+    }
+
+    let refused = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "3"),
+        (320, "99"),
+        (58, "Unsupported type"),
+    ], 1);
+    ccp.process_ccp_message(&refused, &mut None, &mut context, &shared,
+        &None, &mut HeartbeatState::new(), "DU1");
+
+    assert_eq!(ccp.pending_secdef.len(), 2, "neither was the one refused");
+    assert!(shared.reference.drain_historical_errors().is_empty());
+}

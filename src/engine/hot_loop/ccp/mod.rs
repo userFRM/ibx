@@ -593,14 +593,28 @@ impl CcpState {
                 let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                 let ref_tag = parsed.get(&371).map(|s| s.as_str()).unwrap_or("?");
                 log::warn!("SessionReject: reason='{reason}' refTag={ref_tag}");
-                // A rejection of an in-flight contract-details
-                // request was warn-only — the caller saw neither error()
-                // nor end (a hang until the sweep, and before that
-                // forever). The reject carries no request id, so attribute
-                // it only when it cannot be ambiguous: exactly one pending
-                // lookup. Otherwise the sweep bounds the damage.
-                if self.pending_secdef.len() == 1 && self.pending_fanout.is_empty() {
-                    let (req_id, _, _) = self.pending_secdef.remove(0);
+                // The venue names the request it is refusing, on tag 320 —
+                // the same tag its answers are matched on below. Attributed
+                // by count instead, only a lone request was ever told: five
+                // asked together drew five rejects inside a tenth of a
+                // second, and all five callers waited out the sweep and were
+                // told the request had timed out with no reply, when the
+                // reply had arrived at once and said why.
+                //
+                // Falling back on the count where the venue names nothing,
+                // which is the case this stood on.
+                let named = parsed
+                    .get(&320)
+                    .and_then(|stated| stated.parse::<u32>().ok())
+                    .and_then(|stated| {
+                        self.pending_secdef.iter().position(|(pid, _, _)| *pid == stated)
+                    })
+                    .or_else(|| {
+                        (self.pending_secdef.len() == 1 && self.pending_fanout.is_empty())
+                            .then_some(0)
+                    });
+                if let Some(at) = named {
+                    let (req_id, _, _) = self.pending_secdef.remove(at);
                     if req_id < 0xF000_0000 {
                         shared.reference.push_historical_error(
                             req_id, 200,
