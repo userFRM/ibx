@@ -4,24 +4,50 @@ use pyo3::prelude::*;
 
 use super::{camel_aliases_copy};
 
-// ── Tick type constants matching ibapi's TickTypeEnum ──
+/// Every tick this venue numbers, by the name it goes by, in the order that
+/// numbers them.
+///
+/// The position is the number. The reference client builds its own table by
+/// enumerating exactly this list, so the index of a name here is the tick type
+/// a callback is handed, and a program reads a tick back by looking the number
+/// up in it. Held whole rather than as the handful this client names in Rust:
+/// short, every name past the end is absent and every number past it reads as
+/// nothing at all.
+pub static TICK_TYPE_NAMES: [&str; 112] = [
+    "BID_SIZE", "BID", "ASK", "ASK_SIZE", "LAST", "LAST_SIZE", "HIGH", "LOW", "VOLUME", "CLOSE",
+    "BID_OPTION_COMPUTATION", "ASK_OPTION_COMPUTATION", "LAST_OPTION_COMPUTATION",
+    "MODEL_OPTION", "OPEN", "LOW_13_WEEK", "HIGH_13_WEEK", "LOW_26_WEEK", "HIGH_26_WEEK",
+    "LOW_52_WEEK", "HIGH_52_WEEK", "AVG_VOLUME", "OPEN_INTEREST", "OPTION_HISTORICAL_VOL",
+    "OPTION_IMPLIED_VOL", "OPTION_BID_EXCH", "OPTION_ASK_EXCH", "OPTION_CALL_OPEN_INTEREST",
+    "OPTION_PUT_OPEN_INTEREST", "OPTION_CALL_VOLUME", "OPTION_PUT_VOLUME",
+    "INDEX_FUTURE_PREMIUM", "BID_EXCH", "ASK_EXCH", "AUCTION_VOLUME", "AUCTION_PRICE",
+    "AUCTION_IMBALANCE", "MARK_PRICE", "BID_EFP_COMPUTATION", "ASK_EFP_COMPUTATION",
+    "LAST_EFP_COMPUTATION", "OPEN_EFP_COMPUTATION", "HIGH_EFP_COMPUTATION",
+    "LOW_EFP_COMPUTATION", "CLOSE_EFP_COMPUTATION", "LAST_TIMESTAMP", "SHORTABLE", "NOT_USED",
+    "RT_VOLUME", "HALTED", "BID_YIELD", "ASK_YIELD", "LAST_YIELD", "CUST_OPTION_COMPUTATION",
+    "TRADE_COUNT", "TRADE_RATE", "VOLUME_RATE", "LAST_RTH_TRADE", "RT_HISTORICAL_VOL",
+    "IB_DIVIDENDS", "BOND_FACTOR_MULTIPLIER", "REGULATORY_IMBALANCE", "NEWS_TICK",
+    "SHORT_TERM_VOLUME_3_MIN", "SHORT_TERM_VOLUME_5_MIN", "SHORT_TERM_VOLUME_10_MIN",
+    "DELAYED_BID", "DELAYED_ASK", "DELAYED_LAST", "DELAYED_BID_SIZE", "DELAYED_ASK_SIZE",
+    "DELAYED_LAST_SIZE", "DELAYED_HIGH", "DELAYED_LOW", "DELAYED_VOLUME", "DELAYED_CLOSE",
+    "DELAYED_OPEN", "RT_TRD_VOLUME", "CREDITMAN_MARK_PRICE", "CREDITMAN_SLOW_MARK_PRICE",
+    "DELAYED_BID_OPTION", "DELAYED_ASK_OPTION", "DELAYED_LAST_OPTION", "DELAYED_MODEL_OPTION",
+    "LAST_EXCH", "LAST_REG_TIME", "FUTURES_OPEN_INTEREST", "AVG_OPT_VOLUME",
+    "DELAYED_LAST_TIMESTAMP", "SHORTABLE_SHARES", "DELAYED_HALTED", "REUTERS_2_MUTUAL_FUNDS",
+    "ETF_NAV_CLOSE", "ETF_NAV_PRIOR_CLOSE", "ETF_NAV_BID", "ETF_NAV_ASK", "ETF_NAV_LAST",
+    "ETF_FROZEN_NAV_LAST", "ETF_NAV_HIGH", "ETF_NAV_LOW", "SOCIAL_MARKET_ANALYTICS",
+    "ESTIMATED_IPO_MIDPOINT", "FINAL_IPO_LAST", "DELAYED_YIELD_BID", "DELAYED_YIELD_ASK",
+    "ODD_LOT_BID", "ODD_LOT_ASK", "ODD_LOT_BID_SIZE", "ODD_LOT_ASK_SIZE", "ODD_LOT_BID_EXCH",
+    "ODD_LOT_ASK_EXCH", "NOT_SET",
+];
 
-pub const TICK_BID_SIZE: i32 = 0;
-pub const TICK_BID: i32 = 1;
-pub const TICK_ASK: i32 = 2;
-pub const TICK_ASK_SIZE: i32 = 3;
-pub const TICK_LAST: i32 = 4;
-pub const TICK_LAST_SIZE: i32 = 5;
-pub const TICK_HIGH: i32 = 6;
-pub const TICK_LOW: i32 = 7;
-pub const TICK_VOLUME: i32 = 8;
-pub const TICK_CLOSE: i32 = 9;
-pub const TICK_OPEN: i32 = 14;
-pub const TICK_BID_EXCHANGE: i32 = 32;
-pub const TICK_ASK_EXCHANGE: i32 = 33;
-pub const TICK_LAST_TIMESTAMP: i32 = 45;
-pub const TICK_HALTED: i32 = 49;
-pub const TICK_LAST_EXCHANGE: i32 = 84;
+// ── The one tick this module names in Rust ──
+//
+// The rest were a second copy of the numbers, written out to hang the class
+// attributes off. Named from the table above now, so there is nothing here
+// for the two copies to disagree about.
+
+pub use crate::client_core::TICK_LAST_TIMESTAMP;
 
 /// ibapi-compatible TickAttrib for tickPrice callbacks.
 #[pyclass(from_py_object)]
@@ -101,43 +127,37 @@ pub struct TickTypeEnum;
 
 #[pymethods]
 impl TickTypeEnum {
+    /// The name a tick number goes by, or `NOTFOUND` where it names none.
+    ///
+    /// The spelling is the reference client's, which is how a program written
+    /// against it reads a tick back: it keys what it collected on this.
+    #[staticmethod]
+    #[pyo3(name = "toStr")]
+    fn to_str(idx: i64) -> &'static str {
+        usize::try_from(idx)
+            .ok()
+            .and_then(|i| TICK_TYPE_NAMES.get(i))
+            .copied()
+            .unwrap_or("NOTFOUND")
+    }
+
+    /// Every tick number and the name it goes by.
     #[classattr]
-    const BID_SIZE: i32 = TICK_BID_SIZE;
-    #[classattr]
-    const BID: i32 = TICK_BID;
-    #[classattr]
-    const ASK: i32 = TICK_ASK;
-    #[classattr]
-    const ASK_SIZE: i32 = TICK_ASK_SIZE;
-    #[classattr]
-    const LAST: i32 = TICK_LAST;
-    #[classattr]
-    const LAST_SIZE: i32 = TICK_LAST_SIZE;
-    #[classattr]
-    const HIGH: i32 = TICK_HIGH;
-    #[classattr]
-    const LOW: i32 = TICK_LOW;
-    #[classattr]
-    const VOLUME: i32 = TICK_VOLUME;
-    #[classattr]
-    const CLOSE: i32 = TICK_CLOSE;
-    #[classattr]
-    const OPEN: i32 = TICK_OPEN;
-    #[classattr]
-    const LAST_TIMESTAMP: i32 = TICK_LAST_TIMESTAMP;
-    #[classattr]
-    const HALTED: i32 = TICK_HALTED;
-    #[classattr]
-    const BID_EXCHANGE: i32 = TICK_BID_EXCHANGE;
-    #[classattr]
-    const ASK_EXCHANGE: i32 = TICK_ASK_EXCHANGE;
-    #[classattr]
-    const LAST_EXCHANGE: i32 = TICK_LAST_EXCHANGE;
+    fn idx2name() -> std::collections::HashMap<i64, &'static str> {
+        TICK_TYPE_NAMES.iter().enumerate().map(|(i, n)| (i as i64, *n)).collect()
+    }
 }
 
 /// Register tick type classes and constants on the module.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TickTypeEnum>()?;
+    // Named from the one table rather than written out here: sixteen were
+    // written out, and a program asking for any of the other ninety-six got
+    // an AttributeError partway through a callback.
+    let tick_types = m.getattr("TickTypeEnum")?;
+    for (number, name) in TICK_TYPE_NAMES.iter().enumerate() {
+        tick_types.setattr(*name, number as i64)?;
+    }
     m.add_class::<TickAttrib>()?;
     m.add_class::<TickAttribLast>()?;
     m.add_class::<TickAttribBidAsk>()?;
@@ -151,21 +171,57 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
 
+    /// The numbers this client names in Rust are the places those names hold
+    /// in the table the class is built from.
+    ///
+    /// Two lists of the same numbers is the drift this pins: the table is what
+    /// a program reads a tick back by, `client_core` is what the decode path
+    /// compares against, and a tick renumbered in one and not the other files a
+    /// quote under a name that is not its own.
     #[test]
-    fn tick_type_constants_match_ibapi() {
-        assert_eq!(TICK_BID_SIZE, 0);
-        assert_eq!(TICK_BID, 1);
-        assert_eq!(TICK_ASK, 2);
-        assert_eq!(TICK_ASK_SIZE, 3);
-        assert_eq!(TICK_LAST, 4);
-        assert_eq!(TICK_LAST_SIZE, 5);
-        assert_eq!(TICK_HIGH, 6);
-        assert_eq!(TICK_LOW, 7);
-        assert_eq!(TICK_VOLUME, 8);
-        assert_eq!(TICK_CLOSE, 9);
-        assert_eq!(TICK_OPEN, 14);
-        assert_eq!(TICK_LAST_TIMESTAMP, 45);
-        assert_eq!(TICK_HALTED, 49);
+    fn the_table_and_the_names_this_client_uses_agree() {
+        use crate::client_core as core;
+        for (number, name) in [
+            (core::TICK_BID_SIZE, "BID_SIZE"),
+            (core::TICK_BID, "BID"),
+            (core::TICK_ASK, "ASK"),
+            (core::TICK_ASK_SIZE, "ASK_SIZE"),
+            (core::TICK_LAST, "LAST"),
+            (core::TICK_LAST_SIZE, "LAST_SIZE"),
+            (core::TICK_HIGH, "HIGH"),
+            (core::TICK_LOW, "LOW"),
+            (core::TICK_VOLUME, "VOLUME"),
+            (core::TICK_CLOSE, "CLOSE"),
+            (core::TICK_OPEN, "OPEN"),
+            (core::TICK_LAST_TIMESTAMP, "LAST_TIMESTAMP"),
+            (core::TICK_HALTED, "HALTED"),
+            // Named in full in Rust; the table holds the spelling a program
+            // written against the reference client asks for.
+            (core::TICK_BID_EXCHANGE, "BID_EXCH"),
+            (core::TICK_ASK_EXCHANGE, "ASK_EXCH"),
+            (core::TICK_LAST_EXCHANGE, "LAST_EXCH"),
+        ] {
+            assert_eq!(
+                TICK_TYPE_NAMES[number as usize], name,
+                "tick {number} is {} in the table",
+                TICK_TYPE_NAMES[number as usize],
+            );
+        }
+    }
+
+    /// Every tick the venue numbers is in the table, once.
+    #[test]
+    fn the_table_names_each_tick_once() {
+        assert_eq!(TICK_TYPE_NAMES.len(), 112);
+        let mut seen: Vec<&str> = TICK_TYPE_NAMES.to_vec();
+        seen.sort_unstable();
+        let before = seen.len();
+        seen.dedup();
+        assert_eq!(seen.len(), before, "a name is in the table twice");
+        assert_eq!(TickTypeEnum::to_str(1), "BID");
+        assert_eq!(TickTypeEnum::to_str(111), "NOT_SET");
+        assert_eq!(TickTypeEnum::to_str(112), "NOTFOUND");
+        assert_eq!(TickTypeEnum::to_str(-1), "NOTFOUND");
     }
 
     #[test]
