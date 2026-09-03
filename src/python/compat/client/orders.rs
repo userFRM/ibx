@@ -65,7 +65,9 @@ impl EClient {
     /// reference client reports it under, and the call returns. A program
     /// moved from that client has an `error` handler and no exception
     /// handling around a request, because nothing it was written against
-    /// raises there.
+    /// raises there. A send the engine can no longer take is reported the
+    /// same way, stating what has already reached the engine and what has
+    /// not.
     fn place_order(&self, py: Python<'_>, order_id: i64, contract: &Contract, order: &Order) -> PyResult<()> {
         self.core.refuse_if_readonly("an order").map_err(PyRuntimeError::new_err)?;
         let Some(tx) = self.tx_or_report(order_id)? else { return Ok(()) };
@@ -107,7 +109,13 @@ impl EClient {
         // Python objects, so reading them needs the interpreter.
         let api_contract = crate::types::model::Contract {
             primary_exchange: contract.primary_exchange.clone(),
-            combo_legs: contract.combo_legs_api(py).map_err(PyRuntimeError::new_err)?,
+            // A leg this client cannot read is a refusal, like the other
+            // fields read off the caller's objects above, and is reported
+            // the same way.
+            combo_legs: match contract.combo_legs_api(py) {
+                Ok(legs) => legs,
+                Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
+            },
             // Every field is read from the caller's object. A delta or price
             // defaulted to zero hedges the order against nothing.
             delta_neutral_contract: match contract.delta_neutral_contract.as_ref() {
@@ -219,7 +227,13 @@ impl EClient {
             )));
         };
 
-        let instrument = self.find_or_register_instrument(py, contract)?;
+        // A registration the engine does not answer — a wait that ran out or
+        // an engine that went away mid-request — is a refusal, and reported
+        // as one: nothing this call sends has anywhere to go.
+        let instrument = match self.find_or_register_instrument(py, contract) {
+            Ok(instrument) => instrument,
+            Err(why) => return self.report_refusal(py, order_id, why),
+        };
 
         // If orderId is already tracked, this is a modification — emit Modify instead
         // of Submit.
@@ -266,11 +280,87 @@ impl EClient {
         // As on the other surface: an order that does not transmit is built
         // and kept, and one that does sends whatever of its family was kept
         // before sending itself.
+        //
+        // The family goes out as one thing or not at all, as far as the
+        // engine will allow: it stays held while it is sent, and each member
+        // leaves the hold only once its send is accounted for. A send that
+        // fails partway otherwise left the parent live at the venue with its
+        // protective children never sent, and the caller saw only that the
+        // call had failed. What reached the engine and what did not is said
+        // on the error callback, under the number a lost session is reported
+        // under, and the call returns.
         if api_order.transmit {
-            for waiting in self.core.release_before(oid, api_order.parent_id) {
-                Self::send_control(py, &tx, waiting)?;
+            // The transmitting order leaves the hold whatever happens: it is
+            // the one that asked to go, and it cannot stay queued to go out
+            // behind a later transmit.
+            self.core.withdraw_held(oid);
+            let family = self.core.family_before(oid, api_order.parent_id);
+            let mut reached: Vec<u64> = Vec::new();
+            let mut cmd_went = false;
+            for member in family.iter() {
+                if Self::send_control(py, &tx, member.command.clone()).is_ok() {
+                    reached.push(member.order_id);
+                } else {
+                    // The engine takes its commands in order, so a send that
+                    // did not reach it means none behind it will.
+                    break;
+                }
             }
-            Self::send_control(py, &tx, cmd)?;
+            if reached.len() == family.len() {
+                cmd_went = Self::send_control(py, &tx, cmd).is_ok();
+            }
+            let all_went = cmd_went && reached.len() == family.len();
+            if !all_went {
+                // What did not reach the engine comes out of the hold, as
+                // what did: left queued, it would go out behind the next
+                // thing that transmits, after the caller had been told it
+                // did not go. Left held where nothing went at all, so a
+                // caller that opens another session on this client can send
+                // the family again.
+                if !reached.is_empty() {
+                    for member in &family {
+                        self.core.withdraw_held(member.order_id);
+                    }
+                }
+                let name = |ids: &[u64]| {
+                    let list = ids.iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    if ids.len() == 1 { format!("order {list}") } else { format!("orders {list}") }
+                };
+                let message = if reached.is_empty() {
+                    if family.is_empty() {
+                        format!("the engine stopped before order {oid} went out: nothing was sent")
+                    } else {
+                        let ids: Vec<u64> = family.iter().map(|m| m.order_id).collect();
+                        format!(
+                            "the engine stopped before the family of order {oid} went out: \
+                             nothing was sent, and {} {} still held",
+                            name(&ids),
+                            if ids.len() == 1 { "is" } else { "are" },
+                        )
+                    }
+                } else {
+                    let mut missed: Vec<u64> = family.iter()
+                        .map(|m| m.order_id)
+                        .filter(|id| !reached.contains(id))
+                        .collect();
+                    if !cmd_went {
+                        missed.push(oid);
+                    }
+                    format!(
+                        "the engine stopped while the family of order {oid} was going out: \
+                         {} reached the engine and may be live at the venue; {} did not \
+                         reach it",
+                        name(&reached), name(&missed),
+                    )
+                };
+                return self.report_refusal(py, order_id, Refusal::not_connected(message));
+            }
+            for member in &family {
+                self.core.withdraw_held(member.order_id);
+            }
         } else {
             self.core.hold_until_transmitted(oid, api_order.parent_id, cmd);
         }
@@ -348,7 +438,8 @@ impl EClient {
         } else {
             self.take_order_id(py)
         };
-        let instrument = self.find_or_register_instrument(py, contract)?;
+        let instrument = self.find_or_register_instrument(py, contract)
+            .map_err(|why| PyRuntimeError::new_err(why.message))?;
         Self::send_control(py, &tx, ControlCommand::Order(
             ClientCore::build_exercise_request(
                 oid, instrument, action, crate::types::qty_from_wire(qty as i64),
@@ -897,6 +988,288 @@ w = W()",
                 }),
                 "the caller is told on the error callback what was and was not covered: {heard:?}",
             );
+        });
+    }
+
+    /// A connected client whose engine is a channel the test drives, with a
+    /// wrapper that keeps every callback it is handed.
+    fn placed_client(py: Python<'_>) -> (EClient, Arc<SharedState>, Py<PyAny>) {
+        let ns = pyo3::types::PyDict::new(py);
+        py.run(
+            c"class W:
+    def __init__(self): self.calls = []
+    def __getattr__(self, name):
+        return lambda *args: self.calls.append((name,) + args)
+w = W()",
+            None,
+            Some(&ns),
+        )
+        .unwrap();
+        let wrapper = ns.get_item("w").unwrap().unwrap().unbind();
+        let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+        client.__init__(wrapper.clone_ref(py)).unwrap();
+        let shared = Arc::new(SharedState::new());
+        *client.shared.lock().unwrap() = Some(shared.clone());
+        *client.account_id.lock().unwrap() = Some("DU123".into());
+        client.connected.store(true, Ordering::Release);
+        (client, shared, wrapper)
+    }
+
+    /// The contract the bracket tests place their orders on.
+    fn bracket_contract() -> Contract {
+        Contract {
+            con_id: 756733,
+            symbol: "IBM".into(),
+            sec_type: "STK".into(),
+            exchange: "SMART".into(),
+            currency: "USD".into(),
+            ..Default::default()
+        }
+    }
+
+    /// One order of the bracket tests.
+    fn bracket_order(transmit: bool, parent_id: i64) -> Order {
+        Order {
+            action: "BUY".into(),
+            total_quantity: 100.0,
+            order_type: "LMT".into(),
+            lmt_price: 10.0,
+            transmit,
+            parent_id,
+            ..Default::default()
+        }
+    }
+
+    /// The error callbacks the wrapper was handed, as id, code and message.
+    fn error_calls(py: Python<'_>, wrapper: &Py<PyAny>) -> Vec<(i64, i64, String)> {
+        let all: Vec<(String, i64, i64, i64, String, String)> = wrapper
+            .getattr(py, "calls")
+            .unwrap()
+            .extract(py)
+            .unwrap();
+        all.into_iter()
+            .filter(|(name, _, _, _, _, _)| name == "error")
+            .map(|(_, id, _stamp, code, message, _)| (id, code, message))
+            .collect()
+    }
+
+    /// A bracket whose engine takes the whole family: all three go out, in
+    /// the order they were placed, and nothing is left held behind them.
+    #[test]
+    fn a_bracket_whose_engine_takes_the_family_sends_all_three_in_order() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _shared, wrapper) = placed_client(py);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(0);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            client.core.set_registration_timeout(std::time::Duration::from_secs(2));
+            let engine = std::thread::spawn(move || {
+                let mut received = Vec::new();
+                match rx.recv() {
+                    Ok(ControlCommand::RegisterInstrument { reply_tx, .. }) => {
+                        let _ = reply_tx.expect("a registration asks for an answer").send(Ok(7));
+                    }
+                    other => panic!("a registration goes first, got {other:?}"),
+                }
+                while received.len() < 3 {
+                    match rx.recv() {
+                        Ok(cmd) => received.push(cmd),
+                        Err(_) => break,
+                    }
+                }
+                received
+            });
+            client.place_order(py, 3, &bracket_contract(), &bracket_order(false, 0)).unwrap();
+            client.place_order(py, 4, &bracket_contract(), &bracket_order(false, 3)).unwrap();
+            client.place_order(py, 5, &bracket_contract(), &bracket_order(true, 3)).unwrap();
+            let received = engine.join().unwrap();
+            assert!(
+                matches!(
+                    received.as_slice(),
+                    [
+                        ControlCommand::Order(OrderRequest::SubmitEx { order_id: 3, .. }),
+                        ControlCommand::Order(OrderRequest::SubmitEx { order_id: 4, .. }),
+                        ControlCommand::Order(OrderRequest::SubmitEx { order_id: 5, .. }),
+                    ],
+                ),
+                "the family goes in the order it was placed: {received:?}",
+            );
+            assert!(error_calls(py, &wrapper).is_empty(), "a family that went is not reported");
+            assert!(!client.core.withdraw_held(3), "nothing is held after the transmit");
+            assert!(!client.core.withdraw_held(4), "nothing is held after the transmit");
+        });
+    }
+
+    /// The engine stops once the parent of a bracket is in hand: the parent
+    /// is on its way to the venue and the protective children are not. The
+    /// call is answered on the error callback, stating what reached the
+    /// engine and what did not — raised instead, a caller written against
+    /// the reference client learned only that something failed, and had an
+    /// unhedged position it believed did not exist.
+    #[test]
+    fn a_bracket_whose_engine_stops_partway_states_what_reached_the_engine() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _shared, wrapper) = placed_client(py);
+            // A rendezvous channel: nothing reaches the engine until the
+            // engine takes it, so the engine controls exactly how much of
+            // the family it has in hand when it stops.
+            let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(0);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            client.core.set_registration_timeout(std::time::Duration::from_secs(2));
+            let engine = std::thread::spawn(move || {
+                let mut received = Vec::new();
+                // Answer the registration the first order asks for, take the
+                // parent of the bracket, then stop.
+                match rx.recv() {
+                    Ok(ControlCommand::RegisterInstrument { reply_tx, .. }) => {
+                        let _ = reply_tx.expect("a registration asks for an answer").send(Ok(7));
+                    }
+                    other => panic!("a registration goes first, got {other:?}"),
+                }
+                if let Ok(order) = rx.recv() {
+                    received.push(order);
+                }
+                received
+            });
+            client.place_order(py, 3, &bracket_contract(), &bracket_order(false, 0)).unwrap();
+            client.place_order(py, 4, &bracket_contract(), &bracket_order(false, 3)).unwrap();
+            client.place_order(py, 5, &bracket_contract(), &bracket_order(true, 3)).unwrap();
+            let received = engine.join().unwrap();
+            assert!(
+                matches!(
+                    received.as_slice(),
+                    [ControlCommand::Order(OrderRequest::SubmitEx { order_id: 3, .. })],
+                ),
+                "only the parent reached the engine: {received:?}",
+            );
+            let errors = error_calls(py, &wrapper);
+            let (id, code, message) = errors.last().expect("the caller is told on the error callback");
+            assert_eq!(*id, 5);
+            assert_eq!(*code, 504);
+            assert!(message.contains("order 3 reached the engine"), "{message}");
+            assert!(message.contains("orders 4, 5 did not reach it"), "{message}");
+            // What did not go is not left queued to slip out behind the next
+            // thing that transmits.
+            assert!(!client.core.withdraw_held(4), "the child that did not go is withdrawn");
+            assert!(!client.core.withdraw_held(3), "the parent went with its send");
+        });
+    }
+
+    /// The engine stops before it takes anything of a bracket. Nothing is
+    /// sent and nothing is lost: the family is still held for a later
+    /// transmit, and the caller is told that on the error callback rather
+    /// than handed an exception.
+    #[test]
+    fn a_bracket_whose_engine_stops_first_sends_nothing_and_keeps_its_family() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _shared, wrapper) = placed_client(py);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(0);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            client.core.set_registration_timeout(std::time::Duration::from_secs(2));
+            let engine = std::thread::spawn(move || {
+                let received: Vec<ControlCommand> = Vec::new();
+                // Answer the registration, then stop before taking an order.
+                match rx.recv() {
+                    Ok(ControlCommand::RegisterInstrument { reply_tx, .. }) => {
+                        let _ = reply_tx.expect("a registration asks for an answer").send(Ok(7));
+                    }
+                    other => panic!("a registration goes first, got {other:?}"),
+                }
+                received
+            });
+            client.place_order(py, 3, &bracket_contract(), &bracket_order(false, 0)).unwrap();
+            client.place_order(py, 4, &bracket_contract(), &bracket_order(false, 3)).unwrap();
+            client.place_order(py, 5, &bracket_contract(), &bracket_order(true, 3)).unwrap();
+            let received = engine.join().unwrap();
+            assert!(received.is_empty(), "no order reached the engine: {received:?}");
+            let errors = error_calls(py, &wrapper);
+            let (id, code, message) = errors.last().expect("the caller is told on the error callback");
+            assert_eq!(*id, 5);
+            assert_eq!(*code, 504);
+            assert!(message.contains("nothing was sent"), "{message}");
+            assert!(message.contains("orders 3, 4 are still held"), "{message}");
+            assert!(client.core.withdraw_held(3), "the parent is still held");
+            assert!(client.core.withdraw_held(4), "the child is still held");
+        });
+    }
+
+    /// The engine is asked for a contract and says nothing before the wait
+    /// runs out. Reported under this client's own number for silence, and
+    /// the call returns: the exception this used to raise was somewhere a
+    /// caller written against the reference client has no handling.
+    #[test]
+    fn a_registration_that_times_out_is_reported_and_the_call_returns() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _shared, wrapper) = placed_client(py);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(8);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            client.core.set_registration_timeout(std::time::Duration::from_millis(20));
+            let engine = std::thread::spawn(move || {
+                // Take the registration and sit on the answer past the wait.
+                if let Ok(cmd) = rx.recv() {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    drop(cmd);
+                }
+            });
+            client.place_order(py, 3, &bracket_contract(), &bracket_order(true, 0)).unwrap();
+            engine.join().unwrap();
+            let errors = error_calls(py, &wrapper);
+            let (id, code, message) = errors.last().expect("the caller is told on the error callback");
+            assert_eq!(*id, 3);
+            assert_eq!(*code, Refusal::NO_ANSWER as i64);
+            assert!(message.contains("Registration timed out"), "{message}");
+        });
+    }
+
+    /// The engine takes a registration and stops before answering it.
+    /// Reported under the number for a lost session, and the call returns.
+    #[test]
+    fn a_registration_the_engine_stops_in_is_reported_and_the_call_returns() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _shared, wrapper) = placed_client(py);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(8);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            client.core.set_registration_timeout(std::time::Duration::from_secs(2));
+            let engine = std::thread::spawn(move || {
+                // Take the registration and stop without answering.
+                let _ = rx.recv();
+            });
+            client.place_order(py, 3, &bracket_contract(), &bracket_order(true, 0)).unwrap();
+            engine.join().unwrap();
+            let errors = error_calls(py, &wrapper);
+            let (id, code, message) = errors.last().expect("the caller is told on the error callback");
+            assert_eq!(*id, 3);
+            assert_eq!(*code, 504);
+            assert!(message.contains("Engine stopped"), "{message}");
+        });
+    }
+
+    /// A combination leg the caller states and this client cannot read is a
+    /// refusal, as the other unreadable fields are, and is answered on the
+    /// error callback: the exception this used to raise was somewhere a
+    /// caller written against the reference client has no handling.
+    #[test]
+    fn an_unreadable_combination_leg_is_reported_and_the_call_returns() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _shared, wrapper) = placed_client(py);
+            let (tx, _rx) = std::sync::mpsc::sync_channel::<ControlCommand>(8);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            let contract = bracket_contract();
+            // A leg with no contract id: it names no contract, and the list
+            // is refused.
+            let leg = py.eval(c"type('ComboLeg', (), {})()", None, None).unwrap();
+            contract.combo_legs.bound(py).append(leg).unwrap();
+            client.place_order(py, 3, &contract, &bracket_order(true, 0)).unwrap();
+            let errors = error_calls(py, &wrapper);
+            let (id, code, message) = errors.last().expect("the caller is told on the error callback");
+            assert_eq!(*id, 3);
+            assert_eq!(*code, Refusal::VALIDATION as i64);
+            assert!(message.contains("combo leg 0 has no conId"), "{message}");
         });
     }
 }

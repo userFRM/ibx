@@ -953,6 +953,47 @@ impl ClientCore {
         std::mem::take(&mut *held).len()
     }
 
+    /// The family an order that transmits would release, in the order it
+    /// goes, each still held under the id it was placed under.
+    ///
+    /// The same gathering as `release_before`, without taking anything out of
+    /// the hold: a sender has to say what reached the engine and what did
+    /// not, and can only say it if what has not gone yet is still there to
+    /// be withdrawn or sent again. Each member leaves the hold by its id,
+    /// once its send is accounted for.
+    pub fn family_before(&self, order_id: u64, parent_id: i64) -> Vec<HeldOrder> {
+        let held = self.held_orders.lock().unwrap();
+        let mut going: Vec<HeldOrder> = Vec::new();
+        if parent_id != 0
+            && let Some(parent) = held.iter().find(|h| h.order_id == parent_id as u64)
+        {
+            going.push(HeldOrder {
+                order_id: parent.order_id,
+                parent_id: parent.parent_id,
+                command: parent.command.clone(),
+            });
+        }
+        for h in held.iter() {
+            // The same family test as `release_before`: beside it under the
+            // same parent, or hanging from this one. The parent already
+            // gathered cannot also count as a sibling, which it could not
+            // there because it was taken out first.
+            let same_family = (parent_id != 0 && h.parent_id == parent_id)
+                || h.parent_id == order_id as i64;
+            let same_family = same_family
+                && h.order_id != order_id
+                && !going.iter().any(|g| g.order_id == h.order_id);
+            if same_family {
+                going.push(HeldOrder {
+                    order_id: h.order_id,
+                    parent_id: h.parent_id,
+                    command: h.command.clone(),
+                });
+            }
+        }
+        going
+    }
+
     /// The held orders an order that transmits releases, in the order they go.
     ///
     /// Its own parent first, then anything else held that hangs from the same

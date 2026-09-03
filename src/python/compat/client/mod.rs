@@ -1338,8 +1338,16 @@ impl EClient {
     /// loop can take up to `REGISTRATION_TIMEOUT` to reply, so the round
     /// trip runs with the GIL released: otherwise a slow reply stalls every
     /// Python thread, not just this call.
-    pub(crate) fn find_or_register_instrument(&self, py: Python<'_>, contract: &Contract) -> PyResult<u32> {
-        let tx = self.tx()?;
+    ///
+    /// Answers a refusal rather than raising one: a session that went away
+    /// mid-request and a wait that ran out are both refusals, and each
+    /// surface states its own way of reporting them.
+    pub(crate) fn find_or_register_instrument(
+        &self, py: Python<'_>, contract: &Contract,
+    ) -> Result<u32, crate::error_codes::Refusal> {
+        let Some(tx) = self.control_tx.lock().unwrap().clone() else {
+            return Err(crate::error_codes::Refusal::not_connected("Not connected"));
+        };
         let con_id = contract.con_id;
         let symbol = contract.symbol.clone();
         let exchange = contract.exchange.clone();
@@ -1351,7 +1359,6 @@ impl EClient {
         py.detach(|| self.core.find_or_register_instrument(
             &tx, con_id, &symbol, &exchange, &sec_type, &identity,
         ))
-        .map_err(|refusal| PyRuntimeError::new_err(refusal.message))
     }
 }
 
