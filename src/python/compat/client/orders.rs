@@ -873,8 +873,11 @@ w = W()",
         Python::attach(|py| {
             let (client, rx, shared, wrapper) = wired_client(py);
             shared.market.set_instrument_count(1);
-            // Nothing ever sets replay_done: the naming never finishes, and
-            // the wait runs out.
+            // The venue began naming and never said it had finished: the wait
+            // runs out with something named and something possibly not. An
+            // account named nothing at all is the other case, and is told
+            // nothing — there is no uncovered order to warn about.
+            shared.orders.note_naming_began();
             client.req_global_cancel(py, None).unwrap();
             let sent: Vec<ControlCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
             assert!(
