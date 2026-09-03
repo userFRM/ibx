@@ -343,6 +343,16 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         }
         Ok(Some(raw))
     };
+    // A flag is the one kind that is not forwarded as the caller spelled it,
+    // and that is deliberate. A number is forwarded because `5` and `5.0` could
+    // be read as different values by something downstream and nothing here can
+    // say they are not. A flag has two values, this reads all four spellings
+    // the reference client's own samples and documentation use, and refuses
+    // anything else — so nothing is guessed at and nothing is silently
+    // reinterpreted. It goes out as `1` or `0`, which is what those samples
+    // write and what this venue is known to take. Forwarding `true` instead
+    // would be trading a spelling that works for one whose acceptance nobody
+    // here has established, on a live order.
     let get_bool = |key: &str| -> Result<bool, Refusal> {
         let raw = match get(key) {
             None => return Ok(false),
