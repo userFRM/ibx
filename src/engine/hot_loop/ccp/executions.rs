@@ -947,7 +947,21 @@ impl CcpState {
         let restatement_reason = parsed.get(&378).map(|s| s.as_str()).unwrap_or("");
         let revision_refused = matches!(restatement_reason, "102" | "103");
         let is_replace_ack = ord_status == "5" && !revision_refused;
+        if is_replace_ack {
+            // The venue holds what the attempt stated, so the fallback kept
+            // against a refusal is spent. A stale refusal arriving behind the
+            // acceptance must not put the old terms back over it.
+            context.pre_replace.remove(&clord_id);
+        }
         if revision_refused {
+            // A revision the venue will not make leaves the order on the terms
+            // it had, and the record must follow: it took the attempt ahead of
+            // the answer. The refusal of a cancellation is not touched — it
+            // changed no terms, and the revision it may be waiting on has its
+            // own answer coming.
+            if restatement_reason == "102" {
+                context.restore_pre_replace(clord_id);
+            }
             // The order stands as it was, so it has no new status to report —
             // but the caller asked for a change and has to learn it did not
             // happen. Reported the way a refused order is, on the channel a
@@ -1580,6 +1594,16 @@ impl CcpState {
         // unparseable tag 102 is synthesized as -1 here and says nothing, so it
         // takes the same path as the reasons that do mean the order is working.
         let unknown_order = reason_code == 1;
+
+        // The answer to a replace arrives on this message too, and the record
+        // took the attempt ahead of it. Where the venue refuses the attempt
+        // and the order still stands, put back what the venue is known to
+        // hold. An order the venue says is gone has no terms to fall back to,
+        // and the refusal of a cancellation changed none — the revision it may
+        // be waiting on has its own answer coming.
+        if reject_type == 2 && !unknown_order {
+            context.restore_pre_replace(oid);
+        }
 
         // Update local context only for an order tracked in this session.
         let instrument = if let Some(order) = context.order(oid).copied() {

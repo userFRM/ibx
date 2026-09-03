@@ -75,6 +75,13 @@ pub struct Context {
     /// server is entitled to drop — which is exactly the case a retry exists
     /// for. Counts so each attempt is a new name.
     pub(crate) cancel_attempts: HashMap<OrderId, u32>,
+    /// What an order held before the latest replace went out. A replace writes
+    /// its attempt into the record ahead of the venue's answer, and the answer
+    /// can refuse it; this is the record that stands again then, so nothing
+    /// the venue did not accept is restated by a later cancel or replace.
+    /// Keyed by the order rather than held beside the send, because the
+    /// refusal arrives as a message of its own, later, on another path.
+    pub(crate) pre_replace: HashMap<OrderId, Order>,
     /// Timestamp when the last farm socket recv returned data (for decode latency
     /// measurement).
     pub(crate) recv_at: Instant,
@@ -99,6 +106,7 @@ impl Context {
             last_clord: HashMap::new(),
             submitted: HashMap::new(),
             cancel_attempts: HashMap::new(),
+            pre_replace: HashMap::new(),
             account: AccountState::default(),
             clock: Clock::new(),
             // Settled on first use, against what the venue names as working.
@@ -510,6 +518,25 @@ impl Context {
         self.last_clord.remove(&order_id);
         self.submitted.remove(&order_id);
         self.cancel_attempts.remove(&order_id);
+        self.pre_replace.remove(&order_id);
+    }
+
+    /// Put back what the venue is known to hold, where it refused a replace.
+    ///
+    /// The record took the attempt ahead of the venue's answer; where the
+    /// answer is a refusal, the attempt must not stand — every later cancel
+    /// and replace restates from the record, and would carry the refused
+    /// terms. A fill that raced the attempt is the venue's own word and
+    /// survives the restore, and the status follows it.
+    pub fn restore_pre_replace(&mut self, order_id: OrderId) {
+        let Some(mut prior) = self.pre_replace.remove(&order_id) else { return };
+        if let Some(current) = self.open_orders.get(&order_id) {
+            prior.filled = current.filled;
+        }
+        if prior.filled > 0 && prior.status.rank() < OrderStatus::PartiallyFilled.rank() {
+            prior.status = OrderStatus::PartiallyFilled;
+        }
+        self.insert_order(prior);
     }
 
     /// Mark all live open orders as Uncertain (auth disconnect — status may have

@@ -4685,3 +4685,202 @@ fn a_replayed_frame_does_not_reopen_a_refused_order() {
     assert!(context.order(42).is_none(), "nor tracked again in the engine");
 }
 
+
+/// A working order with a record the modify path can restate from.
+fn working_order_state() -> (Context, std::sync::Arc<SharedState>) {
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    context.update_order_status(42, crate::types::OrderStatus::Submitted, false);
+    (context, std::sync::Arc::new(SharedState::new()))
+}
+
+/// A replace writes its attempt into the record ahead of the venue's answer.
+/// Where the venue refuses the attempt, the record must fall back to what the
+/// venue is known to hold: every later action restates from the record, so a
+/// modify naming only a price went out restating the time-in-force and the
+/// quantity the venue had already refused, and nothing said so.
+#[test]
+fn a_refused_replace_puts_back_the_terms_the_venue_holds() {
+    use std::io::Read;
+    let (mut context, shared) = working_order_state();
+    let mut ccp = CcpState::new();
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut conn = Some(conn);
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+
+    // The attempt states a new price, a new quantity and a new time-in-force.
+    context.modify_ex(42, 105 * PRICE_SCALE, 200, false, 0, b'1', 0);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let attempt = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(attempt.contains("35=G"), "the replace went out: {attempt}");
+    assert!(attempt.split('\u{1}').any(|f| f == "59=1"), "stating the asked time-in-force: {attempt}");
+    assert!(attempt.split('\u{1}').any(|f| f == "38=200"), "and the asked quantity: {attempt}");
+
+    // The venue refuses the revision; the order stands as it was.
+    let refusal = exec_report_frame(&[
+        (11, "42.1"), (150, "5"), (39, "5"), (100, "ARCA"), (198, "ARCA:1"), (378, "102"),
+    ]);
+    ccp.handle_exec_report(&refusal, b"", &mut context, &shared, &None, "");
+
+    let order = context.order(42).expect("the order still stands");
+    assert_eq!(order.price, 100 * PRICE_SCALE, "the refused price does not stand");
+    assert_eq!(order.qty, 100 * QTY_SCALE, "the refused quantity does not stand");
+    assert_eq!(order.tif, b'0', "the refused time-in-force does not stand");
+    assert_eq!(order.status, crate::types::OrderStatus::Submitted, "working, not awaiting a replace");
+
+    // A modify naming only a price carries the terms the venue holds.
+    context.modify(42, 106 * PRICE_SCALE, 100, false);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let second = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(second.contains("35=G"), "a replace went out: {second}");
+    assert!(
+        second.split('\u{1}').any(|f| f == "59=0"),
+        "it carries the time-in-force the venue holds, not the one it refused: {second}",
+    );
+}
+
+/// A cancellation states the quantity off the record. After a refused replace
+/// the record holds what the venue holds, so the cancellation names the
+/// quantity that is working, not the one the venue refused.
+#[test]
+fn a_cancel_after_a_refused_replace_names_the_quantity_the_venue_holds() {
+    use std::io::Read;
+    let (mut context, shared) = working_order_state();
+    let mut ccp = CcpState::new();
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut conn = Some(conn);
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+
+    context.modify_ex(42, 105 * PRICE_SCALE, 200, false, 0, b'1', 0);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).contains("35=G"), "the replace went out");
+
+    let refusal = exec_report_frame(&[(11, "42.1"), (150, "5"), (39, "5"), (378, "102")]);
+    ccp.handle_exec_report(&refusal, b"", &mut context, &shared, &None, "");
+
+    context.cancel(42);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let cancel = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(cancel.contains("35=F"), "a cancel went out: {cancel}");
+    assert!(
+        cancel.split('\u{1}').any(|f| f == "38=100"),
+        "it names the quantity the venue holds, not the one it refused: {cancel}",
+    );
+}
+
+/// The venue answers a refused replace on the reject message as well, naming
+/// the attempt on tag 434. The record holds that attempt ahead of the answer,
+/// so the answer puts back what the venue is known to hold — except where the
+/// refusal says the order itself is gone, which the retirement below already
+/// states.
+#[test]
+fn a_replace_refused_on_the_reject_message_puts_back_the_prior_terms() {
+    use std::io::Read;
+    let (mut context, shared) = working_order_state();
+    let mut ccp = CcpState::new();
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut conn = Some(conn);
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+
+    context.modify_ex(42, 105 * PRICE_SCALE, 200, false, 0, b'1', 0);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).contains("35=G"), "the replace went out");
+
+    // The refusal answers the replace itself, on a reason that leaves the
+    // order working.
+    let mut frame = std::collections::HashMap::new();
+    frame.insert(41u32, "42.1".to_string());
+    frame.insert(434u32, "2".to_string());
+    frame.insert(102u32, "0".to_string());
+    ccp.handle_cancel_reject(&frame, &mut context, &shared, &None);
+
+    let order = context.order(42).expect("the order still stands");
+    assert_eq!(order.price, 100 * PRICE_SCALE, "the refused price does not stand");
+    assert_eq!(order.qty, 100 * QTY_SCALE, "the refused quantity does not stand");
+    assert_eq!(order.tif, b'0', "the refused time-in-force does not stand");
+    assert_eq!(order.status, crate::types::OrderStatus::Submitted, "working again");
+}
+
+/// A refusal naming an order the venue does not hold retires it. The fallback
+/// kept against the attempt must not bring the order back: this passes on the
+/// unfixed code too — it guards the restore above against resurrecting.
+#[test]
+fn a_refusal_of_a_gone_order_resurrects_nothing() {
+    use std::io::Read;
+    let (mut context, shared) = working_order_state();
+    let mut ccp = CcpState::new();
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut conn = Some(conn);
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+
+    context.modify_ex(42, 105 * PRICE_SCALE, 200, false, 0, b'1', 0);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).contains("35=G"), "the replace went out");
+
+    let mut frame = std::collections::HashMap::new();
+    frame.insert(41u32, "42.1".to_string());
+    frame.insert(434u32, "2".to_string());
+    frame.insert(102u32, "1".to_string()); // UnknownOrder: the venue holds no such order
+    ccp.handle_cancel_reject(&frame, &mut context, &shared, &None);
+
+    assert!(context.order(42).is_none(), "the order stays gone");
+}
+
+/// An accepted replace spends the fallback: a refusal arriving behind the
+/// acceptance must not put the old terms back over what the venue accepted.
+#[test]
+fn an_acknowledged_replace_spends_the_fallback() {
+    use std::io::Read;
+    let (mut context, shared) = working_order_state();
+    let mut ccp = CcpState::new();
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut conn = Some(conn);
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+
+    context.modify_ex(42, 105 * PRICE_SCALE, 200, false, 0, b'1', 0);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).contains("35=G"), "the replace went out");
+
+    // The venue accepts, then a stale refusal of the same attempt arrives.
+    let ack = exec_report_frame(&[(11, "42.1"), (150, "5"), (39, "5"), (100, "ARCA"), (198, "ARCA:1")]);
+    ccp.handle_exec_report(&ack, b"", &mut context, &shared, &None, "");
+    let mut frame = std::collections::HashMap::new();
+    frame.insert(41u32, "42.1".to_string());
+    frame.insert(434u32, "2".to_string());
+    frame.insert(102u32, "0".to_string());
+    ccp.handle_cancel_reject(&frame, &mut context, &shared, &None);
+
+    let order = context.order(42).expect("the order still stands");
+    assert_eq!(order.tif, b'1', "the accepted terms stand");
+    assert_eq!(order.qty, 200 * QTY_SCALE, "the accepted quantity stands");
+    assert_eq!(order.price, 105 * PRICE_SCALE, "the accepted price stands");
+}

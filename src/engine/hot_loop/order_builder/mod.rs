@@ -395,6 +395,12 @@ pub(crate) fn drain_and_send_orders(
                     replaced.status = OrderStatus::PendingReplace;
                     context.insert_order(replaced);
                 }
+                // The attempt is recorded before the venue answers, so keep
+                // what the venue is known to hold against that answer: a
+                // refusal arrives later, as a message of its own, and puts
+                // this back in the record's place. The write-failure restore
+                // below does the same off its own copy.
+                context.pre_replace.insert(order_id, orig);
                 // Versioned ClOrdID chaining: orderId.0 → .1 → .2
                 let prev_ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
                 let new_ver = prev_ver + 1;
@@ -624,6 +630,9 @@ pub(crate) fn drain_and_send_orders(
                     && let Some(prior) = before
                 {
                     context.insert_order(prior);
+                    // The attempt never reached the wire, so the fallback kept
+                    // against a refusal goes with it.
+                    context.pre_replace.remove(&oid);
                 }
                 // Every leg is marked, not just the one the outcome was
                 // reported under. A bracket's children are sent whatever the
