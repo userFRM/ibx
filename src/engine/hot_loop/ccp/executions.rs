@@ -828,9 +828,21 @@ impl CcpState {
         // Record the ClOrdID exactly as the server reports it so subsequent
         // cancel/modify can echo back the same string. Skip cancel-ack frames
         // (tag 11 starts with 'C' there) — those carry the cancel request's
-        // own id, not the original order's.
+        // own id, not the original order's. The same holds for the 'L' the
+        // venue puts on a report for a position it liquidated: the prefix is
+        // taken off to find the order, and recording it back would make the
+        // next cancel name a string the venue does not know.
+        // The prefixes the id parser strips are not part of the caller's
+        // number, and this is the number a later cancel names as the original.
+        // Recorded with the liquidation prefix still on it, that cancel named
+        // an id the venue does not know: the venue refused it, the refusal
+        // retired the order here, and the order went on working there —
+        // absent from the open orders, out of reach of a withdrawal of
+        // everything, its fills arriving against nothing.
         if let Some(raw_clord) = parsed.get(&11)
-            && !raw_clord.starts_with('C') && raw_clord != "*" {
+            && !raw_clord.starts_with('C')
+            && !raw_clord.starts_with('L')
+            && raw_clord != "*" {
                 context.last_clord.insert(clord_id, raw_clord.clone());
             }
 

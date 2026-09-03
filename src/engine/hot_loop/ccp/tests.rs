@@ -318,6 +318,32 @@ fn the_recovery_terminator_mutates_no_state_before_it_is_dropped() {
         "the terminator must not register an instrument",
     );
 }
+
+/// A report on a position the venue liquidated carries the order's id with
+/// a leading 'L'. The prefix is taken off to find the order, and it must
+/// stay out of the recorded ClOrdID: the next cancel names whatever is
+/// recorded there, and the venue only knows the caller's number.
+#[test]
+fn a_liquidation_report_does_not_record_the_prefixed_id() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+
+    // The order is acknowledged under the caller's number.
+    let ack = exec_report_frame(&[(11, "42.0"), (150, "0"), (39, "0")]);
+    ccp.handle_exec_report(&ack, b"", &mut context, &shared, &None, "");
+
+    // A partial fill then arrives reported under the liquidation prefix.
+    let fill = exec_report_frame(&[
+        (11, "L42.0"), (150, "1"), (39, "1"), (32, "30"), (31, "150.00"),
+        (14, "30"), (151, "70"), (6, "150.00"), (17, "E1"),
+    ]);
+    ccp.handle_exec_report(&fill, b"", &mut context, &shared, &None, "");
+
+    assert_eq!(
+        context.last_clord.get(&42).map(String::as_str),
+        Some("42.0"),
+        "the recorded ClOrdID stays the caller's number, so a cancel names one the venue knows",
+    );
+}
 /// LeavesQty is still the remainder everywhere it was already right. The
 /// two are complements, so a change that confuses them shows up here as
 /// well as on the filled side.
