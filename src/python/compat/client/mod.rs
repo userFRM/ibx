@@ -13,7 +13,7 @@ mod test_helpers;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
 use std::sync::mpsc::SyncSender;
@@ -44,15 +44,19 @@ use super::contract::Contract;
 /// `connect()` spawns a single `ib-engine-hotloop` background thread.
 /// The thread is **joined** on [`disconnect()`] and on [`Drop`].
 /// Dropping an `EClient` without calling `disconnect()` first is safe:
-/// the `Drop` impl sends `Shutdown` and joins the thread.
+/// the `Drop` impl sends `Shutdown` and joins the thread. That holds for a
+/// client that is its own wrapper, as `App(EWrapper, EClient)` built with
+/// `wrapper=self` is: the wrapper is visited on traversal and released on
+/// clear, so the cyclic collector finds that cycle and the drop runs.
 ///
 /// The client is **reconnectable**: calling `disconnect()` resets all session
 /// state so that a subsequent `connect()` on the same instance works correctly.
 #[pyclass(frozen, subclass)]
 pub struct EClient {
     /// The EWrapper the callbacks go to, from the moment `__init__` says which
-    /// (typically `self` in the `App(EWrapper, EClient)` pattern).
-    pub(crate) wrapper: OnceLock<Py<PyAny>>,
+    /// (typically `self` in the `App(EWrapper, EClient)` pattern) until the
+    /// cyclic collector clears it, which is how that pattern's cycle is broken.
+    pub(crate) wrapper: RwLock<Option<Py<PyAny>>>,
     /// Set by connect(), cleared by disconnect.
     pub(crate) shared: Mutex<Option<Arc<SharedState>>>,
     /// Set by connect(), cleared by disconnect.
@@ -296,7 +300,7 @@ impl EClient {
             client_id: AtomicI32::new(0),
             auth_host: Mutex::new(None),
             logged_in_at: Mutex::new(None),
-            wrapper: OnceLock::new(),
+            wrapper: RwLock::new(None),
             shared: Mutex::new(None),
             control_tx: Mutex::new(None),
             next_order_id: AtomicU64::new(0),
@@ -330,12 +334,37 @@ impl EClient {
     /// different wrapper is refused, since callbacks may already be on their
     /// way to the first.
     fn __init__(&self, wrapper: Py<PyAny>) -> PyResult<()> {
-        if let Err(again) = self.wrapper.set(wrapper)
-            && !self.wrapper.get().is_some_and(|bound| bound.is(&again))
-        {
-            return Err(pyo3::exceptions::PyTypeError::new_err("EClient already has a wrapper"));
+        // A refused `wrapper` is dropped on the way out, after the guard: what
+        // its drop runs can reach back here, and would wait on this lock.
+        let mut slot = self.wrapper.write().unwrap();
+        match &*slot {
+            None => *slot = Some(wrapper),
+            Some(bound) if bound.is(&wrapper) => {}
+            Some(_) => return Err(pyo3::exceptions::PyTypeError::new_err("EClient already has a wrapper")),
         }
         Ok(())
+    }
+
+    /// Show the cyclic collector the wrapper, which is commonly the object
+    /// this client is embedded in.
+    ///
+    /// Non-blocking: a collection must never wait on a lock a callback can be
+    /// holding. A slot found held is skipped for this pass, which only keeps
+    /// the object until a later one.
+    fn __traverse__(&self, visit: pyo3::PyVisit<'_>) -> Result<(), pyo3::PyTraverseError> {
+        if let Ok(slot) = self.wrapper.try_read() {
+            visit.call(&*slot)?;
+        }
+        Ok(())
+    }
+
+    /// Release the wrapper, which is what breaks the cycle when this client is
+    /// its own. Every callback after this says there is no wrapper.
+    fn __clear__(&self) {
+        // Bound first so the guard is gone before the wrapper is dropped: its
+        // drop can run the wrapper's own teardown, which can reach back here.
+        let wrapper = self.wrapper.write().unwrap().take();
+        drop(wrapper);
     }
 
     /// Connect to IB and start the engine.
@@ -549,9 +578,10 @@ impl EClient {
         // Announcements, not permission. The session is up and its engine is
         // running; a handler that raises here — starting work in
         // `next_valid_id` is the ordinary way to write one — must not make
-        // this report failure on a session that is live.
-        self.notify(py, "connect_ack", ());
-        self.notify(py, "managed_accounts", (self.accounts_csv().as_str(),));
+        // this report failure on a session that is live. Only an interrupt
+        // ends this call, as it ends any.
+        self.notify(py, "connect_ack", ())?;
+        self.notify(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
         // The id is announced once and a program starts numbering from it, so
         // it is worth the wait: the venue names what the account has used just
         // after the connection is made, and announced before that lands this
@@ -559,9 +589,7 @@ impl EClient {
         // — which is the ordinary way to write one — then has its first order
         // refused as a duplicate, and nothing about the refusal points here.
         self.wait_for_the_replay(py);
-        self.notify(py, "next_valid_id", (self.stated_order_id() as i64,));
-
-        Ok(())
+        self.notify(py, "next_valid_id", (self.stated_order_id() as i64,))
     }
 
     /// Answer to the name the reference client gives a method as well as the
@@ -803,9 +831,10 @@ impl EClient {
         let Some(shared) = self.shared.lock().unwrap().clone() else {
             return Ok(());
         };
-        let delivered = self.dispatch_once(py, &shared);
-        self.tell_the_caller_it_closed(py);
-        delivered
+        // A pass an interrupt ended is over, as it is in `run`: no more of the
+        // caller's code runs on it, and the close is said on the next pass.
+        self.dispatch_once(py, &shared)?;
+        self.tell_the_caller_it_closed(py)
     }
 
     /// Deliver callbacks until the session ends.
@@ -844,9 +873,7 @@ impl EClient {
 
         // The same place `poll` says it from, so a caller driving this a pass
         // at a time hears it too, and neither hears it twice.
-        self.tell_the_caller_it_closed(py);
-
-        Ok(())
+        self.tell_the_caller_it_closed(py)
     }
 
     /// Get the account ID.
@@ -889,18 +916,25 @@ pub(super) const REFERENCE_ALIASES: &[(&str, &str)] =
 
 /// Call a callback on a wrapper under the reference client's name for it where
 /// the caller defined one, and under this client's name otherwise. A client
-/// whose `__init__` was never reached has no wrapper, and says so.
+/// whose `__init__` was never reached has no wrapper, nor has one the collector
+/// has cleared, and either says so.
 pub(crate) fn call_named<'py, A>(
     py: Python<'py>,
-    wrapper: &OnceLock<Py<PyAny>>,
+    wrapper: &RwLock<Option<Py<PyAny>>>,
     name: &str,
     args: A,
 ) -> PyResult<()>
 where
     A: pyo3::call::PyCallArgs<'py> + Clone,
 {
-    let Some(wrapper) = wrapper.get() else {
-        return Err(PyRuntimeError::new_err("EClient has no wrapper: EClient.__init__ was not called"));
+    // A reference of its own, and the lock let go before anything is called:
+    // the call runs the caller's code, which can reach `__init__`, and the
+    // collector, which can reach `__clear__`, and both write under this lock.
+    let wrapper = wrapper.read().unwrap().as_ref().map(|bound| bound.clone_ref(py));
+    let Some(wrapper) = wrapper else {
+        return Err(PyRuntimeError::new_err(
+            "EClient has no wrapper: EClient.__init__ was not called, or the client is being collected",
+        ));
     };
     let alias = ibapi_name(name);
     if alias != name
@@ -1047,15 +1081,16 @@ impl EClient {
     ///
     /// Reported rather than raised: the reference client answers a request it
     /// refuses on the error callback and returns, so a program written against
-    /// it handles refusals there and nowhere else.
+    /// it handles refusals there and nowhere else. What that handler raises is
+    /// answered for as any callback's is: logged if ordinary, and otherwise
+    /// what the call raises.
     pub(crate) fn report_refusal(
         &self,
         py: Python<'_>,
         req_id: i64,
         refusal: crate::error_codes::Refusal,
     ) -> PyResult<()> {
-        let _ = call_named(py, &self.wrapper, "error", (req_id, raised_now(), refusal.code, refusal.message, ""));
-        Ok(())
+        self.notify(py, "error", (req_id, raised_now(), refusal.code, refusal.message, ""))
     }
 
     /// The control channel, or nothing and the caller told why.
@@ -1063,7 +1098,8 @@ impl EClient {
     /// A request issued before connecting is answered on the error callback
     /// and the call returns normally, which is what the reference client does.
     /// Raising instead made a caller written against that client take a
-    /// different path here than it takes there.
+    /// different path here than it takes there. What the handler raises is
+    /// logged if ordinary, as `notify` logs it.
     pub(crate) fn tx_or_report(&self, req_id: i64) -> Option<SyncSender<ControlCommand>> {
         // Taken before the arms run. The `None` arm calls user code, and a
         // handler that disconnects or issues another request would wait on
@@ -1073,7 +1109,15 @@ impl EClient {
             Some(tx) => Some(tx),
             None => {
                 Python::attach(|py| {
-                    let _ = call_named(py, &self.wrapper, "error", (req_id, raised_now(), NOT_CONNECTED_CODE, "Not connected", ""));
+                    // An interrupt the handler raised is lost here, and logged
+                    // as lost: this answers with the channel or nothing, so
+                    // there is nothing to hand it back through. Left set
+                    // instead, it comes out as a `SystemError` at whatever
+                    // call comes next. Handing it back is this answering
+                    // `PyResult<Option<_>>` and a `?` at each request's opening.
+                    if let Err(e) = self.notify(py, "error", (req_id, raised_now(), NOT_CONNECTED_CODE, "Not connected", "")) {
+                        log::error!("Python callback error() raised {e} on a request made with no session, and it was lost");
+                    }
                 });
                 None
             }
@@ -1215,26 +1259,15 @@ impl EClient {
     ///
     /// Not a method on the Python object: it is this client telling the
     /// caller, not something the caller calls.
-    fn tell_the_caller_it_closed(&self, py: Python<'_>) {
+    fn tell_the_caller_it_closed(&self, py: Python<'_>) -> PyResult<()> {
         if self.session_ended.load(Ordering::Acquire)
             && !self.close_notified.swap(true, Ordering::AcqRel)
         {
-            self.notify(py, "connection_closed", ());
+            return self.notify(py, "connection_closed", ());
         }
+        Ok(())
     }
 
-    /// Tell the caller something, and do not let what it raises decide the
-    /// call that is telling it.
-    ///
-    /// For the notices a session sends on its way up. They are announcements,
-    /// not permission: the session is already open and its engine already
-    /// running by the time they go out, so a handler that raises must not make
-    /// opening the session report failure. A caller told that would not close
-    /// what it believes it never opened, and would find the next attempt
-    /// refused for being connected already.
-    ///
-    /// The dispatch loop holds the same rule for the same reason, so one
-    /// raising handler cannot take the loop down with it.
     /// Hand a caller one of the answers to a call it made, and let the rest of
     /// the answer through whatever it does with it.
     ///
@@ -1280,28 +1313,38 @@ impl EClient {
             let Some((name, args)) = self.waiting_answers.lock().unwrap().pop_front() else {
                 return Ok(());
             };
-            let out = self.callback(py, name, args.bind(py).clone());
-            if let Err(e) = out {
-                if !e.is_instance_of::<pyo3::exceptions::PyException>(py) {
-                    return Err(e);
-                }
-                log::error!("Python callback {name}() raised: {e}");
-            }
+            self.notify(py, name, args.bind(py).clone())?;
         }
     }
 
-    pub(crate) fn notify<'py, A>(&self, py: Python<'py>, name: &str, args: A)
+    /// Tell the caller something, and do not let what it raises decide the
+    /// call that is telling it.
+    ///
+    /// For the notices a session sends on its way up, the answers a request
+    /// owes, and the refusals it reports. They are announcements, not
+    /// permission: the session is already open and its engine already running
+    /// by the time they go out, so a handler that raises must not make opening
+    /// the session report failure. A caller told that would not close what it
+    /// believes it never opened, and would find the next attempt refused for
+    /// being connected already. An ordinary exception is logged, and the
+    /// dispatch loop holds the same rule for the same reason, so one raising
+    /// handler cannot take the loop down with it.
+    ///
+    /// Anything else — an interrupt, the interpreter going down — is handed
+    /// back for the call to raise, because nothing here can carry on through
+    /// that. Handed back, not left set: a call that returns normally with an
+    /// exception set is reported by the interpreter as a `SystemError` at
+    /// whatever call comes next, which is nowhere near the handler.
+    pub(crate) fn notify<'py, A>(&self, py: Python<'py>, name: &str, args: A) -> PyResult<()>
     where
         A: pyo3::call::PyCallArgs<'py> + Clone,
     {
-        if let Err(e) = self.callback(py, name, args) {
-            if e.is_instance_of::<pyo3::exceptions::PyException>(py) {
+        match self.callback(py, name, args) {
+            Err(e) if e.is_instance_of::<pyo3::exceptions::PyException>(py) => {
                 log::error!("Python callback {name}() raised: {e}");
-            } else {
-                // Not an ordinary exception — an interrupt, or the interpreter
-                // going down. Nothing here can carry on through that.
-                e.restore(py);
+                Ok(())
             }
+            other => other,
         }
     }
 
@@ -1493,6 +1536,63 @@ mod tests {
     use crate::types::model::{Contract as ApiContract, Order as ApiOrder};
     use crate::types::PositionInfo;
 
+    /// A client that is its own wrapper — `App(EWrapper, EClient)` built with
+    /// `wrapper=self` — is found by the cyclic collector, and the drop it runs
+    /// does its work: the venue is told, the engine is told, and its thread is
+    /// waited for.
+    #[test]
+    fn a_client_that_is_its_own_wrapper_is_collected_and_its_engine_stopped() {
+        Python::initialize();
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let exited = Arc::new(AtomicBool::new(false));
+        Python::attach(|py| {
+            let (client, rx, _shared, _w) = wired_client(py);
+            // Stands in for the engine: reads the control channel until told
+            // to stop, and takes its time leaving so a drop that does not
+            // wait for it is caught.
+            let (heard_here, exited_here) = (heard.clone(), exited.clone());
+            let engine = thread::spawn(move || {
+                while let Ok(cmd) = rx.recv() {
+                    let stop = matches!(cmd, ControlCommand::Shutdown);
+                    heard_here.lock().unwrap().push(cmd);
+                    if stop { break; }
+                }
+                thread::sleep(std::time::Duration::from_millis(50));
+                exited_here.store(true, Ordering::Release);
+            });
+            *client.get()._thread.lock().unwrap() = Some(engine);
+            let was = client.get().wrapper.write().unwrap().replace(client.clone_ref(py).into_any());
+            drop(was);
+
+            // Held by nothing but itself now. Only the collector can free it.
+            drop(client);
+            assert!(heard.lock().unwrap().is_empty());
+            py.import("gc").unwrap().call_method0("collect").unwrap();
+
+            let heard = heard.lock().unwrap();
+            assert!(
+                matches!(heard[..], [ControlCommand::Logout, ControlCommand::Shutdown]),
+                "the drop did not tell the venue and the engine: {heard:?}",
+            );
+            assert!(exited.load(Ordering::Acquire), "the drop did not wait for the engine thread");
+        });
+    }
+
+    /// The collector clears the wrapper before the client is dropped. A
+    /// callback made in between is told there is no wrapper, not handed one
+    /// that is gone.
+    #[test]
+    fn a_cleared_client_says_it_has_no_wrapper() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = client_with(py, recording_wrapper(py));
+            client.callback(py, "error", (-1i64, 0i64, 504i64, "Not connected", "")).unwrap();
+            client.__clear__();
+            let err = client.callback(py, "error", (-1i64, 0i64, 504i64, "Not connected", "")).unwrap_err();
+            assert!(err.to_string().contains("EClient has no wrapper"), "got {err}");
+        });
+    }
+
     /// A wrapper that keeps every callback it is handed, so a test can read
     /// back exactly what crossed the boundary.
     fn recording_wrapper(py: Python<'_>) -> Py<PyAny> {
@@ -1512,7 +1612,7 @@ w = W()",
     /// A client bound to `wrapper`, as `EClient(wrapper)` leaves one.
     fn client_with(py: Python<'_>, wrapper: Py<PyAny>) -> EClient {
         let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
-        client.wrapper.set(wrapper).unwrap();
+        *client.wrapper.write().unwrap() = Some(wrapper);
         client
     }
 
