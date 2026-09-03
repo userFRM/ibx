@@ -620,6 +620,26 @@ mod tests {
         assert!(!shared.orders.replay_done(), "and a reconnect starts over");
     }
 
+    /// The bound the naming is waited on is spent from the moment the
+    /// connection came up, not from the first caller to ask. A first request
+    /// that waited the bound out otherwise spent it, and a global cancel
+    /// issued straight after — the kill switch — waited nothing and said
+    /// nothing.
+    #[test]
+    fn the_replay_bound_is_spent_from_the_connect_not_the_first_waiter() {
+        let shared = SharedState::new();
+        shared.orders.replay_is_pending();
+        // The bound passes with nobody asking.
+        std::thread::sleep(Duration::from_millis(3_200));
+        let started = std::time::Instant::now();
+        assert!(!shared.orders.wait_for_replay(), "the naming never finished");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "a first waiter arriving after the bound has passed is answered at once, \
+             not held for a fresh bound of its own",
+        );
+    }
+
     /// A completed order is remembered as completed, so a replayed frame
     /// cannot write `Submitted` over the terminal entry and have
     /// `req_open_orders` report it as live. A strategy reading that would

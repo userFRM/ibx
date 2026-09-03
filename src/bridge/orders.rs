@@ -47,10 +47,10 @@ pub struct OrderState {
     /// When the wait for that naming gives up, shared by everyone waiting.
     ///
     /// An account with nothing working never sees the naming end, so a wait
-    /// entered on every call ran to its bound every time. Set by the first
-    /// caller after a connect and cleared with `replay_done` on a reconnect,
-    /// so each connection pays the bound once and every caller in that window
-    /// waits for the same moment.
+    /// entered on every call ran to its bound every time. Set when a
+    /// connection comes up — the venue starts the naming then — and replaced
+    /// with the next one on a reconnect, so each connection pays the bound
+    /// once and every caller in that window waits for the same moment.
     replay_deadline: Mutex<Option<Instant>>,
     /// The highest id the venue has named an order working under, from any
     /// session. An id is spent only while its order is live, so this is the
@@ -269,14 +269,18 @@ impl OrderState {
     ///
     /// Bounded, because an account with nothing working never sees the
     /// naming end and waiting forever for it would be worse than proceeding.
-    /// The bound is one deadline per connection: the first caller sets it,
-    /// later callers wait for the same moment, and once it has passed nobody
-    /// waits again until a reconnect.
+    /// The bound is one deadline per connection, anchored to the moment the
+    /// connection came up rather than set by the first caller to wait: the
+    /// venue starts the naming then, so a first request that waits the bound
+    /// out does not spend a later caller's wait, and once it has passed
+    /// nobody waits again until a reconnect.
     pub fn wait_for_replay(&self) -> bool {
         let deadline = *self
             .replay_deadline
             .lock()
             .unwrap()
+            // The connection sets the deadline when it comes up; where one
+            // never has, the first waiter marks the start of the wait.
             .get_or_insert_with(|| Instant::now() + REPLAY_WAIT);
         while !self.replay_done() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
@@ -311,7 +315,12 @@ impl OrderState {
     /// for the new one to say — which is how the same order gets placed twice.
     #[doc(hidden)] pub fn replay_is_pending(&self) {
         self.replay_done.store(false, Ordering::Release);
-        *self.replay_deadline.lock().unwrap() = None;
+        // The venue starts the naming as the connection comes up, so the
+        // bound a caller waits on starts here too. Anchored on the first
+        // caller instead, a first request that waited it out spent it, and a
+        // global cancel issued straight after waited nothing and said
+        // nothing.
+        *self.replay_deadline.lock().unwrap() = Some(Instant::now() + REPLAY_WAIT);
     }
 
     #[doc(hidden)] pub fn push_completed_order(&self, order: CompletedOrder) {

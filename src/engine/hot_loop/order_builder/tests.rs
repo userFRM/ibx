@@ -1739,6 +1739,45 @@ mod modify_wire_tests {
         }
     }
 
+    /// A replace restates the shape the order was placed with, and a peg to
+    /// benchmark was placed with no tag 44. The price a caller names on the
+    /// request has no field of its own on this type, so it is not stated —
+    /// stating a limit the submit never sent describes a different order.
+    #[test]
+    fn a_benchmark_peg_is_replaced_without_a_price_on_tag_44() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.market.set_routing(instrument, "STK", "SMART");
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 7,
+            instrument,
+            side: Side::Buy,
+            qty: crate::types::QTY_SCALE,
+            kind: crate::types::OrderKind::PegBench {
+                price: 150 * crate::types::PRICE_SCALE,
+                ref_con_id: 756733,
+                is_peg_decrease: false,
+                pegged_change_amount: crate::types::PRICE_SCALE,
+                ref_change_amount: crate::types::PRICE_SCALE,
+                starting_price: 149 * crate::types::PRICE_SCALE,
+                stock_ref_price: 149 * crate::types::PRICE_SCALE,
+                ref_exchange: "SMART".into(),
+            },
+            tif: b'0',
+            attrs: crate::types::OrderAttrs::default(),
+        });
+        let placed = drain(&mut context);
+        assert!(!placed.contains("|44="), "the submit states no price on tag 44: {placed}");
+
+        context.pending_orders.push(crate::types::OrderRequest::Modify {
+            order_id: 7, ord_type: 0, tif: 0, price: 151 * crate::types::PRICE_SCALE,
+            qty: 2 * crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+        });
+        let sent = drain(&mut context);
+        assert!(sent.contains("|40=PB|"), "it is still a benchmark peg: {sent}");
+        assert!(!sent.contains("|44="), "and the replace states no price on tag 44: {sent}");
+    }
+
     /// The other side of the same rule: a replace that states both the type
     /// and the trigger is stating a real one. Deciding from the resting order
     /// alone sent a stop-limit with no tag 99, which is not a stop-limit.
@@ -3058,10 +3097,14 @@ fn a_stop_limit_preview_states_both_of_its_prices() {
     assert!(msg.contains("\u{1}99=90\u{1}"), "the trigger is stated: {msg}");
 }
 
-/// A pegged-to-benchmark order states on tag 44 the limit its peg may not
-/// cross.
+/// A pegged-to-benchmark order states no price on tag 44.
+///
+/// The wire shape of the type carries the peg's own fields and its starting
+/// price on tag 99, and nothing on tag 44 — a limit the caller named for the
+/// peg is not among the fields the venue takes for it, so the submit must
+/// not grow one.
 #[test]
-fn a_benchmark_peg_states_the_limit_it_may_not_cross() {
+fn a_benchmark_peg_states_no_price_on_tag_44() {
     let msg = send_kind_for_test(
         crate::types::OrderKind::PegBench {
             price: 150 * crate::types::PRICE_SCALE,
@@ -3076,8 +3119,10 @@ fn a_benchmark_peg_states_the_limit_it_may_not_cross() {
         b'0',
         crate::types::OrderAttrs::default(),
     );
-    assert!(msg.contains("\u{1}44=150\u{1}"), "the limit is stated: {msg}");
-    assert!(msg.contains("\u{1}40=PB\u{1}"), "and it is still a benchmark peg: {msg}");
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("44="), None, "no price is stated on tag 44: {msg}");
+    assert_eq!(tag("40=").as_deref(), Some("PB"), "and it is still a benchmark peg: {msg}");
+    assert_eq!(tag("99=").as_deref(), Some("149"), "the starting price keeps its own tag: {msg}");
 }
 
 /// A cancel-all sends one frame per order and reports one outcome per order.

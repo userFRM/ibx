@@ -440,6 +440,10 @@ impl EClient {
     /// what this session placed since. The venue names the former after the
     /// connect returns, so a global cancel issued straight away waits for that
     /// naming, as asking for the open orders does, and covers what was named.
+    /// Where the naming does not finish within the wait, what had been named
+    /// is still withdrawn and the call says so rather than returning as
+    /// though every order were covered: a partial cancel that reads as one
+    /// beats the same cancel in silence, which reads as a complete answer.
     #[pyo3(signature = (order_cancel=None))]
     fn req_global_cancel(&self, py: Python<'_>, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
         self.core.refuse_if_readonly("a global cancel").map_err(PyRuntimeError::new_err)?;
@@ -452,7 +456,7 @@ impl EClient {
         // go out behind the next thing that transmits — after the caller had
         // asked for every order to be taken back.
         self.core.withdraw_all_held();
-        self.wait_for_the_replay(py);
+        let named = self.wait_for_the_replay(py);
         let shared = self.shared_state()?;
         // One request per instrument the engine holds an order on. The count
         // is the engine's, mirrored: a contract the venue named an order on
@@ -472,6 +476,18 @@ impl EClient {
                 "a global cancel reached the engine for {} of {count} instruments; \
                  the rest were not sent, so orders on them are still working",
                 count as usize - unsent,
+            )));
+        }
+        if !named {
+            // Said to the caller rather than the log: what had been named
+            // went, and what had not been named is not covered. A silent
+            // partial cancel is the worst thing this call can do. Reported
+            // on the error callback and the call returns, the way a refusal
+            // is reported.
+            return self.report_refusal(py, -1, Refusal::no_answer(format!(
+                "the venue had not finished naming this account's working orders within \
+                 the wait: {count} cancels were sent for what had been named, and what had \
+                 not been named is not covered and may still be working",
             )));
         }
         Ok(())
@@ -772,21 +788,31 @@ mod tests {
     use crate::bridge::SharedState;
     use std::sync::Arc;
 
-    /// A connected client whose engine is a channel the test reads.
-    fn wired_client(py: Python<'_>) -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>) {
+    /// A connected client whose engine is a channel the test reads, and a
+    /// wrapper that keeps every callback it is handed.
+    fn wired_client(
+        py: Python<'_>,
+    ) -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>, Py<PyAny>) {
         let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
-        let wrapper = py
-            .eval(c"type('W', (), {'__getattr__': lambda s, n: (lambda *a: None)})()", None, None)
-            .unwrap()
-            .unbind();
-        client.__init__(wrapper).unwrap();
+        let ns = pyo3::types::PyDict::new(py);
+        py.run(
+            c"class W:
+    def __init__(self): self.calls = []
+    def __getattr__(self, name):
+        return lambda *args: self.calls.append((name,) + args)
+w = W()",
+            None,
+            Some(&ns),
+        ).unwrap();
+        let wrapper = ns.get_item("w").unwrap().unwrap().unbind();
+        client.__init__(wrapper.clone_ref(py)).unwrap();
         let shared = Arc::new(SharedState::new());
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
         *client.shared.lock().unwrap() = Some(shared.clone());
         *client.control_tx.lock().unwrap() = Some(tx);
         *client.account_id.lock().unwrap() = Some("DU123".into());
         client.connected.store(true, Ordering::Release);
-        (client, rx, shared)
+        (client, rx, shared, wrapper)
     }
 
     /// The venue names the working orders after the connect returns, and a
@@ -797,7 +823,7 @@ mod tests {
     fn a_global_cancel_waits_for_the_venue_to_name_the_working_orders() {
         Python::initialize();
         Python::attach(|py| {
-            let (client, rx, shared) = wired_client(py);
+            let (client, rx, shared, _wrapper) = wired_client(py);
             let venue = shared.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(200));
@@ -821,13 +847,48 @@ mod tests {
     fn a_global_cancel_forgets_the_orders_held_for_a_later_transmit() {
         Python::initialize();
         Python::attach(|py| {
-            let (client, _rx, shared) = wired_client(py);
+            let (client, _rx, shared, _wrapper) = wired_client(py);
             shared.orders.set_replay_done();
             client.core.hold_until_transmitted(
                 7, 0, ControlCommand::Order(OrderRequest::Cancel { order_id: 7 }),
             );
             client.req_global_cancel(py, None).unwrap();
             assert!(!client.core.withdraw_held(7), "nothing is still held");
+        });
+    }
+
+    /// A global cancel issued before the venue has finished naming the
+    /// working orders is not answered in silence: what had been named is
+    /// still withdrawn, and the caller is told on the error callback that
+    /// the naming had not finished — a partial cancel that reads as one,
+    /// rather than as a complete answer that is not.
+    #[test]
+    fn a_global_cancel_says_when_the_venue_has_not_finished_naming() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, shared, wrapper) = wired_client(py);
+            shared.market.set_instrument_count(1);
+            // Nothing ever sets replay_done: the naming never finishes, and
+            // the wait runs out.
+            client.req_global_cancel(py, None).unwrap();
+            let sent: Vec<ControlCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert!(
+                matches!(sent.as_slice(), [ControlCommand::Order(OrderRequest::CancelAll { instrument: 0 })]),
+                "what had been named is still withdrawn: {sent:?}",
+            );
+            let calls = wrapper.bind(py).getattr("calls").unwrap();
+            let heard = calls
+                .extract::<Vec<(String, i64, i64, i64, String, String)>>()
+                .unwrap();
+            assert!(
+                heard.iter().any(|(name, req_id, _, code, message, _)| {
+                    name == "error"
+                        && *req_id == -1
+                        && *code == crate::error_codes::Refusal::NO_ANSWER as i64
+                        && message.contains("had not finished naming")
+                }),
+                "the caller is told on the error callback what was and was not covered: {heard:?}",
+            );
         });
     }
 }

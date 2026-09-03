@@ -1118,7 +1118,8 @@ impl EClient {
             .ok_or_else(|| PyRuntimeError::new_err("Not connected"))
     }
 
-    /// Hold until the venue has named what the account already has.
+    /// Hold until the venue has named what the account already has, and say
+    /// whether it did.
     ///
     /// The working orders and the executions behind the rest arrive unprompted
     /// after a connect, and both raise the mark an id is floored at. Asked
@@ -1126,10 +1127,12 @@ impl EClient {
     /// fill spent long ago, which the venue refuses as a duplicate — so the
     /// first order of a session is the one that cannot be placed. Bounded, and
     /// paid once per connection, because an account with nothing working never
-    /// sees the replay end. The interpreter is released for the wait.
-    pub(crate) fn wait_for_the_replay(&self, py: Python<'_>) {
-        let Ok(shared) = self.shared_state() else { return };
-        py.detach(|| shared.orders.wait_for_replay());
+    /// sees the replay end. The interpreter is released for the wait. Answers
+    /// `false` where the bound ran out first, or where no session has come up
+    /// to name anything.
+    pub(crate) fn wait_for_the_replay(&self, py: Python<'_>) -> bool {
+        let Ok(shared) = self.shared_state() else { return false };
+        py.detach(|| shared.orders.wait_for_replay())
     }
 
     /// The id a caller may next place under, without taking it.

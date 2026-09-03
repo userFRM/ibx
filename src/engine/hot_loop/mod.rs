@@ -340,6 +340,12 @@ impl HotLoop {
         hot_loop.set_ccp_heartbeat_interval(gateway.heartbeat_interval);
         hot_loop.farm_conn = Some(farm_conn);
         hot_loop.ccp_conn = Some(ccp_conn);
+        // This connection has not named what it has working yet, and the
+        // bound that naming is waited on starts now, when the connection
+        // came up. Left to the first caller to start, a request that waited
+        // the bound out spent it, and a global cancel issued straight after
+        // waited nothing and said nothing.
+        hot_loop.shared.orders.replay_is_pending();
         hot_loop.ccp.ccp_sign_key = gateway.ccp_sign_key.clone();
         hot_loop.ccp.ccp_sign_iv = std::sync::Mutex::new(gateway.ccp_sign_iv.clone());
         hot_loop.hmds_conn = hmds_conn;
@@ -441,6 +447,9 @@ impl HotLoop {
         hl.set_account_id(account_id);
         hl.farm_conn = Some(farm_conn);
         hl.ccp_conn = Some(ccp_conn);
+        // As `for_session`: the bound that naming is waited on starts when
+        // the connection is taken.
+        hl.shared.orders.replay_is_pending();
         hl.hmds_conn = hmds_conn;
         (hl, tx)
     }
@@ -3560,6 +3569,31 @@ mod tests {
     use crate::bridge::{Event, SharedState};
     use crate::types::*;
     use std::time::Duration;
+
+    /// A loop built around a fresh connection starts owing the naming of
+    /// what the account has working, and the bound that naming is waited on
+    /// is spent from the moment the connection was taken. Left for the
+    /// first waiter to start, a first request that waited the bound out
+    /// spent it, and a global cancel issued straight after waited nothing
+    /// and said nothing.
+    #[test]
+    fn the_replay_bound_starts_when_the_connection_is_taken() {
+        let shared = Arc::new(SharedState::new());
+        let (farm_conn, _farm_peer) = crate::protocol::connection::Connection::for_test();
+        let (ccp_conn, _ccp_peer) = crate::protocol::connection::Connection::for_test();
+        let (_hl, _tx) = HotLoop::with_connections(
+            shared.clone(), None, "DU1".into(), farm_conn, ccp_conn, None, None,
+        );
+        // The bound passes with nobody asking.
+        std::thread::sleep(Duration::from_millis(3_200));
+        let started = Instant::now();
+        assert!(!shared.orders.wait_for_replay(), "nothing has been named yet");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the bound began when the connection was taken, so a first waiter arriving \
+             after it has passed is answered at once, not held for a fresh bound",
+        );
+    }
 
     /// A registration naming no symbol keeps the one the slot has.
     ///

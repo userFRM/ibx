@@ -881,11 +881,10 @@ fn is_trigger_only(ord_type: u8) -> bool {
 /// The order types whose own submit states a limit price on tag 44.
 ///
 /// Read off the submit encoder: every other type either states its price on
-/// tag 99 as a trigger, or has no price to state.
+/// tag 99 as a trigger, or has no price to state. A peg to benchmark states
+/// neither — its submit carries no tag 44, so its replace must not grow one.
 fn states_a_limit_price(ord_type: u8) -> bool {
-    matches!(ord_type, b'2' | b'4' | b'B')
-        || ord_type == crate::types::ORD_LIT
-        || ord_type == crate::types::ORD_PEG_BENCH
+    matches!(ord_type, b'2' | b'4' | b'B') || ord_type == crate::types::ORD_LIT
 }
 
 /// The currency an order states for a contract (tag 15).
@@ -1358,7 +1357,6 @@ fn push_type_and_prices(fields: &mut Vec<(u32, String)>, kind: &crate::types::Or
         // ORD_PEG_MKT and ORD_PEG_MID state in types.rs. Emitting only the
         // OrdType sent the two as the same message, saying which peg neither.
         K::PegBench {
-            price,
             ref_con_id,
             is_peg_decrease,
             pegged_change_amount,
@@ -1368,6 +1366,9 @@ fn push_type_and_prices(fields: &mut Vec<(u32, String)>, kind: &crate::types::Or
             ref_exchange,
             ..
         } => {
+            // No tag 44: the wire shape of this type states the peg and the
+            // contract it follows, and no price of its own. The starting
+            // price rides tag 99, which is the only price on it.
             fields.push((40, "PB".to_string()));
             fields.push((6941, ref_con_id.to_string()));
             // The change amount carries its own direction: there is no separate
@@ -1378,10 +1379,6 @@ fn push_type_and_prices(fields: &mut Vec<(u32, String)>, kind: &crate::types::Or
             fields.push((6942, ref_exchange.clone()));
             fields.push((6580, format_price(*stock_ref_price).to_string()));
             fields.push((99, format_price(*starting_price).to_string()));
-            // Tag 44 bounds the peg. 0 = no bound, so the tag is omitted.
-            if *price != 0 {
-                fields.push((44, format_price(*price).to_string()));
-            }
         }
         // The venue names these back as PegToMkt and PegToMid under "P", and
         // named them something else entirely under "E" — so an order a caller

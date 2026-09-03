@@ -354,6 +354,10 @@ impl EClient {
     /// what this session placed since. The venue names the former after the
     /// connect returns, so a global cancel issued straight away waits for that
     /// naming, as asking for the open orders does, and covers what was named.
+    /// Where the naming does not finish within the wait, what had been named
+    /// is still withdrawn and the call says so rather than returning as
+    /// though every order were covered: a partial cancel that reads as one
+    /// beats the same cancel in silence, which reads as a complete answer.
     pub fn req_global_cancel(&self) -> Result<(), Refusal> {
         self.refuse_if_trading_is_over("a withdrawal of every order")?;
         self.core.refuse_if_readonly("a global cancel").map_err(Refusal::validation)?;
@@ -362,18 +366,23 @@ impl EClient {
         // go out behind the next thing that transmits — after the caller had
         // asked for every order to be taken back.
         self.core.withdraw_all_held();
-        if !self.shared.orders.wait_for_replay() {
-            log::warn!(
-                "the venue had not finished naming this account's working orders within \
-                 the wait, so this withdraws what had been named rather than what is working",
-            );
-        }
+        let named = self.shared.orders.wait_for_replay();
         // One request per instrument the engine holds an order on. The count
         // is the engine's, mirrored: a contract the venue named an order on
         // counts whether or not this session ever subscribed to it.
         let count = self.shared.market.instrument_count();
         for instrument in 0..count {
             self.send(ControlCommand::Order(OrderRequest::CancelAll { instrument }))?;
+        }
+        if !named {
+            // Said to the caller rather than the log: what had been named
+            // went, and what had not been named is not covered. A silent
+            // partial cancel is the worst thing this call can do.
+            return Err(Refusal::no_answer(format!(
+                "the venue had not finished naming this account's working orders within \
+                 the wait: {count} cancels were sent for what had been named, and what had \
+                 not been named is not covered and may still be working",
+            )));
         }
         Ok(())
     }

@@ -2735,6 +2735,34 @@ fn req_global_cancel_no_instruments_no_commands() {
     assert!(rx.try_recv().is_err());
 }
 
+/// A global cancel issued before the venue has finished naming the working
+/// orders is not answered in silence. What had been named is still
+/// withdrawn, and the call says the naming had not finished — a partial
+/// cancel that reads as one, rather than as a complete answer that is not.
+#[test]
+fn a_global_cancel_says_when_the_venue_has_not_finished_naming() {
+    let (client, rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    // Nothing ever sets replay_done: the naming never finishes, and the wait
+    // runs out.
+    let refusal = client.req_global_cancel().expect_err(
+        "a withdrawal composed before the naming finished says so rather than returning",
+    );
+    let sent: Vec<ControlCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        matches!(sent.as_slice(), [ControlCommand::Order(OrderRequest::CancelAll { instrument: 0 })]),
+        "what had been named is still withdrawn: {sent:?}",
+    );
+    assert_eq!(
+        refusal.code, crate::error_codes::Refusal::NO_ANSWER,
+        "under this client's own number for a wait the venue did not finish",
+    );
+    assert!(
+        refusal.message.contains("had not finished naming"),
+        "the caller is told what was and was not covered: {refusal}",
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Order validation — aux_price guards
 // ═══════════════════════════════════════════════════════════════════
