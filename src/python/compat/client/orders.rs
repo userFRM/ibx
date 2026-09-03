@@ -413,7 +413,14 @@ impl EClient {
         self.cancel_order(py, order_id as i64, None)
     }
 
-    /// Cancel all orders globally.
+    /// Cancel every order the account is working.
+    ///
+    /// This wire carries no request to withdraw everything, so it is composed
+    /// here: one cancel for each order held, which is what a caller asking for
+    /// everything back is asking for. What is held is what the venue named as working at connect and
+    /// what this session placed since. The venue names the former after the
+    /// connect returns, so a global cancel issued straight away waits for that
+    /// naming, as asking for the open orders does, and covers what was named.
     #[pyo3(signature = (order_cancel=None))]
     fn req_global_cancel(&self, py: Python<'_>, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
         self.core.refuse_if_readonly("a global cancel").map_err(PyRuntimeError::new_err)?;
@@ -421,7 +428,16 @@ impl EClient {
             return self.report_refusal(py, -1, Refusal::validation(stated));
         }
         let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
+        // Everything held goes with everything working: an order the venue was
+        // never given is withdrawn by forgetting it, and left queued it would
+        // go out behind the next thing that transmits — after the caller had
+        // asked for every order to be taken back.
+        self.core.withdraw_all_held();
+        self.wait_for_the_replay(py);
         let shared = self.shared_state()?;
+        // One request per instrument the engine holds an order on. The count
+        // is the engine's, mirrored: a contract the venue named an order on
+        // counts whether or not this session ever subscribed to it.
         let count = shared.market.instrument_count();
         // Every failed send is counted and reported. A caller answered without
         // an error takes the account to be flat, and a send that did not reach
@@ -496,15 +512,11 @@ impl EClient {
     /// Request all open orders for this client.
     fn req_open_orders(&self, py: Python<'_>) -> PyResult<()> {
         let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
-        let shared = self.shared_state()?;
         // The venue names the working orders unprompted after a connect.
         // Answering before that replay lands reports none of them, and a
-        // caller that reads "nothing" places the same order twice. Bounded at
-        // 3s: an account with nothing working never sees the replay end.
-        for _ in 0..300 {
-            if shared.orders.replay_done() { break; }
-            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
-        }
+        // caller that reads "nothing" places the same order twice.
+        self.wait_for_the_replay(py);
+        let shared = self.shared_state()?;
         let orders = self.core.collect_open_orders(&shared);
         for (order_id, tracked) in &orders {
             let c_py = Py::new(py, Contract::from_api(py, &tracked.contract)?)?.into_any();
@@ -732,5 +744,71 @@ impl EClient {
             self.deliver(py, "completed_orders_end", ())?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::SharedState;
+    use std::sync::Arc;
+
+    /// A connected client whose engine is a channel the test reads.
+    fn wired_client(py: Python<'_>) -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>) {
+        let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+        let wrapper = py
+            .eval(c"type('W', (), {'__getattr__': lambda s, n: (lambda *a: None)})()", None, None)
+            .unwrap()
+            .unbind();
+        client.__init__(wrapper).unwrap();
+        let shared = Arc::new(SharedState::new());
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        *client.shared.lock().unwrap() = Some(shared.clone());
+        *client.control_tx.lock().unwrap() = Some(tx);
+        *client.account_id.lock().unwrap() = Some("DU123".into());
+        client.connected.store(true, Ordering::Release);
+        (client, rx, shared)
+    }
+
+    /// The venue names the working orders after the connect returns, and a
+    /// global cancel is composed from what has been named. Issued before the
+    /// naming lands, it waits for it — without the wait it counted no
+    /// instruments, sent nothing, and returned without an error.
+    #[test]
+    fn a_global_cancel_waits_for_the_venue_to_name_the_working_orders() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, shared) = wired_client(py);
+            let venue = shared.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                venue.market.set_instrument_count(1);
+                venue.orders.set_replay_done();
+            });
+            client.req_global_cancel(py, None).unwrap();
+            let sent: Vec<ControlCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert!(
+                matches!(sent.as_slice(), [ControlCommand::Order(OrderRequest::CancelAll { instrument: 0 })]),
+                "the order the venue named is withdrawn: {sent:?}",
+            );
+        });
+    }
+
+    /// An order held back for a later transmit was never given to the venue,
+    /// so a withdrawal of everything forgets it rather than sending a cancel
+    /// the venue would refuse — left held, it would go out behind the next
+    /// thing that transmits, after the caller had asked for everything back.
+    #[test]
+    fn a_global_cancel_forgets_the_orders_held_for_a_later_transmit() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared) = wired_client(py);
+            shared.orders.set_replay_done();
+            client.core.hold_until_transmitted(
+                7, 0, ControlCommand::Order(OrderRequest::Cancel { order_id: 7 }),
+            );
+            client.req_global_cancel(py, None).unwrap();
+            assert!(!client.core.withdraw_held(7), "nothing is still held");
+        });
     }
 }

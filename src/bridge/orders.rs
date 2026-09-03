@@ -2,11 +2,14 @@
 
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::sync::Mutex;
 use std::collections::HashMap;
 use crate::types::*;
 use crate::types::model as api;
+
+/// How long a caller waits for the venue to finish naming the working orders.
+const REPLAY_WAIT: Duration = Duration::from_secs(3);
 
 /// Fills, order status updates, cancel rejects, what-if responses, order
 /// cache, and inactive-order reasons.
@@ -41,6 +44,14 @@ pub struct OrderState {
     /// it does unprompted after a connect. Until then "none" and "not yet
     /// told" look the same to a caller.
     replay_done: AtomicBool,
+    /// When the wait for that naming gives up, shared by everyone waiting.
+    ///
+    /// An account with nothing working never sees the naming end, so a wait
+    /// entered on every call ran to its bound every time. Set by the first
+    /// caller after a connect and cleared with `replay_done` on a reconnect,
+    /// so each connection pays the bound once and every caller in that window
+    /// waits for the same moment.
+    replay_deadline: Mutex<Option<Instant>>,
     /// The highest id the venue has named an order working under, from any
     /// session. An id is spent only while its order is live, so this is the
     /// floor a new id has to clear.
@@ -95,6 +106,7 @@ impl OrderState {
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
             replay_done: AtomicBool::new(false),
+            replay_deadline: Mutex::new(None),
             working_id_watermark: AtomicU64::new(0),
             narrow_id_watermark: AtomicU64::new(0),
             order_inactive: Mutex::new(Vec::with_capacity(8)),
@@ -252,6 +264,26 @@ impl OrderState {
         self.replay_done.load(Ordering::Acquire)
     }
 
+    /// Wait for the venue to finish naming the orders already working, and
+    /// say whether it did.
+    ///
+    /// Bounded, because an account with nothing working never sees the
+    /// naming end and waiting forever for it would be worse than proceeding.
+    /// The bound is one deadline per connection: the first caller sets it,
+    /// later callers wait for the same moment, and once it has passed nobody
+    /// waits again until a reconnect.
+    pub fn wait_for_replay(&self) -> bool {
+        let deadline = *self
+            .replay_deadline
+            .lock()
+            .unwrap()
+            .get_or_insert_with(|| Instant::now() + REPLAY_WAIT);
+        while !self.replay_done() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.replay_done()
+    }
+
     /// The highest id the venue has named an order under, or zero where it has
     /// named none.
     ///
@@ -279,6 +311,7 @@ impl OrderState {
     /// for the new one to say — which is how the same order gets placed twice.
     #[doc(hidden)] pub fn replay_is_pending(&self) {
         self.replay_done.store(false, Ordering::Release);
+        *self.replay_deadline.lock().unwrap() = None;
     }
 
     #[doc(hidden)] pub fn push_completed_order(&self, order: CompletedOrder) {

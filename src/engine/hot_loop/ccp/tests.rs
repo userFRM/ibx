@@ -4239,3 +4239,67 @@ fn a_bust_on_an_untracked_order_books_nothing_rather_than_a_purchase() {
         "a busted trade booked {booked} as bought on an order nobody here tracks",
     );
 }
+
+/// A contract the venue names an order on at connect is counted where the
+/// API reads the instrument count. Only a subscription refreshed that count,
+/// so a session that subscribed to nothing composed its global cancel over no
+/// instruments, withdrew none of the orders the venue had named, and returned
+/// without an error.
+#[test]
+fn a_recovered_orders_contract_is_counted_where_the_api_reads_the_count() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let named = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+        (11, "1787685160171119.0"), (150, "0"), (39, "0"), (6008, "756733"),
+        (38, "1"), (14, "0"), (55, "SPY"), (54, "1"), (40, "3"),
+    ], 1);
+    ccp.process_ccp_message(&named, &mut None, &mut context, &shared,
+        &None, &mut HeartbeatState::new(), "DU1");
+    assert!(context.order(1787685160171119).is_some(), "the venue named it, so the engine holds it");
+    assert_eq!(shared.market.instrument_count(), 1, "and its contract counts for a global cancel");
+}
+
+/// The venue replays the executions behind the day's orders at connect and
+/// marks each as restated. A partial fill among them, for an order this
+/// session does not hold as working, is the past of an order that finished —
+/// an immediate-or-cancel that filled part and lapsed — and the lapse is never
+/// replayed. Read as the order's state, it listed an order the venue was not
+/// working. A restated report that finishes an order is still filed, for the
+/// caller asking what completed.
+#[test]
+fn a_restated_partial_fill_of_an_order_not_held_lists_no_working_order() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let mut lapsed = std::collections::HashMap::new();
+    for (tag, val) in [
+        (11u32, "1788103664.0"), (39u32, "1"), (150u32, "1"), (97u32, "Y"),
+        (17u32, "00012dbb.6a93b90b.01.01"), (6008u32, "479624278"), (55u32, "BTC"),
+        (54u32, "1"), (38u32, "0.001"), (14u32, "0.00018171"), (32u32, "0.00018171"),
+        (31u32, "78882"), (151u32, "0.00081829"), (44u32, "78882"), (59u32, "3"),
+        (40u32, "2"), (60u32, "20260830-15:27:45"),
+    ] {
+        lapsed.insert(tag, val.to_string());
+    }
+    ccp.handle_exec_report(&lapsed, b"", &mut context, &shared, &None, "");
+    assert!(shared.orders.drain_open_orders().is_empty(), "the venue is not working it");
+    assert_eq!(shared.orders.drain_restated_executions().len(), 1, "the execution is on record");
+
+    let mut done = std::collections::HashMap::new();
+    for (tag, val) in [
+        (11u32, "1787923041.0"), (39u32, "2"), (150u32, "2"), (97u32, "Y"),
+        (17u32, "00025b49.6a8880e4.01.01"), (6008u32, "756733"), (55u32, "SPY"),
+        (54u32, "2"), (38u32, "1"), (14u32, "1"), (32u32, "1"), (31u32, "645.10"),
+        (151u32, "0"), (40u32, "1"), (60u32, "20260830-13:30:00"),
+    ] {
+        done.insert(tag, val.to_string());
+    }
+    ccp.handle_exec_report(&done, b"", &mut context, &shared, &None, "");
+    assert_eq!(
+        shared.orders.get_order_info(1787923041).map(|o| o.order_state.status),
+        Some("Filled".to_string()),
+        "a restated report that finishes an order is filed as completed",
+    );
+}

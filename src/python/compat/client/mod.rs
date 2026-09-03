@@ -117,13 +117,6 @@ pub struct EClient {
     /// reaches the wrapper on the next pass, in the order the answers were
     /// made.
     pub(crate) waiting_answers: Mutex<std::collections::VecDeque<(&'static str, Py<pyo3::types::PyTuple>)>>,
-    /// Whether this session has already waited out the replay once.
-    ///
-    /// An account with nothing working never sees the replay end, so the wait
-    /// runs to its bound every time it is entered. Entered per id, that was
-    /// three seconds on every call for an account with no working orders —
-    /// which is the ordinary way an id is asked for before each order.
-    pub(crate) replay_waited: AtomicBool,
     /// The number this session connected under, as the caller gave it.
     ///
     /// One session holds the account here, so this does not route anything.
@@ -314,7 +307,6 @@ impl EClient {
             session_ended: AtomicBool::new(false),
             close_notified: AtomicBool::new(false),
             waiting_answers: Mutex::new(std::collections::VecDeque::new()),
-            replay_waited: AtomicBool::new(false),
             event_rx: Mutex::new(None),
             events_lost: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             _test_event_tx: Mutex::new(None),
@@ -1068,7 +1060,6 @@ impl EClient {
         // Counted per session, so a caller reading it is told what this
         // session lost rather than a total carried over from the last.
         self.events_lost.store(0, Ordering::Relaxed);
-        self.replay_waited.store(false, Ordering::Relaxed);
         // Answers owed to the session that ended. Left queued, the next
         // session's first pass would hand over another session's positions and
         // orders under request numbers nobody there gave out.
@@ -1133,26 +1124,12 @@ impl EClient {
     /// after a connect, and both raise the mark an id is floored at. Asked
     /// before they land, the floor is nothing and the id handed out is one a
     /// fill spent long ago, which the venue refuses as a duplicate — so the
-    /// first order of a session is the one that cannot be placed. Bounded the
-    /// same way and for the same reason as the open-order replay beside it: an
-    /// account with nothing working never sees the replay end.
+    /// first order of a session is the one that cannot be placed. Bounded, and
+    /// paid once per connection, because an account with nothing working never
+    /// sees the replay end. The interpreter is released for the wait.
     pub(crate) fn wait_for_the_replay(&self, py: Python<'_>) {
-        // Once per session, however many ids are asked for. What the wait is
-        // for is the floor being raised before the first id goes out, and that
-        // has either happened by the time the first wait returns or it is not
-        // going to: an account with nothing working never sees the replay end,
-        // so waiting again only spends the bound again.
-        if self.replay_waited.load(Ordering::Acquire) {
-            return;
-        }
         let Ok(shared) = self.shared_state() else { return };
-        for _ in 0..300 {
-            if shared.orders.replay_done() {
-                break;
-            }
-            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
-        }
-        self.replay_waited.store(true, Ordering::Release);
+        py.detach(|| shared.orders.wait_for_replay());
     }
 
     /// The id a caller may next place under, without taking it.

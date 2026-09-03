@@ -1444,12 +1444,27 @@ impl CcpState {
                 let already_terminal = shared.orders.get_order_info(clord_id).is_some_and(|prev| {
                     matches!(prev.order_state.status.as_str(), "Filled" | "Cancelled")
                 });
-                if !already_terminal || matches!(
+                let finishes = matches!(
                     status,
                     crate::types::OrderStatus::Filled
                         | crate::types::OrderStatus::Cancelled
                         | crate::types::OrderStatus::Rejected
-                ) {
+                );
+                // A report the venue marks as restating history, on an order
+                // this session does not hold as working, is the past of an
+                // order that finished. The venue names what is working once
+                // at connect, unmarked; the marked reports are the executions
+                // behind everything else, and the cancel or expiry that ended
+                // those orders is not an execution and is never replayed.
+                // Cached as the order's state, a partial fill from days ago —
+                // an immediate-or-cancel that filled part and lapsed, a day
+                // order that expired — listed an order the venue was not
+                // working, and a caller asking what it had on was told so. A
+                // restated report that finishes an order is still filed, for
+                // the caller asking what completed.
+                let history_of_a_finished_order =
+                    is_resend && !finishes && context.order(clord_id).is_none();
+                if (!already_terminal || finishes) && !history_of_a_finished_order {
                     shared.orders.push_order_info(clord_id, info);
                 }
             }

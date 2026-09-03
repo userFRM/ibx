@@ -329,7 +329,15 @@ impl EClient {
         self.cancel_order(order_id as i64, "")
     }
 
-    /// Cancel all orders. Matches `reqGlobalCancel` in C++.
+    /// Cancel every order the account is working. Matches `reqGlobalCancel`
+    /// in C++.
+    ///
+    /// This wire carries no request to withdraw everything, so it is composed
+    /// here: one cancel for each order held, which is what a caller asking for
+    /// everything back is asking for. What is held is what the venue named as working at connect and
+    /// what this session placed since. The venue names the former after the
+    /// connect returns, so a global cancel issued straight away waits for that
+    /// naming, as asking for the open orders does, and covers what was named.
     pub fn req_global_cancel(&self) -> Result<(), Refusal> {
         self.refuse_if_trading_is_over("a withdrawal of every order")?;
         self.core.refuse_if_readonly("a global cancel").map_err(Refusal::validation)?;
@@ -338,7 +346,15 @@ impl EClient {
         // go out behind the next thing that transmits — after the caller had
         // asked for every order to be taken back.
         self.core.withdraw_all_held();
-        // Use global instrument count (not just locally-tracked ones)
+        if !self.shared.orders.wait_for_replay() {
+            log::warn!(
+                "the venue had not finished naming this account's working orders within \
+                 the wait, so this withdraws what had been named rather than what is working",
+            );
+        }
+        // One request per instrument the engine holds an order on. The count
+        // is the engine's, mirrored: a contract the venue named an order on
+        // counts whether or not this session ever subscribed to it.
         let count = self.shared.market.instrument_count();
         for instrument in 0..count {
             self.send(ControlCommand::Order(OrderRequest::CancelAll { instrument }))?;
@@ -423,14 +439,8 @@ impl EClient {
         // connect, and answering before that lands reports none of them. A
         // strategy asking what it already has on, at the moment it starts, is
         // exactly who asks this first, and telling it "nothing" is how the same
-        // order gets placed twice. Bounded: an account with nothing working
-        // never sees the replay end, and waiting forever for it would be worse
-        // than answering.
-        for _ in 0..300 {
-            if self.shared.orders.replay_done() { break; }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        if !self.shared.orders.replay_done() {
+        // order gets placed twice.
+        if !self.shared.orders.wait_for_replay() {
             // An incomplete replay is reported: what follows is what has arrived,
             // which is otherwise indistinguishable from an account with nothing
             // working.

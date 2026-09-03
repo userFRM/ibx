@@ -1094,6 +1094,13 @@ impl CcpState {
                 }
             }
         }
+        // Every contract the messages above registered is counted where the
+        // API reads the count. A recovery record registers the contract it
+        // names, and only a subscription refreshed this mirror — so an account
+        // whose working orders were on contracts this session never subscribed
+        // to counted none of them, and a global cancel, composed by instrument
+        // from the count, withdrew nothing and returned without an error.
+        shared.market.set_instrument_count(context.market.count());
     }
 
     fn handle_news_bulletin(&mut self, parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {

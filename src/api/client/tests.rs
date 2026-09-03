@@ -2690,6 +2690,7 @@ fn two_prints_of_one_order_in_one_pass_are_two_executions() {
 #[test]
 fn req_global_cancel_sends_cancel_all_for_each_instrument() {
     let (client, rx, shared) = test_client();
+    shared.orders.set_replay_done();
     shared.market.set_instrument_count(2);
     client.req_global_cancel().unwrap();
     let mut cancel_instruments = vec![];
@@ -2705,7 +2706,8 @@ fn req_global_cancel_sends_cancel_all_for_each_instrument() {
 
 #[test]
 fn req_global_cancel_no_instruments_no_commands() {
-    let (client, rx, _shared) = test_client();
+    let (client, rx, shared) = test_client();
+    shared.orders.set_replay_done();
     client.req_global_cancel().unwrap();
     assert!(rx.try_recv().is_err());
 }
@@ -6740,5 +6742,26 @@ fn a_run_of_ids_is_measured_by_its_widest() {
         body.contains("say_if_past_a_request_id(first + n - 1)"),
         "a run is measured by its first id, so a bracket whose children cross the line \
          hands them out in silence",
+    );
+}
+
+/// The venue names the working orders after the connect returns, and a global
+/// cancel is composed from what has been named. Issued before the naming
+/// lands, it waits for it — without the wait it counted no instruments, sent
+/// nothing, and returned without an error.
+#[test]
+fn a_global_cancel_waits_for_the_venue_to_name_the_working_orders() {
+    let (client, rx, shared) = test_client();
+    let venue = shared.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        venue.market.set_instrument_count(1);
+        venue.orders.set_replay_done();
+    });
+    client.req_global_cancel().unwrap();
+    let sent: Vec<ControlCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        matches!(sent.as_slice(), [ControlCommand::Order(OrderRequest::CancelAll { instrument: 0 })]),
+        "the order the venue named is withdrawn: {sent:?}",
     );
 }
