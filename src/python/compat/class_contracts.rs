@@ -263,10 +263,12 @@ impl Contract {
 
     /// The whole contract the engine holds, not the handful of fields a
     /// callback happens to print: an option with no strike, right or expiry
-    /// names nothing the caller can act on. Combo legs and the delta-neutral
-    /// contract need a `Python` token to build and are left empty here.
-    pub(crate) fn from_api(c: &crate::types::model::Contract) -> Self {
-        Self {
+    /// names nothing the caller can act on, and a combination with no legs
+    /// names a different contract from the one placed. The legs are built as
+    /// the class a caller builds one with, which is what takes the interpreter.
+    /// The delta-neutral contract is left unset: nothing here builds one.
+    pub(crate) fn from_api(py: Python<'_>, c: &crate::types::model::Contract) -> PyResult<Self> {
+        Ok(Self {
             con_id: c.con_id,
             symbol: c.symbol.clone(),
             sec_type: c.sec_type.clone(),
@@ -286,9 +288,9 @@ impl Contract {
             description: c.description.clone(),
             issuer_id: c.issuer_id.clone(),
             combo_legs_descrip: c.combo_legs_descrip.clone(),
-            combo_legs: ListField::new(),
+            combo_legs: ListField::of(py, c.combo_legs.iter().map(ComboLeg::from_api))?,
             delta_neutral_contract: None,
-        }
+        })
     }
 
     /// The same contract in the shape the rest of the client uses.
@@ -424,6 +426,93 @@ impl TagValue {
     /// The same pair, as the Python side names it.
     pub(crate) fn from_api(tv: &crate::types::model::TagValue) -> Self {
         Self { tag: tv.tag.clone(), value: tv.value.clone() }
+    }
+}
+
+/// One leg of a combination, under the names the reference client gives its
+/// fields.
+///
+/// Built by a caller for the contract they place, and built here for the
+/// contract handed back, so a leg read off an open order is the class a
+/// program compares against and appends to the next combination. The defaults
+/// are the reference client's: a leg nobody set an exempt code on states minus
+/// one, not nought, and one given no ratio states none.
+#[pyclass(from_py_object)]
+#[derive(Clone, Debug)]
+pub struct ComboLeg {
+    #[pyo3(get, set)]
+    pub con_id: i64,
+    #[pyo3(get, set)]
+    pub ratio: i32,
+    #[pyo3(get, set)]
+    pub action: String,
+    #[pyo3(get, set)]
+    pub exchange: String,
+    #[pyo3(get, set)]
+    pub open_close: i32,
+    #[pyo3(get, set)]
+    pub short_sale_slot: i32,
+    #[pyo3(get, set)]
+    pub designated_location: String,
+    #[pyo3(get, set)]
+    pub exempt_code: i32,
+}
+
+impl Default for ComboLeg {
+    fn default() -> Self {
+        Self {
+            con_id: 0,
+            ratio: 0,
+            action: String::new(),
+            exchange: String::new(),
+            open_close: 0,
+            short_sale_slot: 0,
+            designated_location: String::new(),
+            exempt_code: -1,
+        }
+    }
+}
+
+#[pymethods]
+impl ComboLeg {
+    // What `openClose` can state, under the names the reference client gives
+    // the values.
+    #[classattr]
+    const SAME: i32 = 0;
+    #[classattr]
+    const OPEN: i32 = 1;
+    #[classattr]
+    const CLOSE: i32 = 2;
+    #[classattr]
+    const UNKNOWN: i32 = 3;
+
+    #[new]
+    #[pyo3(signature = ())]
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ComboLeg(conId={}, ratio={}, action='{}', exchange='{}')",
+            self.con_id, self.ratio, self.action, self.exchange,
+        )
+    }
+}
+
+impl ComboLeg {
+    /// The same leg, as the Python side names it.
+    pub(crate) fn from_api(l: &crate::types::model::ComboLeg) -> Self {
+        Self {
+            con_id: l.con_id,
+            ratio: l.ratio,
+            action: l.action.clone(),
+            exchange: l.exchange.clone(),
+            open_close: l.open_close,
+            short_sale_slot: l.shorting_policy,
+            designated_location: l.designated_location.clone(),
+            exempt_code: l.exempt_code,
+        }
     }
 }
 
@@ -1178,6 +1267,21 @@ contract.comboLegs.append(leg2)
 camel_aliases_copy! {
     Contract {
         get_include_expired_alias set_include_expired_alias includeExpired include_expired bool;
+    }
+}
+
+camel_aliases_copy! {
+    ComboLeg {
+        get_con_id_alias set_con_id_alias conId con_id i64;
+        get_open_close_alias set_open_close_alias openClose open_close i32;
+        get_short_sale_slot_alias set_short_sale_slot_alias shortSaleSlot short_sale_slot i32;
+        get_exempt_code_alias set_exempt_code_alias exemptCode exempt_code i32;
+    }
+}
+
+camel_aliases_owned! {
+    ComboLeg {
+        get_designated_location_alias set_designated_location_alias designatedLocation designated_location String;
     }
 }
 

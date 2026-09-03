@@ -1935,7 +1935,7 @@ mod tests {
     fn order_attrs_conditions_forwarded() {
         let o = Order {
             conditions: vec![
-                OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true },
+                OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true, is_conjunction_connection: true },
             ],
             conditions_cancel_order: true,
             ..Default::default()
@@ -2068,7 +2068,7 @@ mod tests {
             ("trigger_method", |o| o.trigger_method = 2),
             ("cash_qty", |o| o.cash_qty = 1000.0),
             ("conditions", |o| o.conditions.push(
-                OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true },
+                OrderCondition::Time { time: "20260311-09:30:00".into(), is_more: true, is_conjunction_connection: true },
             )),
             ("conditions_cancel_order", |o| o.conditions_cancel_order = true),
             ("conditions_ignore_rth", |o| o.conditions_ignore_rth = true),

@@ -275,8 +275,15 @@ impl EClient {
             self.core.hold_until_transmitted(oid, api_order.parent_id, cmd);
         }
 
-        // Track order in shared core
-        let api_contract = contract.to_api();
+        // Track order in shared core. The record is the contract as the venue
+        // was told it: the description, and the legs and the hedge read off
+        // the caller's objects above. Converted afresh, the record held a BAG
+        // with nothing in it, and that is what every callback handed back.
+        let api_contract = crate::types::model::Contract {
+            combo_legs: api_contract.combo_legs,
+            delta_neutral_contract: api_contract.delta_neutral_contract,
+            ..contract.to_api()
+        };
         let mut tracked_order = api_order.clone();
         tracked_order.order_id = oid as i64;
         self.core.cache_contract(contract.con_id, api_contract.clone());
@@ -500,7 +507,7 @@ impl EClient {
         }
         let orders = self.core.collect_open_orders(&shared);
         for (order_id, tracked) in &orders {
-            let c_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
+            let c_py = Py::new(py, Contract::from_api(py, &tracked.contract)?)?.into_any();
             let o = Order::from_api(py, &tracked.order, self.client_id.load(Ordering::Acquire))?;
             let o_py = Py::new(py, o)?.into_any();
             let state = super::super::contract::OrderState {
@@ -632,7 +639,7 @@ impl EClient {
         // held, and re-entering a path that locks `executions` would freeze
         // the interpreter, not just this thread.
         for se in snapshot {
-            let c_py = Py::new(py, Contract::from_api(&se.contract))?.into_any();
+            let c_py = Py::new(py, Contract::from_api(py, &se.contract)?)?.into_any();
 
             let exec_obj = Execution::from_api(&se.execution);
             let exec_py = Py::new(py, exec_obj)?.into_any();
@@ -714,7 +721,7 @@ impl EClient {
             // these again, and the lock is not re-entrant.
             let completed = self.completed.lock().unwrap().clone();
             for (contract, order, state) in &completed {
-                let c_py = Py::new(py, Contract::from_api(contract))?.into_any();
+                let c_py = Py::new(py, Contract::from_api(py, contract)?)?.into_any();
                 let o_py = Py::new(
                     py,
                     Order::from_api(py, order, self.client_id.load(Ordering::Acquire))?,

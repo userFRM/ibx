@@ -215,7 +215,7 @@ impl EClient {
             // hear of it.
             let moved = shared.portfolio.drain_position_changes();
             for pi in &moved {
-                let c_py = Py::new(py, self.position_contract(pi, shared))?.into_any();
+                let c_py = Py::new(py, self.position_contract(py, pi, shared)?)?.into_any();
                 let avg_cost = pi.avg_cost as f64 / crate::types::PRICE_SCALE as f64;
                 if on_position {
                     call_wrapper!(
@@ -353,7 +353,7 @@ impl EClient {
             // says the charge is unknown rather than that it was nothing.
             let api_commission = ApiCommissionAndFeesReport::default();
 
-            let c_py = Py::new(py, Contract::from_api(&api_contract))?.into_any();
+            let c_py = Py::new(py, Contract::from_api(py, &api_contract)?)?.into_any();
             // The same record the replay keeps, in the shape a caller reads,
             // so the two cannot state different things about one fill.
             let exec_py = Py::new(py, Execution::from_api(&api_exec))?.into_any();
@@ -415,7 +415,7 @@ impl EClient {
             // GIL held behind it.
             let tracked = self.core.open_orders.lock().unwrap().get(&update.order_id).cloned();
             if let Some(tracked) = tracked {
-                let contract_py = Py::new(py, Contract::from_api(&tracked.contract))?.into_any();
+                let contract_py = Py::new(py, Contract::from_api(py, &tracked.contract)?)?.into_any();
                 let order_py = Py::new(
                     py,
                     Order::from_api(py, &tracked.order, self.client_id.load(Ordering::Acquire))?,
@@ -578,8 +578,15 @@ impl EClient {
                 }
             }
         }
+        // Withdrawn by this client, not by the caller, so nothing is reported:
+        // a handler that disconnected on `tick_snapshot_end` is not told 504
+        // about a snapshot that completed, and an engine that has gone is not
+        // an exception out of `run` — the session was recorded as over above.
         for req_id in snapshot_done {
-            self.cancel_mkt_data(py, req_id)?;
+            let Ok(tx) = self.tx() else { break };
+            if let Err(why) = self.withdraw_mkt_data(py, &tx, req_id) {
+                log::debug!("withdrawing finished snapshot {req_id}: {why}");
+            }
         }
 
         // Drain TBT trades -> tickByTickAllLast
@@ -666,7 +673,7 @@ impl EClient {
 
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract_py, order_py) = if let Some(t) = tracked {
-                let c = Contract::from_api(&t.contract);
+                let c = Contract::from_api(py, &t.contract)?;
                 let o = Order::from_api(py, &t.order, self.client_id.load(Ordering::Acquire))?;
                 (Py::new(py, c)?.into_any(), Py::new(py, o)?.into_any())
             } else {
@@ -983,9 +990,10 @@ impl EClient {
             // Portfolio updates (position entries)
             let portfolio = self.core.prepare_portfolio_updates(shared);
             for entry in &portfolio {
-                let contract = self.core.get_contract(entry.con_id, shared);
-                let c = contract.map(|ac| Contract::from_api(&ac))
-                    .unwrap_or_else(|| Contract { con_id: entry.con_id, ..Default::default() });
+                let c = match self.core.get_contract(entry.con_id, shared) {
+                    Some(ac) => Contract::from_api(py, &ac)?,
+                    None => Contract { con_id: entry.con_id, ..Default::default() },
+                };
                 let c_py = pyo3::Py::new(py, c).unwrap().into_any();
                 call_wrapper!(self.wrapper, py, "update_portfolio",
                     (&c_py, entry.position, entry.market_price, entry.market_value,
@@ -1057,5 +1065,44 @@ mod unstated_tests {
         for greek in [solved.delta, solved.gamma, solved.vega, solved.theta, solved.pv_dividend] {
             assert_eq!(or_unstated_greek(greek), -2.0, "a greek nobody computed reads as one");
         }
+    }
+}
+
+#[cfg(test)]
+mod withdrawal_tests {
+    use super::*;
+
+    /// A snapshot that ends once the engine has gone is withdrawn quietly.
+    ///
+    /// The pass reaches the withdrawal with the session already recorded as
+    /// over. A send that fails there is not an exception out of `run`, which
+    /// ends the way the loop means it to, with `connection_closed`.
+    #[test]
+    fn a_snapshot_ending_after_the_engine_has_gone_does_not_end_the_pass_with_an_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+            let wrapper = py
+                .eval(c"type('W', (), {'__getattr__': lambda s, n: (lambda *a: None)})()", None, None)
+                .unwrap()
+                .unbind();
+            client.__init__(wrapper).unwrap();
+            let shared = Arc::new(SharedState::new());
+            shared.market.set_instrument_count(1);
+            // The engine's end of the channel is gone.
+            let (tx, rx) = std::sync::mpsc::sync_channel(4);
+            drop(rx);
+            *client.shared.lock().unwrap() = Some(shared.clone());
+            *client.control_tx.lock().unwrap() = Some(tx);
+            client.connected.store(true, Ordering::Release);
+            // A snapshot asked for long enough ago to be swept on this pass.
+            client.core.req_to_instrument.lock().unwrap().insert(1, 0);
+            client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+            client.core.snapshot_reqs.lock().unwrap().insert(
+                1, (std::time::Instant::now() - std::time::Duration::from_secs(12), 0),
+            );
+
+            client.dispatch_once(py, &shared).expect("the pass ends, saying nothing of the withdrawal");
+        });
     }
 }

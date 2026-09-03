@@ -1629,6 +1629,7 @@ fn decode_condition(c: &std::collections::HashMap<u32, String>) -> Option<crate:
     const PERCENT: u32 = 6245;
     const VOLUME: u32 = 6263;
     const EXECUTION: u32 = 6246;
+    const CONJUNCTION: u32 = 6137;
 
     // Tag 6126 carries the comparison itself: `>=` or `<=`, and no others. A
     // condition stating neither has no direction this can name, so it is omitted
@@ -1648,10 +1649,15 @@ fn decode_condition(c: &std::collections::HashMap<u32, String>) -> Option<crate:
     let text = |tag: u32| c.get(&tag).map(|s| s.trim().to_string()).unwrap_or_default();
     let number = |tag: u32| c.get(&tag).and_then(|s| s.trim().parse::<f64>().ok());
     let con_id = c.get(&CON_ID).and_then(|s| s.trim().parse::<i64>().ok()).unwrap_or(0);
+    // `a` joins this condition to the next with AND. The reference client
+    // reads any other spelling as not AND — `o`, and the `n` the last one
+    // carries — and an order read back here reads the same.
+    let is_conjunction_connection = c.get(&CONJUNCTION).map(|s| s.trim()) == Some("a");
 
     match c.get(&COND_TYPE).map(|s| s.trim()) {
         Some("1") => Some(OrderCondition::Price {
             con_id,
+            is_conjunction_connection,
             exchange: text(EXCHANGE),
             price: crate::types::price_from_f64(number(PRICE)?),
             is_more: is_more()?,
@@ -1659,8 +1665,9 @@ fn decode_condition(c: &std::collections::HashMap<u32, String>) -> Option<crate:
             // method reads as the venue's rather than the caller's.
             trigger_method: 0,
         }),
-        Some("3") => Some(OrderCondition::Time { time: text(TIME), is_more: is_more()? }),
+        Some("3") => Some(OrderCondition::Time { time: text(TIME), is_more: is_more()?, is_conjunction_connection }),
         Some("4") => Some(OrderCondition::Margin {
+            is_conjunction_connection,
             percent: number(PERCENT)? as u32,
             is_more: is_more()?,
         }),
@@ -1674,6 +1681,7 @@ fn decode_condition(c: &std::collections::HashMap<u32, String>) -> Option<crate:
                     .to_string()
             };
             Some(OrderCondition::Execution {
+                is_conjunction_connection,
                 symbol: field("symbol"),
                 exchange: field("exchange"),
                 sec_type: field("securityType"),
@@ -1681,12 +1689,14 @@ fn decode_condition(c: &std::collections::HashMap<u32, String>) -> Option<crate:
         }
         Some("6") => Some(OrderCondition::Volume {
             con_id,
+            is_conjunction_connection,
             exchange: text(EXCHANGE),
             volume: number(VOLUME)? as i64,
             is_more: is_more()?,
         }),
         Some("7") => Some(OrderCondition::PercentChange {
             con_id,
+            is_conjunction_connection,
             exchange: text(EXCHANGE),
             percent: number(PERCENT)?,
             is_more: is_more()?,

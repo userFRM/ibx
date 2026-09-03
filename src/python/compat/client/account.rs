@@ -13,17 +13,20 @@ impl EClient {
     /// The contract a position is a position in. Prefers the secdef cache,
     /// which carries exchange/localSymbol/tradingClass, and falls back to the
     /// wire-derived `PositionInfo` fields when it is cold.
-    pub(crate) fn position_contract(&self, pi: &PositionInfo, shared: &crate::bridge::SharedState) -> Contract {
-        self.core.get_contract(pi.con_id, shared)
-            .map(|ac| Contract::from_api(&ac))
-            .unwrap_or_else(|| Contract {
+    pub(crate) fn position_contract(
+        &self, py: Python<'_>, pi: &PositionInfo, shared: &crate::bridge::SharedState,
+    ) -> PyResult<Contract> {
+        match self.core.get_contract(pi.con_id, shared) {
+            Some(ac) => Contract::from_api(py, &ac),
+            None => Ok(Contract {
                 con_id: pi.con_id,
                 symbol: pi.symbol.clone(),
                 sec_type: pi.sec_type.clone(),
                 currency: pi.currency.clone(),
                 multiplier: pi.multiplier.clone(),
                 ..Default::default()
-            })
+            }),
+        }
     }
 }
 
@@ -151,7 +154,7 @@ impl EClient {
             positions = shared.portfolio.position_infos();
         }
         for pi in &positions {
-            let c_py = Py::new(py, self.position_contract(pi, &shared))?.into_any();
+            let c_py = Py::new(py, self.position_contract(py, pi, &shared)?)?.into_any();
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             self.deliver(py, "position", (self.account().as_str(), &c_py, pi.position, avg_cost))?;
         }
@@ -166,7 +169,7 @@ impl EClient {
             ids
         };
         for pi in &already_stated {
-            let c_py = Py::new(py, self.position_contract(pi, &shared))?.into_any();
+            let c_py = Py::new(py, self.position_contract(py, pi, &shared)?)?.into_any();
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             for req_id in &watching {
                 self.deliver(
@@ -283,7 +286,7 @@ impl EClient {
         }
         let positions = shared.portfolio.position_infos();
         for pi in &positions {
-            let c_py = Py::new(py, self.position_contract(pi, &shared))?.into_any();
+            let c_py = Py::new(py, self.position_contract(py, pi, &shared)?)?.into_any();
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             self.deliver(py, "position_multi",
                 (req_id, account, model_code, &c_py, pi.position, avg_cost))?;

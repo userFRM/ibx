@@ -3540,6 +3540,27 @@ fn two_conditions_are_both_read() {
     assert_eq!(waits_on.len(), 2, "both conditions are read, not only the last");
 }
 
+/// A condition reads back the way it was joined.
+///
+/// `a` joins a condition to the next with AND and `o` with OR. The reference
+/// client reads any other spelling as not AND, which is what the last
+/// condition's `n` reads as, and an order read back here reads the same, so
+/// placed again it is joined the way it was.
+#[test]
+fn a_condition_reads_back_how_it_is_joined() {
+    use super::executions::decode_conditions;
+
+    let report = concat!(
+        "35=8\x0111=1\x016136=3\x01",
+        "6222=1\x016123=756733\x016124=BEST\x016126=<=\x016125=0.01\x016137=o\x01",
+        "6222=1\x016123=9579970\x016124=SMART\x016126=>=\x016125=999.00\x016137=a\x01",
+        "6222=1\x016123=9579970\x016124=SMART\x016126=>=\x016125=999.00\x016137=n\x01",
+    );
+    let joined: Vec<bool> =
+        decode_conditions(report.as_bytes()).iter().map(|c| c.is_conjunction_connection()).collect();
+    assert_eq!(joined, [false, true, false], "OR, AND, and the last joins nothing");
+}
+
 /// A report carrying no conditions states none, rather than one made up.
 #[test]
 fn an_unconditional_order_states_no_conditions() {

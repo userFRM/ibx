@@ -744,7 +744,7 @@ impl EClient {
         &self, py: Python<'_>, contract: &Contract, key: &str,
     ) -> Result<Contract, Refusal> {
         if let Some(already) = self.core.named_for(key) {
-            return Ok(Contract::from_api(&already));
+            return Contract::from_api(py, &already).map_err(|e| Refusal::validation(e.to_string()));
         }
         let answer = self.qualify_contract_stated(py, contract)?;
         self.core.remember_named(key.to_string(), answer.to_api());
