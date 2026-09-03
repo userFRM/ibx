@@ -306,6 +306,11 @@ fn algo_param_names(strategy: &str) -> Option<&'static [&'static str]> {
 /// forwarded as the caller wrote it, so a key it does not name would go no
 /// further. Said rather than dropped: the caller had set it for a reason and
 /// the order that reached the venue would not have carried it.
+///
+/// A number is checked, not re-spelled. A parameter is text on the wire, and
+/// the text the caller wrote is what reaches the venue, as the reference
+/// client forwards it; the parse here is this client's own check that it
+/// reads as one.
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal> {
     let folded = strategy.to_lowercase();
     if let Some(known) = algo_param_names(&folded)
@@ -322,9 +327,10 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         params.iter().find(|tv| tv.tag == key).map(|tv| tv.value.clone())
     };
     let get_str = |key: &str| -> String { get(key).unwrap_or_default() };
-    let get_f64 = |key: &str| -> Result<f64, Refusal> {
+    // An absent key stays the `0` this client has always stated for it.
+    let get_num = |key: &str| -> Result<String, Refusal> {
         let raw = match get(key) {
-            None => return Ok(0.0),
+            None => return Ok("0".to_string()),
             Some(raw) => raw,
         };
         let v: f64 = raw.parse()
@@ -334,7 +340,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
                 format!("Invalid {key} '{raw}': must be a finite number"),
             ));
         }
-        Ok(v)
+        Ok(raw)
     };
     let get_bool = |key: &str| -> Result<bool, Refusal> {
         let raw = match get(key) {
@@ -352,7 +358,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
 
     match folded.as_str() {
         "vwap" => Ok(AlgoParams::Vwap {
-            max_pct_vol: get_f64("maxPctVol")?,
+            max_pct_vol: get_num("maxPctVol")?,
             no_take_liq: get_bool("noTakeLiq")?,
             allow_past_end_time: get_bool("allowPastEndTime")?,
             start_time: get_str("startTime"),
@@ -364,7 +370,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             end_time: get_str("endTime"),
         }),
         "arrivalpx" | "arrival_price" => Ok(AlgoParams::ArrivalPx {
-            max_pct_vol: get_f64("maxPctVol")?,
+            max_pct_vol: get_num("maxPctVol")?,
             risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
             allow_past_end_time: get_bool("allowPastEndTime")?,
             force_completion: get_bool("forceCompletion")?,
@@ -372,7 +378,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             end_time: get_str("endTime"),
         }),
         "closepx" | "close_price" => Ok(AlgoParams::ClosePx {
-            max_pct_vol: get_f64("maxPctVol")?,
+            max_pct_vol: get_num("maxPctVol")?,
             risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
             force_completion: get_bool("forceCompletion")?,
             start_time: get_str("startTime"),
@@ -386,7 +392,10 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
                     "DarkIce needs a displaySize: it is how much of the order the \
                      book shows, and this client will not choose it for you",
                 )),
-                Some(raw) => raw.parse().map_err(|_| format!("Invalid displaySize '{raw}': expected a non-negative integer"))?,
+                Some(raw) => {
+                    raw.parse::<u32>().map_err(|_| format!("Invalid displaySize '{raw}': expected a non-negative integer"))?;
+                    raw
+                }
             };
             Ok(AlgoParams::DarkIce {
                 allow_past_end_time: get_bool("allowPastEndTime")?,
@@ -396,7 +405,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             })
         }
         "pctvol" | "pct_vol" => Ok(AlgoParams::PctVol {
-            pct_vol: get_f64("pctVol")?,
+            pct_vol: get_num("pctVol")?,
             no_take_liq: get_bool("noTakeLiq")?,
             start_time: get_str("startTime"),
             end_time: get_str("endTime"),
@@ -3012,7 +3021,7 @@ impl ClientCore {
             parent_perm_id, pt_order_id, pt_order_type, randomize_price,
             scale_init_fill_qty, scale_table, shareholder, sl_order_id,
             sl_order_type, smart_combo_routing_params,
-            soft_dollar_tier_display_name, what_if_type,
+            what_if_type,
         );
 
 

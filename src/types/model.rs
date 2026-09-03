@@ -622,8 +622,15 @@ pub struct Order {
     pub soft_dollar_tier_val: String,
     /// What the soft-dollar tier is called on a screen.
     ///
-    /// **Not carried by this protocol.** The tier and its value are sent; the
-    /// display name beside them is never written to the wire.
+    /// Reported by the venue and not sent: it states all three when it lists
+    /// the tiers an account has, and the tier is named to the wire by the
+    /// other two. The reference client sends those two and no more either.
+    ///
+    /// So it is a label rather than an instruction, and a caller who lists the
+    /// tiers, picks one and hands the whole thing to an order has asked for
+    /// nothing by carrying it. Refused for being stated, as a field nothing
+    /// carries would be, that ordinary sequence could not be written without
+    /// first blanking something the venue itself filled in.
     pub soft_dollar_tier_display_name: String,
     /// Whether the order was solicited from the customer.
     pub solicited: bool,
