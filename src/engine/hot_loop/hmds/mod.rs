@@ -804,6 +804,11 @@ impl HmdsState {
                         const HMDS_ERROR_CODE: i32 = 162;
                         let mut released_req_id: Option<u32> = None;
                         let mut from_historical = false;
+                        // Whether the query the venue refused is one a held
+                        // series is actually waiting on. A hold belongs to its
+                        // own bar query and to the corporate-actions query that
+                        // folds it, and to nothing else.
+                        let mut refused_a_held_query = false;
                         if let Some(qid) = &query_id {
                             if let Some(pos) = self.pending_historical.iter().position(|(q, _)| q == qid) {
                                 let (_, req_id) = self.pending_historical.remove(pos);
@@ -818,6 +823,7 @@ impl HmdsState {
                                 // that nothing had rejected.
                                 released_req_id = Some(req_id);
                                 from_historical = true;
+                                refused_a_held_query = true;
                             } else if let Some(pos) = self.rtbar_subs.iter().position(|(q, ..)| q == qid) {
                                 // A rejected bar query is matched on the query
                                 // id, which is the one identifier that is
@@ -836,6 +842,7 @@ impl HmdsState {
                             } else if let Some(pos) = self.pending_adjustments.iter().position(|(q, _, _)| q == qid) {
                                 let (_, req_id, _) = self.pending_adjustments.remove(pos);
                                 released_req_id = Some(req_id);
+                                refused_a_held_query = true;
                             } else if let Some(pos) = self.pending_ticks.iter().position(|(q, _, _)| q == qid) {
                                 let (_, req_id, _) = self.pending_ticks.remove(pos);
                                 released_req_id = Some(req_id);
@@ -860,10 +867,19 @@ impl HmdsState {
                         // refused is a bar request that failed: what was held is
                         // dropped and the caller is answered on the bar channels,
                         // terminal sentinel and all, rather than left waiting on
-                        // a series that will never complete. An adjusted
-                        // request's two queries share the caller's number, so
-                        // this catches a refusal of either.
+                        // a series that will never complete.
+                        //
+                        // Only for a refusal of one of its own two queries. The
+                        // lists above do not share a number space — the comment
+                        // forty lines up records exactly that — so a request
+                        // that is kept up to date, whose batch and whose
+                        // five-second stream carry one caller number, lost every
+                        // page it was holding the moment the venue refused the
+                        // stream. What it had collected went out as an empty
+                        // end, and the pages still to come were then delivered
+                        // as updates, newest first, after it.
                         if let Some(rid) = released_req_id
+                            && refused_a_held_query
                             && self.held.iter().any(|a| a.req_id == rid)
                         {
                             self.held.retain(|a| a.req_id != rid);
@@ -1754,7 +1770,11 @@ fn build_tbt_query(
         let entry = self.held.remove(pos);
         let folded = if entry.adjusted {
             let actions = entry.actions.unwrap_or_default();
-            crate::control::adjustments::scale_historical_bars(entry.bars, &actions)
+            // On the clock the venue named beside the bars: an action is dated
+            // on the exchange's day and a stamp below a day arrives in UTC.
+            crate::control::adjustments::scale_historical_bars(
+                entry.bars, &actions, &entry.timezone,
+            )
         } else {
             Ok(entry.bars)
         };

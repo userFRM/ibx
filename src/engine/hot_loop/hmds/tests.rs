@@ -1296,3 +1296,59 @@ fn a_tick_stream_states_the_prelude_and_the_filter_it_was_asked_for() {
     assert!(asked.contains("<timeLength>100 t</timeLength>"), "{asked}");
     assert!(asked.contains("<filter><ignoreSize>true</ignoreSize></filter>"), "{asked}");
 }
+
+/// A refusal of a different query under the same caller number leaves the
+/// held series alone.
+///
+/// The lists these queries are drawn from do not share a number space. A
+/// request that is kept up to date proves it on its own: the batch and the
+/// five-second stream that follows it carry one caller number, and the venue
+/// refusing the stream — a series it serves as history but not at five
+/// seconds, or a contract with no streaming entitlement — threw away every
+/// page the batch had collected. What was held went out as an end carrying no
+/// bars, and the pages still to come were then delivered after it as updates,
+/// newest page first.
+#[test]
+fn a_refusal_of_another_query_leaves_a_held_series_alone() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+
+    // One caller number, two queries: the batch of bars, and the stream that
+    // keeps it up to date.
+    hmds.pending_historical.push(("hist_2001".to_string(), 7));
+    hmds.keep_up_to_date_reqs.insert(7);
+    hmds.rtbar_subs.push(("rt_2002".to_string(), 7, None, 0.01, 1.0));
+    hmds.held.push(HeldSeries {
+        req_id: 7, adjusted: false, con_id: 0, sec_type: String::new(), exchange: String::new(),
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions: None,
+        complete: false,
+    });
+    hmds.process_hmds_message(&make_bar_msg("hist_2001", false), &mut conn, &shared, &None, &mut hb);
+    let held_before = hmds.held[0].bars.len();
+    assert!(held_before > 0, "the batch has pages in hand");
+
+    // The venue refuses the stream, not the batch.
+    hmds.process_hmds_message(
+        &make_query_error_msg("rt_2002", "No market data permissions"),
+        &mut conn, &shared, &None, &mut hb,
+    );
+
+    assert_eq!(hmds.held.len(), 1, "the batch was not the query that was refused");
+    assert_eq!(hmds.held[0].bars.len(), held_before, "and it still holds its pages");
+    assert!(hmds.rtbar_subs.is_empty(), "the stream that was refused is gone");
+    assert!(
+        !hmds.pending_historical.is_empty(),
+        "the batch is still outstanding, so its remaining pages still reach the hold",
+    );
+
+    // The caller hears about the stream, and is not handed an end for a series
+    // that has not finished arriving.
+    let errors = shared.reference.drain_historical_errors();
+    assert_eq!(errors, vec![(7, 162, "No market data permissions".to_string())]);
+    assert!(
+        shared.reference.drain_historical_data().is_empty(),
+        "no end for a series still being collected",
+    );
+}

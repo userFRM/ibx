@@ -283,7 +283,7 @@ pub fn scale_before(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
     // every date there is, so a price from after a split would be scaled by it
     // — and the caller reaching this helper directly, rather than through
     // `scale_bars`, had nothing checking that for them.
-    let Some(date) = day_of(date) else {
+    let Some(date) = day_of(date, "") else {
         return Err(format!(
             "{date:?} is not a day a price can be placed before or after, so no scale \
              can be stated for it",
@@ -310,7 +310,7 @@ pub fn scale_before(date: &str, actions: &[Adjustment]) -> Result<f64, String> {
         // every date there is, so the action reads as already past and is
         // skipped — leaving the price it should have moved exactly as the venue
         // served it, under the name of an adjusted one.
-        let Some(acted) = day_of(&a.date) else {
+        let Some(acted) = day_of(&a.date, "") else {
             return Err(format!(
                 "the {} in this contract's actions is dated {:?}, which is not a day a \
                  price can be placed before or after. Adjusting around it would hand \
@@ -372,22 +372,57 @@ const EXACT_IN_A_FLOAT: u64 = 1 << 53;
 /// there is — so the whole series would be scaled by all of them. What tells
 /// the two apart is what follows: a day is followed by a time or by nothing,
 /// never by a ninth digit.
-fn day_of(bar_date: &str) -> Option<String> {
+fn day_of(bar_date: &str, zone: &str) -> Option<String> {
     let day: String = bar_date.chars().take(8).collect();
     if day.len() != 8 || !day.bytes().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    match bar_date.as_bytes().get(8) {
-        None | Some(b' ' | b'-' | b'T') => {}
-        Some(c) if !c.is_ascii_digit() => {}
+    let carries_a_time = match bar_date.as_bytes().get(8) {
+        None => false,
+        Some(b' ' | b'-' | b'T') => true,
+        Some(c) if !c.is_ascii_digit() => true,
         Some(_) => return None,
-    }
+    };
     // Eight digits are a shape, not a date. The thirteenth month and the
     // thirty-second of a month both pass the shape and name no day, and read
     // as text they sort among the days that do — so an action stated on one
     // would move the prices either side of a day that never happened.
     crate::protocol::datetime::ib_datetime_to_unix(&format!("{day}-00:00:00"))?;
+    // An action is dated on the day the exchange had, and a stamp below a day
+    // arrives stated in UTC — so the two are only the same day for a session
+    // that does not cross midnight there. A morning in Sydney is the evening
+    // before in UTC, and an American evening session is the next day: taken
+    // from the wire's own eight digits, the first hour of an ex-date was
+    // divided by the ratio a second time and the last hour before one was left
+    // on the old scale, which is the wrong number under the adjusted name that
+    // this fold exists to prevent.
+    //
+    // Only for a stamp that has not already been put on the contract's clock:
+    // one that has says so by naming the zone, and converting it again would
+    // move it twice.
+    if carries_a_time && !zone.is_empty() && !already_on_a_named_clock(bar_date) {
+        let local = crate::protocol::datetime::bar_date_as_asked(bar_date, 1, zone);
+        let there: String = local.chars().take(8).collect();
+        if there.len() == 8 && there.bytes().all(|c| c.is_ascii_digit()) {
+            return Some(there);
+        }
+    }
     Some(day)
+}
+
+/// Whether a stamp already states the clock it is written on.
+///
+/// A stamp handed to a caller carries the zone's name after the time; one read
+/// off the wire does not.
+fn already_on_a_named_clock(bar_date: &str) -> bool {
+    bar_date
+        .rsplit(|c: char| c.is_ascii_whitespace())
+        .next()
+        .is_some_and(|last| {
+            !last.is_empty()
+                && !last.bytes().all(|c| c.is_ascii_digit() || c == b':')
+                && crate::protocol::datetime::clock_named(last).is_some()
+        })
 }
 
 pub fn scale_bars(
@@ -395,7 +430,7 @@ pub fn scale_bars(
 ) -> Result<Vec<crate::types::model::BarData>, String> {
     bars.into_iter()
         .map(|mut b| {
-            let Some(day) = day_of(&b.date) else {
+            let Some(day) = day_of(&b.date, &b.timezone) else {
                 return Err(format!(
                     "a bar dated {:?} states no day to compare an action against, so \
                      putting it on one scale would be guesswork", b.date,
@@ -464,13 +499,14 @@ pub fn scale_bars(
 /// and the count that made it alone, so the round trip carries those across
 /// untouched.
 pub fn scale_historical_bars(
-    bars: Vec<crate::control::historical::HistoricalBar>, actions: &[Adjustment],
+    bars: Vec<crate::control::historical::HistoricalBar>, actions: &[Adjustment], zone: &str,
 ) -> Result<Vec<crate::control::historical::HistoricalBar>, String> {
     let model = bars
         .into_iter()
         .map(|b| crate::types::model::BarData {
             date: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
-            volume: b.volume, wap: b.wap, bar_count: b.count as i32, timezone: String::new(),
+            volume: b.volume, wap: b.wap, bar_count: b.count as i32,
+            timezone: zone.to_string(),
         })
         .collect();
     Ok(scale_bars(model, actions)?
@@ -485,6 +521,68 @@ pub fn scale_historical_bars(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bar below a day is folded on the exchange's day, not on UTC's.
+    ///
+    /// An action is dated on the day the exchange had. A stamp below a day
+    /// arrives stated in UTC, so for any session that crosses midnight there
+    /// the two are different days: a morning in Sydney is the evening before
+    /// in UTC, and an American evening session is already the next day. Taken
+    /// from the wire's own eight digits, the first hour of an ex-date was
+    /// divided by the ratio a second time and the last hour before one was
+    /// left on the old scale — the wrong number under the adjusted name that
+    /// this fold exists to prevent.
+    #[test]
+    fn a_timed_bar_is_folded_on_the_day_the_exchange_was_having() {
+        // Ten for one on the tenth, so a price before it is divided by ten.
+        let split = vec![Adjustment {
+            kind: Some(AdjustmentKind::Split),
+            date: "20240610".to_string(),
+            value: "10".into(),
+            ..Default::default()
+        }];
+
+        // Sydney, 09:00 on the tenth — the ex-date, so this price is already
+        // restated and nothing moves it. UTC was still on the ninth.
+        let sydney_morning = crate::types::model::BarData {
+            date: "20240609-23:00:00".to_string(), open: 100.0, high: 100.0,
+            low: 100.0, close: 100.0, volume: 10, wap: 100.0, bar_count: 1,
+            timezone: "Australia/Sydney".to_string(),
+        };
+        // New York, 20:30 on the ninth — the evening before, so this price is
+        // the old one and is divided by the ratio. UTC had turned the tenth.
+        let new_york_evening = crate::types::model::BarData {
+            date: "20240610-00:30:00".to_string(), open: 1000.0, high: 1000.0,
+            low: 1000.0, close: 1000.0, volume: 10, wap: 1000.0, bar_count: 1,
+            timezone: "US/Eastern".to_string(),
+        };
+
+        let out = scale_bars(vec![sydney_morning, new_york_evening], &split)
+            .expect("both bars state a day");
+        assert!((out[0].close - 100.0).abs() < 1e-9,
+            "already past the action where it traded, so it is left alone: {}", out[0].close);
+        assert!((out[1].close - 100.0).abs() < 1e-9,
+            "still before it where it traded, so it is divided by the ratio: {}", out[1].close);
+    }
+
+    /// A stamp already put on the contract's clock is not moved again.
+    ///
+    /// One handed to a caller says which clock it is on. Converted a second
+    /// time it would shift by the offset twice, which is the same defect in
+    /// the other direction.
+    #[test]
+    fn a_stamp_that_names_its_clock_is_taken_as_it_stands() {
+        assert_eq!(day_of("20240610 09:30:00 US/Eastern", "US/Eastern").as_deref(), Some("20240610"));
+        assert_eq!(day_of("20240610 00:30:00 Australia/Sydney", "Australia/Sydney").as_deref(),
+            Some("20240610"));
+        // And one off the wire is put on it.
+        assert_eq!(day_of("20240611-00:30:00", "US/Eastern").as_deref(), Some("20240610"));
+        assert_eq!(day_of("20240609-23:30:00", "Australia/Sydney").as_deref(), Some("20240610"));
+        // A day on its own states no time to convert, whatever clock is named.
+        assert_eq!(day_of("20240610", "Australia/Sydney").as_deref(), Some("20240610"));
+        // And with no clock named, the stamp is all there is.
+        assert_eq!(day_of("20240611-00:30:00", "").as_deref(), Some("20240611"));
+    }
 
     /// A future rolling into its next month is read, and moves no scale.
     ///
@@ -726,7 +824,7 @@ mod tests {
             volume, count: 7,
         };
         let out = scale_historical_bars(
-            vec![bar("20240607", 1208.88, 100), bar("20240610", 121.79, 100)], &split,
+            vec![bar("20240607", 1208.88, 100), bar("20240610", 121.79, 100)], &split, "",
         )
         .expect("both bars state a day");
         assert!((out[0].close - 120.888).abs() < 1e-9, "before: {}", out[0].close);
