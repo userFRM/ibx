@@ -674,7 +674,7 @@ def account_snapshot()
 
 #### `place_order`
 
-Place an order.  A request the client will not send is reported under the number the reference client reports it under, and the call returns. A program moved from that client has an `error` handler and no exception handling around a request, because nothing it was written against raises there.
+Place an order.  A request the client will not send is reported under the number the reference client reports it under, and the call returns. A program moved from that client has an `error` handler and no exception handling around a request, because nothing it was written against raises there. A send the engine can no longer take is reported the same way, stating what has already reached the engine and what has not.
 
 ```python
 def place_order(order_id, contract, order)
