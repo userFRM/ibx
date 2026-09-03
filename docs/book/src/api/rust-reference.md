@@ -271,7 +271,7 @@ pub fn session(&self) -> &crate::auth::resume::ResumableSession
 
 #### `historical_data`
 
-Bars for a contract, as `req_historical_data` asks for them. `ADJUSTED_LAST` is served here and by `req_historical_data` alike. The venue has no adjusted series to pass through: what it serves is raw, and adjusting it needs the contract's actions in hand before a bar can be handed to anyone. This call waits and hands back the folded series in one piece; `req_historical_data` holds the raw bars until the actions arrive and then delivers them folded, bar by bar on its callbacks. Both require the venue's id for the contract, which the actions are asked for by.
+Bars for a contract, as `req_historical_data` asks for them. The venue has no adjusted series to pass through: what it serves is raw trades, and the two series the vendor states as adjusted — TRADES and ADJUSTED_LAST — are those folded with the contract's own actions. The fold is made once the series is whole and the actions are in hand, before a bar is handed to anyone. This call waits and hands the series back in one piece; `req_historical_data` delivers the same bars one at a time on its callbacks. Both ask for the actions by the venue's id for the contract, and refuse a contract that does not carry it.
 
 ```rust
 pub fn historical_data( &self, contract: &Contract, end_date_time: &str, duration: &str, bar_size: &str, what_to_show: &str, use_rth: bool, ) -> Result<Vec<BarData>, Refusal>

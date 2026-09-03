@@ -2452,9 +2452,11 @@ fn conditions_round_trip_phase_live() {
 /// The assertion is deliberately not "this bar equals that number". A series
 /// that crosses a ten-for-one split steps by ten, and the point of adjusting it
 /// is that it stops doing that — so what is checked is the size of the biggest
-/// step either side of the same request. Raw it must be large; adjusted it must
-/// not be. That holds whatever the venue's exact closes are on the day, which a
-/// test has no business pinning.
+/// step in each series over the same window. The vendor states TRADES as
+/// adjusted for splits and ADJUSTED_LAST as adjusted for dividends as well, so
+/// neither may step; the split kind is what this window is built around. That
+/// holds whatever the venue's exact closes are on the day, which a test has no
+/// business pinning.
 ///
 /// Run: cargo test --test ib_paper_compat adjusted_series_and_the_clock_live -- --ignored --nocapture
 #[test]
@@ -2521,20 +2523,24 @@ fn adjusted_series_and_the_clock_live() {
             .unwrap_or_else(|e| panic!("{what}: {e}"))
     };
 
-    let raw = ask("TRADES");
+    // The vendor states both names as adjusted for splits, so neither may
+    // step across the one in this window. Before that was done, TRADES was
+    // the raw series the venue serves, and this same check measured it
+    // stepping by the ratio here.
+    let trades = ask("TRADES");
     let adjusted = ask("ADJUSTED_LAST");
-    println!("\n  {} raw bars, {} adjusted bars", raw.len(), adjusted.len());
-    assert_eq!(raw.len(), adjusted.len(), "adjusting a series does not change how many bars are in it");
+    println!("\n  {} TRADES bars, {} ADJUSTED_LAST bars", trades.len(), adjusted.len());
+    assert_eq!(trades.len(), adjusted.len(), "adjusting a series does not change how many bars are in it");
 
-    let (raw_step, raw_where) = biggest_step(&raw);
+    let (trades_step, trades_where) = biggest_step(&trades);
     let (adj_step, adj_where) = biggest_step(&adjusted);
-    println!("  biggest step raw:      {raw_step:.3}x   {raw_where}");
-    println!("  biggest step adjusted: {adj_step:.3}x   {adj_where}");
+    println!("  biggest step TRADES:        {trades_step:.3}x   {trades_where}");
+    println!("  biggest step ADJUSTED_LAST: {adj_step:.3}x   {adj_where}");
 
     assert!(
-        raw_step > 5.0,
-        "the raw series is expected to step across the split; it stepped {raw_step:.3}x, so \
-         either the venue now serves something adjusted or this window missed the split",
+        trades_step < 1.5,
+        "TRADES is stated as adjusted for splits, and still steps {trades_step:.3}x at \
+         {trades_where} — either the window missed the split or the fold did not",
     );
     assert!(
         adj_step < 1.5,
@@ -2542,10 +2548,11 @@ fn adjusted_series_and_the_clock_live() {
          scale is exactly what should have removed that",
     );
 
-    // Volume runs the other way, so the same day states more of it once scaled.
-    if let (Some(r), Some(a)) = (raw.first(), adjusted.first()) {
-        println!("  first bar {}: close {} -> {}, volume {} -> {}", r.date, r.close, a.close, r.volume, a.volume);
-        assert!(a.volume >= r.volume, "a split multiplies the count it divides out of the price");
+    // One fold states both series, and this client's applies no cash-dividend
+    // adjustment yet, so what comes back under the two names is the same
+    // series. Said once, for the window asked.
+    if let (Some(t), Some(a)) = (trades.first(), adjusted.first()) {
+        println!("  first bar {}: close {} / {}, volume {} / {}", t.date, t.close, a.close, t.volume, a.volume);
     }
 
     // ── The clock, at both precisions ──
@@ -2786,8 +2793,9 @@ fn what_kinds_of_action_the_venue_states_live() {
     }
 
     // The strongest thing a session can say about the reciprocal branch: a
-    // series across a real spin-off, raw and adjusted, from the venue's own
-    // bars. The split was established this way and the spin-off was not.
+    // series across a real spin-off, asked under both names this client
+    // adjusts, from the venue's own bars. The split was established this way
+    // and the spin-off was not.
     let ge = client.qualify_contract(&ApiContract {
         symbol: "GE".into(), sec_type: "STK".into(), exchange: "SMART".into(),
         currency: "USD".into(), ..Default::default()
@@ -2808,14 +2816,14 @@ fn what_kinds_of_action_the_venue_states_live() {
         };
         let ask = |what: &str| client.historical_data(&ge, "20230201-00:00:00", "2 M", "1 day", what, true);
         match (ask("TRADES"), ask("ADJUSTED_LAST")) {
-            (Ok(raw), Ok(adj)) if !raw.is_empty() => {
-                let (raw_step, raw_where) = step(&raw);
+            (Ok(trades), Ok(adj)) if !trades.is_empty() => {
+                let (trades_step, trades_where) = step(&trades);
                 let (adj_step, adj_where) = step(&adj);
                 println!("\n  a series across a real spin-off:");
-                println!("    raw:      {raw_step:.4}x  {raw_where}");
-                println!("    adjusted: {adj_step:.4}x  {adj_where}");
+                println!("    TRADES:        {trades_step:.4}x  {trades_where}");
+                println!("    ADJUSTED_LAST: {adj_step:.4}x  {adj_where}");
                 assert!(
-                    adj_step <= raw_step + 1e-9,
+                    adj_step <= trades_step + 1e-9,
                     "putting a series on one scale must not make its biggest step larger",
                 );
             }

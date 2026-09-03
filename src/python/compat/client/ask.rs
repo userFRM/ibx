@@ -306,14 +306,14 @@ impl EClient {
     /// Bars for a contract over a period, handed back rather than delivered a
     /// bar at a time to a callback.
     ///
-    /// `ADJUSTED_LAST` is served here and by `reqHistoricalData` alike. The
-    /// venue has no adjusted series to pass through: an adjusted one is built
-    /// from the raw trades and the contract's actions, which means holding both
-    /// before a bar is handed over. This call waits and hands the folded series
-    /// back in one piece; `reqHistoricalData` holds the raw bars until the
-    /// actions arrive and then delivers them folded, bar by bar on its
-    /// callbacks. Both are asked for by the venue's id for the contract, which
-    /// the actions need.
+    /// The venue has no adjusted series to pass through: what it serves is raw
+    /// trades, and the two series the vendor states as adjusted — TRADES and
+    /// ADJUSTED_LAST — are those folded with the contract's own actions. The
+    /// fold is made once the series is whole and the actions are in hand,
+    /// before a bar is handed to anyone. This call waits and hands the series
+    /// back in one piece; `reqHistoricalData` delivers the same bars one at a
+    /// time on its callbacks. Both ask for the actions by the venue's id for
+    /// the contract, and refuse a contract that does not carry it.
     #[pyo3(signature = (contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth=1))]
     fn historical_data(
         &self,
@@ -325,39 +325,6 @@ impl EClient {
         what_to_show: &str,
         use_rth: i32,
     ) -> PyResult<Vec<BarData>> {
-        if what_to_show.eq_ignore_ascii_case("ADJUSTED_LAST") {
-            let bars = self.historical_data(
-                py, contract, end_date_time, duration_str, bar_size_setting, "TRADES", use_rth,
-            )?;
-            // From the first bar to today rather than to the last: a split
-            // last month moves a series that ended last year. The series
-            // arrives oldest first, so its first bar is its earliest day.
-            let Some(first) = bars.first() else { return Ok(bars) };
-            let from: String = first.date.chars().take(8).collect();
-            let today: String = crate::protocol::datetime::chrono_free_timestamp()
-                .chars().take(8).collect();
-            let actions = self.actions_for(py, contract, &from, &today)?;
-            if actions.is_empty() {
-                return Ok(bars);
-            }
-            let raw = bars
-                .iter()
-                .map(|b| crate::types::model::BarData {
-                    date: b.date.clone(), open: b.open, high: b.high, low: b.low,
-                    close: b.close, volume: b.volume, wap: b.wap,
-                    bar_count: b.bar_count, timezone: b.timezone.clone(),
-                })
-                .collect();
-            let scaled = crate::control::adjustments::scale_bars(raw, &actions)
-                .map_err(PyValueError::new_err)?;
-            return Ok(scaled
-                .into_iter()
-                .map(|b| BarData::new(
-                    b.date, b.open, b.high, b.low, b.close, b.volume, b.wap,
-                    b.bar_count, b.timezone,
-                ))
-                .collect());
-        }
         let shared = self.connected_shared()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else. Marked here because this is where
@@ -393,6 +360,14 @@ impl EClient {
             }
             None
         })?;
+        // A series that could not be folded — an action this client cannot
+        // classify, a factor it cannot read — is ended with nothing in it and
+        // the reason stated beside it. The empty completion above releases
+        // the wait, so the reason is read here rather than handed back as
+        // though nothing were the answer.
+        if let Some((code, msg)) = shared.reference.take_error_for(req_id as u32) {
+            return Err(PyRuntimeError::new_err(format!("{msg} ({code})")));
+        }
 
         Ok(bars
             .into_iter()

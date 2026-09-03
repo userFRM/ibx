@@ -316,21 +316,18 @@ impl EClient {
 
     /// Bars for a contract, as `req_historical_data` asks for them.
     ///
-    /// `ADJUSTED_LAST` is served here and by `req_historical_data` alike. The
-    /// venue has no adjusted series to pass through: what it serves is raw, and
-    /// adjusting it needs the contract's actions in hand before a bar can be
-    /// handed to anyone. This call waits and hands back the folded series in
-    /// one piece; `req_historical_data` holds the raw bars until the actions
-    /// arrive and then delivers them folded, bar by bar on its callbacks. Both
-    /// require the venue's id for the contract, which the actions are asked for
-    /// by.
+    /// The venue has no adjusted series to pass through: what it serves is raw
+    /// trades, and the two series the vendor states as adjusted — TRADES and
+    /// ADJUSTED_LAST — are those folded with the contract's own actions. The
+    /// fold is made once the series is whole and the actions are in hand,
+    /// before a bar is handed to anyone. This call waits and hands the series
+    /// back in one piece; `req_historical_data` delivers the same bars one at
+    /// a time on its callbacks. Both ask for the actions by the venue's id for
+    /// the contract, and refuse a contract that does not carry it.
     pub fn historical_data(
         &self, contract: &Contract, end_date_time: &str, duration: &str,
         bar_size: &str, what_to_show: &str, use_rth: bool,
     ) -> Result<Vec<BarData>, Refusal> {
-        if what_to_show.eq_ignore_ascii_case("ADJUSTED_LAST") {
-            return self.adjusted_bars(contract, end_date_time, duration, bar_size, use_rth);
-        }
         // One question at a time: see `EClient::asking`.
         // Named before the turn is taken. A contract given by the venue's id
         // alone is filled in by asking the venue for it, which is one of these
@@ -372,52 +369,6 @@ impl EClient {
             req_id, contract, end_date_time, duration, bar_size, what_to_show, use_rth, 1, false,
         )?;
         self.wait_for(&mut collector, &state, &format!("{duration} of bars for {}", contract.symbol))
-    }
-
-    /// What traded, put on the scale it trades on now.
-    ///
-    /// The trades the venue serves are raw: a series crossing a ten-for-one
-    /// split steps by ten with nothing in it saying so. This asks for those
-    /// trades and for the contract's own actions, and puts the two together.
-    ///
-    /// A split, a stock dividend and a spin-off each move the scale, and a bar
-    /// dated before one is divided by the factor it states while its volume is
-    /// multiplied by it: the same shares changed hands either side. A cash
-    /// dividend and a rights offer do not move it — one is a payment out of
-    /// the price rather than a restatement of it, the other moves what a holder
-    /// paid rather than what the share is quoted at — so neither is applied
-    /// here, and a caller wanting them can read them from
-    /// [`corporate_actions`](Self::corporate_actions).
-    ///
-    /// The actions are asked for from the first bar to today rather than to
-    /// the end of the bars: a split last month moves a series that ended last
-    /// year, and stopping at the last bar would leave it on a scale nothing
-    /// trades on.
-    fn adjusted_bars(
-        &self, contract: &Contract, end_date_time: &str, duration: &str,
-        bar_size: &str, use_rth: bool,
-    ) -> Result<Vec<BarData>, Refusal> {
-        let bars = self.historical_data(
-            contract, end_date_time, duration, bar_size, "TRADES", use_rth,
-        )?;
-        // The series arrives oldest first, as the reference client's callers
-        // read it, so its first bar is its earliest day.
-        let Some(first) = bars.first() else { return Ok(bars) };
-        let from: String = first.date.chars().take(8).collect();
-        let today: String = crate::protocol::datetime::chrono_free_timestamp()
-            .chars().take(8).collect();
-        let actions = self.corporate_actions(contract, &from, &today)?;
-        // What the fold actually receives, over the range it asked. A series
-        // handed back unchanged under the adjusted name is either an empty
-        // answer here or a range that missed the action, and this says which.
-        log::debug!(
-            "adjusted_bars {}: {} bar(s) [{from}..{today}], {} action(s) to fold",
-            contract.symbol, bars.len(), actions.len(),
-        );
-        if actions.is_empty() {
-            return Ok(bars);
-        }
-        crate::control::adjustments::scale_bars(bars, &actions).map_err(Refusal::no_answer)
     }
 
     /// A contract's corporate actions, asked for and waited on.

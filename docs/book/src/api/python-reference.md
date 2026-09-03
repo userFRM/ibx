@@ -305,7 +305,7 @@ def corporate_actions(contract, start_date, end_date)
 
 #### `historical_data`
 
-Bars for a contract over a period, handed back rather than delivered a bar at a time to a callback.  `ADJUSTED_LAST` is served here and by `reqHistoricalData` alike. The venue has no adjusted series to pass through: an adjusted one is built from the raw trades and the contract's actions, which means holding both before a bar is handed over. This call waits and hands the folded series back in one piece; `reqHistoricalData` holds the raw bars until the actions arrive and then delivers them folded, bar by bar on its callbacks. Both are asked for by the venue's id for the contract, which the actions need.
+Bars for a contract over a period, handed back rather than delivered a bar at a time to a callback.  The venue has no adjusted series to pass through: what it serves is raw trades, and the two series the vendor states as adjusted — TRADES and ADJUSTED_LAST — are those folded with the contract's own actions. The fold is made once the series is whole and the actions are in hand, before a bar is handed to anyone. This call waits and hands the series back in one piece; `reqHistoricalData` delivers the same bars one at a time on its callbacks. Both ask for the actions by the venue's id for the contract, and refuse a contract that does not carry it.
 
 ```python
 def historical_data(contract, end_date_time, duration_str, bar_size_setting, what_to_show, use_rth=1)

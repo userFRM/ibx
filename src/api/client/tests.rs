@@ -3246,6 +3246,25 @@ fn req_historical_data_refuses_adjusted_last_kept_up_to_date() {
     assert!(rx.try_recv().is_err(), "nothing may reach the engine");
 }
 
+/// The waiting call is served by the same fold as the callback path, so a
+/// contract with no venue id is refused where the request is made — the fold
+/// cannot ask for the actions without it. Fetching the raw series first and
+/// finding out afterwards would make the caller wait out the answer timeout
+/// for a refusal that was known at once.
+#[test]
+fn the_waiting_call_refuses_adjusted_last_without_the_venue_id() {
+    let (client, rx, _shared) = test_client();
+    let unqualified = Contract {
+        symbol: "SPY".into(), exchange: "SMART".into(), sec_type: "STK".into(),
+        ..Default::default()
+    };
+    let err = client
+        .historical_data(&unqualified, "", "1 Y", "1 day", "ADJUSTED_LAST", true)
+        .unwrap_err();
+    assert!(err.message.contains("venue's id"), "got: {err}");
+    assert!(rx.try_recv().is_err(), "nothing may reach the engine");
+}
+
 /// An engine that has gone is not a request that was malformed. A caller that
 /// branches on the code has to be able to tell a session it can reopen from a
 /// request it has to fix.

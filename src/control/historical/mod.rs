@@ -81,9 +81,8 @@ impl BarDataType {
                 "an adjusted series is built from the raw trades and the contract's own \
                  actions, so it is not a live bar the venue streams. Ask for it on a \
                  historical bar request — `req_historical_data` and \
-                 `EClient::historical_data` both serve it — or build it by hand from \
-                 TRADES with `EClient::corporate_actions` and \
-                 `control::adjustments::scale_bars`"
+                 `EClient::historical_data` both serve it. Do not fold TRADES a second \
+                 time: it already comes back adjusted for splits"
                     .to_string(),
             ),
             "AGGTRADES" => Self::AggTrades,

@@ -114,8 +114,8 @@ pub(crate) struct HmdsState {
     /// `CcpState::start_scanner_enrichment`.
     pub(crate) cold_scanner_results: Vec<(u32, crate::control::scanner::ScannerResult)>,
     /// Every in-flight bar request's pages, held until the last is in so the
-    /// series is delivered oldest first and on one zone; one asked for adjusted
-    /// also waits there for the contract's actions.
+    /// series is delivered oldest first and on one zone; one that is to be
+    /// folded also waits there for the contract's actions.
     pub(crate) held: Vec<HeldSeries>,
 }
 
@@ -249,6 +249,27 @@ pub(crate) struct RtBarRequest {
     pub use_rth: bool,
 }
 
+/// Whether a held series is folded with the contract's actions before it is
+/// filed, and with which of them.
+///
+/// The vendor states two of its series as adjusted: TRADES is adjusted for
+/// splits but not dividends, and ADJUSTED_LAST for dividends as well. The
+/// venue serves raw trades either way, so both are one fold — one routine
+/// applies the actions — and they differ only in which kinds of action the
+/// fold is handed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fold {
+    /// Filed as the venue served it.
+    None,
+    /// Folded with the actions that move the scale — a split, a stock
+    /// dividend and a spin-off. A cash dividend is a payment out of the
+    /// price rather than a restatement of it, and stays out.
+    Splits,
+    /// Folded with every kind of action this client can apply. Which kinds
+    /// that is, the fold's own routine states.
+    Adjusted,
+}
+
 /// A historical bar request's pages, held until the last is in.
 ///
 /// The venue pages a long series and the pages arrive newest first, each
@@ -260,18 +281,19 @@ pub(crate) struct RtBarRequest {
 /// complete series for the dispatch pass to deliver bar by bar. The zone is the
 /// series' own: the first page that states one states it for the rest.
 ///
-/// A request asked for adjusted also waits for the contract's corporate
-/// actions. The venue serves no adjusted series — what it sends is raw trades,
-/// and an adjusted one is those folded with the actions — and every bar dated
-/// before a split is on the wrong scale until the split is known, so the
-/// actions are asked for once the series is whole and ordered, from its first
-/// bar's day to today, and the fold is made before anything is filed.
+/// A request that is to be folded — TRADES and ADJUSTED_LAST alike — also
+/// waits for the contract's corporate actions. The venue serves no adjusted
+/// series — what it sends is raw trades, and an adjusted one is those folded
+/// with the actions — and every bar dated before a split is on the wrong scale
+/// until the split is known, so the actions are asked for once the series is
+/// whole and ordered, from its first bar's day to today, and the fold is made
+/// before anything is filed.
 pub(crate) struct HeldSeries {
     /// The caller's request, which the series is filed and delivered under.
     pub(crate) req_id: u32,
     /// Whether the series is to be folded with the contract's actions before
-    /// it is filed.
-    pub(crate) adjusted: bool,
+    /// it is filed, and with which of them.
+    pub(crate) fold: Fold,
     /// The venue's id for the contract, which its corporate actions are asked
     /// for by.
     pub(crate) con_id: u32,
@@ -355,18 +377,18 @@ impl HmdsState {
     fn fail_pending(&mut self, why: &str, shared: &SharedState) {
         let mut stranded: Vec<(u32, bool)> = Vec::new();
         // Every bar request holds its pages here, and it shares the caller's
-        // number with its query on `pending_historical` and, if adjusted, its
-        // actions query on `pending_adjustments`. Failed once, on the bar
-        // channels: its number is taken off the other two lists below so the
-        // caller is not told three times.
-        let adjusted_ids: std::collections::HashSet<u32> =
+        // number with its query on `pending_historical` and, if it is to be
+        // folded, its actions query on `pending_adjustments`. Failed once, on
+        // the bar channels: its number is taken off the other two lists below
+        // so the caller is not told three times.
+        let held_ids: std::collections::HashSet<u32> =
             self.held.iter().map(|a| a.req_id).collect();
         stranded.extend(self.held.drain(..).map(|a| (a.req_id, true)));
         // Bars are failed on the data channel as well as the error channel;
         // a caller blocked on the series needs the empty completion. Other
         // request kinds use the error channel alone.
         stranded.extend(self.pending_historical.drain(..)
-            .filter(|(_, rid)| !adjusted_ids.contains(rid)).map(|(_, rid)| (rid, true)));
+            .filter(|(_, rid)| !held_ids.contains(rid)).map(|(_, rid)| (rid, true)));
         stranded.extend(self.pending_head_ts.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_scanner.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_news.drain(..).map(|(_, rid)| (rid, false)));
@@ -378,7 +400,7 @@ impl HmdsState {
         self.answered_news.clear();
         stranded.extend(self.pending_histogram.drain(..).map(|(_, rid)| (rid, false)));
         stranded.extend(self.pending_adjustments.drain(..)
-            .filter(|(_, rid, _)| !adjusted_ids.contains(rid)).map(|(_, rid, _)| (rid, false)));
+            .filter(|(_, rid, _)| !held_ids.contains(rid)).map(|(_, rid, _)| (rid, false)));
         stranded.extend(self.pending_schedule.drain(..).map(|(_, rid, _)| (rid, false)));
         stranded.extend(self.pending_ticks.drain(..).map(|(_, rid, _)| (rid, false)));
         if stranded.is_empty() {
@@ -1599,6 +1621,20 @@ fn build_tbt_query(
                 }
             }
         };
+        // The vendor states two series as adjusted, and both are the raw
+        // trades under the names they go out by: ADJUSTED_LAST is folded with
+        // every kind of action this client can apply, and TRADES with the ones
+        // that move the scale — the vendor documents it as adjusted for
+        // splits, but not dividends. A raw series that crosses a split steps
+        // by the ratio with nothing in it saying so, which is why neither is
+        // filed before the fold. Every other series is what the venue served.
+        let fold = if adjusted {
+            Fold::Adjusted
+        } else if data_type == crate::control::historical::BarDataType::Trades {
+            Fold::Splits
+        } else {
+            Fold::None
+        };
         let bs = match crate::control::historical::BarSize::from_api_str(bar_size) {
             Ok(bs) => bs,
             Err(e) => {
@@ -1644,11 +1680,11 @@ fn build_tbt_query(
         }
         self.pending_historical.push((query_id, req_id));
         // Every request's pages are held until the last is in, so the series
-        // goes up oldest first whatever order the venue sends the pages in. An
-        // adjusted one also waits there for the contract's actions.
+        // goes up oldest first whatever order the venue sends the pages in. One
+        // that is to be folded also waits there for the contract's actions.
         self.held.push(HeldSeries {
             req_id,
-            adjusted,
+            fold,
             con_id: con_id as u32,
             sec_type: sec_type.to_string(),
             exchange: exchange.to_string(),
@@ -1714,15 +1750,16 @@ fn build_tbt_query(
                 );
             }
         }
-        // An adjusted series asks for its actions once, when the last page is
-        // in and the first bar is the oldest. Asked on the first bar to arrive,
-        // the range began after a split the series crossed and came back
-        // without it, and the fold ran with nothing to apply — three years of
-        // a contract that split ten for one were handed back raw under the
-        // adjusted name, with no error. It runs to today rather than to the
-        // last bar, because a split after the last bar moves the whole series.
+        // A series that is to be folded asks for its actions once, when the
+        // last page is in and the first bar is the oldest. Asked on the first
+        // bar to arrive, the range began after a split the series crossed and
+        // came back without it, and the fold ran with nothing to apply — three
+        // years of a contract that split ten for one were handed back raw
+        // under the adjusted name, with no error. It runs to today rather than
+        // to the last bar, because a split after the last bar moves the whole
+        // series.
         if self.held[pos].complete
-            && self.held[pos].adjusted
+            && self.held[pos].fold != Fold::None
             && !self.held[pos].actions_asked
             && let Some(from) = self.held[pos].bars.first()
                 .map(|b| b.time.chars().take(8).collect::<String>())
@@ -1741,13 +1778,13 @@ fn build_tbt_query(
         self.try_file_held(req_id, shared, event_tx);
     }
 
-    /// File a held series once it is whole — and, if it was asked for
-    /// adjusted, once the contract's actions are in hand and it is folded.
+    /// File a held series once it is whole — and, if it is to be folded, once
+    /// the contract's actions are in hand and it is folded.
     ///
     /// Filed as one complete response, which the dispatch pass delivers bar by
     /// bar and then ends. A fold that cannot be made — an action this client
     /// cannot classify, a factor it cannot read — is a stated refusal with the
-    /// terminal sentinel rather than the raw price handed back under the
+    /// terminal sentinel rather than the raw price handed back under an
     /// adjusted name.
     fn try_file_held(
         &mut self, req_id: u32, shared: &SharedState, event_tx: &Option<EventSink>,
@@ -1759,24 +1796,40 @@ fn build_tbt_query(
         if !entry.complete {
             return;
         }
-        // An adjusted series with bars waits for the actions those bars are
-        // scaled by. One with none needs no actions — there is nothing to
-        // scale, and the query is only sent for a first bar that never came —
-        // so it is filed empty rather than held for an answer nothing asked
-        // for, which is what the waiting call does with it.
-        if entry.adjusted && !entry.bars.is_empty() && entry.actions.is_none() {
+        // A series with bars that is to be folded waits for the actions those
+        // bars are scaled by. One with none needs no actions — there is
+        // nothing to scale, and the query is only sent for a first bar that
+        // never came — so it is filed empty rather than held for an answer
+        // nothing asked for, which is what the waiting call does with it.
+        if entry.fold != Fold::None && !entry.bars.is_empty() && entry.actions.is_none() {
             return;
         }
         let entry = self.held.remove(pos);
-        let folded = if entry.adjusted {
-            let actions = entry.actions.unwrap_or_default();
-            // On the clock the venue named beside the bars: an action is dated
-            // on the exchange's day and a stamp below a day arrives in UTC.
-            crate::control::adjustments::scale_historical_bars(
-                entry.bars, &actions, &entry.timezone,
-            )
-        } else {
-            Ok(entry.bars)
+        let folded = match entry.fold {
+            Fold::None => Ok(entry.bars),
+            fold => {
+                let actions = entry.actions.unwrap_or_default();
+                // The vendor states TRADES as adjusted for splits and no
+                // more, so its fold takes the kinds that move the scale and
+                // leaves a payment out of the price where it is. ADJUSTED_LAST
+                // takes every kind the fold can apply. A kind this client
+                // cannot name goes with either, so the fold refuses it rather
+                // than guess.
+                let actions: Vec<_> = if fold == Fold::Splits {
+                    actions
+                        .into_iter()
+                        .filter(|a| a.kind.map_or(true, |k| k.moves_the_scale()))
+                        .collect()
+                } else {
+                    actions
+                };
+                // On the clock the venue named beside the bars: an action is
+                // dated on the exchange's day and a stamp below a day arrives
+                // in UTC.
+                crate::control::adjustments::scale_historical_bars(
+                    entry.bars, &actions, &entry.timezone,
+                )
+            }
         };
         match folded {
             Ok(bars) => {
@@ -1793,7 +1846,7 @@ fn build_tbt_query(
                 }
             }
             Err(why) => {
-                log::warn!("adjusted req_id={} could not be folded: {why}", entry.req_id);
+                log::warn!("req_id={} could not be folded: {why}", entry.req_id);
                 super::push_hmds_error(shared, entry.req_id, why, true);
             }
         }
