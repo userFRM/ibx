@@ -2843,7 +2843,7 @@ impl ClientCore {
         // order and holds it Inactive with "Invalid value in field # 6246",
         // which names a tag no caller of this client has heard of.
         for condition in &order.conditions {
-            if let crate::types::OrderCondition::Execution { symbol, exchange, sec_type } = condition {
+            if let crate::types::OrderCondition::Execution { symbol, exchange, sec_type, .. } = condition {
                 for (what, value) in
                     [("symbol", symbol), ("exchange", exchange), ("security type", sec_type)]
                 {

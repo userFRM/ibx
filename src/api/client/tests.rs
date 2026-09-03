@@ -698,7 +698,7 @@ fn parse_algo_vwap() {
     let algo = parse_algo_params("vwap", &params).unwrap();
     match algo {
         AlgoParams::Vwap { max_pct_vol, start_time, end_time, .. } => {
-            assert!((max_pct_vol - 0.1).abs() < 1e-10);
+            assert_eq!(max_pct_vol, "0.1");
             assert_eq!(start_time, "09:30:00");
             assert_eq!(end_time, "16:00:00");
         }
@@ -721,7 +721,7 @@ fn parse_algo_arrival_price() {
     let algo = parse_algo_params("arrivalpx", &params).unwrap();
     match algo {
         AlgoParams::ArrivalPx { max_pct_vol, risk_aversion, .. } => {
-            assert!((max_pct_vol - 0.25).abs() < 1e-10);
+            assert_eq!(max_pct_vol, "0.25");
             assert!(matches!(risk_aversion, RiskAversion::Aggressive));
         }
         _ => panic!("wrong variant"),
@@ -741,7 +741,7 @@ fn parse_algo_dark_ice() {
     ];
     let algo = parse_algo_params("darkice", &params).unwrap();
     match algo {
-        AlgoParams::DarkIce { display_size, .. } => assert_eq!(display_size, 200),
+        AlgoParams::DarkIce { display_size, .. } => assert_eq!(display_size, "200"),
         _ => panic!("wrong variant"),
     }
 }
@@ -753,7 +753,7 @@ fn parse_algo_pct_vol() {
     ];
     let algo = parse_algo_params("pctvol", &params).unwrap();
     match algo {
-        AlgoParams::PctVol { pct_vol, .. } => assert!((pct_vol - 0.05).abs() < 1e-10),
+        AlgoParams::PctVol { pct_vol, .. } => assert_eq!(pct_vol, "0.05"),
         _ => panic!("wrong variant"),
     }
 }
@@ -5809,6 +5809,52 @@ fn the_last_thing_the_connection_did_is_what_a_caller_is_told() {
     shared.set_connection_restored();
     client.process_msgs(&mut w);
     assert!(client.is_connected(), "the connection came back");
+}
+
+/// A request made while the engine is still rebuilding a lost connection is
+/// carried, and only one made after the session has ended is refused.
+///
+/// Guarded on `connected`, which the loss clears and the recovery restores, a
+/// withdrawal made in between was answered 504 and left unapplied — so the
+/// feed the caller had withdrawn came back with the session. The reference
+/// client serves that window; what it answers 504 is a session with nothing
+/// to come back to, closed or given up on, which is what the engine records.
+#[test]
+fn a_request_during_a_recoverable_loss_is_carried_and_one_after_the_end_is_refused() {
+    use std::sync::atomic::Ordering;
+    let (client, _rx, shared) = test_client();
+    let mut w = RecordingWrapper::default();
+    let refused = |w: &RecordingWrapper| {
+        w.events.iter().filter(|e| e.starts_with("error:-1:504")).count()
+    };
+    let summary_asked = || {
+        client.core.account_summary_req.lock().unwrap().as_ref().map(|(id, _)| *id)
+    };
+
+    // Announced lost, with the engine still working on it: no end recorded.
+    shared.set_connection_lost();
+    client.process_msgs(&mut w);
+    assert!(!client.is_connected(), "the loss was announced");
+
+    client.positions_requested.store(true, Ordering::Release);
+    client.cancel_positions();
+    client.req_account_summary(7, "All", "NetLiquidation");
+    client.process_msgs(&mut w);
+    assert_eq!(refused(&w), 0, "a request during recovery was refused: {:?}", w.events);
+    assert!(!client.positions_requested.load(Ordering::Acquire), "the withdrawal took");
+    assert_eq!(summary_asked(), Some(7), "and so did the request");
+
+    // The engine gave up: the end is recorded, and the same calls are refused.
+    shared.reference.set_session_over(
+        crate::reliability::retry::DisconnectReason::EngineStopped.as_str(),
+    );
+    client.positions_requested.store(true, Ordering::Release);
+    client.cancel_positions();
+    client.req_account_summary(8, "All", "NetLiquidation");
+    client.process_msgs(&mut w);
+    assert_eq!(refused(&w), 2, "each is answered 504 once: {:?}", w.events);
+    assert!(client.positions_requested.load(Ordering::Acquire), "and nothing was applied");
+    assert_eq!(summary_asked(), Some(7), "the later request was not taken");
 }
 
 /// Two callers subscribing one contract at once: one holds it, the other

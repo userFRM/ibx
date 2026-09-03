@@ -737,6 +737,9 @@ pub enum OrderCondition {
         is_more: bool,
         /// 0=default, 1=last, 2=bid/ask, 3=bid, 4=ask
         trigger_method: u8,
+        /// Joined to the next condition with AND rather than OR. The last
+        /// condition joins nothing, and this is not written for it.
+        is_conjunction_connection: bool,
     },
     /// Trigger at a specific time.
     Time {
@@ -744,6 +747,9 @@ pub enum OrderCondition {
         time: String,
         /// Whether the condition is met above the value rather than below it.
         is_more: bool,
+        /// Joined to the next condition with AND rather than OR. The last
+        /// condition joins nothing, and this is not written for it.
+        is_conjunction_connection: bool,
     },
     /// Trigger based on margin cushion percentage.
     Margin {
@@ -751,6 +757,9 @@ pub enum OrderCondition {
         percent: u32,
         /// Whether the condition is met above the value rather than below it.
         is_more: bool,
+        /// Joined to the next condition with AND rather than OR. The last
+        /// condition joins nothing, and this is not written for it.
+        is_conjunction_connection: bool,
     },
     /// Trigger when a trade executes on a specific instrument.
     Execution {
@@ -760,6 +769,9 @@ pub enum OrderCondition {
         exchange: String,
         /// What kind of contract: `STK`, `OPT`, `FUT`, `CASH`, `IND`, `CRYPTO`.
         sec_type: String,
+        /// Joined to the next condition with AND rather than OR. The last
+        /// condition joins nothing, and this is not written for it.
+        is_conjunction_connection: bool,
     },
     /// Trigger when volume exceeds a threshold.
     Volume {
@@ -771,6 +783,9 @@ pub enum OrderCondition {
         volume: i64,
         /// Whether the condition is met above the value rather than below it.
         is_more: bool,
+        /// Joined to the next condition with AND rather than OR. The last
+        /// condition joins nothing, and this is not written for it.
+        is_conjunction_connection: bool,
     },
     /// Trigger on percentage price change.
     PercentChange {
@@ -782,7 +797,24 @@ pub enum OrderCondition {
         percent: f64,
         /// Whether the condition is met above the value rather than below it.
         is_more: bool,
+        /// Joined to the next condition with AND rather than OR. The last
+        /// condition joins nothing, and this is not written for it.
+        is_conjunction_connection: bool,
     },
+}
+
+impl OrderCondition {
+    /// Whether this condition is joined to the next with AND rather than OR.
+    pub fn is_conjunction_connection(&self) -> bool {
+        match self {
+            Self::Price { is_conjunction_connection, .. }
+            | Self::Time { is_conjunction_connection, .. }
+            | Self::Margin { is_conjunction_connection, .. }
+            | Self::Execution { is_conjunction_connection, .. }
+            | Self::Volume { is_conjunction_connection, .. }
+            | Self::PercentChange { is_conjunction_connection, .. } => *is_conjunction_connection,
+        }
+    }
 }
 
 /// Risk aversion level for Arrival Price and Close Price algos.
@@ -834,8 +866,11 @@ pub enum AlgoParams {
     /// VWAP: Volume-weighted average price.
     /// Tag 847=Vwap, 849=max_pct_vol.
     Vwap {
-        /// Maximum participation rate (0.0-1.0). Sent as tag 849.
-        max_pct_vol: f64,
+        /// The most of the market's volume the algorithm may take, as the
+        /// caller wrote it. A parameter is text on the wire and the venue is
+        /// handed the caller's own spelling; this client checks only that it
+        /// reads as a finite number. Sent as tag 849.
+        max_pct_vol: String,
         /// Don't take liquidity (0 or 1).
         no_take_liq: bool,
         /// Allow algo to continue past end time.
@@ -858,8 +893,9 @@ pub enum AlgoParams {
     /// Arrival Price: Minimize arrival price impact.
     /// Tag 847=ArrivalPx, 849=max_pct_vol.
     ArrivalPx {
-        /// The most of the market's volume the algorithm may take.
-        max_pct_vol: f64,
+        /// The most of the market's volume the algorithm may take, as the
+        /// caller wrote it (see [`AlgoParams::Vwap`]).
+        max_pct_vol: String,
         /// How hard it works against the price to finish.
         risk_aversion: RiskAversion,
         /// Whether it may keep working past that.
@@ -874,8 +910,9 @@ pub enum AlgoParams {
     /// Close Price: Target closing price.
     /// Tag 847=ClosePx, 849=max_pct_vol.
     ClosePx {
-        /// The most of the market's volume the algorithm may take.
-        max_pct_vol: f64,
+        /// The most of the market's volume the algorithm may take, as the
+        /// caller wrote it (see [`AlgoParams::Vwap`]).
+        max_pct_vol: String,
         /// How hard it works against the price to finish.
         risk_aversion: RiskAversion,
         /// Whether it must finish within its window.
@@ -888,8 +925,9 @@ pub enum AlgoParams {
     DarkIce {
         /// Whether it may keep working past that.
         allow_past_end_time: bool,
-        /// How much of an iceberg is shown at once.
-        display_size: u32,
+        /// How much of an iceberg is shown at once, as the caller wrote it;
+        /// checked to read as a whole number.
+        display_size: String,
         /// When the algorithm should begin.
         start_time: String,
         /// When it should stop.
@@ -898,8 +936,9 @@ pub enum AlgoParams {
     /// Percentage of Volume: Participate at % of volume.
     /// Tag 847=PctVol.
     PctVol {
-        /// Target participation rate (0.0-1.0). Sent as param pctVol.
-        pct_vol: f64,
+        /// Target participation rate, as the caller wrote it. Sent as param
+        /// pctVol.
+        pct_vol: String,
         /// Whether it may only add liquidity.
         no_take_liq: bool,
         /// When the algorithm should begin.

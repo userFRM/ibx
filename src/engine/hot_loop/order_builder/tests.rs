@@ -917,7 +917,7 @@ fn algo_wire_carries_the_attributes_and_keeps_its_algo_tags() {
         crate::types::OrderKind::Algo {
             price: 100 * crate::types::PRICE_SCALE,
             algo: AlgoParams::Vwap {
-                max_pct_vol: 0.25,
+                max_pct_vol: "0.25".into(),
                 no_take_liq: true,
                 allow_past_end_time: false,
                 start_time: String::new(),
@@ -939,6 +939,75 @@ fn algo_wire_carries_the_attributes_and_keeps_its_algo_tags() {
     assert_eq!(tag("5957=").as_deref(), Some("4"), "param count: {msg}");
     assert_eq!(tag("5958=").as_deref(), Some("noTakeLiq"));
     assert_eq!(tag("5960=").as_deref(), Some("1"));
+}
+
+/// A number the caller wrote reaches the venue in the caller's spelling.
+///
+/// An algorithm's parameters are text on the wire. The reference client
+/// forwards each value as it was given, and an unmodelled strategy has always
+/// gone through here the same way. A modelled one parsed the value into a
+/// number and wrote the number back out, so `5.0` went as `5` and `1e-05` as
+/// `0.00001`: two spellings of one order, depending on whether this client
+/// happened to know the strategy. The parse is this client's own check; the
+/// text is what goes.
+#[test]
+fn an_algo_number_reaches_the_wire_as_the_caller_wrote_it() {
+    use crate::types::model::TagValue;
+    let tv = |tag: &str, value: &str| TagValue { tag: tag.into(), value: value.into() };
+    let wire = |strategy: &str, params: &[TagValue]| {
+        let algo = crate::client_core::parse_algo_params(strategy, params).unwrap();
+        send_kind_for_test(
+            crate::types::OrderKind::Algo { price: 100 * crate::types::PRICE_SCALE, algo },
+            b'1',
+            crate::types::OrderAttrs::default(),
+        )
+    };
+    let pair = |key: &str, value: &str| format!("5958={key}\u{1}5960={value}\u{1}");
+
+    let vwap = wire("Vwap", &[tv("maxPctVol", "5.0")]);
+    let tag_849 = vwap.split('\u{1}').find_map(|f| f.strip_prefix("849="));
+    assert_eq!(tag_849, Some("5.0"), "{vwap}");
+
+    let pct = wire("PctVol", &[tv("pctVol", "1e-05")]);
+    assert!(pct.contains(&pair("pctVol", "1e-05")), "{pct}");
+
+    let ice = wire("DarkIce", &[tv("displaySize", "007")]);
+    assert!(ice.contains(&pair("displaySize", "007")), "{ice}");
+
+    // The unmodelled path, which this now agrees with.
+    let named = wire("Other", &[tv("maxPctVol", "5.0")]);
+    assert!(named.contains(&pair("maxPctVol", "5.0")), "{named}");
+}
+
+/// Conditions are joined the way the caller joined them.
+///
+/// Each condition states how it joins the next: `a` for AND, `o` for OR. The
+/// last joins nothing and states `n` whatever it holds, which is how the
+/// counterpart writes it. Every condition but the last used to go as `a`, so
+/// an order the caller joined with OR reached the venue joined with AND: not
+/// refused, a different order.
+#[test]
+fn conditions_are_joined_the_way_the_caller_joined_them() {
+    use crate::types::{OrderAttrs, OrderCondition, OrderKind};
+    let price = |is_conjunction_connection: bool| OrderCondition::Price {
+        con_id: 756733,
+        exchange: "SMART".into(),
+        price: 100 * crate::types::PRICE_SCALE,
+        is_more: true,
+        trigger_method: 0,
+        is_conjunction_connection,
+    };
+    let joins = |conditions: Vec<OrderCondition>| -> Vec<String> {
+        let msg = send_kind_for_test(
+            OrderKind::Limit { price: 100 * crate::types::PRICE_SCALE },
+            b'1',
+            OrderAttrs { conditions, ..Default::default() },
+        );
+        msg.split('\u{1}').filter_map(|f| f.strip_prefix("6137=").map(str::to_string)).collect()
+    };
+    assert_eq!(joins(vec![price(false), price(true)]), ["o", "n"], "OR, then the terminator");
+    assert_eq!(joins(vec![price(true), price(false), price(true)]), ["a", "o", "n"]);
+    assert_eq!(joins(vec![price(false)]), ["n"], "one condition joins nothing");
 }
 
 #[test]

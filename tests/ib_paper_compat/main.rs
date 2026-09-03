@@ -696,6 +696,7 @@ fn replace_one_refused_order_phase_live() {
         ("a conditional order", lmt(), OrderAttrs {
             conditions: vec![ibx::types::OrderCondition::Price {
                 con_id: 756733, exchange: "SMART".into(), price: 1_000_000_000, is_more: true, trigger_method: 0,
+                is_conjunction_connection: true,
             }],
             ..Default::default()
         }),
@@ -2381,7 +2382,7 @@ fn conditions_round_trip_phase_live() {
             // The exchange from the qualification reply, not the request: a
             // condition names the contract as the venue describes it.
             con_id: spy.con_id, exchange: spy.exchange.clone(),
-            price: PRICE_SCALE / 100, is_more: false, trigger_method: 0,
+            price: PRICE_SCALE / 100, is_more: false, trigger_method: 0, is_conjunction_connection: true,
         }];
 
         let id = next_order_id() as i64;

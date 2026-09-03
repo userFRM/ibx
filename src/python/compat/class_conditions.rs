@@ -22,6 +22,8 @@ pub struct PriceCondition {
     pub is_more: bool,
     #[pyo3(get, set)]
     pub trigger_method: i32,
+    #[pyo3(get, set)]
+    pub is_conjunction_connection: bool,
 }
 
 #[pymethods]
@@ -38,9 +40,9 @@ impl PriceCondition {
     // Empty, which is what the reference client holds for a condition nobody
     // named an exchange on. Named as SMART here, a condition watching a
     // contract that trades elsewhere watched it on a venue nobody chose.
-    #[pyo3(signature = (con_id=0, exchange=String::new(), price=0.0, is_more=true, trigger_method=0, **keywords))]
-    fn new(con_id: i64, exchange: String, price: f64, is_more: bool, trigger_method: i32, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
-        let made = Py::new(py, Self { con_id, exchange, price, is_more, trigger_method })?;
+    #[pyo3(signature = (con_id=0, exchange=String::new(), price=0.0, is_more=true, trigger_method=0, is_conjunction_connection=true, **keywords))]
+    fn new(con_id: i64, exchange: String, price: f64, is_more: bool, trigger_method: i32, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { con_id, exchange, price, is_more, trigger_method, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
     }
@@ -59,6 +61,7 @@ impl PriceCondition {
             price: crate::types::price_from_f64(self.price),
             is_more: self.is_more,
             trigger_method: self.trigger_method as u8,
+            is_conjunction_connection: self.is_conjunction_connection,
         }
     }
 }
@@ -71,6 +74,8 @@ pub struct TimeCondition {
     pub time: String,
     #[pyo3(get, set)]
     pub is_more: bool,
+    #[pyo3(get, set)]
+    pub is_conjunction_connection: bool,
 }
 
 #[pymethods]
@@ -84,9 +89,9 @@ impl TimeCondition {
     fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
 
     #[new]
-    #[pyo3(signature = (time="".to_string(), is_more=true, **keywords))]
-    fn new(time: String, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
-        let made = Py::new(py, Self { time, is_more })?;
+    #[pyo3(signature = (time="".to_string(), is_more=true, is_conjunction_connection=true, **keywords))]
+    fn new(time: String, is_more: bool, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { time, is_more, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
     }
@@ -99,7 +104,7 @@ impl TimeCondition {
 
 impl TimeCondition {
     pub fn to_internal(&self) -> OrderCondition {
-        OrderCondition::Time { time: self.time.clone(), is_more: self.is_more }
+        OrderCondition::Time { time: self.time.clone(), is_more: self.is_more, is_conjunction_connection: self.is_conjunction_connection }
     }
 }
 
@@ -111,6 +116,8 @@ pub struct MarginCondition {
     pub percent: u32,
     #[pyo3(get, set)]
     pub is_more: bool,
+    #[pyo3(get, set)]
+    pub is_conjunction_connection: bool,
 }
 
 #[pymethods]
@@ -124,9 +131,9 @@ impl MarginCondition {
     fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
 
     #[new]
-    #[pyo3(signature = (percent=0, is_more=true, **keywords))]
-    fn new(percent: u32, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
-        let made = Py::new(py, Self { percent, is_more })?;
+    #[pyo3(signature = (percent=0, is_more=true, is_conjunction_connection=true, **keywords))]
+    fn new(percent: u32, is_more: bool, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { percent, is_more, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
     }
@@ -138,7 +145,7 @@ impl MarginCondition {
 
 impl MarginCondition {
     pub fn to_internal(&self) -> OrderCondition {
-        OrderCondition::Margin { percent: self.percent, is_more: self.is_more }
+        OrderCondition::Margin { percent: self.percent, is_more: self.is_more, is_conjunction_connection: self.is_conjunction_connection }
     }
 }
 
@@ -152,6 +159,8 @@ pub struct ExecutionCondition {
     pub exchange: String,
     #[pyo3(get, set)]
     pub sec_type: String,
+    #[pyo3(get, set)]
+    pub is_conjunction_connection: bool,
 }
 
 #[pymethods]
@@ -165,9 +174,9 @@ impl ExecutionCondition {
     fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
 
     #[new]
-    #[pyo3(signature = (symbol="".to_string(), exchange="".to_string(), sec_type="".to_string(), **keywords))]
-    fn new(symbol: String, exchange: String, sec_type: String, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
-        let made = Py::new(py, Self { symbol, exchange, sec_type })?;
+    #[pyo3(signature = (symbol="".to_string(), exchange="".to_string(), sec_type="".to_string(), is_conjunction_connection=true, **keywords))]
+    fn new(symbol: String, exchange: String, sec_type: String, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { symbol, exchange, sec_type, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
     }
@@ -183,6 +192,7 @@ impl ExecutionCondition {
             symbol: self.symbol.clone(),
             exchange: self.exchange.clone(),
             sec_type: self.sec_type.clone(),
+            is_conjunction_connection: self.is_conjunction_connection,
         }
     }
 }
@@ -199,6 +209,8 @@ pub struct VolumeCondition {
     pub volume: i64,
     #[pyo3(get, set)]
     pub is_more: bool,
+    #[pyo3(get, set)]
+    pub is_conjunction_connection: bool,
 }
 
 #[pymethods]
@@ -212,9 +224,9 @@ impl VolumeCondition {
     fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
 
     #[new]
-    #[pyo3(signature = (con_id=0, exchange=String::new(), volume=0, is_more=true, **keywords))]
-    fn new(con_id: i64, exchange: String, volume: i64, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
-        let made = Py::new(py, Self { con_id, exchange, volume, is_more })?;
+    #[pyo3(signature = (con_id=0, exchange=String::new(), volume=0, is_more=true, is_conjunction_connection=true, **keywords))]
+    fn new(con_id: i64, exchange: String, volume: i64, is_more: bool, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { con_id, exchange, volume, is_more, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
     }
@@ -232,6 +244,7 @@ impl VolumeCondition {
             exchange: self.exchange.clone(),
             volume: self.volume,
             is_more: self.is_more,
+            is_conjunction_connection: self.is_conjunction_connection,
         }
     }
 }
@@ -248,6 +261,8 @@ pub struct PercentChangeCondition {
     pub change_percent: f64,
     #[pyo3(get, set)]
     pub is_more: bool,
+    #[pyo3(get, set)]
+    pub is_conjunction_connection: bool,
 }
 
 #[pymethods]
@@ -261,9 +276,9 @@ impl PercentChangeCondition {
     fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
 
     #[new]
-    #[pyo3(signature = (con_id=0, exchange=String::new(), change_percent=0.0, is_more=true, **keywords))]
-    fn new(con_id: i64, exchange: String, change_percent: f64, is_more: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
-        let made = Py::new(py, Self { con_id, exchange, change_percent, is_more })?;
+    #[pyo3(signature = (con_id=0, exchange=String::new(), change_percent=0.0, is_more=true, is_conjunction_connection=true, **keywords))]
+    fn new(con_id: i64, exchange: String, change_percent: f64, is_more: bool, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { con_id, exchange, change_percent, is_more, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
     }
@@ -281,6 +296,7 @@ impl PercentChangeCondition {
             exchange: self.exchange.clone(),
             percent: self.change_percent,
             is_more: self.is_more,
+            is_conjunction_connection: self.is_conjunction_connection,
         }
     }
 }
@@ -297,8 +313,9 @@ pub(crate) fn condition_from_internal(
     held: &OrderCondition,
 ) -> PyResult<Py<PyAny>> {
     Ok(match held {
-        OrderCondition::Price { con_id, exchange, price, is_more, trigger_method } => {
+        OrderCondition::Price { con_id, exchange, price, is_more, trigger_method, is_conjunction_connection } => {
             Py::new(py, PriceCondition {
+                is_conjunction_connection: *is_conjunction_connection,
                 con_id: *con_id,
                 exchange: exchange.clone(),
                 price: *price as f64 / PRICE_SCALE_F,
@@ -306,31 +323,36 @@ pub(crate) fn condition_from_internal(
                 trigger_method: *trigger_method as i32,
             })?.into_any()
         }
-        OrderCondition::Time { time, is_more } => Py::new(py, TimeCondition {
+        OrderCondition::Time { time, is_more, is_conjunction_connection } => Py::new(py, TimeCondition {
+            is_conjunction_connection: *is_conjunction_connection,
             time: time.clone(),
             is_more: *is_more,
         })?.into_any(),
-        OrderCondition::Margin { percent, is_more } => Py::new(py, MarginCondition {
+        OrderCondition::Margin { percent, is_more, is_conjunction_connection } => Py::new(py, MarginCondition {
+            is_conjunction_connection: *is_conjunction_connection,
             percent: *percent,
             is_more: *is_more,
         })?.into_any(),
-        OrderCondition::Execution { symbol, exchange, sec_type } => {
+        OrderCondition::Execution { symbol, exchange, sec_type, is_conjunction_connection } => {
             Py::new(py, ExecutionCondition {
+                is_conjunction_connection: *is_conjunction_connection,
                 symbol: symbol.clone(),
                 exchange: exchange.clone(),
                 sec_type: sec_type.clone(),
             })?.into_any()
         }
-        OrderCondition::Volume { con_id, exchange, volume, is_more } => {
+        OrderCondition::Volume { con_id, exchange, volume, is_more, is_conjunction_connection } => {
             Py::new(py, VolumeCondition {
+                is_conjunction_connection: *is_conjunction_connection,
                 con_id: *con_id,
                 exchange: exchange.clone(),
                 volume: *volume,
                 is_more: *is_more,
             })?.into_any()
         }
-        OrderCondition::PercentChange { con_id, exchange, percent, is_more } => {
+        OrderCondition::PercentChange { con_id, exchange, percent, is_more, is_conjunction_connection } => {
             Py::new(py, PercentChangeCondition {
+                is_conjunction_connection: *is_conjunction_connection,
                 con_id: *con_id,
                 exchange: exchange.clone(),
                 change_percent: *percent,
@@ -359,13 +381,15 @@ mod tests {
                 price: (412.25 * PRICE_SCALE_F) as Price,
                 is_more: true,
                 trigger_method: 0,
+                is_conjunction_connection: false,
             },
-            OrderCondition::Time { time: "20260101 09:30:00".into(), is_more: false },
+            OrderCondition::Time { time: "20260101 09:30:00".into(), is_more: false, is_conjunction_connection: true },
             OrderCondition::Volume {
                 con_id: 756733,
                 exchange: "SMART".into(),
                 volume: 1_000_000,
                 is_more: true,
+                is_conjunction_connection: true,
             },
         ];
         let held = crate::types::model::Order { conditions: sent.clone(), ..Default::default() };
@@ -390,6 +414,7 @@ camel_aliases_copy! {
     PriceCondition {
         get_is_more_alias set_is_more_alias isMore is_more bool;
         get_trigger_method_alias set_trigger_method_alias triggerMethod trigger_method i32;
+        get_is_conjunction_connection_alias set_is_conjunction_connection_alias isConjunctionConnection is_conjunction_connection bool;
     }
 }
 
@@ -408,6 +433,7 @@ camel_aliases_owned! {
 camel_aliases_copy! {
     VolumeCondition {
         get_is_more_alias set_is_more_alias isMore is_more bool;
+        get_is_conjunction_connection_alias set_is_conjunction_connection_alias isConjunctionConnection is_conjunction_connection bool;
     }
 }
 
@@ -421,11 +447,30 @@ camel_aliases_copy! {
     PercentChangeCondition {
         get_is_more_alias set_is_more_alias isMore is_more bool;
         get_change_percent_alias set_change_percent_alias changePercent change_percent f64;
+        get_is_conjunction_connection_alias set_is_conjunction_connection_alias isConjunctionConnection is_conjunction_connection bool;
     }
 }
 
 camel_aliases_owned! {
     PercentChangeCondition {
         get_exchange_alias set_exchange_alias exch exchange String;
+    }
+}
+
+camel_aliases_copy! {
+    TimeCondition {
+        get_is_conjunction_connection_alias set_is_conjunction_connection_alias isConjunctionConnection is_conjunction_connection bool;
+    }
+}
+
+camel_aliases_copy! {
+    MarginCondition {
+        get_is_conjunction_connection_alias set_is_conjunction_connection_alias isConjunctionConnection is_conjunction_connection bool;
+    }
+}
+
+camel_aliases_copy! {
+    ExecutionCondition {
+        get_is_conjunction_connection_alias set_is_conjunction_connection_alias isConjunctionConnection is_conjunction_connection bool;
     }
 }

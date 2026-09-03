@@ -2032,12 +2032,15 @@ fn push_order_attrs(
         K::Algo { algo, .. } => {
             let (algo_name, param_strs) = build_algo_tags(algo);
             fields.push((847, algo_name.to_string()));
-            // Tag 849 (maxPctVol) for the algos that use it.
+            // Tag 849 (maxPctVol) for the algos that use it, in the caller's
+            // own spelling: a parameter is text on the wire, and what the
+            // caller wrote is what goes. Written back out from a parsed
+            // number, `5.0` went as `5` and `1e-05` as `0.00001`.
             if let AlgoParams::Vwap { max_pct_vol, .. }
             | AlgoParams::ArrivalPx { max_pct_vol, .. }
             | AlgoParams::ClosePx { max_pct_vol, .. } = algo
             {
-                fields.push((849, format!("{max_pct_vol}")));
+                fields.push((849, max_pct_vol.clone()));
             }
             fields.push((5957, (param_strs.len() / 2).to_string()));
             // Key/value pairs: 5958=key, 5960=value, repeated.
@@ -2121,7 +2124,7 @@ fn build_algo_tags(algo: &AlgoParams) -> (&str, Vec<String>) {
                 "allowPastEndTime".into(),
                 if *allow_past_end_time { "1" } else { "0" }.into(),
                 "displaySize".into(),
-                display_size.to_string(),
+                display_size.clone(),
                 "startTime".into(),
                 start_time.clone(),
                 "endTime".into(),
@@ -2134,7 +2137,7 @@ fn build_algo_tags(algo: &AlgoParams) -> (&str, Vec<String>) {
                 "noTakeLiq".into(),
                 if *no_take_liq { "1" } else { "0" }.into(),
                 "pctVol".into(),
-                format!("{}", pct_vol),
+                pct_vol.clone(),
                 "startTime".into(),
                 start_time.clone(),
                 "endTime".into(),
@@ -2148,11 +2151,16 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
     let mut out = Vec::with_capacity(1 + conditions.len() * 11);
     out.push(conditions.len().to_string());
     for (i, cond) in conditions.iter().enumerate() {
+        // `a` or `o` as the caller joined this condition to the next, and
+        // `n` on the last, which joins nothing whatever it holds: the
+        // terminator is the position rather than a value a caller states.
+        // Every condition but the last used to go as `a`, so an order joined
+        // by OR reached the venue joined by AND.
         let is_last = i == conditions.len() - 1;
-        let conj = if is_last { "n" } else { "a" };
+        let conj = if is_last { "n" } else if cond.is_conjunction_connection() { "a" } else { "o" };
         let op = |is_more: bool| if is_more { ">=" } else { "<=" };
         match cond {
-            OrderCondition::Price { con_id, exchange, price, is_more, trigger_method } => {
+            OrderCondition::Price { con_id, exchange, price, is_more, trigger_method, .. } => {
                 out.push("1".into()); // condType
                 out.push(conj.into()); // conjunction
                 out.push(op(*is_more).into()); // operator
@@ -2172,7 +2180,7 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
             // price condition carries, and not the timezone on tag 6947,
             // which is written only for the condition types that carry one.
             // The venue holds an order under this until its time.
-            OrderCondition::Time { time, is_more } => {
+            OrderCondition::Time { time, is_more, .. } => {
                 out.push("3".into());
                 out.push(conj.into());
                 out.push(op(*is_more).into());
@@ -2185,7 +2193,7 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new()); // volume (unused)
                 out.push(String::new()); // execution (unused)
             }
-            OrderCondition::Margin { percent, is_more } => {
+            OrderCondition::Margin { percent, is_more, .. } => {
                 out.push("4".into());
                 out.push(conj.into());
                 out.push(op(*is_more).into());
@@ -2198,7 +2206,7 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(String::new());
                 out.push(String::new());
             }
-            OrderCondition::Execution { symbol, exchange, sec_type } => {
+            OrderCondition::Execution { symbol, exchange, sec_type, .. } => {
                 out.push("5".into());
                 out.push(conj.into());
                 out.push(String::new()); // operator (unused)
@@ -2216,7 +2224,7 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 let exch = if exchange == "SMART" || exchange == "BEST" { "*" } else { exchange.as_str() };
                 out.push(format!("symbol={symbol};exchange={exch};securityType={sec_type};"));
             }
-            OrderCondition::Volume { con_id, exchange, volume, is_more } => {
+            OrderCondition::Volume { con_id, exchange, volume, is_more, .. } => {
                 out.push("6".into());
                 out.push(conj.into());
                 out.push(op(*is_more).into());
@@ -2229,7 +2237,7 @@ fn build_condition_strings(conditions: &[OrderCondition]) -> Vec<String> {
                 out.push(volume.to_string()); // volume
                 out.push(String::new());
             }
-            OrderCondition::PercentChange { con_id, exchange, percent, is_more } => {
+            OrderCondition::PercentChange { con_id, exchange, percent, is_more, .. } => {
                 out.push("7".into());
                 out.push(conj.into());
                 out.push(op(*is_more).into());
