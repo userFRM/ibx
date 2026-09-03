@@ -726,12 +726,17 @@ impl EClient {
     /// This is what a caller adjusts with.
     /// [`scale_before`](crate::scale_before) turns a date
     /// and these actions into the factor a price from that date carries, so a
-    /// caller can put a series on one scale. Splits are what it applies: the
-    /// ratio is the value the action states, established against a contract
-    /// that split ten for one where the closes either side were 1208.88 and
-    /// 121.79. Dividends are stated here and not applied by it, because how
-    /// much of one comes off a historical price is a convention this client has
-    /// not established against anything it can check.
+    /// caller can put a series on one scale. Three kinds move a price: a stock
+    /// dividend, a split and a spin-off. The factor is the value the action
+    /// states, and a spin-off states its reciprocal — established against a
+    /// contract that split ten for one, where the closes either side were
+    /// 1208.88 and 121.79, and every close before it folds to a tenth.
+    ///
+    /// A cash dividend is stated here and moves nothing, and neither does a
+    /// rights offer; a future rollover carries no value to move anything by.
+    /// That is the scale the adjusted series is stated in, not a gap in this
+    /// client: a series that took dividends off as well would be on a second
+    /// scale, and nothing the venue serves beside it would be on that one.
     ///
     /// Empty until the venue has stated them for the contract, which it does
     /// once per contract on a historical request.
