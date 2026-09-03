@@ -4636,3 +4636,52 @@ fn a_refusal_naming_a_stranger_leaves_the_waiting_alone() {
     assert_eq!(ccp.pending_secdef.len(), 2, "neither was the one refused");
     assert!(shared.reference.drain_historical_errors().is_empty());
 }
+/// A refusal is cached in the shape of a parked order — status "Inactive"
+/// with the reason on `completed_status` — and the venue can still send a
+/// frame from before the refusal afterwards. Once the completion window has
+/// passed there is nothing left to refuse it but the terminal-status guard,
+/// so the replay must meet a finished order and leave the refusal as it is:
+/// reported as live, a strategy would hedge a position it does not have.
+#[test]
+fn a_replayed_frame_does_not_reopen_a_refused_order() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    // The venue refuses the order.
+    let refusal = exec_report_frame(&[
+        (39, "8"), (150, "0"),
+        (58, "No valid bid/ask"), (103, "1"),
+    ]);
+    ccp.handle_exec_report(&refusal, b"", &mut context, &shared, &None, "");
+    assert!(context.order(42).is_none(), "a refusal retires the order");
+
+    // Outlast the completion window the way a long session does: the memory
+    // is held by age with a hard cap of 65_536, so a cap of other
+    // completions evicts this one.
+    for id in 1000u64..(1000 + 65_536) {
+        shared.orders.push_completed_order(crate::types::CompletedOrder {
+            order_id: id,
+            instrument: 0,
+            status: crate::types::OrderStatus::Filled,
+            filled_qty: 0,
+            timestamp_ns: 0,
+        });
+    }
+    assert!(!shared.orders.recently_completed(42), "the window has passed");
+
+    // The frame the venue already sent once, before the refusal: the order
+    // parked. Replayed after the refusal, it must not stand in for it.
+    let replayed = exec_report_frame(&[(39, "I"), (150, "0")]);
+    ccp.handle_exec_report(&replayed, b"", &mut context, &shared, &None, "");
+
+    let info = shared.orders.get_order_info(42).expect("the refusal is still cached");
+    assert_eq!(info.order_state.status, "Inactive");
+    assert_eq!(
+        info.order_state.completed_status, "No valid bid/ask",
+        "a replayed frame does not reopen a refused order",
+    );
+    assert!(
+        shared.orders.drain_open_orders().is_empty(),
+        "a refused order is not listed in the open-order book",
+    );
+    assert!(context.order(42).is_none(), "nor tracked again in the engine");
+}
+

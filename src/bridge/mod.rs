@@ -665,6 +665,51 @@ mod tests {
         }
     }
 
+    /// A refused order is cached in the shape of a parked one — the status
+    /// vocabulary has no refused string, and the refusal rides the completed
+    /// status beside it. That shape is finished too: once the completion
+    /// window has passed there is nothing left to refuse a replayed frame but
+    /// the terminal-status guard, and a refused entry reported as live sends
+    /// a strategy hedging a position it does not hold.
+    #[test]
+    fn a_refused_order_is_not_returned_to_the_open_book() {
+        let shared = SharedState::new();
+        shared.orders.push_order_info(7, RichOrderInfo {
+            contract: api::Contract::default(),
+            order: api::Order::default(),
+            order_state: api::OrderState {
+                status: "Inactive".to_string(),
+                completed_status: "No valid bid/ask".to_string(),
+                ..Default::default()
+            },
+            last_exec: api::Execution::default(),
+        });
+
+        for open in ["Submitted", "PreSubmitted", "PendingCancel"] {
+            shared.orders.push_order_info(7, info(open));
+            let cached = shared.orders.get_order_info(7).unwrap();
+            assert_eq!(
+                cached.order_state.status, "Inactive",
+                "{open} must not overwrite a refusal",
+            );
+            assert_eq!(cached.order_state.completed_status, "No valid bid/ask");
+        }
+        assert!(
+            shared.orders.drain_open_orders().is_empty(),
+            "and the refusal stays out of the open-order snapshot",
+        );
+
+        // A genuinely parked order carries no completed status and has not
+        // finished: the venue can bring it back to working, so a working
+        // frame still supersedes it.
+        shared.orders.push_order_info(8, info("Inactive"));
+        shared.orders.push_order_info(8, info("Submitted"));
+        assert_eq!(
+            shared.orders.get_order_info(8).unwrap().order_state.status, "Submitted",
+            "a parked order is not finished and still moves",
+        );
+    }
+
     /// Completing an order evicts its cache row, so the cached status cannot be
     /// what remembers the order is done — the replayed frame finds nothing to
     /// refuse and inserts itself. This is the ordinary path, not an edge case.

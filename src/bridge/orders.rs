@@ -355,16 +355,6 @@ impl OrderState {
             .is_some_and(|at| at.elapsed() < COMPLETED_RETENTION)
     }
 
-    /// Whether a status ends an order's life.
-    ///
-    /// These are the three the engine acts on by removing the order from its
-    /// book. `Inactive` is not among them — it returns to working when the
-    /// condition holding the order clears — and neither is `Uncertain`, which
-    /// states the opposite of a conclusion.
-    fn is_terminal_status(status: &str) -> bool {
-        matches!(status, "Filled" | "Cancelled" | "Rejected")
-    }
-
     /// Cache the enriched view of an order.
     ///
     /// An order that has completed is not returned to a working status. Nothing
@@ -399,9 +389,12 @@ impl OrderState {
             // written back as an open one — the test saw the record, the
             // removal took it away, and the insert put a stale view of it back.
             let mut cache = self.order_cache.lock().unwrap();
-            if cache.get(&order_id)
-                .is_some_and(|e| Self::is_terminal_status(&e.order_state.status))
-            {
+            if cache.get(&order_id).is_some_and(|e| {
+                crate::types::order_status::is_terminal_status(
+                    &e.order_state.status,
+                    &e.order_state.completed_status,
+                )
+            }) {
                 return;
             }
             cache.insert(order_id, info);

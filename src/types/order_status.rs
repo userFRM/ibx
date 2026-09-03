@@ -43,6 +43,25 @@ pub fn is_open_or_reactivatable(status: &str, completed_status: &str) -> bool {
     is_open_status(status) || (status == "Inactive" && completed_status.is_empty())
 }
 
+/// True when `status`/`completed_status` describe an order that has finished:
+/// filled, withdrawn, or refused by the venue.
+///
+/// A refusal reads as "Inactive" — [`order_status_str`] has no refused string —
+/// and only the completed status beside it tells the two apart: the venue
+/// states one for a refusal and leaves it empty for an order it merely holds.
+/// An "Inactive" row carrying a completed status has therefore finished, while
+/// one without can still return to working, and a cancel-all must still reach
+/// it. `Unknown` states the opposite of a conclusion and is not finished
+/// either.
+///
+/// Everyone who must not let a late frame reopen a finished order reads the
+/// verdict here, so the two cannot answer the question differently.
+#[inline]
+pub fn is_terminal_status(status: &str, completed_status: &str) -> bool {
+    matches!(status, "Filled" | "Cancelled" | "Rejected")
+        || (status == "Inactive" && !completed_status.is_empty())
+}
+
 /// Convert OrderStatus enum to ibapi-compatible string.
 #[inline]
 pub fn order_status_str(status: OrderStatus) -> &'static str {

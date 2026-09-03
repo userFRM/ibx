@@ -152,6 +152,31 @@ impl EClient {
             .ok_or_else(|| PyRuntimeError::new_err("not connected"))
     }
 
+    /// The sender of the session holding `shared`, taken with it as one pair.
+    ///
+    /// The state and the sender are held apart, and a reconnect replaces them
+    /// in two writes, so the sender is taken and the state taken again:
+    /// unchanged, they are a pair, and a request sent goes on the session the
+    /// wait is watching; changed, they are two halves of a reconnect, and the
+    /// request would be answered where nobody is waiting. Refused here rather
+    /// than sent, because checking afterwards finds that out too late — the
+    /// request has already gone.
+    pub(crate) fn paired_sender(
+        &self, shared: &Arc<SharedState>,
+    ) -> PyResult<std::sync::mpsc::SyncSender<crate::types::commands::ControlCommand>> {
+        let tx = self.control_tx.lock().unwrap().clone().ok_or_else(|| {
+            PyRuntimeError::new_err("not connected")
+        })?;
+        // Still the same session after both were taken, so they are a pair
+        // and not two halves of a reconnect.
+        if !std::sync::Arc::ptr_eq(shared, &self.connected_shared()?) {
+            return Err(PyRuntimeError::new_err(
+                "the session was replaced while asking: ask again",
+            ));
+        }
+        Ok(tx)
+    }
+
     /// A contract's corporate actions, asked for and waited on.
     ///
     /// The venue answers per contract, which says which contract an answer is
@@ -170,25 +195,10 @@ impl EClient {
             )));
         }
         // The state and the sender are taken as one pair, before anything is
-        // made or sent. Taken apart, a reconnect between them puts the slot on
-        // the session this call started with and the request on the one it
-        // finished with: the answer is filed where nobody is watching, and the
-        // request runs on a session nobody is waiting on. Checking afterwards
-        // finds that out too late — the request has already gone.
-        let (shared, tx) = {
-            let shared = self.connected_shared()?;
-            let tx = self.control_tx.lock().unwrap().clone().ok_or_else(|| {
-                PyRuntimeError::new_err("not connected")
-            })?;
-            // Still the same session after both were taken, so they are a pair
-            // and not two halves of a reconnect.
-            if !std::sync::Arc::ptr_eq(&shared, &self.connected_shared()?) {
-                return Err(PyRuntimeError::new_err(
-                    "the session was replaced while asking for corporate actions: ask again",
-                ));
-            }
-            (shared, tx)
-        };
+        // made or sent, so a reconnect between them refuses rather than
+        // leaving the wait and the request on two different sessions.
+        let shared = self.connected_shared()?;
+        let tx = self.paired_sender(&shared)?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else. Marked here because this is where
         // the number is taken, and every one of them takes it here.
@@ -355,6 +365,10 @@ impl EClient {
         let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
+        // Taken as a pair with the state the wait watches, so a reconnect
+        // landing between them is refused rather than sending the request
+        // where nobody is waiting.
+        self.paired_sender(&shared)?;
         self.req_historical_data(
             py, req_id, contract, end_date_time, duration_str, bar_size_setting,
             what_to_show, use_rth, 1, false, Vec::new(),
@@ -407,6 +421,10 @@ impl EClient {
         let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
+        // Taken as a pair with the state the wait watches, so a reconnect
+        // landing between them is refused rather than sending the request
+        // where nobody is waiting.
+        self.paired_sender(&shared)?;
         self.req_head_time_stamp(py, req_id, contract, what_to_show, use_rth, 1)?;
         let what = format!("the earliest data for {} {}", contract.sec_type, contract.symbol);
         let r = wait_for(py, &shared, req_id, &what, |sh| {
@@ -428,6 +446,10 @@ impl EClient {
         let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
+        // Taken as a pair with the state the wait watches, so a reconnect
+        // landing between them is refused rather than sending the request
+        // where nobody is waiting.
+        self.paired_sender(&shared)?;
         self.req_matching_symbols(py, req_id, pattern)?;
         let what = format!("a symbol search for {pattern}");
         let found = wait_for(py, &shared, req_id, &what, |sh| {
@@ -471,6 +493,10 @@ impl EClient {
         let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
+        // Taken as a pair with the state the wait watches, so a reconnect
+        // landing between them is refused rather than sending the request
+        // where nobody is waiting.
+        self.paired_sender(&shared)?;
         self.req_historical_news(
             py, req_id, con_id, provider_codes, start_date_time, end_date_time,
             total_results, Vec::new(),
@@ -504,6 +530,10 @@ impl EClient {
         let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
+        // Taken as a pair with the state the wait watches, so a reconnect
+        // landing between them is refused rather than sending the request
+        // where nobody is waiting.
+        self.paired_sender(&shared)?;
         self.req_historical_schedule(py, req_id, contract, end_date_time, duration_str, use_rth)?;
         let what = format!("when {} trades", contract.symbol);
         let schedule = wait_for(py, &shared, req_id, &what, |sh| {
@@ -536,6 +566,10 @@ impl EClient {
         let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
+        // Taken as a pair with the state the wait watches, so a reconnect
+        // landing between them is refused rather than sending the request
+        // where nobody is waiting.
+        self.paired_sender(&shared)?;
         self.req_sec_def_opt_params(
             py, req_id, underlying_symbol, fut_fop_exchange, underlying_sec_type,
             underlying_con_id,
@@ -573,6 +607,10 @@ impl EClient {
         let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
+        // Taken as a pair with the state the wait watches, so a reconnect
+        // landing between them is refused rather than sending the request
+        // where nobody is waiting.
+        self.paired_sender(&shared)?;
         self.req_histogram_data(py, req_id, contract, use_rth, time_period)?;
         let what = format!("a histogram for {} {}", contract.sec_type, contract.symbol);
         let rows = wait_for(py, &shared, req_id, &what, |sh| {
@@ -595,6 +633,10 @@ impl EClient {
         let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
+        // Taken as a pair with the state the wait watches, so a reconnect
+        // landing between them is refused rather than sending the request
+        // where nobody is waiting.
+        self.paired_sender(&shared)?;
         self.req_fundamental_data(py, req_id, contract, report_type, Vec::new())?;
         let what = format!("a {report_type} report for {}", contract.symbol);
         wait_for(py, &shared, req_id, &what, |sh| {
@@ -668,10 +710,12 @@ impl EClient {
         let _answering = crate::api::client::Answering::begin();
         let asked = ask_id(&shared);
         let req_id = asked.get();
-        self.req_contract_details(py, req_id, contract)
+        // Taken as a pair with the state the wait watches, so a reconnect
+        // landing between them is refused rather than sending the request
+        // where nobody is waiting.
+        self.paired_sender(&shared)
             .map_err(|e| Refusal::not_connected(e.to_string()))?;
-
-        let shared = self.connected_shared()
+        self.req_contract_details(py, req_id, contract)
             .map_err(|e| Refusal::not_connected(e.to_string()))?;
 
         // The clock measures silence, not the length of the answer: a class

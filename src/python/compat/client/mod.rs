@@ -1634,6 +1634,36 @@ w = W()",
         });
     }
 
+    /// An answering call waits on the session it holds, so its request has
+    /// to go on that session's sender: a reconnect replaces the session in
+    /// two writes, and a sender taken after them serves the session that
+    /// replaced it, where nobody is waiting. The pair is checked as one,
+    /// and a sender whose session was replaced is refused rather than
+    /// sent on.
+    #[test]
+    fn a_sender_is_refused_once_its_session_is_replaced() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, _w) = wired_client(py);
+            // A reconnect, landing after the state was taken: the slots now
+            // hold a second session.
+            let successor = Arc::new(SharedState::new());
+            let (successor_tx, _successor_rx) =
+                std::sync::mpsc::sync_channel::<ControlCommand>(16);
+            *client.get().shared.lock().unwrap() = Some(successor.clone());
+            *client.get().control_tx.lock().unwrap() = Some(successor_tx);
+
+            let err = client.get().paired_sender(&shared).unwrap_err();
+            assert!(
+                err.to_string().contains("the session was replaced"),
+                "got {err}",
+            );
+
+            // The session still held answers for itself.
+            assert!(client.get().paired_sender(&successor).is_ok());
+        });
+    }
+
     /// An account with nothing working counts from one, and one working order
     /// puts the count past it. The venue holds an id only while its order is
     /// live, so this is the whole of what a new id has to clear.

@@ -1463,11 +1463,15 @@ impl CcpState {
                 // completed order back to open. The cache is what
                 // `req_open_orders` reads, so a caller polling between the two
                 // frames would see a finished order listed as working.
-                // Inactive is not terminal. The venue still holds such an
-                // order and it can return to working, so a cancel-all reaches
-                // one.
+                // Inactive is not terminal in general — the venue still holds
+                // such an order and it can return to working, so a cancel-all
+                // reaches one — but one that also carries a completed status
+                // is a refusal, and a refusal is finished.
                 let already_terminal = shared.orders.get_order_info(clord_id).is_some_and(|prev| {
-                    matches!(prev.order_state.status.as_str(), "Filled" | "Cancelled")
+                    crate::types::order_status::is_terminal_status(
+                        &prev.order_state.status,
+                        &prev.order_state.completed_status,
+                    )
                 });
                 let finishes = matches!(
                     status,
