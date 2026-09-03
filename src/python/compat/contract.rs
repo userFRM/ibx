@@ -83,6 +83,7 @@ pub(super) fn set_from_keywords(
 /// Register all compat contract/order classes on the module.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Contract>()?;
+    m.add_class::<ComboLeg>()?;
     m.add_class::<Order>()?;
     m.add_class::<OptionChain>()?;
     m.add_class::<TagValue>()?;
@@ -199,6 +200,16 @@ mod tests {
             // The Python class holds a list a program appends to, which has
             // its own type on that side; empty is empty on both.
             .map(|l| l.replace("ListField::new()", "Vec::new()"))
+            // And the soft-dollar tier as one object, as the reference client
+            // holds it, where the Rust order holds its three strings flat.
+            .flat_map(|l| match l.as_str() {
+                "soft_dollar_tier: TierField::new()," => vec![
+                    "soft_dollar_tier_name: String::new(),".to_string(),
+                    "soft_dollar_tier_val: String::new(),".to_string(),
+                    "soft_dollar_tier_display_name: String::new(),".to_string(),
+                ],
+                _ => vec![l],
+            })
             .collect();
         assert!(
             lines.iter().any(|l| l == "fn default() -> Self {"),
@@ -359,6 +370,7 @@ mod tests {
             price: 200.0,
             is_more: true,
             trigger_method: 1,
+            is_conjunction_connection: true,
         };
         match pc.to_internal() {
             OrderCondition::Price { con_id, price, is_more, trigger_method, .. } => {
@@ -373,9 +385,9 @@ mod tests {
 
     #[test]
     fn time_condition_to_internal() {
-        let tc = TimeCondition { time: "20260311-09:30:00".into(), is_more: true };
+        let tc = TimeCondition { time: "20260311-09:30:00".into(), is_more: true, is_conjunction_connection: true };
         match tc.to_internal() {
-            OrderCondition::Time { time, is_more } => {
+            OrderCondition::Time { time, is_more, .. } => {
                 assert_eq!(time, "20260311-09:30:00");
                 assert!(is_more);
             }
@@ -390,6 +402,7 @@ mod tests {
             exchange: "SMART".into(),
             volume: 1_000_000,
             is_more: true,
+            is_conjunction_connection: true,
         };
         match vc.to_internal() {
             OrderCondition::Volume { con_id, volume, is_more, .. } => {

@@ -35,9 +35,20 @@ def _fields(where: str, struct: str) -> set[str]:
     raise AssertionError(f"no `pub struct {struct}` anywhere under {where}")
 
 
+#: The soft-dollar tier, which the reference client holds as one object on the
+#: order — a program writes `order.softDollarTier.name` — and the Rust client
+#: holds flat beside the rest. A difference in shape, not in what a caller can
+#: reach.
+_THE_TIER_FLAT = {"soft_dollar_tier_name", "soft_dollar_tier_val", "soft_dollar_tier_display_name"}
+_THE_TIER_WHOLE = {"soft_dollar_tier"}
+
+
 def test_both_clients_carry_the_same_order():
     rust = _fields("src/types", "Order")
     python = _fields("src/python/compat", "Order")
+    assert _THE_TIER_FLAT <= rust and _THE_TIER_WHOLE <= python, "the tier, in each client's own shape"
+    rust -= _THE_TIER_FLAT
+    python -= _THE_TIER_WHOLE
     assert rust == python, (
         "an order field exists on one client and not the other: "
         f"rust only={sorted(rust - python)} python only={sorted(python - rust)}"

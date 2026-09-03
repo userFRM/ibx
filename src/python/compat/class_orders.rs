@@ -5,6 +5,7 @@ use super::{class_contracts::*, class_conditions::*};
 use super::contract::{by_reference_name, set_from_keywords};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
+use std::sync::OnceLock;
 
 use super::{camel_aliases_copy, camel_aliases_owned};
 use crate::types::*;
@@ -298,11 +299,7 @@ pub struct Order {
     #[pyo3(get, set)]
     pub smart_combo_routing_params: ListField,
     #[pyo3(get, set)]
-    pub soft_dollar_tier_name: String,
-    #[pyo3(get, set)]
-    pub soft_dollar_tier_val: String,
-    #[pyo3(get, set)]
-    pub soft_dollar_tier_display_name: String,
+    pub soft_dollar_tier: TierField,
     #[pyo3(get, set)]
     pub solicited: bool,
     #[pyo3(get, set)]
@@ -472,9 +469,7 @@ impl Clone for Order {
             sl_order_id: self.sl_order_id,
             sl_order_type: self.sl_order_type.clone(),
             smart_combo_routing_params: self.smart_combo_routing_params.clone(),
-            soft_dollar_tier_name: self.soft_dollar_tier_name.clone(),
-            soft_dollar_tier_val: self.soft_dollar_tier_val.clone(),
-            soft_dollar_tier_display_name: self.soft_dollar_tier_display_name.clone(),
+            soft_dollar_tier: self.soft_dollar_tier.clone(),
             solicited: self.solicited,
             starting_price: self.starting_price,
             stock_range_lower: self.stock_range_lower,
@@ -635,9 +630,7 @@ impl Default for Order {
             sl_order_id: i32::MAX,
             sl_order_type: String::new(),
             smart_combo_routing_params: ListField::new(),
-            soft_dollar_tier_name: String::new(),
-            soft_dollar_tier_val: String::new(),
-            soft_dollar_tier_display_name: String::new(),
+            soft_dollar_tier: TierField::new(),
             solicited: false,
             starting_price: f64::MAX,
             stock_range_lower: f64::MAX,
@@ -765,32 +758,11 @@ impl Order {
         self.smart_combo_routing_params = v;
     }
     #[getter(softDollarTier)]
-    fn get_soft_dollar_tier(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let tier = SoftDollarTierPy {
-            name: self.soft_dollar_tier_name.clone(),
-            val: self.soft_dollar_tier_val.clone(),
-            display_name: self.soft_dollar_tier_display_name.clone(),
-        };
-        Ok(Py::new(py, tier)?.into_any())
+    fn get_soft_dollar_tier<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, SoftDollarTierPy>> {
+        self.soft_dollar_tier.bound(py)
     }
-    /// The three strings the tier is, taken from whatever states them.
-    ///
-    /// The tier is one object on the reference client and three fields here.
-    /// Readable only, an order directing its commission to a tier reaches the
-    /// venue with none, which is half a soft-dollar arrangement.
     #[setter(softDollarTier)]
-    fn set_soft_dollar_tier(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
-        let text = |names: [&str; 2]| -> String {
-            names
-                .iter()
-                .find_map(|n| v.getattr(*n).ok().and_then(|a| a.extract::<String>().ok()))
-                .unwrap_or_default()
-        };
-        self.soft_dollar_tier_name = text(["name", "name"]);
-        self.soft_dollar_tier_val = text(["val", "value"]);
-        self.soft_dollar_tier_display_name = text(["displayName", "display_name"]);
-        Ok(())
-    }
+    fn set_soft_dollar_tier(&mut self, v: TierField) { self.soft_dollar_tier = v; }
 }
 
 impl Order {
@@ -1057,9 +1029,11 @@ impl Order {
                 py,
                 a.smart_combo_routing_params.iter().map(TagValue::from_api),
             )?,
-            soft_dollar_tier_name: a.soft_dollar_tier_name.clone(),
-            soft_dollar_tier_val: a.soft_dollar_tier_val.clone(),
-            soft_dollar_tier_display_name: a.soft_dollar_tier_display_name.clone(),
+            soft_dollar_tier: TierField::of(py, SoftDollarTierPy {
+                name: a.soft_dollar_tier_name.clone(),
+                val: a.soft_dollar_tier_val.clone(),
+                display_name: a.soft_dollar_tier_display_name.clone(),
+            })?,
             solicited: a.solicited,
             starting_price: a.starting_price,
             stock_range_lower: a.stock_range_lower,
@@ -1076,6 +1050,7 @@ impl Order {
 
     /// Convert to Rust API Order.
     pub fn to_api(&self) -> crate::types::model::Order {
+        let tier = self.soft_dollar_tier.value();
         crate::types::model::Order {
             order_id: self.order_id,
             action: self.action.clone(),
@@ -1231,9 +1206,9 @@ impl Order {
             // As `algo_params`: filled at the call site from
             // `convert_smart_combo_routing_params`.
             smart_combo_routing_params: Vec::new(),
-            soft_dollar_tier_name: self.soft_dollar_tier_name.clone(),
-            soft_dollar_tier_val: self.soft_dollar_tier_val.clone(),
-            soft_dollar_tier_display_name: self.soft_dollar_tier_display_name.clone(),
+            soft_dollar_tier_name: tier.name,
+            soft_dollar_tier_val: tier.val,
+            soft_dollar_tier_display_name: tier.display_name,
             solicited: self.solicited,
             starting_price: self.starting_price,
             stock_range_lower: self.stock_range_lower,
@@ -1503,6 +1478,87 @@ impl OrderState {
     }
 }
 
+/// An order's soft-dollar tier: one object, made once and answered with on
+/// every read, so a write to a field of it lands where the next read looks
+/// and where the engine reads at send time. Built fresh on every read from
+/// three strings on the order, it took each write on a temporary and dropped
+/// it. Empty until read or set, which needs no interpreter: `Default` and
+/// `Clone` run where there is none.
+pub struct TierField(OnceLock<Py<SoftDollarTierPy>>);
+
+impl TierField {
+    pub const fn new() -> Self {
+        Self(OnceLock::new())
+    }
+
+    /// The tier itself, made empty if nothing has read or set it yet.
+    pub fn bound<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, SoftDollarTierPy>> {
+        let tier = match self.0.get() {
+            Some(tier) => tier,
+            None => {
+                let made = Py::new(py, SoftDollarTierPy::default())?;
+                self.0.get_or_init(|| made)
+            }
+        };
+        Ok(tier.bind(py).clone())
+    }
+
+    /// One holding this.
+    pub fn of(py: Python<'_>, tier: SoftDollarTierPy) -> PyResult<Self> {
+        Ok(Self(OnceLock::from(Py::new(py, tier)?)))
+    }
+
+    /// What the tier says, as a value. An unset slot says nothing and needs
+    /// no interpreter; a set one proves there is one to attach to.
+    pub fn value(&self) -> SoftDollarTierPy {
+        match self.0.get() {
+            None => SoftDollarTierPy::default(),
+            Some(tier) => Python::attach(|py| tier.bind(py).borrow().clone()),
+        }
+    }
+}
+
+impl Clone for TierField {
+    /// The same object, as Python assignment shares it.
+    fn clone(&self) -> Self {
+        match self.0.get() {
+            None => Self::new(),
+            Some(tier) => Self(OnceLock::from(Python::attach(|py| tier.clone_ref(py)))),
+        }
+    }
+}
+
+impl<'py> IntoPyObject<'py> for &TierField {
+    type Target = SoftDollarTierPy;
+    type Output = Bound<'py, SoftDollarTierPy>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
+        self.bound(py)
+    }
+}
+
+impl FromPyObject<'_, '_> for TierField {
+    type Error = PyErr;
+
+    /// The tier assigned, itself: a name the caller keeps for it goes on
+    /// writing to the order's tier, as it does on the reference client. An
+    /// object of another client's type is read by the three names the
+    /// reference gives them, and one lacking a name is refused by it rather
+    /// than taken as an empty tier.
+    fn extract(obj: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        let tier = match obj.cast::<SoftDollarTierPy>() {
+            Ok(own) => own.to_owned().unbind(),
+            Err(_) => Py::new(obj.py(), SoftDollarTierPy {
+                name: obj.getattr("name")?.extract()?,
+                val: obj.getattr("val")?.extract()?,
+                display_name: obj.getattr("displayName")?.extract()?,
+            })?,
+        };
+        Ok(Self(OnceLock::from(tier)))
+    }
+}
+
 /// ibapi-compatible SoftDollarTier class.
 #[pyclass(from_py_object, name = "SoftDollarTier")]
 #[derive(Clone, Debug, Default)]
@@ -1517,9 +1573,13 @@ pub struct SoftDollarTierPy {
 
 #[pymethods]
 impl SoftDollarTierPy {
+    // The reference client's signature, spelling included: the lint
+    // allowance is on the one name a program written against it passes.
     #[new]
-    #[pyo3(signature = ())]
-    fn new() -> Self { Self::default() }
+    #[pyo3(signature = (name=String::new(), val=String::new(), displayName=String::new()))]
+    fn new(name: String, val: String, #[allow(non_snake_case)] displayName: String) -> Self {
+        Self { name, val, display_name: displayName }
+    }
 
     // The reference client runs the words together. Without this, a tier built
     // the way that client builds one carried its name and its value and lost
@@ -1579,6 +1639,37 @@ order.algoParams.append(TagValue('allowPastEndTime', int(True)))
             };
             assert!(allow_past_end_time, "the flag the sample hands over as an int");
             assert_eq!((start_time.as_str(), end_time.as_str()), ("09:00:00 US/Eastern", "16:00:00 US/Eastern"));
+        });
+    }
+
+    /// A write to a field of the tier is what the engine reads at send time.
+    ///
+    /// Built fresh on every read from three strings on the order, the tier
+    /// took each write on a temporary and dropped it: an order directing its
+    /// commission field by field, as the reference client's own object lets
+    /// it, went to the venue directing it nowhere.
+    #[test]
+    fn a_write_to_a_field_of_the_tier_reaches_the_order_sent() {
+        Python::initialize();
+        Python::attach(|py| {
+            let order = Py::new(py, Order::default()).expect("an order");
+            let locals = PyDict::new(py);
+            locals.set_item("order", &order).expect("named for the program");
+            py.run(
+                c"
+order.softDollarTier.name = 'Tier A'
+order.softDollarTier.val = '45.5'
+",
+                None,
+                Some(&locals),
+            )
+            .expect("written field by field");
+            let attrs = order.borrow(py).to_api().attrs();
+            assert_eq!(
+                (attrs.soft_dollar_tier_name.as_str(), attrs.soft_dollar_tier_val.as_str()),
+                ("Tier A", "45.5"),
+                "the arrangement the builder reads",
+            );
         });
     }
 }
