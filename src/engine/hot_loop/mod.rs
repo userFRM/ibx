@@ -4188,7 +4188,12 @@ mod tests {
 
         let id = hl.context.market.register(4001);
         hl.context.market.register_server_tag(910_001, id);
-        hl.farm.instrument_md_reqs.push((id, vec![7]));
+        hl.farm.instrument_md_reqs.push((id, crate::engine::hot_loop::farm::MdReqRecord {
+            con_id: 4001,
+            sec_type: "CS".into(),
+            mode_9887: 0,
+            entries: vec![crate::engine::hot_loop::farm::MdReqEntry { req_id: 7, request_type: 442, venue: "BEST".into() }],
+        }));
         hl.hmds.tbt_subscriptions.push(crate::engine::hot_loop::hmds::TbtSubscription {
             ignore_size: false,
             instrument: id,
@@ -4225,7 +4230,12 @@ mod tests {
 
         let id = hl.context.market.register(4002);
         hl.context.market.register_server_tag(910_002, id);
-        hl.farm.instrument_md_reqs.push((id, vec![8]));
+        hl.farm.instrument_md_reqs.push((id, crate::engine::hot_loop::farm::MdReqRecord {
+            con_id: 4002,
+            sec_type: "CS".into(),
+            mode_9887: 0,
+            entries: vec![crate::engine::hot_loop::farm::MdReqEntry { req_id: 8, request_type: 442, venue: "BEST".into() }],
+        }));
         hl.ccp.news_subscriptions.push((id, 55, "BRFG".to_string(), 756733, "STK".to_string()));
 
         tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();

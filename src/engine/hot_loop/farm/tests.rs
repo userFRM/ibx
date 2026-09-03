@@ -693,7 +693,12 @@ mod resub_tests {
 
         // And a live subscription does the same on its own.
         let mut farm = FarmState::new();
-        farm.instrument_md_reqs.push((instrument, vec![7]));
+        farm.instrument_md_reqs.push((instrument, MdReqRecord {
+            con_id: 756733,
+            sec_type: "CS".into(),
+            mode_9887: 0,
+            entries: vec![MdReqEntry { req_id: 7, request_type: 442, venue: "BEST".into() }],
+        }));
         assert!(farm.holds_market_data(instrument), "a live subscription");
 
         // An instrument with none of the three is free to go.
@@ -1079,9 +1084,12 @@ mod price_scaling_tests {
             instrument, 0, false, &mut conn, &mut hb,
         );
         assert_eq!(farm.greeks_subs.len(), 1, "an option is worth modelling");
-        let reqs = &farm.instrument_md_reqs.iter()
+        let record = &farm.instrument_md_reqs.iter()
             .find(|(id, _)| *id == instrument).expect("its requests").1;
-        assert!(reqs.contains(&farm.greeks_subs[0].0), "and the model is one of them, so a cancel finds it");
+        assert!(
+            record.entries.iter().any(|e| e.req_id == farm.greeks_subs[0].0),
+            "and the model is one of them, so a cancel finds it",
+        );
 
         farm.send_mktdata_unsubscribe(instrument, &mut conn, &mut hb);
         assert!(farm.greeks_subs.is_empty(), "withdrawn with the rest");
@@ -1356,4 +1364,151 @@ fn a_size_increment_comes_only_from_an_ack_shaped_to_carry_one() {
         trailing_size_increment(&short), None,
         "a server tag is not a size increment",
     );
+}
+
+mod withdrawal_wire_tests {
+    use super::super::*;
+    use crate::bridge::SharedState;
+    use crate::engine::context::Context;
+    use std::collections::BTreeSet;
+
+    /// Every value a message carries for one tag, in order. Split on the
+    /// field mark, so a tag stated more than once states each of its values,
+    /// which a map keyed by the tag cannot hold.
+    fn values_of(msg: &[u8], tag: u32) -> Vec<String> {
+        let prefix = format!("{tag}=");
+        msg.split(|&b| b == 0x01)
+            .filter_map(|field| {
+                let field = std::str::from_utf8(field).ok()?;
+                field.strip_prefix(prefix.as_str()).map(|v| v.to_string())
+            })
+            .collect()
+    }
+
+    /// Every inner message written onto the wire, read off the peer's side of
+    /// the test pair and decompressed.
+    fn drain_inner(peer: &mut Connection) -> Vec<Vec<u8>> {
+        let mut inner = Vec::new();
+        loop {
+            match peer.try_recv() {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            for frame in peer.extract_frames() {
+                let Frame::FixComp(raw) = frame else { continue };
+                let Some(unsigned) = peer.unsign(&raw) else { continue };
+                inner.extend(fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default());
+            }
+        }
+        inner
+    }
+
+    /// A withdrawal states each entry the way the subscription stated it.
+    ///
+    /// Named by the number alone, the venue leaves the subscription being
+    /// served. The number then stays held on the connection, and an engine
+    /// that starts on the same connection and asks under it is answered with
+    /// nothing — no acknowledgement, no refusal, no data — while the quotes
+    /// it never asked for keep arriving under the number it happens to have
+    /// given out.
+    #[test]
+    fn a_withdrawal_states_the_entries_the_subscription_stated() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).expect("a connection over the test pair");
+
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut conn, &mut hb,
+        );
+        let mut asked = BTreeSet::new();
+        for msg in drain_inner(&mut peer) {
+            if values_of(&msg, 263).first().map(String::as_str) == Some("1") {
+                asked.extend(values_of(&msg, 262));
+            }
+        }
+        assert_eq!(asked.len(), 4, "a realtime stock is asked for under four numbers");
+
+        farm.send_mktdata_unsubscribe(instrument, &mut conn, &mut hb);
+        let withdrawals: Vec<Vec<u8>> = drain_inner(&mut peer)
+            .into_iter()
+            .filter(|msg| values_of(msg, 263).first().map(String::as_str) == Some("2"))
+            .collect();
+        let withdrawn: BTreeSet<String> = withdrawals
+            .iter()
+            .flat_map(|msg| values_of(msg, 262))
+            .collect();
+        assert_eq!(withdrawn, asked, "every number asked for is withdrawn");
+        for msg in &withdrawals {
+            assert_eq!(
+                values_of(msg, 146).first().map(String::as_str), Some("1"),
+                "one entry per withdrawal",
+            );
+            assert_eq!(
+                values_of(msg, 6008).first().map(String::as_str), Some("756733"),
+                "the contract is stated",
+            );
+            assert_eq!(
+                values_of(msg, 207).first().map(String::as_str), Some("BEST"),
+                "the venue it was asked on",
+            );
+            assert_eq!(
+                values_of(msg, 167).first().map(String::as_str), Some("CS"),
+                "the type it was asked for",
+            );
+            assert!(
+                !values_of(msg, 264).is_empty(),
+                "the kind of market data it asked for",
+            );
+        }
+    }
+
+    /// A book is withdrawn the way it was asked for. Left named by its
+    /// number alone, the venue keeps serving it, and the number stays held
+    /// against the next engine on the connection.
+    #[test]
+    fn withdrawing_a_book_states_the_book_it_withdraws() {
+        let mut farm = FarmState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).expect("a connection over the test pair");
+
+        farm.send_depth_subscribe(
+            7, 756733, "SMART", "", "STK", 10, true, &mut conn, &mut hb, &shared,
+        );
+        let _asked = drain_inner(&mut peer);
+
+        farm.send_depth_unsubscribe(7, &mut conn, &mut hb);
+        let withdrawals: Vec<Vec<u8>> = drain_inner(&mut peer)
+            .into_iter()
+            .filter(|msg| values_of(msg, 263).first().map(String::as_str) == Some("2"))
+            .collect();
+        assert_eq!(
+            withdrawals.len(), 1,
+            "a book on no particular venue is one withdrawal",
+        );
+        let msg = &withdrawals[0];
+        assert_eq!(values_of(msg, 146).first().map(String::as_str), Some("1"), "of one entry");
+        assert_eq!(
+            values_of(msg, 6008).first().map(String::as_str), Some("756733"),
+            "naming the contract",
+        );
+        assert_eq!(
+            values_of(msg, 207).first().map(String::as_str), Some("BEST"),
+            "the venue it was asked on",
+        );
+        assert_eq!(
+            values_of(msg, 167).first().map(String::as_str), Some("CS"),
+            "the type it was asked for",
+        );
+        assert_eq!(values_of(msg, 264).first().map(String::as_str), Some("0"), "and a book");
+    }
 }

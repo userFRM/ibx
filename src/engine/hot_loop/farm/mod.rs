@@ -11,6 +11,19 @@ use crate::types::{qty_from_counted, InstrumentId};
 
 use super::{HeartbeatState, ReplayPacing, emit, fast_extract_msg_type, find_body_after_tag, EventSink};
 
+/// The venue and security type exactly as a subscription states them on the
+/// wire: the caller's blanks filled, and both in the wire's own spelling.
+///
+/// A withdrawal states an entry the way the subscription stated it, so the
+/// one is worked out from the same answer as the other.
+fn stated_venue_and_type<'a>(sec_type: &'a str, exchange: &'a str) -> (&'a str, &'a str) {
+    let exchange = if exchange.is_empty() { "SMART" } else { exchange };
+    (
+        crate::control::contracts::exchange_to_fix(exchange),
+        crate::control::contracts::sec_type_to_fix(sec_type),
+    )
+}
+
 /// Build the 35=V subscribe tag list for a contract whose conId is known.
 ///
 /// Kept pure so the wire shape stays unit-testable. SecurityType (167) and
@@ -48,19 +61,17 @@ fn build_conid_subscribe_tags(
     // route, which is what every example written against the reference client
     // states for one.
     debug_assert!(!sec_type.is_empty(), "contract {con_id} reached the wire untyped");
-    let exchange = if exchange.is_empty() { "SMART" } else { exchange };
-    let fix_exchange = crate::control::contracts::exchange_to_fix(exchange);
-    let fix_sec_type = crate::control::contracts::sec_type_to_fix(sec_type);
+    let (fix_exchange, fix_sec_type) = stated_venue_and_type(sec_type, exchange);
 
     // The chargeable snapshot is a request type of its own and one entry. A
     // stream is the realtime fan-out into BID_ASK and LAST, or the single TOP
     // the delayed and frozen feeds are served on.
-    let entries: &[(u32, &str)] = if regulatory_snapshot {
-        &[(bid_ask_id, REGULATORY_SNAPSHOT_REQUEST_TYPE)]
+    let entries: Vec<(u32, String)> = if regulatory_snapshot {
+        vec![(bid_ask_id, REGULATORY_SNAPSHOT_REQUEST_TYPE.to_string())]
     } else if realtime {
-        &[(bid_ask_id, "442"), (last_id, "443")]
+        vec![(bid_ask_id, "442".to_string()), (last_id, "443".to_string())]
     } else {
-        &[(bid_ask_id, "1")]
+        vec![(bid_ask_id, "1".to_string())]
     };
     // 146 = NoRelatedSym: how many entries follow, counted rather than stated
     // per shape, so a shape added here cannot state the wrong number.
@@ -71,7 +82,7 @@ fn build_conid_subscribe_tags(
         (146, entries.len().to_string()),
     ];
 
-    for (req_id, depth) in entries {
+    for (req_id, depth) in &entries {
         tags.push((262, req_id.to_string()));
         tags.push((6008, con_id_str.clone()));
         tags.push((207, fix_exchange.to_string()));
@@ -96,6 +107,34 @@ type MdResubInfo = (InstrumentId, String, String, String, String, f64, String, S
 
 /// `MdResubInfo` with the instrument's resolved con_id spliced in behind it.
 type MdResubTarget = (InstrumentId, i64, String, String, String, String, f64, String, String, i32);
+
+/// One entry of an L1 subscription as it went out: the number it was asked
+/// under, the kind of market data that number carries, and the venue it was
+/// asked on.
+///
+/// Kept so a withdrawal can state each entry the way the subscription stated
+/// it. A withdrawal naming a number alone is one the venue leaves being
+/// served, and the number then outlives the engine that asked under it: a
+/// connection handed on with one still held is answered with silence when
+/// the next engine asks under the same number.
+pub(crate) struct MdReqEntry {
+    pub(crate) req_id: u32,
+    pub(crate) request_type: u32,
+    pub(crate) venue: String,
+}
+
+/// An instrument's L1 subscriptions as they went out, so each can be
+/// withdrawn as itself: the contract and venue and type each entry named.
+pub(crate) struct MdReqRecord {
+    pub(crate) con_id: i64,
+    /// The security type in the wire's own spelling, the one the entries
+    /// were asked for under.
+    pub(crate) sec_type: String,
+    /// The feed a delayed or frozen quote was asked for, stated beside the
+    /// entry and so beside its withdrawal too. Zero where none was.
+    pub(crate) mode_9887: i32,
+    pub(crate) entries: Vec<MdReqEntry>,
+}
 
 pub(crate) struct FarmState {
     /// The trade time the venue last stated as a base, in seconds, and how far
@@ -123,7 +162,7 @@ pub(crate) struct FarmState {
     /// subscription's venue because both were numbered 2.
     pub(crate) next_md_req_id: u32,
     pub(crate) md_req_to_instrument: Vec<(u32, InstrumentId)>,
-    pub(crate) instrument_md_reqs: Vec<(InstrumentId, Vec<u32>)>,
+    pub(crate) instrument_md_reqs: Vec<(InstrumentId, MdReqRecord)>,
     /// Venue numbers whose quotes this session has no contract for, each said
     /// once. A quote naming one is dropped, and dropped silently there is no
     /// way to tell a venue that stopped sending from one still sending under a
@@ -247,7 +286,7 @@ const A_YEAR_OF_DAYS: f64 = 365.0;
 /// venue names it `regsshot` when it refuses one, and an account without the
 /// entitlement is refused by name. It is asked for under the snapshot action
 /// below and never with a feed named beside it.
-const REGULATORY_SNAPSHOT_REQUEST_TYPE: &str = "624";
+const REGULATORY_SNAPSHOT_REQUEST_TYPE: u32 = 624;
 
 /// Deliver the request once, on tag 263, in place of subscribing to it.
 const SNAPSHOT_ACTION: &str = "3";
@@ -1294,22 +1333,37 @@ impl FarmState {
             self.greeks_subs.push((id, con_id, sec_type.to_string()));
         }
 
+        // Each entry as it goes onto the wire: the number it is asked under,
+        // the kind of market data that number carries, and the venue it is
+        // asked on. Kept so the withdrawal can state each one the way the
+        // subscription stated it — named by number alone, the venue leaves it
+        // being served.
+        let (venue, wire_sec_type) = stated_venue_and_type(sec_type, exchange);
+        let venue = venue.to_string();
+        let mut entries = if realtime {
+            vec![
+                MdReqEntry { req_id: bid_ask_id, request_type: 442, venue: venue.clone() },
+                MdReqEntry { req_id: last_id, request_type: 443, venue: venue.clone() },
+            ]
+        } else if regulatory_snapshot {
+            vec![MdReqEntry { req_id: bid_ask_id, request_type: REGULATORY_SNAPSHOT_REQUEST_TYPE, venue: venue.clone() }]
+        } else {
+            vec![MdReqEntry { req_id: bid_ask_id, request_type: 1, venue: venue.clone() }]
+        };
+        entries.push(MdReqEntry { req_id: status_req_id, request_type: TRADING_STATUS_REQUEST_TYPE, venue: venue.clone() });
+        entries.push(MdReqEntry { req_id: venue_map_req_id, request_type: BBO_EXCHANGE_MAP_REQUEST_TYPE, venue: venue.clone() });
+        if let Some(id) = greeks_req_id {
+            entries.push(MdReqEntry { req_id: id, request_type: GREEKS_REQUEST_TYPE, venue: GREEKS_VENUE.to_string() });
+        }
         match self.instrument_md_reqs.iter_mut().find(|(id, _)| *id == instrument) {
-            Some((_, reqs)) => {
-                reqs.push(bid_ask_id);
-                reqs.push(status_req_id);
-                reqs.push(venue_map_req_id);
-                if realtime { reqs.push(last_id); }
-                if let Some(id) = greeks_req_id { reqs.push(id); }
-            }
+            Some((_, record)) => record.entries.extend(entries),
             None => {
-                let mut reqs = if realtime {
-                    vec![bid_ask_id, last_id, status_req_id, venue_map_req_id]
-                } else {
-                    vec![bid_ask_id, status_req_id, venue_map_req_id]
-                };
-                if let Some(id) = greeks_req_id { reqs.push(id); }
-                self.instrument_md_reqs.push((instrument, reqs));
+                self.instrument_md_reqs.push((instrument, MdReqRecord {
+                    con_id,
+                    sec_type: wire_sec_type.to_string(),
+                    mode_9887,
+                    entries,
+                }));
             }
         }
         // A chargeable snapshot is not recorded for replay: the caller asked
@@ -1391,8 +1445,9 @@ impl FarmState {
                     (263, if regulatory_snapshot { SNAPSHOT_ACTION } else { SUBSCRIBE_ACTION }),
                     (146, no_related_sym),
                 ];
+                let snapshot_type = REGULATORY_SNAPSHOT_REQUEST_TYPE.to_string();
                 let entries: &[(&String, &str)] = if regulatory_snapshot {
-                    &[(&bid_ask_str, REGULATORY_SNAPSHOT_REQUEST_TYPE)]
+                    &[(&bid_ask_str, &snapshot_type)]
                 } else if realtime {
                     &[(&bid_ask_str, "442"), (&last_str, "443")]
                 } else {
@@ -1445,15 +1500,13 @@ impl FarmState {
         // written down — left standing, the replay re-sends a subscription the
         // caller has just cancelled.
         self.replay_queue.retain(|r| r.0 != instrument);
-        let reqs = match self.instrument_md_reqs.iter()
+        let record = match self.instrument_md_reqs.iter()
             .position(|(id, _)| *id == instrument)
         {
-            Some(idx) => {
-                let (_, reqs) = self.instrument_md_reqs.remove(idx);
-                reqs
-            }
+            Some(idx) => self.instrument_md_reqs.remove(idx).1,
             None => return,
         };
+        let reqs: Vec<u32> = record.entries.iter().map(|e| e.req_id).collect();
         // Forget the pending acks too. A `35=Q` still in flight when the
         // unsubscribe goes out would otherwise resolve its request id after
         // the slot has been reclaimed and reused, binding this subscription's
@@ -1466,52 +1519,41 @@ impl FarmState {
         // still be read as the tick this one asked for.
         self.generic_tick_reqs.retain(|(req_id, _)| !reqs.contains(req_id));
         self.generic_tick_tags.retain(|(_, _, held)| *held != instrument);
-
-        // Take the option-model records before the connection is checked. With
-        // the farm down there is nothing to send, and a record left behind
-        // would outlive the subscription it describes.
-        // Kept for the line below, which the loop consumes the list to send.
-        let asked = reqs.len();
-        let mut withdrawn: Vec<(u32, i64, String)> = Vec::new();
-        self.greeks_subs.retain(|entry| {
-            if reqs.contains(&entry.0) {
-                withdrawn.push(entry.clone());
-                false
-            } else {
-                true
-            }
-        });
+        // The option-model records go with the withdrawal whether or not the
+        // farm is up: left behind, they outlive the subscription they
+        // describe.
+        self.greeks_subs.retain(|(id, ..)| !reqs.contains(id));
 
         let conn = match farm_conn.as_mut() {
             Some(c) => c,
             None => return,
         };
 
-        for req_id in reqs {
-            let req_id_str = req_id.to_string();
-            // The option model is withdrawn the way it was asked for: the venue
-            // is told which model, on which contract, not merely which request.
-            if let Some(at) = withdrawn.iter().position(|(id, ..)| *id == req_id) {
-                let (_, con_id, sec_type) = withdrawn.remove(at);
-                let con_id_str = (con_id as u32).to_string();
-                let fix_sec_type = crate::control::contracts::sec_type_to_fix(&sec_type);
-                let greeks_type = GREEKS_REQUEST_TYPE.to_string();
-                let _ = conn.send_fixcomp(&[
-                    (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                    (262, &req_id_str),
-                    (263, "2"),
-                    (6008, &con_id_str),
-                    (207, GREEKS_VENUE),
-                    (167, fix_sec_type),
-                    (264, &greeks_type),
-                ]);
-                continue;
-            }
-            let _ = conn.send_fixcomp(&[
+        let asked = record.entries.len();
+        let con_id_str = (record.con_id as u32).to_string();
+        for entry in &record.entries {
+            // Withdrawn the way it was asked for: the venue is told which
+            // tick, on which contract, on which venue, not merely which
+            // request. Named by the number alone the venue leaves it being
+            // served, and the number stays held against whoever asks under it
+            // next on this connection.
+            let req_id_str = entry.req_id.to_string();
+            let request_type_str = entry.request_type.to_string();
+            let mut tags: Vec<(u32, &str)> = vec![
                 (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                (262, &req_id_str),
                 (263, "2"),
-            ]);
+                (146, "1"),
+                (262, &req_id_str),
+                (6008, &con_id_str),
+                (207, entry.venue.as_str()),
+                (167, record.sec_type.as_str()),
+                (264, &request_type_str),
+            ];
+            let mode_str = record.mode_9887.to_string();
+            if record.mode_9887 != 0 && entry.request_type == 1 {
+                tags.push((9887, &mode_str));
+            }
+            let _ = conn.send_fixcomp(&tags);
         }
         // Said, because the venue serves a limited number of these at once and
         // a withdrawal that leaves no trace cannot be told apart from one that
@@ -1679,6 +1721,23 @@ impl FarmState {
             .filter(|(_, user)| *user == req_id)
             .map(|(sub, _)| *sub)
             .collect();
+        // Each entry as it was asked for, gathered before the records go:
+        // withdrawn the way it was subscribed, by contract and venue and type
+        // as well as number, or the venue leaves it being served.
+        let mut entries: Vec<(u32, i64, String, String)> = Vec::new();
+        if let Some((_, con_id, _, _, sec_type, ..)) =
+            self.depth_resub_info.iter().find(|(id, ..)| *id == req_id)
+        {
+            let con_id = *con_id;
+            let fix_sec_type = crate::control::contracts::sec_type_to_fix(sec_type).to_string();
+            for sub in &asked_under {
+                let venue = self.depth_fanout_exchange.iter()
+                    .find(|(s, _)| s == sub)
+                    .map(|(_, venue)| venue.clone())
+                    .unwrap_or_default();
+                entries.push((*sub, con_id, venue, fix_sec_type.clone()));
+            }
+        }
         // Cleared whether or not anything was asked yet: left behind, a book
         // the caller withdrew was asked for again by the next reconnect.
         self.depth_resub_info.retain(|(id, ..)| *id != req_id);
@@ -1693,18 +1752,24 @@ impl FarmState {
         self.depth_rows.retain(|(id, _)| *id != req_id);
 
         if let Some(conn) = farm_conn.as_mut() {
-            for sub_req in &asked_under {
+            for (sub_req, con_id, venue, fix_sec_type) in &entries {
                 let sub_req_str = sub_req.to_string();
+                let con_id_str = (*con_id as u32).to_string();
                 let _ = conn.send_fixcomp(&[
                     (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                    (262, &sub_req_str),
                     (263, "2"),
+                    (146, "1"),
+                    (262, &sub_req_str),
+                    (6008, &con_id_str),
+                    (207, venue.as_str()),
+                    (167, fix_sec_type.as_str()),
+                    (264, DEEP_REQUEST),
                 ]);
             }
             hb.last_farm_sent = Instant::now();
             log::info!(
                 "Sent depth unsubscribe for req_id={req_id}: {} venue(s)",
-                asked_under.len(),
+                entries.len(),
             );
         }
     }
