@@ -6843,3 +6843,40 @@ fn an_answering_call_does_not_wait_on_itself_to_name_a_contract_given_by_id() {
         assert!(returned, "{what} never returned: it is waiting on its own turn");
     }
 }
+
+/// A preview carrying an algo strategy is still a preview.
+///
+/// The flag that asks for one used to be a kind of order, so an order that was
+/// already a kind — an algo, or an adaptive one — had nowhere to carry it. The
+/// algo branch answered first and returned, and the preview flag went nowhere:
+/// a caller asking what an algo order would cost had one placed instead, live,
+/// and got order statuses for something they never meant to send.
+///
+/// It is a field on the order's attributes now rather than a kind, so the two
+/// are no longer alternatives. Pinned here because nothing else states it, and
+/// a preview that places an order is the worst way for this to come back.
+#[test]
+fn a_preview_of_an_algo_order_is_not_placed() {
+    for strategy in ["Adaptive", "Vwap", "Twap", "ArrivalPx"] {
+        let mut order = Order::limit("BUY", 100.0, 10.0);
+        order.algo_strategy = strategy.to_string();
+        order.algo_params = vec![
+            crate::types::model::TagValue { tag: "maxPctVol".into(), value: "0.1".into() },
+            crate::types::model::TagValue { tag: "adaptivePriority".into(), value: "Normal".into() },
+        ];
+        order.what_if = true;
+
+        let built = ClientCore::build_order_request(&order, 1, 0, None);
+        let Ok(crate::types::ControlCommand::Order(request)) = built else {
+            panic!("{strategy}: a preview of it was not built: {built:?}");
+        };
+        let crate::types::OrderRequest::SubmitEx { attrs, .. } = &request else {
+            panic!("{strategy}: a preview was not a submission: {request:?}");
+        };
+        assert!(
+            attrs.what_if,
+            "{strategy}: the preview flag did not survive the strategy, so the order \
+             would be placed rather than priced",
+        );
+    }
+}
