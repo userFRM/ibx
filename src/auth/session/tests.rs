@@ -1172,7 +1172,11 @@ fn security_code_gate_surfaces_an_ns_error_frame() {
         Some(&code_provider_returning("123456")),
     )
     .unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::Other);
+    // The venue answering with an error frame is a refusal, not a gate that
+    // went quiet: raised with no kind on it the retry ladder read it as a
+    // transport failure and went round again, which re-asks for a second
+    // factor the venue has already refused.
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     assert!(!err.to_string().contains("timed out"), "got {err}");
 }
 

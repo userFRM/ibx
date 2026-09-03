@@ -44,6 +44,24 @@ pub const NS_TEST_REQUEST: u32 = 530;
 /// Payload: `MISC{ns_version};531;{server_timestamp};`.
 pub const NS_HEART_BEAT: u32 = 531;
 
+/// An error frame the venue sent during authentication, as an error a caller
+/// can act on.
+///
+/// A frame of type [`NS_ERROR_RESPONSE`] or [`NS_SECURE_ERROR`] is the venue
+/// answering: it read what was sent and refused it. Raised as
+/// [`io::ErrorKind::Other`] that refusal reads as a door that did not open, and
+/// the failover knocks on every other door with the same credentials — four
+/// refused logons where the account asked for one, which is how an account is
+/// locked rather than connected. Every door answers for the same account, so
+/// there is no second door to ask.
+///
+/// What is retryable inside such a refusal — the account being busy, a session
+/// limit, somebody else holding it — the venue states in its own words, and
+/// those are read before this kind is looked at.
+pub fn refused_by_the_venue(what: &str, stated: String) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, format!("{what}: {stated}"))
+}
+
 /// Build an NS message with `#%#%` framing.
 ///
 /// Format: `#%#%` + 4-byte-BE-length + payload

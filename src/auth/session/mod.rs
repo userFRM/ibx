@@ -268,9 +268,7 @@ pub fn recv_secure<R: Read>(
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid msg type"))?;
 
         if msg_type == NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(io::Error::other(
-                format!("Auth error: {}", parts[2..].join(";")),
-            ));
+            return Err(ns::refused_by_the_venue("Auth error", parts[2..].join(";")));
         }
         if msg_type == NS_REDIRECT {
             let target = parts.get(2).unwrap_or(&"");
@@ -1165,9 +1163,9 @@ pub fn do_security_code_2fa<S: Read + Write>(
             RecvMsg::Ns { msg_type, .. } if msg_type == NS_ERROR_RESPONSE
                 || msg_type == NS_SECURE_ERROR =>
             {
-                return Err(ib_key_err(
-                    io::ErrorKind::Other,
-                    format!("security-code gate: server error type={msg_type}"),
+                return Err(ns::refused_by_the_venue(
+                    "security-code gate",
+                    format!("server error type={msg_type}"),
                 ));
             }
             RecvMsg::Ns { msg_type, fields, .. } if msg_type == NS_TEST_REQUEST => {
@@ -1403,9 +1401,9 @@ pub fn do_ib_key_2fa<S: Read + Write>(
             RecvMsg::Ns { msg_type, .. } if msg_type == NS_ERROR_RESPONSE
                 || msg_type == NS_SECURE_ERROR =>
             {
-                return Err(ib_key_err(
-                    io::ErrorKind::Other,
-                    format!("2FA gate: server error type={msg_type}"),
+                return Err(ns::refused_by_the_venue(
+                    "2FA gate",
+                    format!("server error type={msg_type}"),
                 ));
             }
             RecvMsg::Xyz { msg_id, state, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN => {

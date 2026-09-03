@@ -204,8 +204,9 @@ fn read_server_hello(tls: &mut impl std::io::Read, what: &str) -> io::Result<Vec
         let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
 
         if msg_type == ns::NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(io::Error::other(
-                format!("{what} DH error: {}", parts[2..].join(";")),
+            return Err(ns::refused_by_the_venue(
+                &format!("{what} DH error"),
+                parts[2..].join(";"),
             ));
         }
         if msg_type == ns::NS_REDIRECT {
@@ -884,8 +885,9 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
             fix_ready = true;
             break;
         } else if msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(io::Error::other(
-                format!("CCP reconnect post-auth error: {}", inner_parts[2..].join(";")),
+            return Err(ns::refused_by_the_venue(
+                "CCP reconnect post-auth error",
+                inner_parts[2..].join(";"),
             ));
         }
         // Ignore 530 keepalives and other types
@@ -1167,8 +1169,9 @@ fn wait_for_data_start(
             channel.decrypt(&ct)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
         } else if raw_type == ns::NS_SECURE_ERROR {
-            return Err(io::Error::other(
-                format!("Post-auth secure error: {}", parts[2..].join(";")),
+            return Err(ns::refused_by_the_venue(
+                "Post-auth secure error",
+                parts[2..].join(";"),
             ));
         } else if raw_type == ns::NS_REDIRECT {
             let target = parts.get(2).unwrap_or(&"");
@@ -1202,8 +1205,9 @@ fn wait_for_data_start(
             fix_ready = true;
             break;
         } else if msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(io::Error::other(
-                format!("Post-auth error: {}", inner_parts[2..].join(";")),
+            return Err(ns::refused_by_the_venue(
+                "Post-auth error",
+                inner_parts[2..].join(";"),
             ));
         } else {
             log::info!("Post-auth msg type={msg_type}: {inner_text}");

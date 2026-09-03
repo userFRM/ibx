@@ -828,3 +828,46 @@ mod auth_finish_tests {
         );
     }
 }
+
+/// A door that answered and refused is not a door that did not open.
+///
+/// The venue sends an error frame when it has read what was sent and will not
+/// have it. Raised with no kind on it, that refusal came back as
+/// [`io::ErrorKind::Other`], which [`super::nobody_answered`] reads as a
+/// transport failure — so the failover knocked on all four doors with the same
+/// credentials, and a wrong password became four refused logons where the
+/// account asked for one. Every door answers for the same account; there is no
+/// second door to ask.
+///
+/// Measured against the venue with an empty username: `cdc1` answered
+/// `1;malformed user name;` and the client tried `ndc1`, `zdc1` and `hdc1`,
+/// logging each as "did not answer".
+#[test]
+fn a_refusal_from_the_venue_is_not_a_door_that_did_not_open() {
+    use crate::protocol::ns;
+    use crate::reliability::retry::{DisconnectReason, Recovery};
+
+    let refused = ns::refused_by_the_venue("Auth error", "1;malformed user name;".to_string());
+    assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied, "{refused}");
+    assert!(
+        !super::nobody_answered(&refused),
+        "a stated refusal sent the failover round every other host",
+    );
+    assert_eq!(DisconnectReason::from_error(&refused), DisconnectReason::AuthorizationFailed);
+    assert_eq!(
+        DisconnectReason::from_error(&refused).recovery(),
+        Recovery::Stop,
+        "asking again carries the same credentials",
+    );
+
+    // What the venue states as retryable stays retryable: those are read from
+    // its own words, before the kind is looked at.
+    let busy = ns::refused_by_the_venue("Auth error", "too many sessions".to_string());
+    assert_eq!(DisconnectReason::from_error(&busy), DisconnectReason::NotReady);
+    let held = ns::refused_by_the_venue("Auth error", "competing logon: elsewhere".to_string());
+    assert_eq!(DisconnectReason::from_error(&held), DisconnectReason::TakenOver);
+
+    // And a door that genuinely did not open still sends it to the next one.
+    let unreachable = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+    assert!(super::nobody_answered(&unreachable));
+}
