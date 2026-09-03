@@ -617,8 +617,10 @@ impl EClient {
             .values()
             .any(|other| other.contract.con_id == gone.contract.con_id);
         drop(kept);
-        if !still_watched {
-            let _ = self.cancel_mkt_data(py, req_id);
+        // The watch was this client's own, so it goes without a word: the
+        // caller withdrew a question, not a subscription.
+        if !still_watched && let Ok(tx) = self.tx() {
+            let _ = self.withdraw_mkt_data(py, &tx, req_id);
         }
     }
 

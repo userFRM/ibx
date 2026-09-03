@@ -298,7 +298,7 @@ impl EClient {
     /// that follow, [`req_mkt_data_ex`](EClient::req_mkt_data_ex) takes it.
     /// A number naming no type leaves subscriptions realtime, and says so.
     pub fn req_market_data_type(&self, market_data_type: i32) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.core.set_market_data_type(market_data_type);
     }
 

@@ -236,7 +236,7 @@ impl EClient {
     /// which is what stopped a subscription from opening with bulletins
     /// published before anyone asked for any.
     pub fn req_news_bulletins(&self, all_msgs: bool) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         if !all_msgs {
             let _ = self.shared.market.drain_news_bulletins();
         }
@@ -245,7 +245,7 @@ impl EClient {
 
     /// Cancel news bulletin subscription. Matches `cancelNewsBulletins` in C++.
     pub fn cancel_news_bulletins(&self) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.core.unsubscribe_bulletins();
     }
 

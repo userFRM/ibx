@@ -19,7 +19,7 @@ impl EClient {
     /// routing components at logon, for this session rather than per exchange,
     /// and that whole table is what comes back.
     pub fn req_smart_components(&self, req_id: i64, _bbo_exchange: &str, wrapper: &mut impl Wrapper) {
-        if !self.is_connected() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
+        if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         let components = self.shared.reference.smart_components();
         wrapper.smart_components(req_id, &components);
     }
@@ -29,7 +29,7 @@ impl EClient {
     /// Request available news providers. Matches `reqNewsProviders` in C++.
     /// Gateway-local — returns provider list from init data.
     pub fn req_news_providers(&self, wrapper: &mut impl Wrapper) {
-        if !self.is_connected() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
+        if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         let providers = self.shared.reference.news_providers();
         wrapper.news_providers(&providers);
     }
@@ -352,20 +352,20 @@ impl EClient {
     /// a contract. Nothing about one crosses this wire, so they are kept here
     /// and served to callers from here.
     pub fn query_display_groups(&self, req_id: i64) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.core.query_display_groups(req_id);
     }
 
     /// Follow a display group. Answered on `display_group_updated`, at once
     /// with what the group holds and again whenever it changes.
     pub fn subscribe_to_group_events(&self, req_id: i64, group_id: i32) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.core.subscribe_to_group_events(req_id, group_id);
     }
 
     /// Stop following a display group.
     pub fn unsubscribe_from_group_events(&self, req_id: i64) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.core.unsubscribe_from_group_events(req_id);
     }
 
@@ -382,7 +382,7 @@ impl EClient {
     /// Request soft dollar tiers. Matches `reqSoftDollarTiers` in C++.
     /// Gateway-local — returns tiers parsed from CCP logon tag 6560.
     pub fn req_soft_dollar_tiers(&self, req_id: i64, wrapper: &mut impl Wrapper) {
-        if !self.is_connected() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
+        if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         let tiers = self.shared.reference.soft_dollar_tiers();
         wrapper.soft_dollar_tiers(req_id, &tiers);
     }
@@ -392,7 +392,7 @@ impl EClient {
     /// Request family codes. Matches `reqFamilyCodes` in C++.
     /// Gateway-local — returns codes parsed from CCP logon tag 6823.
     pub fn req_family_codes(&self, wrapper: &mut impl Wrapper) {
-        if !self.is_connected() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
+        if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         let codes = self.shared.reference.family_codes();
         wrapper.family_codes(&codes);
     }
@@ -423,7 +423,7 @@ impl EClient {
     /// Request user info. Matches `reqUserInfo` in C++.
     /// Gateway-local — returns whiteBrandingId from CCP logon.
     pub fn req_user_info(&self, req_id: i64, wrapper: &mut impl Wrapper) {
-        if !self.is_connected() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
+        if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         let id = self.shared.reference.white_branding_id();
         wrapper.user_info(req_id, &id);
     }

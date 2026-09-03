@@ -681,6 +681,17 @@ impl EClient {
         self.connected.load(Ordering::Relaxed)
     }
 
+    /// Whether this session is finished rather than merely disconnected:
+    /// closed by [`disconnect()`](EClient::disconnect), or given up on by the
+    /// engine, which records why. A loss the engine is still working on is
+    /// neither — `is_connected()` reads false between the 1100 and the 1102,
+    /// and a request made then is carried when the transports come back.
+    /// Refused under 504 there, a withdrawal was left unapplied and the feed
+    /// came back with the session; the reference client serves that window.
+    pub fn session_over(&self) -> bool {
+        self.shared.reference.session_over().is_some()
+    }
+
     /// Disconnect from IB.  Sends `Shutdown` to the hot loop, waits for the
     /// background thread to exit, and marks the client as disconnected.
     pub fn disconnect(&self) {

@@ -125,13 +125,13 @@ impl EClient {
     /// [`req_pnl`](EClient::req_pnl): the figures are for the account this
     /// session opened under.
     pub fn req_pnl_single(&self, req_id: i64, _account: &str, _model_code: &str, con_id: i64) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.core.subscribe_pnl_single(req_id, con_id);
     }
 
     /// Cancel single-position PnL subscription. Matches `cancelPnLSingle` in C++.
     pub fn cancel_pnl_single(&self, req_id: i64) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.core.unsubscribe_pnl_single(req_id);
     }
 
@@ -143,13 +143,13 @@ impl EClient {
     /// and the venue states its figures for that account without being asked
     /// which, so there is no second account or model portfolio to name.
     pub fn req_account_summary(&self, req_id: i64, _group: &str, tags: &str) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.core.subscribe_account_summary(req_id, tags);
     }
 
     /// Cancel account summary. Matches `cancelAccountSummary` in C++.
     pub fn cancel_account_summary(&self, req_id: i64) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.core.unsubscribe_account_summary(req_id);
     }
 
@@ -182,7 +182,7 @@ impl EClient {
     /// listening. What stops is the reporting — a holding that moves after
     /// this is no longer delivered on `position`.
     pub fn cancel_positions(&self) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.positions_requested.store(false, Ordering::Release);
     }
 
@@ -243,7 +243,7 @@ impl EClient {
     /// request it would name is answered from what this session already holds,
     /// before a caller has this to cancel it with.
     pub fn cancel_account_updates_multi(&self, _req_id: i64) {
-        if !self.is_connected() { self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { self.report_reason(-1, &Refusal::not_connected("Not connected")); }
     }
 
     /// Request positions for multiple accounts/models. Matches `reqPositionsMulti` in
@@ -299,7 +299,7 @@ impl EClient {
     // reporting — a holding that moves after this is no longer delivered on
     // `position_multi` for this request.
     pub fn cancel_positions_multi(&self, req_id: i64) {
-        if !self.is_connected() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         self.positions_multi_requested.lock().unwrap().remove(&req_id);
     }
 

@@ -135,20 +135,7 @@ impl EClient {
     /// Cancel market data.
     pub fn cancel_mkt_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id) else { return Ok(()) };
-        let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
-        if instrument.is_none() && stop_news.is_none() {
-            return Ok(());
-        }
-        // Asked separately, because the quotes stay up for another caller
-        // while the headlines this one asked for stop. Withdrawn only
-        // alongside the quotes, they carried on with nobody listening.
-        if let Some(instrument) = stop_news {
-            let _ = Self::send_control(py, &tx, ControlCommand::UnsubscribeNews { instrument });
-        }
-        if let Some(instrument) = instrument {
-            Self::send_control(py, &tx, ControlCommand::Unsubscribe { instrument })?;
-        }
-        Ok(())
+        self.withdraw_mkt_data(py, &tx, req_id)
     }
 
     /// Request tick-by-tick data.
@@ -441,5 +428,34 @@ impl EClient {
             dict.set_item("close", q.close as f64 / ps)?;
             Ok(Some(dict.into_any().unbind()))
         })
+    }
+}
+
+impl EClient {
+    /// Withdraw a request's subscription, saying nothing about it.
+    ///
+    /// The body of `cancel_mkt_data`, for the withdrawals this client makes on
+    /// its own: a snapshot that has ended, the watch opened behind an option
+    /// calculation. Nobody asked for those, so nothing is reported against the
+    /// request — made through the public cancel, a handler that disconnected
+    /// on `tick_snapshot_end` was told 504 about a snapshot that had just
+    /// completed.
+    pub(crate) fn withdraw_mkt_data(
+        &self,
+        py: Python<'_>,
+        tx: &std::sync::mpsc::SyncSender<ControlCommand>,
+        req_id: i64,
+    ) -> PyResult<()> {
+        let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
+        // Asked separately, because the quotes stay up for another caller
+        // while the headlines this one asked for stop. Withdrawn only
+        // alongside the quotes, they carried on with nobody listening.
+        if let Some(instrument) = stop_news {
+            let _ = Self::send_control(py, tx, ControlCommand::UnsubscribeNews { instrument });
+        }
+        if let Some(instrument) = instrument {
+            Self::send_control(py, tx, ControlCommand::Unsubscribe { instrument })?;
+        }
+        Ok(())
     }
 }
