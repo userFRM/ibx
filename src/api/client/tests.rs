@@ -2743,8 +2743,11 @@ fn req_global_cancel_no_instruments_no_commands() {
 fn a_global_cancel_says_when_the_venue_has_not_finished_naming() {
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
-    // Nothing ever sets replay_done: the naming never finishes, and the wait
-    // runs out.
+    // The venue began naming and never said it had finished: the wait runs
+    // out with something named and something possibly not. An account that
+    // was named nothing at all is the other case, and says nothing — there is
+    // no uncovered order to warn about.
+    shared.orders.note_naming_began();
     let refusal = client.req_global_cancel().expect_err(
         "a withdrawal composed before the naming finished says so rather than returning",
     );
@@ -6907,4 +6910,21 @@ fn a_preview_of_an_algo_order_is_not_placed() {
              would be placed rather than priced",
         );
     }
+}
+
+/// An account the venue named nothing for is not warned about.
+///
+/// The record that ends the naming cannot be told from the one that precedes
+/// it, so an account working nothing never sees the naming finish. Warned on
+/// that alone, every withdrawal against an idle account would say orders might
+/// still be working when there were none — which is the same lie as silence,
+/// told the other way round.
+#[test]
+fn a_withdrawal_against_an_account_working_nothing_says_nothing() {
+    let (client, _rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    // The venue named nothing at all: no naming began, and none finished.
+    client.req_global_cancel().expect(
+        "an account the venue named nothing for is withdrawn without complaint",
+    );
 }

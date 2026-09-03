@@ -44,6 +44,8 @@ pub struct OrderState {
     /// it does unprompted after a connect. Until then "none" and "not yet
     /// told" look the same to a caller.
     replay_done: AtomicBool,
+    /// Whether the venue has named anything on this connection.
+    naming_began: AtomicBool,
     /// When the wait for that naming gives up, shared by everyone waiting.
     ///
     /// An account with nothing working never sees the naming end, so a wait
@@ -106,6 +108,7 @@ impl OrderState {
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
             replay_done: AtomicBool::new(false),
+            naming_began: AtomicBool::new(false),
             replay_deadline: Mutex::new(None),
             working_id_watermark: AtomicU64::new(0),
             narrow_id_watermark: AtomicU64::new(0),
@@ -249,6 +252,23 @@ impl OrderState {
     }
 
     /// The server has finished naming what is already working.
+    /// Whether the venue has named anything at all on this connection.
+    ///
+    /// Distinct from the naming being over: an account working nothing is
+    /// named with nothing, and the record that ends the naming cannot be told
+    /// from the one that precedes it, so an empty account never sees the
+    /// naming finish. A caller that has to say what its withdrawal did not
+    /// cover needs to know which of the two it is looking at — with nothing
+    /// named there is nothing uncovered to warn about.
+    #[doc(hidden)] pub fn note_naming_began(&self) {
+        self.naming_began.store(true, Ordering::Release);
+    }
+
+    /// Whether the venue has named anything on this connection.
+    pub fn naming_began(&self) -> bool {
+        self.naming_began.load(Ordering::Acquire)
+    }
+
     #[doc(hidden)] pub fn set_replay_done(&self) {
         self.replay_done.store(true, Ordering::Release);
     }

@@ -478,7 +478,12 @@ impl EClient {
                 count as usize - unsent,
             )));
         }
-        if !named {
+        // Only where the venue had begun naming and not finished. An account
+        // working nothing is named with nothing, and the record that ends the
+        // naming cannot be told from the one that precedes it, so an empty
+        // account never sees it finish — warning there would cry wolf on every
+        // withdrawal against an idle account.
+        if !named && shared.orders.naming_began() {
             // Said to the caller rather than the log: what had been named
             // went, and what had not been named is not covered. A silent
             // partial cancel is the worst thing this call can do. Reported

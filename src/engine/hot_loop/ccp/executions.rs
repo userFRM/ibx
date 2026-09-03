@@ -573,6 +573,7 @@ impl CcpState {
                 stop_price: stop_price_i64,
             });
             self.hydrated_any = true;
+            shared.orders.note_naming_began();
             log::info!("CCP recovery: inserted orderId={} sym={:?} side={:?} qty={} px={}",
                 clord_id, parsed.get(&55), side, qty,
                 limit_price_i64 as f64 / PRICE_SCALE as f64);
