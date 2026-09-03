@@ -2032,15 +2032,45 @@ fn build_tbt_query(
                         "corporate actions request did not go out: req_id={req_id} \
                          con_id={con_id}: {e}"
                     );
-                    crate::engine::hot_loop::push_hmds_error(
-                        shared,
-                        req_id,
-                        format!("the request for this contract's corporate actions could \
-                                 not be sent: {e}"),
-                        false,
-                    );
+                    self.the_actions_did_not_go_out(req_id, &e.to_string(), shared);
                 }
             }
+        } else {
+            // No connection to carry it. The same outcome as a write that
+            // failed, and it reached neither branch above: the caller heard
+            // nothing and the series waited on an answer to a request that was
+            // never made.
+            self.the_actions_did_not_go_out(
+                req_id, "there is no connection to the venue", shared,
+            );
+        }
+    }
+
+    /// Say that a contract's actions could not be asked for, and let go of the
+    /// series that was waiting to be folded by them.
+    ///
+    /// The request is registered as outstanding only when it actually goes out,
+    /// so one that does not is on no path that later fails it. Left held, the
+    /// series waits until the connection is torn down and the caller is then
+    /// told a second time, with the end it should have had here.
+    fn the_actions_did_not_go_out(&mut self, req_id: u32, why: &str, shared: &SharedState) {
+        crate::engine::hot_loop::push_hmds_error(
+            shared,
+            req_id,
+            format!("the request for this contract's corporate actions could not be sent: {why}"),
+            false,
+        );
+        if self.held.iter().any(|a| a.req_id == req_id) {
+            self.held.retain(|a| a.req_id != req_id);
+            shared.reference.push_historical_data(
+                req_id,
+                crate::control::historical::HistoricalResponse {
+                    query_id: String::new(),
+                    timezone: String::new(),
+                    is_complete: true,
+                    bars: Vec::new(),
+                },
+            );
         }
     }
 

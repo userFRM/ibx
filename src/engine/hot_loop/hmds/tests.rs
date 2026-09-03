@@ -1352,3 +1352,39 @@ fn a_refusal_of_another_query_leaves_a_held_series_alone() {
         "no end for a series still being collected",
     );
 }
+
+/// A series whose corporate actions could not be asked for is let go, not held.
+///
+/// The request is registered as outstanding only if it actually went out, so a
+/// send that fails is on no path that later fails it. The caller was told the
+/// actions could not be asked for and the series stayed held behind it —
+/// waiting on an answer to a request that never left — until the connection
+/// was torn down, when it was told a second time and given the end it should
+/// have had at once.
+#[test]
+fn a_series_whose_actions_could_not_be_asked_for_is_let_go() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    // No socket, so the send cannot go.
+    let mut conn: Option<Connection> = None;
+
+    hmds.held.push(HeldSeries {
+        req_id: 21, adjusted: true, con_id: 756733, sec_type: "STK".to_string(),
+        exchange: "SMART".to_string(), bars: Vec::new(), timezone: String::new(),
+        actions_asked: false, actions: None, complete: true,
+    });
+
+    hmds.send_adjustments_request(
+        21, 756733, "STK", "SMART", "20240101", "20240201", &shared, &mut conn, &mut hb,
+    );
+
+    assert!(hmds.held.is_empty(), "nothing is waiting on a request that never left");
+    let errors = shared.reference.drain_historical_errors();
+    assert_eq!(errors.len(), 1, "told once, here, rather than again at teardown");
+    assert_eq!(errors[0].0, 21);
+    let ended = shared.reference.drain_historical_data();
+    assert_eq!(ended.len(), 1, "and given the end that lets a blocked caller go");
+    assert!(ended[0].1.is_complete);
+    assert!(ended[0].1.bars.is_empty());
+}

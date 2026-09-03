@@ -6789,3 +6789,57 @@ fn a_global_cancel_waits_for_the_venue_to_name_the_working_orders() {
     );
 }
 
+
+/// A call answered here does not wait on its own turn to name a contract the
+/// caller gave by id alone.
+///
+/// These calls take the turn first and then ask the venue for the contract's
+/// full description, which is another call that waits for the same turn. The
+/// lock is not re-entrant, so neither ever runs again, and the deadline that
+/// would have said so is set inside the wait that never starts — the session
+/// stops answering anything, with nothing said.
+///
+/// `what_if_order` and `place` already name the contract before taking the
+/// turn, and the comment there names this hazard. They guard a contract with
+/// no id; this is the other shape the venue is asked about — an id with no
+/// security type or venue beside it, which is exactly what
+/// `named_by_the_venue` exists to fill in.
+#[test]
+fn an_answering_call_does_not_wait_on_itself_to_name_a_contract_given_by_id() {
+    // The venue's own id, and nothing else — the shape that needs naming.
+    let by_id_alone = || Contract { con_id: 756733, ..Default::default() };
+
+    for (what, call) in [
+        ("historical_data", 0u8), ("head_timestamp", 1), ("histogram_data", 2), ("schedule", 3),
+    ] {
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&done);
+        std::thread::spawn(move || {
+            let (client, _rx, _shared) = test_client();
+            let c = by_id_alone();
+            // No engine answers, so each of these fails or times out. What must
+            // not happen is that it never returns at all.
+            let _ = match call {
+                0 => client.historical_data(&c, "", "1 D", "1 hour", "TRADES", true).map(|_| ()),
+                1 => client.head_timestamp(&c, "TRADES", true).map(|_| ()),
+                2 => client.histogram_data(&c, true, "1 week").map(|_| ()),
+                _ => client.schedule(&c, "1 D").map(|_| ()),
+            };
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        // Read from the wait it is bounded by rather than written out, so this
+        // cannot race the wait moving.
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(crate::config::LOOKUP_TIMEOUT_SECS * 3);
+        let mut returned = false;
+        while std::time::Instant::now() < deadline {
+            if done.load(std::sync::atomic::Ordering::SeqCst) {
+                returned = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(returned, "{what} never returned: it is waiting on its own turn");
+    }
+}

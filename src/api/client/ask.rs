@@ -332,6 +332,14 @@ impl EClient {
             return self.adjusted_bars(contract, end_date_time, duration, bar_size, use_rth);
         }
         // One question at a time: see `EClient::asking`.
+        // Named before the turn is taken. A contract given by the venue's id
+        // alone is filled in by asking the venue for it, which is one of these
+        // calls and waits for this same turn — asked while this one holds it,
+        // on a lock that is not re-entrant, neither ever runs again and the
+        // deadline that would have said so is set inside the wait that never
+        // starts. `what_if_order` and `place` name theirs here for the same
+        // reason; these four asked inside the turn instead.
+        let contract = &*self.named_by_the_venue(contract)?;
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
@@ -585,6 +593,14 @@ impl EClient {
         &self, contract: &Contract, what_to_show: &str, use_rth: bool,
     ) -> Result<String, Refusal> {
         // One question at a time: see `EClient::asking`.
+        // Named before the turn is taken. A contract given by the venue's id
+        // alone is filled in by asking the venue for it, which is one of these
+        // calls and waits for this same turn — asked while this one holds it,
+        // on a lock that is not re-entrant, neither ever runs again and the
+        // deadline that would have said so is set inside the wait that never
+        // starts. `what_if_order` and `place` name theirs here for the same
+        // reason; these four asked inside the turn instead.
+        let contract = &*self.named_by_the_venue(contract)?;
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
@@ -731,6 +747,14 @@ impl EClient {
         &self, contract: &Contract, use_rth: bool, period: &str,
     ) -> Result<Vec<(f64, i64)>, Refusal> {
         // One question at a time: see `EClient::asking`.
+        // Named before the turn is taken. A contract given by the venue's id
+        // alone is filled in by asking the venue for it, which is one of these
+        // calls and waits for this same turn — asked while this one holds it,
+        // on a lock that is not re-entrant, neither ever runs again and the
+        // deadline that would have said so is set inside the wait that never
+        // starts. `what_if_order` and `place` name theirs here for the same
+        // reason; these four asked inside the turn instead.
+        let contract = &*self.named_by_the_venue(contract)?;
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
@@ -1295,6 +1319,14 @@ impl EClient {
     /// When a contract trades, over a window ending now.
     pub fn schedule(&self, contract: &Contract, duration: &str) -> Result<Schedule, Refusal> {
         // One question at a time: see `EClient::asking`.
+        // Named before the turn is taken. A contract given by the venue's id
+        // alone is filled in by asking the venue for it, which is one of these
+        // calls and waits for this same turn — asked while this one holds it,
+        // on a lock that is not re-entrant, neither ever runs again and the
+        // deadline that would have said so is set inside the wait that never
+        // starts. `what_if_order` and `place` name theirs here for the same
+        // reason; these four asked inside the turn instead.
+        let contract = &*self.named_by_the_venue(contract)?;
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
