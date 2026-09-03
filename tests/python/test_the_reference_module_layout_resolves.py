@@ -32,7 +32,8 @@ LAYOUT = [
     ("ticktype", ["TickType", "TickTypeEnum"]),
     ("account_summary_tags", ["AccountSummaryTags"]),
     ("object_implem", ["Object"]),
-    ("common", ["BarData", "RealTimeBar", "HistogramData", "TickAttrib",
+    ("common", ["Object", "floatMaxString", "intMaxString", "decimalMaxString",
+                "BarData", "RealTimeBar", "HistogramData", "TickAttrib",
                 "TickAttribBidAsk", "TickAttribLast", "FamilyCode",
                 "HistoricalSession", "DepthMktDataDescription",
                 "UNSET_DOUBLE", "TickerId", "MarketDataTypeEnum"]),
@@ -137,3 +138,20 @@ def test_a_star_import_brings_names_and_not_modules():
     assert "EClient" in brought and "IB" in brought
     for shadowed in ("order", "contract", "client", "wrapper", "common", "inspect", "ibx"):
         assert shadowed not in brought, f"{shadowed} would shadow the caller's own"
+
+def test_a_star_import_of_common_brings_what_that_module_imports():
+    # It is not only what the module defines. The reference's `common` imports
+    # `Object` and the figure-writing helpers, so a program that star-imports it
+    # uses them unqualified — its own sample writes `class Activity(Object)` on
+    # exactly that strength, and a module short of them is a NameError in the
+    # middle of a class body. Which is where this was found: driving that
+    # sample.
+    brought = {}
+    exec("from ibx.common import *", brought)
+    for named in ("Object", "floatMaxString", "intMaxString", "decimalMaxString"):
+        assert named in brought, named
+
+    class Activity(brought["Object"]):
+        pass
+
+    assert str(Activity()) == "Activity"

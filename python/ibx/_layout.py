@@ -125,7 +125,14 @@ def install(surface: dict) -> dict:
                  "ListOfHistoricalTickBidAsk", "ListOfHistoricalTickLast",
                  "ListOfHistoricalSessions", "ListOfOrder", "UNSET_DOUBLE", "UNSET_INTEGER", "UNSET_LONG",
                  "UNSET_DECIMAL", "DOUBLE_INFINITY", "INFINITY_STR", "NO_VALID_ID",
-                 "MAX_MSG_LEN"),
+                 "MAX_MSG_LEN",
+                 # Named in that module because it imports them, and a program
+                 # star-imports it and uses them unqualified: its own sample
+                 # writes `class Activity(Object)` on the strength of exactly
+                 # that. A module short of what a star import there brings is a
+                 # NameError in the middle of a class body, which is where this
+                 # was found.
+                 "Object", "floatMaxString", "intMaxString", "decimalMaxString"),
             "The shapes and the constants a callback signature names.",
         ),
         "const": (held("UNSET_DOUBLE", "UNSET_INTEGER", "UNSET_LONG", "UNSET_DECIMAL",
