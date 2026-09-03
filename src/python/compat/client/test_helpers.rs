@@ -127,6 +127,18 @@ impl EClient {
         Ok(())
     }
 
+    /// What this session has queued for the engine, taken and cleared.
+    ///
+    /// Written out rather than handed over as objects: a test asks whether a
+    /// command was sent and which order it names, and the debug rendering
+    /// answers both without publishing the engine's own types.
+    #[doc(hidden)]
+    fn _test_take_commands(&self) -> Vec<String> {
+        let held = self._test_control_rx.lock().unwrap();
+        let Some(rx) = held.as_ref() else { return Vec::new() };
+        rx.try_iter().map(|cmd| format!("{cmd:?}")).collect()
+    }
+
     /// Say which slot a contract's prices arrive in. Worth stating separately
     /// from the reqId mapping: what a position is worth is looked up by
     /// contract, so without this a held position has no price and no P&L.

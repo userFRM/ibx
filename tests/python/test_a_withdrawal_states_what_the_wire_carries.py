@@ -5,10 +5,12 @@ takes one too — when a person entered the withdrawal, on whose authority, and
 whether a person entered it at all. Passing one raised here, because the second
 argument was a bare time string.
 
-A cancel on this wire names five fields and none of those is among them. So the
-object is taken, and a withdrawal that states one of the three is refused rather
-than sent without it: taken and dropped, the order was withdrawn under nobody's
-name while the caller had given one.
+A cancel on this wire names five fields and none of those is among them, so
+what a caller states in that object cannot travel. The order still comes back
+and the caller is told the annotation did not go with it. Refusing the
+withdrawal outright left a live order working because a record could not be
+filed, which is the worse of the two — and the client this one stands in for
+withdraws it: it states all three on every cancel it sends.
 """
 
 import ibx
@@ -38,10 +40,14 @@ def _said(client, heard):
     ]
 
 
+def _withdrew(client):
+    return [cmd for cmd in client._test_take_commands() if "Cancel" in cmd]
+
+
 def test_a_withdrawal_that_states_nothing_goes_through():
     client, heard = _client()
     client.cancelOrder(1, ibx.OrderCancel())
-    client.reqGlobalCancel(ibx.OrderCancel())
+    assert _withdrew(client), "the order comes back"
     assert not [t for t in _said(client, heard) if "withdrawal states" in t]
 
 
@@ -51,28 +57,32 @@ def test_the_object_is_taken_where_a_bare_time_was_taken_before():
     client, heard = _client()
     client.cancelOrder(1, "")
     client.cancel_order(2)
+    assert len(_withdrew(client)) == 2
     assert not [t for t in _said(client, heard) if "withdrawal states" in t]
 
 
-def test_a_time_the_wire_cannot_carry_is_refused_not_dropped():
+def test_a_time_the_wire_cannot_carry_is_said_and_the_order_still_comes_back():
     client, heard = _client()
     withdrawal = ibx.OrderCancel()
     withdrawal.manualOrderCancelTime = "20260902-14:30:00"
     client.cancelOrder(1, withdrawal)
+
+    assert _withdrew(client), "a record with nowhere to go does not keep an order working"
     said = [t for t in _said(client, heard) if "withdrawal states" in t]
     assert said, heard.refusals
     assert "a time" in said[0] and "no field for it" in said[0]
 
 
-def test_an_operator_the_wire_cannot_carry_is_refused():
+def test_an_operator_the_wire_cannot_carry_is_said():
     client, heard = _client()
     withdrawal = ibx.OrderCancel()
     withdrawal.extOperator = "someone"
     client.cancelOrder(1, withdrawal)
+    assert _withdrew(client)
     assert [t for t in _said(client, heard) if "an operator" in t]
 
 
-def test_who_entered_it_is_refused_and_the_unset_value_is_not():
+def test_who_entered_it_is_said_and_the_unset_value_is_not():
     client, heard = _client()
     # The number an integer nobody set carries is not a statement.
     left_alone = ibx.OrderCancel()
@@ -83,10 +93,11 @@ def test_who_entered_it_is_refused_and_the_unset_value_is_not():
     stated = ibx.OrderCancel()
     stated.manualOrderIndicator = 1
     client.cancelOrder(2, stated)
+    assert len(_withdrew(client)) == 2, "both orders come back"
     assert [t for t in _said(client, heard) if "who entered it" in t]
 
 
-def test_the_global_withdrawal_refuses_the_same_way():
+def test_the_global_withdrawal_says_the_same_and_still_withdraws():
     client, heard = _client()
     withdrawal = ibx.OrderCancel()
     withdrawal.manualOrderCancelTime = "20260902-14:30:00"

@@ -282,12 +282,28 @@ impl EClient {
 
     /// Cancel an order. Matches `cancelOrder` in C++.
     ///
-    /// `manual_order_cancel_time` is taken and not applied. A cancel names five
-    /// fields on this wire and no time among them, as the protocol's
-    /// cancel does.
-    pub fn cancel_order(&self, order_id: i64, _manual_order_cancel_time: &str) -> Result<(), Refusal> {
+    /// A cancel names five fields on this wire and no time among them, so a
+    /// stated `manual_order_cancel_time` cannot travel. The cancel goes anyway
+    /// and the caller is told the record did not: a live order left standing
+    /// because a regulatory annotation has nowhere to go is the worse of the
+    /// two, and the client this one stands in for withdraws it — it states the
+    /// time on every cancel it sends. Taken in silence, as this did, the order
+    /// came back under nobody's name while the caller had given one.
+    pub fn cancel_order(&self, order_id: i64, manual_order_cancel_time: &str) -> Result<(), Refusal> {
         self.refuse_if_trading_is_over("a withdrawal")?;
         self.core.refuse_if_readonly("a cancel").map_err(Refusal::validation)?;
+        if !manual_order_cancel_time.is_empty() {
+            self.shared.orders.push_order_inactive(
+                u64::try_from(order_id).unwrap_or_default(),
+                Refusal::VALIDATION,
+                format!(
+                    "a withdrawal states a time, and this protocol carries no field for \
+                     it: the cancel names five and none of them is that one, so the order \
+                     is withdrawn without it. State it where the order was placed to have \
+                     it recorded. (stated: {manual_order_cancel_time})",
+                ),
+            );
+        }
         // Tag 11 order ids start at 1. A negative id cast unchecked becomes a
         // large unsigned one, which the venue answers "no such order".
         let order_id = u64::try_from(order_id).ok().filter(|id| *id > 0).ok_or_else(|| {

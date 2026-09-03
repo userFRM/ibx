@@ -369,15 +369,16 @@ impl EClient {
     /// the time alone, which is how this client took it before.
     ///
     /// A cancel on this wire names five fields and none of those is among
-    /// them, so a withdrawal that states one is refused rather than sent
-    /// without it: taken and dropped, the order was withdrawn under nobody's
-    /// name while the caller had given one.
+    /// them, so what the caller stated cannot travel. The cancel goes anyway
+    /// and the caller is told the annotation did not: refused outright, a live
+    /// order was left standing over a record the wire has no room for, and the
+    /// client this one stands in for withdraws it — it states all three on
+    /// every cancel it sends. Taken silently it would be withdrawn under
+    /// nobody's name while the caller had given one, so it is said.
     #[pyo3(signature = (order_id, order_cancel=None))]
     fn cancel_order(&self, py: Python<'_>, order_id: i64, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
         self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
-        if let Some(stated) = withdrawal_states(py, order_cancel.as_ref()) {
-            return self.report_refusal(py, order_id, Refusal::validation(stated));
-        }
+        let uncarried = withdrawal_states(py, order_cancel.as_ref());
         let Some(tx) = self.tx_or_report(order_id)? else { return Ok(()) };
         // As `place_order`. A negative id read as unsigned is a number above
         // nine quintillion, and the cancel names it.
@@ -386,7 +387,25 @@ impl EClient {
                 "cancel_order: order_id {order_id} is not an order number",
             )));
         };
+        // Said before the cancel goes, so a caller reading its callbacks in
+        // order learns what will not travel before it is told the order went.
+        if let Some(stated) = uncarried {
+            self.say_the_annotation_did_not_travel(py, order_id, stated)?;
+        }
         Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: oid }))
+    }
+
+    /// Say that a withdrawal's annotation has nowhere to go, without stopping
+    /// the withdrawal.
+    ///
+    /// The order still comes back. A record of who withdrew it and when is a
+    /// regulatory one, and losing it matters — but not as much as a live order
+    /// left working because the record could not be filed, which is what
+    /// refusing did.
+    fn say_the_annotation_did_not_travel(
+        &self, py: Python<'_>, order_id: i64, stated: String,
+    ) -> PyResult<()> {
+        self.report_refusal(py, order_id, Refusal::validation(stated))
     }
 
     /// Cancel an order identified by `permId` — stable across sessions, unlike
@@ -425,7 +444,7 @@ impl EClient {
     fn req_global_cancel(&self, py: Python<'_>, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
         self.core.refuse_if_readonly("a global cancel").map_err(PyRuntimeError::new_err)?;
         if let Some(stated) = withdrawal_states(py, order_cancel.as_ref()) {
-            return self.report_refusal(py, -1, Refusal::validation(stated));
+            self.say_the_annotation_did_not_travel(py, -1, stated)?;
         }
         let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
         // Everything held goes with everything working: an order the venue was
