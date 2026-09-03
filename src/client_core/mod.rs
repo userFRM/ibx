@@ -250,20 +250,26 @@ pub struct PortfolioUpdateEntry {
     pub realized_pnl: f64,
 }
 
-/// Parse a `riskAversion` tag value (used by ArrivalPx and ClosePx). A
-/// missing tag defaults to Neutral, matching IB's own algo default; a
-/// present value — including an empty string — that isn't a recognized
-/// member is refused rather than silently defaulting to Neutral.
-fn parse_risk_aversion(raw: Option<&str>) -> Result<RiskAversion, Refusal> {
+/// Parse a `riskAversion` tag value (used by ArrivalPx and ClosePx). A tag
+/// the caller never set is not stated; a present value — including an empty
+/// string — that isn't a recognized member is refused rather than sent.
+///
+/// One of the two parameters sent in the venue's spelling rather than the
+/// caller's (the other is a flag, see `get_bool`): the value is folded for
+/// matching, so `getdone` goes as `Get_Done`. The venue names these three in
+/// one spelling and takes no other, so folding the caller's is the lenient
+/// direction: a caller who writes it another way is served rather than refused,
+/// and what reaches the wire is a spelling the venue reads either way.
+fn parse_risk_aversion(raw: Option<&str>) -> Result<Option<RiskAversion>, Refusal> {
     let raw = match raw {
-        None => return Ok(RiskAversion::Neutral),
+        None => return Ok(None),
         Some(raw) => raw,
     };
     match raw.to_lowercase().as_str() {
-        "neutral" => Ok(RiskAversion::Neutral),
-        "get_done" | "getdone" => Ok(RiskAversion::GetDone),
-        "aggressive" => Ok(RiskAversion::Aggressive),
-        "passive" => Ok(RiskAversion::Passive),
+        "neutral" => Ok(Some(RiskAversion::Neutral)),
+        "get_done" | "getdone" => Ok(Some(RiskAversion::GetDone)),
+        "aggressive" => Ok(Some(RiskAversion::Aggressive)),
+        "passive" => Ok(Some(RiskAversion::Passive)),
         _ => Err(Refusal::validation(
             "Unknown riskAversion '{raw}': expected Get_Done, Aggressive, Neutral or Passive"
                 .replace("{raw}", raw),
@@ -296,23 +302,23 @@ fn algo_param_names(strategy: &str) -> Option<&'static [&'static str]> {
 
 /// Parse algo strategy and TagValue params into internal AlgoParams.
 ///
-/// A number the caller never set is not stated: the venue's own default for
-/// it is not known here, and a `0` sent in its place is a claim the caller
-/// did not make. A flag the caller never set defaults to false, and an enum to
-/// its documented default. A key the caller *did* set — even to an empty
-/// string — is refused if it does not parse, rather than taking a default:
-/// `riskAversion="Aggresive"` would otherwise submit a Neutral algo with no
-/// error, and `maxPctVol=""` would submit one the caller did not write.
+/// A key the caller never set is not stated: the venue's own default for it
+/// is not known here, and a value sent in its place — `0`, an empty time,
+/// Neutral — is a claim the caller did not make. A key the caller *did* set —
+/// even to an empty string — is refused if it does not read, rather than
+/// dropped or defaulted: `riskAversion="Aggresive"` would otherwise submit an
+/// algo the caller did not describe, with no error.
 ///
 /// A strategy modelled here is re-encoded from the fields it names rather than
 /// forwarded as the caller wrote it, so a key it does not name would go no
 /// further. Said rather than dropped: the caller had set it for a reason and
 /// the order that reached the venue would not have carried it.
 ///
-/// A number is checked, not re-spelled. A parameter is text on the wire, and
+/// A value is checked, not re-spelled. A parameter is text on the wire, and
 /// the text the caller wrote is what reaches the venue, as the reference
 /// client forwards it; the parse here is this client's own check that it
-/// reads as one.
+/// reads. Two kinds are sent in the venue's spelling instead, each said where
+/// it is read: a flag goes as `1`/`0`, and `riskAversion` as the venue names it.
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal> {
     let folded = strategy.to_lowercase();
     if let Some(known) = algo_param_names(&folded)
@@ -328,7 +334,6 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
     let get = |key: &str| -> Option<String> {
         params.iter().find(|tv| tv.tag == key).map(|tv| tv.value.clone())
     };
-    let get_str = |key: &str| -> String { get(key).unwrap_or_default() };
     let get_num = |key: &str| -> Result<Option<String>, Refusal> {
         let raw = match get(key) {
             None => return Ok(None),
@@ -343,8 +348,10 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         }
         Ok(Some(raw))
     };
-    // A flag is the one kind that is not forwarded as the caller spelled it,
-    // and that is deliberate. A number is forwarded because `5` and `5.0` could
+    // A flag is one of two kinds not forwarded as the caller spelled it — the
+    // other is `riskAversion`, folded to the venue's own name in
+    // `parse_risk_aversion` — and both are deliberate. A number is forwarded
+    // because `5` and `5.0` could
     // be read as different values by something downstream and nothing here can
     // say they are not. A flag has two values, this reads all four spellings
     // the reference client's own samples and documentation use, and refuses
@@ -352,15 +359,16 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
     // reinterpreted. It goes out as `1` or `0`, which is what those samples
     // write and what this venue is known to take. Forwarding `true` instead
     // would be trading a spelling that works for one whose acceptance nobody
-    // here has established, on a live order.
-    let get_bool = |key: &str| -> Result<bool, Refusal> {
+    // here has established, on a live order. One the caller never set is not
+    // sent at all.
+    let get_bool = |key: &str| -> Result<Option<bool>, Refusal> {
         let raw = match get(key) {
-            None => return Ok(false),
+            None => return Ok(None),
             Some(raw) => raw,
         };
         match raw.to_lowercase().as_str() {
-            "0" | "false" => Ok(false),
-            "1" | "true" => Ok(true),
+            "0" | "false" => Ok(Some(false)),
+            "1" | "true" => Ok(Some(true)),
             _ => Err(Refusal::validation(
                 format!("Invalid {key} '{raw}': expected true/false or 1/0"),
             )),
@@ -372,27 +380,27 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             max_pct_vol: get_num("maxPctVol")?,
             no_take_liq: get_bool("noTakeLiq")?,
             allow_past_end_time: get_bool("allowPastEndTime")?,
-            start_time: get_str("startTime"),
-            end_time: get_str("endTime"),
+            start_time: get("startTime"),
+            end_time: get("endTime"),
         }),
         "twap" => Ok(AlgoParams::Twap {
             allow_past_end_time: get_bool("allowPastEndTime")?,
-            start_time: get_str("startTime"),
-            end_time: get_str("endTime"),
+            start_time: get("startTime"),
+            end_time: get("endTime"),
         }),
         "arrivalpx" | "arrival_price" => Ok(AlgoParams::ArrivalPx {
             max_pct_vol: get_num("maxPctVol")?,
             risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
             allow_past_end_time: get_bool("allowPastEndTime")?,
             force_completion: get_bool("forceCompletion")?,
-            start_time: get_str("startTime"),
-            end_time: get_str("endTime"),
+            start_time: get("startTime"),
+            end_time: get("endTime"),
         }),
         "closepx" | "close_price" => Ok(AlgoParams::ClosePx {
             max_pct_vol: get_num("maxPctVol")?,
             risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
             force_completion: get_bool("forceCompletion")?,
-            start_time: get_str("startTime"),
+            start_time: get("startTime"),
         }),
         "darkice" | "dark_ice" => {
             // Stated, not chosen here. A display size is how much of the
@@ -411,15 +419,15 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             Ok(AlgoParams::DarkIce {
                 allow_past_end_time: get_bool("allowPastEndTime")?,
                 display_size,
-                start_time: get_str("startTime"),
-                end_time: get_str("endTime"),
+                start_time: get("startTime"),
+                end_time: get("endTime"),
             })
         }
         "pctvol" | "pct_vol" => Ok(AlgoParams::PctVol {
             pct_vol: get_num("pctVol")?,
             no_take_liq: get_bool("noTakeLiq")?,
-            start_time: get_str("startTime"),
-            end_time: get_str("endTime"),
+            start_time: get("startTime"),
+            end_time: get("endTime"),
         }),
         // Anything else goes as the caller wrote it.
         //

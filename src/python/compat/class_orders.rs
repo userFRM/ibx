@@ -1637,8 +1637,8 @@ order.algoParams.append(TagValue('allowPastEndTime', int(True)))
             let AlgoParams::Twap { allow_past_end_time, start_time, end_time } = algo else {
                 panic!("a Twap runs as a Twap, got {algo:?}")
             };
-            assert!(allow_past_end_time, "the flag the sample hands over as an int");
-            assert_eq!((start_time.as_str(), end_time.as_str()), ("09:00:00 US/Eastern", "16:00:00 US/Eastern"));
+            assert_eq!(allow_past_end_time, Some(true), "the flag the sample hands over as an int");
+            assert_eq!((start_time.as_deref(), end_time.as_deref()), (Some("09:00:00 US/Eastern"), Some("16:00:00 US/Eastern")));
         });
     }
 

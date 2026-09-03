@@ -874,24 +874,32 @@ pub enum AlgoParams {
         /// default for it is not known here, and `0` is a claim. Sent as tag
         /// 849.
         max_pct_vol: Option<String>,
-        /// Don't take liquidity (0 or 1).
-        no_take_liq: bool,
-        /// Allow algo to continue past end time.
-        allow_past_end_time: bool,
-        /// Start time in UTC: "YYYYMMDD-HH:MM:SS".
-        start_time: String,
-        /// End time in UTC: "YYYYMMDD-HH:MM:SS".
-        end_time: String,
+        /// Whether it may only add liquidity, or nothing where the
+        /// caller stated none. Sent as `1`/`0`.
+        no_take_liq: Option<bool>,
+        /// Whether it may keep working past its end time, or nothing where the
+        /// caller stated none. Sent as `1`/`0`.
+        allow_past_end_time: Option<bool>,
+        /// When the algorithm should begin, as the caller wrote it
+        /// (`YYYYMMDD-HH:MM:SS` in UTC), or nothing where the
+        /// caller stated none.
+        start_time: Option<String>,
+        /// When it should stop, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        end_time: Option<String>,
     },
     /// TWAP: Time-weighted average price.
     /// Tag 847=Twap.
     Twap {
-        /// Whether it may keep working past that.
-        allow_past_end_time: bool,
-        /// When the algorithm should begin.
-        start_time: String,
-        /// When it should stop.
-        end_time: String,
+        /// Whether it may keep working past that, or nothing where the
+        /// caller stated none. Sent as `1`/`0`.
+        allow_past_end_time: Option<bool>,
+        /// When the algorithm should begin, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        start_time: Option<String>,
+        /// When it should stop, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        end_time: Option<String>,
     },
     /// Arrival Price: Minimize arrival price impact.
     /// Tag 847=ArrivalPx, 849=max_pct_vol.
@@ -900,16 +908,21 @@ pub enum AlgoParams {
         /// caller wrote it, or nothing where the caller stated none (see
         /// [`AlgoParams::Vwap`]).
         max_pct_vol: Option<String>,
-        /// How hard it works against the price to finish.
-        risk_aversion: RiskAversion,
-        /// Whether it may keep working past that.
-        allow_past_end_time: bool,
-        /// Whether it must finish within its window.
-        force_completion: bool,
-        /// When the algorithm should begin.
-        start_time: String,
-        /// When it should stop.
-        end_time: String,
+        /// How hard it works against the price to finish, or nothing where the
+        /// caller stated none.
+        risk_aversion: Option<RiskAversion>,
+        /// Whether it may keep working past that, or nothing where the
+        /// caller stated none. Sent as `1`/`0`.
+        allow_past_end_time: Option<bool>,
+        /// Whether it must finish within its window, or nothing where the
+        /// caller stated none. Sent as `1`/`0`.
+        force_completion: Option<bool>,
+        /// When the algorithm should begin, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        start_time: Option<String>,
+        /// When it should stop, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        end_time: Option<String>,
     },
     /// Close Price: Target closing price.
     /// Tag 847=ClosePx, 849=max_pct_vol.
@@ -918,25 +931,31 @@ pub enum AlgoParams {
         /// caller wrote it, or nothing where the caller stated none (see
         /// [`AlgoParams::Vwap`]).
         max_pct_vol: Option<String>,
-        /// How hard it works against the price to finish.
-        risk_aversion: RiskAversion,
-        /// Whether it must finish within its window.
-        force_completion: bool,
-        /// When the algorithm should begin.
-        start_time: String,
+        /// How hard it works against the price to finish, or nothing where the
+        /// caller stated none.
+        risk_aversion: Option<RiskAversion>,
+        /// Whether it must finish within its window, or nothing where the
+        /// caller stated none. Sent as `1`/`0`.
+        force_completion: Option<bool>,
+        /// When the algorithm should begin, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        start_time: Option<String>,
     },
     /// Dark Ice: Hidden iceberg algo.
     /// Tag 847=DarkIce.
     DarkIce {
-        /// Whether it may keep working past that.
-        allow_past_end_time: bool,
+        /// Whether it may keep working past that, or nothing where the
+        /// caller stated none. Sent as `1`/`0`.
+        allow_past_end_time: Option<bool>,
         /// How much of an iceberg is shown at once, as the caller wrote it;
         /// checked to read as a whole number.
         display_size: String,
-        /// When the algorithm should begin.
-        start_time: String,
-        /// When it should stop.
-        end_time: String,
+        /// When the algorithm should begin, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        start_time: Option<String>,
+        /// When it should stop, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        end_time: Option<String>,
     },
     /// Percentage of Volume: Participate at % of volume.
     /// Tag 847=PctVol.
@@ -945,12 +964,15 @@ pub enum AlgoParams {
         /// where the caller stated none (see [`AlgoParams::Vwap`]). Sent as
         /// param pctVol.
         pct_vol: Option<String>,
-        /// Whether it may only add liquidity.
-        no_take_liq: bool,
-        /// When the algorithm should begin.
-        start_time: String,
-        /// When it should stop.
-        end_time: String,
+        /// Whether it may only add liquidity, or nothing where the
+        /// caller stated none. Sent as `1`/`0`.
+        no_take_liq: Option<bool>,
+        /// When the algorithm should begin, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        start_time: Option<String>,
+        /// When it should stop, as the caller wrote it, or nothing where the
+        /// caller stated none.
+        end_time: Option<String>,
     },
 }
 

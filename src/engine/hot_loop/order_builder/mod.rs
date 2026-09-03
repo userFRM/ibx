@@ -6,7 +6,7 @@ use crate::protocol::datetime::{chrono_free_timestamp, unix_to_ib_utc_dash};
 use crate::engine::context::Context;
 use crate::protocol::connection::Connection;
 use crate::protocol::fix;
-use crate::types::{AlgoParams, OrderCondition, OrderRequest, OrderStatus, OrderUpdate, Side, qty_to_f64};
+use crate::types::{AlgoParams, OrderCondition, OrderRequest, OrderStatus, OrderUpdate, RiskAversion, Side, qty_to_f64};
 
 use super::{HeartbeatState, format_price, format_qty, format_uint};
 
@@ -2058,33 +2058,43 @@ fn push_order_attrs(
 }
 
 fn build_algo_tags(algo: &AlgoParams) -> (&str, Vec<String>) {
+    // Name then value for each parameter the caller stated, in the order the
+    // strategy lists them. One the caller did not state is not sent: the
+    // venue's own default for it is not known here, and a value put in its
+    // place — `0` for a flag, an empty time, Neutral — is a claim the caller
+    // did not make. The count on 5957 is of what is sent.
+    fn stated(pairs: &[(&str, Option<String>)]) -> Vec<String> {
+        let mut out = Vec::with_capacity(pairs.len() * 2);
+        for (key, value) in pairs {
+            if let Some(value) = value {
+                out.push(key.to_string());
+                out.push(value.clone());
+            }
+        }
+        out
+    }
+    let flag = |f: &Option<bool>| f.map(|f| if f { "1" } else { "0" }.to_string());
+    let spelled = |r: &Option<RiskAversion>| r.as_ref().map(|r| r.as_str().to_string());
     match algo {
         // Carried through untouched: the venue decides which algorithms this
         // account may use, and it says so at logon.
         AlgoParams::Named { strategy, params } => (strategy.as_str(), params.clone()),
         AlgoParams::Vwap { no_take_liq, allow_past_end_time, start_time, end_time, .. } => (
             "Vwap",
-            vec![
-                "noTakeLiq".into(),
-                if *no_take_liq { "1" } else { "0" }.into(),
-                "allowPastEndTime".into(),
-                if *allow_past_end_time { "1" } else { "0" }.into(),
-                "startTime".into(),
-                start_time.clone(),
-                "endTime".into(),
-                end_time.clone(),
-            ],
+            stated(&[
+                ("noTakeLiq", flag(no_take_liq)),
+                ("allowPastEndTime", flag(allow_past_end_time)),
+                ("startTime", start_time.clone()),
+                ("endTime", end_time.clone()),
+            ]),
         ),
         AlgoParams::Twap { allow_past_end_time, start_time, end_time } => (
             "Twap",
-            vec![
-                "allowPastEndTime".into(),
-                if *allow_past_end_time { "1" } else { "0" }.into(),
-                "startTime".into(),
-                start_time.clone(),
-                "endTime".into(),
-                end_time.clone(),
-            ],
+            stated(&[
+                ("allowPastEndTime", flag(allow_past_end_time)),
+                ("startTime", start_time.clone()),
+                ("endTime", end_time.clone()),
+            ]),
         ),
         AlgoParams::ArrivalPx {
             risk_aversion,
@@ -2095,52 +2105,40 @@ fn build_algo_tags(algo: &AlgoParams) -> (&str, Vec<String>) {
             ..
         } => (
             "ArrivalPx",
-            vec![
-                "riskAversion".into(),
-                risk_aversion.as_str().into(),
-                "allowPastEndTime".into(),
-                if *allow_past_end_time { "1" } else { "0" }.into(),
-                "forceCompletion".into(),
-                if *force_completion { "1" } else { "0" }.into(),
-                "startTime".into(),
-                start_time.clone(),
-                "endTime".into(),
-                end_time.clone(),
-            ],
+            stated(&[
+                ("riskAversion", spelled(risk_aversion)),
+                ("allowPastEndTime", flag(allow_past_end_time)),
+                ("forceCompletion", flag(force_completion)),
+                ("startTime", start_time.clone()),
+                ("endTime", end_time.clone()),
+            ]),
         ),
         AlgoParams::ClosePx { risk_aversion, force_completion, start_time, .. } => (
             "ClosePx",
-            vec![
-                "riskAversion".into(),
-                risk_aversion.as_str().into(),
-                "forceCompletion".into(),
-                if *force_completion { "1" } else { "0" }.into(),
-                "startTime".into(),
-                start_time.clone(),
-            ],
+            stated(&[
+                ("riskAversion", spelled(risk_aversion)),
+                ("forceCompletion", flag(force_completion)),
+                ("startTime", start_time.clone()),
+            ]),
         ),
         AlgoParams::DarkIce { allow_past_end_time, display_size, start_time, end_time } => (
             "DarkIce",
-            vec![
-                "allowPastEndTime".into(),
-                if *allow_past_end_time { "1" } else { "0" }.into(),
-                "displaySize".into(),
-                display_size.clone(),
-                "startTime".into(),
-                start_time.clone(),
-                "endTime".into(),
-                end_time.clone(),
-            ],
+            stated(&[
+                ("allowPastEndTime", flag(allow_past_end_time)),
+                ("displaySize", Some(display_size.clone())),
+                ("startTime", start_time.clone()),
+                ("endTime", end_time.clone()),
+            ]),
         ),
-        AlgoParams::PctVol { pct_vol, no_take_liq, start_time, end_time } => {
-            let mut params = vec!["noTakeLiq".into(), if *no_take_liq { "1" } else { "0" }.into()];
-            // A rate the caller did not state is not sent; it used to go as `0`.
-            if let Some(pct_vol) = pct_vol {
-                params.extend(["pctVol".into(), pct_vol.clone()]);
-            }
-            params.extend(["startTime".into(), start_time.clone(), "endTime".into(), end_time.clone()]);
-            ("PctVol", params)
-        }
+        AlgoParams::PctVol { pct_vol, no_take_liq, start_time, end_time } => (
+            "PctVol",
+            stated(&[
+                ("noTakeLiq", flag(no_take_liq)),
+                ("pctVol", pct_vol.clone()),
+                ("startTime", start_time.clone()),
+                ("endTime", end_time.clone()),
+            ]),
+        ),
     }
 }
 

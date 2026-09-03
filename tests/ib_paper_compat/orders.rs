@@ -1131,7 +1131,7 @@ pub(super) fn phase_vwap_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 62: VWAP Algo Order (SPY)",
         OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::Vwap { max_pct_vol: Some("0.1".into()), no_take_liq: false, allow_past_end_time: true, start_time: start, end_time: end } },
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::Vwap { max_pct_vol: Some("0.1".into()), no_take_liq: Some(false), allow_past_end_time: Some(true), start_time: Some(start), end_time: Some(end) } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1143,7 +1143,7 @@ pub(super) fn phase_twap_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 63: TWAP Algo Order (SPY)",
         OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::Twap { allow_past_end_time: true, start_time: start, end_time: end } },
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::Twap { allow_past_end_time: Some(true), start_time: Some(start), end_time: Some(end) } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1155,7 +1155,7 @@ pub(super) fn phase_arrival_px_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 64: Arrival Price Algo Order (SPY)",
         OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::ArrivalPx { max_pct_vol: Some("0.1".into()), risk_aversion: RiskAversion::Neutral, allow_past_end_time: true, force_completion: false, start_time: start, end_time: end } },
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::ArrivalPx { max_pct_vol: Some("0.1".into()), risk_aversion: Some(RiskAversion::Neutral), allow_past_end_time: Some(true), force_completion: Some(false), start_time: Some(start), end_time: Some(end) } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1167,7 +1167,7 @@ pub(super) fn phase_close_px_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 65: Close Price Algo Order (SPY)",
         OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::ClosePx { max_pct_vol: Some("0.1".into()), risk_aversion: RiskAversion::Neutral, force_completion: false, start_time: start } },
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::ClosePx { max_pct_vol: Some("0.1".into()), risk_aversion: Some(RiskAversion::Neutral), force_completion: Some(false), start_time: Some(start) } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1185,7 +1185,7 @@ pub(super) fn phase_dark_ice_order(conns: Conns) -> Conns {
         // is already accepted with. Asking for one share showing one was
         // refused every run, which tested the venue's rule and never the algo.
         OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: 200 * ibx::types::QTY_SCALE,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::DarkIce { allow_past_end_time: true, display_size: "100".into(), start_time: start, end_time: end } },
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::DarkIce { allow_past_end_time: Some(true), display_size: "100".into(), start_time: Some(start), end_time: Some(end) } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }
@@ -1197,7 +1197,7 @@ pub(super) fn phase_pct_vol_order(conns: Conns) -> Conns {
     let oid = next_order_id();
     run_submit_cancel_phase(conns, "Phase 67: % of Volume Algo Order (SPY)",
         OrderRequest::SubmitEx { order_id: oid, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
-            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::PctVol { pct_vol: Some("0.1".into()), no_take_liq: false, start_time: start, end_time: end } },
+            kind: OrderKind::Algo { price: 1_00_000_000, algo: AlgoParams::PctVol { pct_vol: Some("0.1".into()), no_take_liq: Some(false), start_time: Some(start), end_time: Some(end) } },
             tif: b'0', attrs: OrderAttrs::default() },
         false)
 }

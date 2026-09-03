@@ -918,10 +918,10 @@ fn algo_wire_carries_the_attributes_and_keeps_its_algo_tags() {
             price: 100 * crate::types::PRICE_SCALE,
             algo: AlgoParams::Vwap {
                 max_pct_vol: Some("0.25".into()),
-                no_take_liq: true,
-                allow_past_end_time: false,
-                start_time: String::new(),
-                end_time: String::new(),
+                no_take_liq: Some(true),
+                allow_past_end_time: Some(false),
+                start_time: Some(String::new()),
+                end_time: Some(String::new()),
             },
         },
         b'1',
@@ -990,6 +990,7 @@ fn an_algo_number_reaches_the_wire_as_the_caller_wrote_it() {
 #[test]
 fn an_algo_number_the_caller_did_not_state_is_not_sent() {
     use crate::types::model::TagValue;
+    let tv = |tag: &str, value: &str| TagValue { tag: tag.into(), value: value.into() };
     let wire = |strategy: &str, params: &[TagValue]| {
         let algo = crate::client_core::parse_algo_params(strategy, params).unwrap();
         send_kind_for_test(
@@ -1004,9 +1005,48 @@ fn an_algo_number_the_caller_did_not_state_is_not_sent() {
     assert_eq!(tag(&vwap, "849="), None, "{vwap}");
     assert_eq!(tag(&vwap, "847=").as_deref(), Some("Vwap"), "the order still names its strategy: {vwap}");
 
-    let pct = wire("PctVol", &[]);
+    let pct = wire("PctVol", &[tv("noTakeLiq", "0"), tv("startTime", "20260101-09:30:00"), tv("endTime", "20260101-16:00:00")]);
     assert!(!pct.contains("5958=pctVol\u{1}"), "{pct}");
     assert_eq!(tag(&pct, "5957=").as_deref(), Some("3"), "the count is of what is sent: {pct}");
+}
+
+/// A flag, a time or a risk aversion the caller did not state is not sent.
+///
+/// A Twap placed with no parameters went out with `allowPastEndTime=0`,
+/// `startTime=` and `endTime=`, and an Arrival Price with no riskAversion
+/// with `Neutral`: claims the caller never made, on the same footing as the
+/// `maxPctVol=0` that stopped being sent. A stated flag still goes as `1`/`0`.
+/// The pair count is asserted as well as the absence: a count that disagrees
+/// with the pairs is the kind of thing the venue refuses naming nothing.
+#[test]
+fn an_algo_flag_time_or_risk_aversion_the_caller_did_not_state_is_not_sent() {
+    use crate::types::model::TagValue;
+    let tv = |tag: &str, value: &str| TagValue { tag: tag.into(), value: value.into() };
+    let wire = |strategy: &str, params: &[TagValue]| {
+        let algo = crate::client_core::parse_algo_params(strategy, params).unwrap();
+        send_kind_for_test(
+            crate::types::OrderKind::Algo { price: 100 * crate::types::PRICE_SCALE, algo },
+            b'1',
+            crate::types::OrderAttrs::default(),
+        )
+    };
+    let tag = |msg: &str, t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    let pair = |key: &str, value: &str| format!("5958={key}\u{1}5960={value}\u{1}");
+
+    let twap = wire("Twap", &[]);
+    assert_eq!(tag(&twap, "5957=").as_deref(), Some("0"), "{twap}");
+    assert!(!twap.contains("5958="), "{twap}");
+
+    let twap = wire("Twap", &[tv("allowPastEndTime", "true")]);
+    assert_eq!(tag(&twap, "5957=").as_deref(), Some("1"), "{twap}");
+    assert!(twap.contains(&pair("allowPastEndTime", "1")), "a stated flag still goes as 1/0: {twap}");
+    assert!(!twap.contains("5958=startTime"), "{twap}");
+
+    let arrival = wire("ArrivalPx", &[tv("forceCompletion", "0")]);
+    assert_eq!(tag(&arrival, "5957=").as_deref(), Some("1"), "{arrival}");
+    assert!(arrival.contains(&pair("forceCompletion", "0")), "{arrival}");
+    assert!(!arrival.contains("5958=riskAversion"), "{arrival}");
+    assert_eq!(tag(&arrival, "849="), None, "{arrival}");
 }
 
 /// Conditions are joined the way the caller joined them.

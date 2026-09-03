@@ -699,8 +699,8 @@ fn parse_algo_vwap() {
     match algo {
         AlgoParams::Vwap { max_pct_vol, start_time, end_time, .. } => {
             assert_eq!(max_pct_vol.as_deref(), Some("0.1"));
-            assert_eq!(start_time, "09:30:00");
-            assert_eq!(end_time, "16:00:00");
+            assert_eq!(start_time.as_deref(), Some("09:30:00"));
+            assert_eq!(end_time.as_deref(), Some("16:00:00"));
         }
         _ => panic!("wrong variant"),
     }
@@ -722,7 +722,7 @@ fn parse_algo_arrival_price() {
     match algo {
         AlgoParams::ArrivalPx { max_pct_vol, risk_aversion, .. } => {
             assert_eq!(max_pct_vol.as_deref(), Some("0.25"));
-            assert!(matches!(risk_aversion, RiskAversion::Aggressive));
+            assert_eq!(risk_aversion, Some(RiskAversion::Aggressive));
         }
         _ => panic!("wrong variant"),
     }
@@ -833,18 +833,18 @@ fn parse_algo_arrival_price_rejects_unknown_risk_aversion() {
 }
 
 #[test]
-fn parse_algo_arrival_price_defaults_risk_aversion_when_absent() {
+fn parse_algo_arrival_price_states_no_risk_aversion_when_none_was_given() {
     let algo = parse_algo_params("arrivalpx", &[]).unwrap();
     match algo {
-        AlgoParams::ArrivalPx { risk_aversion, .. } => assert!(matches!(risk_aversion, RiskAversion::Neutral)),
+        AlgoParams::ArrivalPx { risk_aversion, .. } => assert_eq!(risk_aversion, None),
         _ => panic!("wrong variant"),
     }
 }
 
 #[test]
 fn parse_algo_arrival_price_rejects_empty_risk_aversion() {
-    // Present-but-empty is not the same as absent: only a tag the caller
-    // never set may default to Neutral.
+    // Present-but-empty is not the same as absent: a tag the caller never
+    // set is not sent, one they set to nothing is refused.
     let params = vec![TagValue { tag: "riskAversion".into(), value: "".into() }];
     let err = parse_algo_params("arrivalpx", &params).unwrap_err();
     assert!(err.message.contains("riskAversion"), "got: {err}");
