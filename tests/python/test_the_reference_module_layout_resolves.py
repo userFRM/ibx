@@ -29,10 +29,13 @@ LAYOUT = [
     ("commission_and_fees_report", ["CommissionAndFeesReport"]),
     ("scanner", ["ScannerSubscription", "ScanData"]),
     ("tag_value", ["TagValue"]),
-    ("ticktype", ["TickTypeEnum", "TickAttrib"]),
+    ("ticktype", ["TickType", "TickTypeEnum"]),
     ("account_summary_tags", ["AccountSummaryTags"]),
     ("object_implem", ["Object"]),
-    ("common", ["BarData", "UNSET_DOUBLE", "TickerId", "MarketDataTypeEnum"]),
+    ("common", ["BarData", "RealTimeBar", "HistogramData", "TickAttrib",
+                "TickAttribBidAsk", "TickAttribLast", "FamilyCode",
+                "HistoricalSession", "DepthMktDataDescription",
+                "UNSET_DOUBLE", "TickerId", "MarketDataTypeEnum"]),
     ("const", ["UNSET_DOUBLE", "NO_VALID_ID", "MAX_MSG_LEN"]),
     ("utils", ["iswrapper", "getTimeStrFromMillis", "decimalMaxString"]),
 ]
@@ -77,5 +80,60 @@ def test_a_star_import_from_one_of_them_brings_something():
     # The samples star-import four of these, so an empty module would pass the
     # import and leave the program with nothing.
     for name, _ in LAYOUT:
+
         module = importlib.import_module(f"ibx.{name}")
         assert getattr(module, "__all__", None), f"ibx.{name} publishes nothing"
+
+def test_a_module_holds_what_the_reference_puts_in_it():
+    # Split the wrong way round once: the attrib classes were in `ticktype`,
+    # which there holds `TickType` and `TickTypeEnum` and nothing else, and the
+    # reference's own wrapper imports `TickType` from it. What is stated about
+    # a tick lives in `common`, which is where its decoder reads them from.
+    from ibx import common, ticktype
+
+    assert ticktype.TickType is int
+    assert not hasattr(ticktype, "TickAttrib"), "that class lives in common"
+    for named in ("TickAttrib", "TickAttribBidAsk", "TickAttribLast"):
+        assert hasattr(common, named), named
+
+
+def test_a_condition_is_made_the_way_that_client_makes_one():
+    # Its samples build every conditional order this way, so the six classes
+    # being importable is not enough on its own.
+    from ibx import order_condition
+
+    made = order_condition.Create(order_condition.OrderCondition.Price)
+    assert type(made).__name__ == "PriceCondition"
+    made.conId = 265598
+    made.isMore = True
+    made.price = 100.0
+    for kind, name in [
+        (order_condition.OrderCondition.Time, "TimeCondition"),
+        (order_condition.OrderCondition.Margin, "MarginCondition"),
+        (order_condition.OrderCondition.Execution, "ExecutionCondition"),
+        (order_condition.OrderCondition.Volume, "VolumeCondition"),
+        (order_condition.OrderCondition.PercentChange, "PercentChangeCondition"),
+    ]:
+        assert type(order_condition.Create(kind)).__name__ == name
+    assert order_condition.Create(99) is None, "a kind there is not is not invented"
+
+
+def test_the_layout_says_so_when_it_names_something_absent():
+    # Filtered to what the package happens to have, a module came out short and
+    # the import that wanted the missing name failed at the caller instead.
+    import ibx._layout as layout
+
+    try:
+        layout.install({"EClient": ibx.EClient})
+    except AttributeError as why:
+        assert "does not publish" in str(why)
+        return
+    raise AssertionError("a layout naming what is not there was accepted")
+
+
+def test_a_star_import_brings_names_and_not_modules():
+    brought = {}
+    exec("from ibx import *", brought)
+    assert "EClient" in brought and "IB" in brought
+    for shadowed in ("order", "contract", "client", "wrapper", "common", "inspect", "ibx"):
+        assert shadowed not in brought, f"{shadowed} would shadow the caller's own"

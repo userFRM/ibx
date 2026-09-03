@@ -39,11 +39,13 @@ from ._reference_shapes import (  # noqa: F401
     UNSET_LONG,
     COMPETE_AGAINST_BEST_OFFSET_UP_TO_MID,
     AccountSummaryTags,
-    ComboLeg,
     DeltaNeutralContract,
     ExecutionFilter,
     FaDataTypeEnum,
+    FamilyCode,
+    HistogramData,
     HistogramDataList,
+    HistoricalSession,
     ListOfContractDescription,
     ListOfDepthExchanges,
     ListOfFamilyCode,
@@ -60,6 +62,7 @@ from ._reference_shapes import (  # noqa: F401
     OrderComboLeg,
     OrderCondition,
     OrderId,
+    RealTimeBar,
     ScanData,
     ScannerSubscription,
     SetOfFloat,
@@ -221,7 +224,18 @@ from . import _layout as _layout_module  # noqa: E402
 globals().update(_layout_module.install(dict(globals())))
 del _layout_module
 
-# The extension module is bound on this package by the star-import above, so
-# `dir()` names it too. Left in, `from ibx import *` rebinds the caller's own
-# `ibx` to that submodule and `ibx.IB` stops existing.
-__all__ = [n for n in dir() if not n.startswith("_") and n != "ibx"]
+# What `from ibx import *` brings. The extension module is bound on this
+# package by the star-import above, so `dir()` names it too: left in, the star
+# import rebinds the caller's own `ibx` to that submodule and `ibx.IB` stops
+# existing. The layout's modules go the same way — `from ibapi import *` brings
+# none of them there, and a script that had its own `order` or `contract` would
+# lose it to ours. So: no modules, and nothing this file merely imported to do
+# its own work.
+import types as _types
+
+__all__ = [
+    n for n, held in sorted(globals().items())
+    if not n.startswith("_")
+    and n != "ibx"
+    and not isinstance(held, _types.ModuleType)
+]

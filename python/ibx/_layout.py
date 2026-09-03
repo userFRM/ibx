@@ -31,6 +31,30 @@ def _module(name: str, contents: dict, doc: str) -> types.ModuleType:
     return made
 
 
+def _creator(surface: dict):
+    """`Create(condType)`, which is how a condition is made in that client.
+
+    Its samples build every conditional order this way — an empty condition of
+    the kind named, then its fields set — so the six classes being present is
+    not enough on its own.
+    """
+    by_kind = {
+        surface["OrderCondition"].Price: surface["PriceCondition"],
+        surface["OrderCondition"].Time: surface["TimeCondition"],
+        surface["OrderCondition"].Margin: surface["MarginCondition"],
+        surface["OrderCondition"].Execution: surface["ExecutionCondition"],
+        surface["OrderCondition"].Volume: surface["VolumeCondition"],
+        surface["OrderCondition"].PercentChange: surface["PercentChangeCondition"],
+    }
+
+    def Create(condType):
+        """An empty condition of the kind named, or nothing for a kind there is not."""
+        made = by_kind.get(condType)
+        return made() if made is not None else None
+
+    return Create
+
+
 def install(surface: dict) -> dict:
     """Lay the reference client's module names over `surface`.
 
@@ -40,7 +64,20 @@ def install(surface: dict) -> dict:
     program does both.
     """
     def held(*names):
-        return {n: surface[n] for n in names if n in surface}
+        """The named things, and a complaint if one of them is not there.
+
+        Filtered to what the surface happens to have, a module quietly came out
+        short and the import line that wanted the missing name failed at the
+        caller instead of here. Two modules were wrong that way and nothing
+        said so.
+        """
+        absent = [n for n in names if n not in surface]
+        if absent:
+            raise AttributeError(
+                f"the layout names {', '.join(absent)}, which this package does "
+                f"not publish: add the shape or stop naming it here",
+            )
+        return {n: surface[n] for n in names}
 
     layout = {
         "client": (held("EClient"), "The client, under the name that client gives it."),
@@ -57,24 +94,30 @@ def install(surface: dict) -> dict:
         "order_state": (held("OrderState", "OrderAllocation"), "What the venue says about an order."),
         "order_cancel": (held("OrderCancel"), "What a withdrawal states."),
         "order_condition": (
-            held("OrderCondition", "PriceCondition", "TimeCondition", "MarginCondition",
-                 "ExecutionCondition", "VolumeCondition", "PercentChangeCondition"),
+            dict(
+                held("OrderCondition", "PriceCondition", "TimeCondition", "MarginCondition",
+                     "ExecutionCondition", "VolumeCondition", "PercentChangeCondition"),
+                Create=_creator(surface),
+            ),
             "What an order can be made to wait for.",
         ),
         "execution": (held("Execution", "ExecutionFilter"), "A fill and which fills are asked for."),
         "commission_and_fees_report": (held("CommissionAndFeesReport"), "What a fill cost."),
         "scanner": (held("ScannerSubscription", "ScanData"), "A scan and one of its rows."),
         "tag_value": (held("TagValue"), "One named value."),
-        "ticktype": (held("TickTypeEnum", "TickAttrib", "TickAttribBidAsk", "TickAttribLast"),
-                     "What a tick is, and what is stated about one."),
+        "ticktype": (held("TickType", "TickTypeEnum"),
+                     "What a tick is. The reference client's module holds these two "
+                     "and nothing else; what is stated about a tick lives in `common`."),
         "account_summary_tags": (held("AccountSummaryTags"), "The account figures, by name."),
         "softdollartier": (held("SoftDollarTier"), "A soft-dollar tier."),
         "news": (held("NewsProvider"), "A news provider."),
         "object_implem": (held("Object"), "The base that client's plain objects are written on."),
         "common": (
-            held("BarData", "RealTimeBar", "HistogramData", "HistoricalTick",
-                 "HistoricalTickBidAsk", "HistoricalTickLast", "PriceIncrement",
-                 "SmartComponent", "WshEventData", "FaDataTypeEnum", "MarketDataTypeEnum",
+            held("BarData", "RealTimeBar", "HistogramData", "NewsProvider",
+                 "DepthMktDataDescription", "SmartComponent", "TickAttrib",
+                 "TickAttribBidAsk", "TickAttribLast", "FamilyCode", "PriceIncrement",
+                 "HistoricalTick", "HistoricalTickBidAsk", "HistoricalTickLast",
+                 "HistoricalSession", "WshEventData", "FaDataTypeEnum", "MarketDataTypeEnum",
                  "TickerId", "OrderId", "TickType", "TagValueList", "SetOfString",
                  "SetOfFloat", "SmartComponentMap", "HistogramDataList",
                  "ListOfContractDescription", "ListOfDepthExchanges", "ListOfNewsProviders",

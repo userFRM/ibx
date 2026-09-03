@@ -1,15 +1,16 @@
 """The names a program written against the reference client imports.
 
 That client publishes a handful of plain objects a caller fills in and hands
-back — an execution filter, a scanner subscription, a combination leg — along
-with the constants its unset fields carry and the aliases its type annotations
+back — an execution filter, a scanner subscription, a withdrawal — along with
+the constants its unset fields carry and the aliases its type annotations
 name. A program imports them on its first line, so absent, none of it ran.
 
 Everything here is plain Python, as it is there, because this client reads
 these objects by attribute: the shape is the contract, and any object carrying
 the same attribute names is already accepted. What each field means is the
 venue's business and is documented by the venue; what is written here is the
-shape and nothing else.
+shape and nothing else. A combination leg is not here: a callback hands legs
+back as well as taking them, so that class lives beside the contract class.
 """
 
 import math
@@ -114,30 +115,6 @@ class ScannerSubscription:
         self.averageOptionVolumeAbove = UNSET_INTEGER
         self.scannerSettingPairs = ""
         self.stockTypeFilter = ""
-
-
-class ComboLeg:
-    """One leg of a combination contract.
-
-    A leg with no `conId` names no contract and is refused; a leg with no
-    `ratio` is a leg the caller had not finished describing, and is not made
-    into a one-for-one leg on their behalf.
-    """
-
-    SAME = 0
-    OPEN = 1
-    CLOSE = 2
-    UNKNOWN = 3
-
-    def __init__(self):
-        self.conId = 0
-        self.ratio = 0
-        self.action = ""
-        self.exchange = ""
-        self.openClose = 0
-        self.shortSaleSlot = 0
-        self.designatedLocation = ""
-        self.exemptCode = -1
 
 
 class DeltaNeutralContract:
@@ -324,4 +301,48 @@ def getEnumTypeName(cls, value):
             return name
     named = [n for n in vars(cls) if not n.startswith("_")]
     return named[0] if named else ""
+
+class RealTimeBar:
+    """One five-second bar, as a callback hands it over.
+
+    A program builds one of these itself in its own `realtimeBar` override, so
+    it has to be constructible the way that client's is.
+    """
+
+    def __init__(self, time=0, endTime=-1, open_=0.0, high=0.0, low=0.0,
+                 close=0.0, volume=UNSET_DECIMAL, wap=UNSET_DECIMAL, count=0):
+        self.time = time
+        self.endTime = endTime
+        self.open_ = open_
+        self.high = high
+        self.low = low
+        self.close = close
+        self.volume = volume
+        self.wap = wap
+        self.count = count
+
+
+class HistogramData:
+    """How much traded at one price, over the window asked about."""
+
+    def __init__(self):
+        self.price = 0.0
+        self.size = UNSET_DECIMAL
+
+
+class FamilyCode:
+    """An account and the family it belongs to."""
+
+    def __init__(self):
+        self.accountID = ""
+        self.familyCodeStr = ""
+
+
+class HistoricalSession:
+    """One session in the schedule a contract trades on."""
+
+    def __init__(self):
+        self.startDateTime = ""
+        self.endDateTime = ""
+        self.refDate = ""
 
