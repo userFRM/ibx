@@ -417,7 +417,9 @@ impl Context {
     /// Apply a server-reported status. Returns true when the stored status
     /// actually changed. Guarded: a stale or reordered frame must
     /// not regress the lifecycle — terminal states are absorbing, and a
-    /// lower-rank status never overwrites a higher one. Deliberate
+    /// lower-rank status never overwrites a higher one. A rejection does not
+    /// displace a pending cancel either: it answers the request that raced
+    /// the cancel, and the cancel's own verdict is still owed. Deliberate
     /// regressions go through `set_order_status_forced`.
     ///
     /// `replayed` marks a report that restates history: PossResend (tag 97)
@@ -450,7 +452,13 @@ impl Context {
             let resumes_working = !replayed
                 && prev == OrderStatus::PendingCancel
                 && matches!(status, OrderStatus::PreSubmitted | OrderStatus::Submitted);
-            if !resumes_working && (prev.is_terminal() || status.rank() < prev.rank()) {
+            // A rejection arriving behind a pending cancel answers the request
+            // that raced the cancel, not the cancel itself: the venue still
+            // owes the cancel its own verdict, and the order stands as
+            // in-flight until that lands rather than being reported done.
+            let cancel_still_owed = prev == OrderStatus::PendingCancel
+                && status == OrderStatus::Rejected;
+            if !resumes_working && (cancel_still_owed || prev.is_terminal() || status.rank() < prev.rank()) {
                 log::debug!(
                     "Order {order_id} status guard: keeping {prev:?}, dropping stale {status:?}",
                 );

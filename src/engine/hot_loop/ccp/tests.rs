@@ -1946,6 +1946,84 @@ fn a_recovered_order_without_a_time_in_force_states_none() {
         "a replace must not restate a time-in-force the order never had: {msg}");
 }
 
+/// The venue names at connect what it holds, not only what is working: the
+/// shape for an order it holds is 150=0 with the status as it stands, 39=I
+/// captured. A cancel-all iterates the engine's book, so a named order that
+/// never reached the book is one the kill switch silently skips. It must
+/// reach the book, and the cancel must cover it.
+#[test]
+fn a_naming_record_for_a_held_order_reaches_the_book_and_the_cancel() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+
+    // A naming record in the venue's shape for a held order.
+    let mut frame = std::collections::HashMap::new();
+    for (tag, val) in [
+        (11u32, "77"), (150u32, "0"), (39u32, "I"), (6008u32, "756733"),
+        (38u32, "100"), (55u32, "SPY"), (54u32, "1"), (40u32, "2"),
+        (44u32, "100.0"), (58u32, "Order held pending margin check"), (103u32, "0"),
+    ] {
+        frame.insert(tag, val.to_string());
+    }
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    let order = context.order(77).expect("the named order reaches the book");
+    assert_eq!(
+        order.status, crate::types::OrderStatus::Inactive,
+        "and keeps the status the naming record stated",
+    );
+
+    // The set a cancel-all iterates, for the contract named on the record.
+    let open: Vec<u64> = context.open_orders_for(order.instrument)
+        .iter().map(|o| o.order_id).collect();
+    assert_eq!(open, vec![77], "the cancel-all covers it");
+
+    // The wire leg of the kill switch: the cancel names the order the venue
+    // named, under the ClOrdID the naming record stated.
+    context.cancel_all(order.instrument);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared_arc = std::sync::Arc::new(SharedState::new());
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared_arc, false, &None,
+    );
+    let mut buf = [0u8; 4096];
+    let n = std::io::Read::read(&mut peer, &mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(msg.contains("35=F"), "a cancel went out: {msg}");
+    assert!(msg.contains("|41=77|"), "naming the order the venue named: {msg}");
+}
+
+/// A report the venue marks as restating history states a working status for
+/// an order that finished — the naming at connect arrives unmarked, and the
+/// marked reports are the past. One must not be recovered as working even
+/// though its status is non-terminal.
+#[test]
+fn a_marked_restating_is_not_recovered_as_working() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+
+    let mut frame = std::collections::HashMap::new();
+    for (tag, val) in [
+        (11u32, "77"), (150u32, "0"), (39u32, "0"), (97u32, "Y"), (6008u32, "756733"),
+        (38u32, "100"), (55u32, "SPY"), (54u32, "1"), (40u32, "2"),
+    ] {
+        frame.insert(tag, val.to_string());
+    }
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    assert!(
+        context.order(77).is_none(),
+        "the past of a finished order is not brought back as working",
+    );
+}
+
 fn cancel_reject_frame(reason_code: &str) -> std::collections::HashMap<u32, String> {
     let mut m = std::collections::HashMap::new();
     m.insert(41u32, "C42".to_string()); // OrigClOrdID
@@ -2181,6 +2259,65 @@ fn ord_status_rejected_records_the_reason_with_its_code() {
 
     let info = shared.orders.get_order_info(42).unwrap();
     assert_eq!(info.order_state.reject_reason, "No valid bid/ask (reason code 1)");
+}
+
+/// A replace followed at once by a cancel races at the venue, and the venue
+/// resolves the race in the cancel's favour with the rejections first and the
+/// cancel's own acknowledgement last. The rejections answer the replace, and
+/// the first of them used to retire the order, so the acknowledgement arrived
+/// with nothing tracked to announce it against, and a caller that had
+/// cancelled was told the order was rejected and never that it was cancelled.
+#[test]
+fn a_cancel_is_still_answered_when_rejections_cross_it() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    // Working, then a cancel on the wire: that cancel is what the venue owes
+    // an answer to.
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
+
+    let report = |exec_type: &str, ord_status: &str, text: &str| {
+        crate::protocol::fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+            (11, "42"), (150, exec_type), (39, ord_status), (58, text),
+        ], 1)
+    };
+    // The race, in the order the venue stated it.
+    ccp.process_ccp_message(
+        &report("8", "8", "Order has been cancelled already, too late to replace"),
+        &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+    assert!(
+        context.order(42).is_some(),
+        "the venue still owes the cancel its answer, so the order stays in the book",
+    );
+    ccp.process_ccp_message(
+        &report("8", "8", "Prior submit/modify was rejected"),
+        &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+    ccp.process_ccp_message(
+        &report("4", "4", "Revision rejected due to unapproved mod followed by cancel"),
+        &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+
+    let updates = shared.orders.drain_order_updates();
+    assert!(
+        updates.iter().any(|u| u.order_id == 42 && u.status == crate::types::OrderStatus::Cancelled),
+        "the venue's final word on the order reaches the caller: {updates:?}",
+    );
+    assert!(
+        !updates.iter().any(|u| u.order_id == 42 && u.status == crate::types::OrderStatus::Rejected),
+        "the rejections answered the replace, not the cancel: {updates:?}",
+    );
+    assert!(
+        context.order(42).is_none(),
+        "and the book lets the order go once the venue has had its final word",
+    );
 }
 
 // /: in the UP portfolio snapshot the average cost is

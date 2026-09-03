@@ -746,13 +746,29 @@ impl CcpState {
             }).unwrap_or(0)
         });
 
-        // Recovery insert: a 35=8 with status New/New (150=0/39=0) for an order
+        // Recovery insert: a 35=8 with exec type New (150=0) for an order
         // that is NOT in this session's context is a cross-session recovery entry
         // pushed by CCP on session establishment. Insert into context.open_orders
         // so subsequent cancel/modify ACKs at ~line 668 can match via
         // context.order(clord_id) and emit OrderUpdate events to the user.
-        let is_new_ack = parsed.get(&150).map(|s| s.as_str()) == Some("0")
-            && parsed.get(&39).map(|s| s.as_str()) == Some("0");
+        //
+        // The venue names what it holds, not only what is working: a held
+        // order is named the same way with its status as it stands — 39=I
+        // captured — and the book is what a cancel-all iterates, so a named
+        // order that never reached the book is one the kill switch silently
+        // skips. Any non-terminal status is recovered; a terminal one states
+        // the order finished and is recorded below, not brought back. A report
+        // the venue marks as restating history is the past of an order that
+        // finished — the naming at connect arrives unmarked — and must not be
+        // recovered as working either.
+        let ord_status = parsed.get(&39).map(|s| s.as_str()).unwrap_or("");
+        let exec_type = parsed.get(&150).map(|s| s.as_str()).unwrap_or("");
+        let is_new_ack = exec_type == "0";
+        let status = status_of(ord_status, clord_id, parsed);
+        let replayed = |tag: u32| {
+            parsed.get(&tag).map(|v| v.eq_ignore_ascii_case("Y")).unwrap_or(false)
+        };
+        let marked_resend = replayed(97) || replayed(43);
         // The sentinel is dropped further down, but this recovery insert runs
         // first — without the guard, a `11='*'` terminator registers a conId
         // and inserts the reserved order id 0 before being "discarded".
@@ -776,7 +792,8 @@ impl CcpState {
         // the order finished — so its absence reads as "never seen" and the
         // echo would insert it as live, with none of the fill on it.
         let already_finished = shared.orders.recently_completed(clord_id);
-        if is_new_ack && clord_id != 0 && !already_finished
+        if is_new_ack && !status.is_terminal() && !marked_resend
+            && clord_id != 0 && !already_finished
             && (context.order(clord_id).is_none() || unknown)
         {
             self.recover_order(parsed, clord_id, prior, context, shared);
@@ -839,8 +856,6 @@ impl CcpState {
             return;
         }
 
-        let ord_status = parsed.get(&39).map(|s| s.as_str()).unwrap_or("");
-        let exec_type = parsed.get(&150).map(|s| s.as_str()).unwrap_or("");
         let exec_id = parsed.get(&17).map(|s| s.as_str()).unwrap_or("");
         let last_px = parsed.get(&31).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
         // Tag 32, the quantity of this print, held fixed-point. A fractional
@@ -900,8 +915,6 @@ impl CcpState {
                 parsed.get(&58).map(|s| s.as_str()).unwrap_or(""),
                 parsed.get(&103).map(|s| s.as_str()).unwrap_or(""));
         }
-
-        let status = status_of(ord_status, clord_id, parsed);
 
         // A replace is acknowledged as 39=5, reached through 39=6 first: a
         // modify runs PendingCancel then Replaced. Confirmed live.
@@ -1489,7 +1502,17 @@ impl CcpState {
                 filled_qty: tracked.map_or(0, |o| o.filled),
                 timestamp_ns: context.now_ns(),
             });
-            context.retire_order(clord_id);
+            // A rejection the guard left standing is the venue's answer to the
+            // request that raced the cancel, not an answer to the cancel: the
+            // venue still owes the cancel its own verdict, and retiring here
+            // would leave that verdict nothing to announce against when it
+            // lands. The order stays in the book until a verdict the guard
+            // accepts finishes it.
+            let cancel_still_owed = status == crate::types::OrderStatus::Rejected
+                && tracked.is_some_and(|o| o.status == crate::types::OrderStatus::PendingCancel);
+            if !cancel_still_owed {
+                context.retire_order(clord_id);
+            }
         }
 
         // Announced after everything this report changed is written. A caller
