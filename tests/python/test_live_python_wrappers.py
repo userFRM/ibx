@@ -60,6 +60,10 @@ class FullWrapper(EWrapper):
         self.connected = threading.Event()
         self.got_next_id = threading.Event()
         self.got_tick = threading.Event()
+        # A print, not a quote. Any price at all sets `got_tick` — a bid, an
+        # ask, yesterday's close — and none of those says the contract is
+        # trading. Only a last price does.
+        self.got_print = threading.Event()
         self.got_order_status = threading.Event()
         self.got_order_cancelled = threading.Event()
         self.got_contract = threading.Event()
@@ -107,6 +111,13 @@ class FullWrapper(EWrapper):
         self._record(("error", req_id, error_code, error_string))
 
     # ── Market Data ──
+    #: When the last trade happened, as the venue states it — seconds since the
+    #: epoch, on a string tick. The price of the last trade is not evidence that
+    #: anything is trading: it stands unchanged all night. The time it happened
+    #: is.
+    LAST_TIMESTAMP = 45
+    TRADED_WITHIN = 300  # seconds; a print this recent means the session is live
+
     def tick_price(self, req_id, tick_type, price, attrib):
         self._record(("tick_price", req_id, tick_type, price))
         if price > 0:
@@ -117,6 +128,15 @@ class FullWrapper(EWrapper):
 
     def tick_string(self, req_id, tick_type, value):
         self._record(("tick_string", req_id, tick_type, value))
+        if tick_type == self.LAST_TIMESTAMP:
+            import time
+
+            try:
+                traded_at = float(value)
+            except (TypeError, ValueError):
+                return
+            if 0 < time.time() - traded_at < self.TRADED_WITHIN:
+                self.got_print.set()
 
     # ── Orders ──
     def order_status(self, order_id, status, filled, remaining,
@@ -689,33 +709,82 @@ class TestScanner:
 # Tick-by-Tick Tests
 # ═══════════════════════════════════════
 
+def _inside_the_session(client, wrapper, contract):
+    """Whether the venue says this contract's own session is open right now.
+
+    Asked of the venue rather than worked out from a clock here: it states the
+    liquid hours on the contract, in the contract's own zone, and those are the
+    hours the trade stream carries prints for. A quote is no evidence — outside
+    the session a contract carries a bid, an ask and the price of the last trade
+    there ever was. Nor is the time of that trade: it can come from a route this
+    stream does not carry, which is what a subscription the venue accepts and
+    then says nothing on looks like at four in the morning.
+    """
+    import datetime
+    import zoneinfo
+
+    wrapper._get_events("contract_details")
+    client.req_contract_details(9911, contract)
+    for _ in range(150):
+        client.poll() if hasattr(client, "poll") else None
+        found = [e for e in wrapper._get_events("contract_details") if e[1] == 9911]
+        if found:
+            break
+        time.sleep(0.1)
+    else:
+        return False
+
+    details = found[0][2]
+    hours = getattr(details, "liquid_hours", "") or ""
+    zone = getattr(details, "time_zone_id", "") or "US/Eastern"
+    try:
+        now = datetime.datetime.now(zoneinfo.ZoneInfo(zone))
+    except Exception:
+        return False
+    for span in hours.split(";"):
+        if "-" not in span or "CLOSED" in span:
+            continue
+        opens, shuts = span.split("-", 1)
+        try:
+            a = datetime.datetime.strptime(opens, "%Y%m%d:%H%M")
+            b = datetime.datetime.strptime(shuts, "%Y%m%d:%H%M")
+        except ValueError:
+            continue
+        if a.replace(tzinfo=now.tzinfo) <= now <= b.replace(tzinfo=now.tzinfo):
+            return True
+    return False
+
+
 class TestTickByTick:
 
     def test_tbt_last(self, ib_connection):
         """A trade stream on a contract that is trading.
 
-        Skipped only on evidence that nothing is trading — which is what a
-        quote on the same contract establishes. Skipping whenever no trade
-        arrived made this pass on a client that never delivered one.
+        Skipped only on evidence that nothing is trading, and the evidence has
+        to be a print. A quote is not one: outside the session a contract
+        carries a bid, an ask and yesterday's close while nothing trades at
+        all, and this asked for any price above zero — so at three in the
+        morning it read a stale close as proof of trading and failed a client
+        that was working. Skipping whenever no trade arrived would be the
+        opposite mistake, and made this pass on a client that never delivered
+        one.
         """
         wrapper, client = ib_connection
         wrapper.got_tbt.clear()
-        wrapper.got_tick.clear()
 
         contract = make_spy_contract()
-        client.req_mkt_data(7002, contract, "", False)
-        quoted = wrapper.got_tick.wait(timeout=30)
-
         client.req_tick_by_tick_data(7001, contract, "Last", 0, False)
         got_tbt = wrapper.got_tbt.wait(timeout=45)
         client.cancel_tick_by_tick_data(7001)
-        client.cancel_mkt_data(7002)
 
-        if not quoted:
-            pytest.skip("the venue is quoting nothing, so nothing is trading")
+        if not _inside_the_session(client, wrapper, contract):
+            pytest.skip(
+                "the venue's own liquid hours say this contract's session is shut, "
+                "and the trade stream carries the session's prints"
+            )
         assert got_tbt, (
-            "the venue quotes this contract, so it is trading, and a trade "
-            "stream on it delivered nothing"
+            "the venue reported a trade on this contract, so it is trading, "
+            "and a trade stream on it delivered nothing"
         )
 
         events = [e for e in wrapper._get_events("tick_by_tick_all_last") if e[1] == 7001]
