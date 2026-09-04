@@ -562,10 +562,17 @@ impl CcpState {
             // terminal status for it is dropped and no OrderUpdate
             // reaches the caller. A missing order beats taking
             // the engine down; it is not a complete answer.
+            // Counted, not only logged: a withdrawal of everything composes
+            // its cancels from the book, so an order that never reached the
+            // book is one it silently skips, and the caller who asked for the
+            // account to be flattened is answered as though it were.
             match context.try_register_instrument(con_id) {
-                None => log::warn!(
-                    "recovery: instrument table full, order clord={clord_id} con_id={con_id} not tracked in the engine book",
-                ),
+                None => {
+                    shared.orders.note_an_order_without_a_slot();
+                    log::warn!(
+                        "recovery: instrument table full, order clord={clord_id} con_id={con_id} not tracked in the engine book",
+                    );
+                }
                 Some(instrument) => {
             if let Some(sym) = parsed.get(&55) {
                 context.set_symbol(instrument, sym.clone());

@@ -496,6 +496,10 @@ impl EClient {
     /// is still withdrawn and the call says so rather than returning as
     /// though every order were covered: a partial cancel that reads as one
     /// beats the same cancel in silence, which reads as a complete answer.
+    /// The same where the naming did finish and an order it named could not be
+    /// given a slot in this client's instrument table — the engine holds no
+    /// record of such an order, so no cancel here names it and it goes on
+    /// working at the venue.
     #[pyo3(signature = (order_cancel=None))]
     fn req_global_cancel(&self, py: Python<'_>, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
         self.core.refuse_if_readonly("a global cancel").map_err(PyRuntimeError::new_err)?;
@@ -528,6 +532,19 @@ impl EClient {
                 "a global cancel reached the engine for {} of {count} instruments; \
                  the rest were not sent, so orders on them are still working",
                 count as usize - unsent,
+            )));
+        }
+        // An order the venue named that could not be given a slot in this
+        // client's instrument table is in none of those requests: the engine
+        // holds no record of it to compose a cancel from, and it is still
+        // working there. Said before the naming is judged, because this is an
+        // omission that happened rather than one that may have.
+        let unheld = shared.orders.orders_without_a_slot();
+        if unheld > 0 {
+            return self.report_refusal(py, -1, Refusal::no_answer(format!(
+                "{unheld} of this account's working orders have no slot in this client's \
+                 instrument table, so no cancel was composed for them and they are still \
+                 working; the {count} that were sent cover the rest",
             )));
         }
         // Only where the venue had begun naming and not finished. An account
@@ -623,6 +640,21 @@ impl EClient {
                 "the venue had not finished naming this account's working orders within \
                  the wait, so what follows is what had arrived rather than what is working",
             ))?;
+        }
+        // And where an order the venue named could not be given a slot in the
+        // instrument table. It is listed below, from the order cache, and the
+        // engine holds no record of it: no fill on it is booked, no status
+        // change on it is announced, and a withdrawal of everything does not
+        // reach it. Listed without that said, it reads as an order this
+        // session is following.
+        let unheld = shared.orders.orders_without_a_slot();
+        if unheld > 0 {
+            self.report_refusal(py, -1, Refusal::no_answer(format!(
+                "{unheld} of the orders below have no slot in this client's instrument \
+                 table and are absent from the engine's book: their fills are not booked, \
+                 their status changes are not announced, and a withdrawal of every order \
+                 does not reach them",
+            )))?;
         }
         let orders = self.core.collect_open_orders(&shared);
         for (order_id, tracked) in &orders {
@@ -994,6 +1026,74 @@ w = W()",
                         && message.contains("had not finished naming")
                 }),
                 "the caller is told the snapshot is not known to be whole: {told:?}",
+            );
+        });
+    }
+
+    /// An order the venue named that could not be given a slot in the
+    /// instrument table is in none of the cancels a withdrawal of everything
+    /// composes: those are composed from the engine's book, and the order
+    /// never reached it. The caller is told on the error callback rather than
+    /// answered as though the account had been flattened.
+    #[test]
+    fn a_global_cancel_says_when_an_order_has_no_slot_in_the_instrument_table() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, shared, wrapper) = wired_client(py);
+            // The naming finished. One of the orders it carried arrived with
+            // the table full, so this is the other case from a naming that
+            // never ended: what was left out is established, not suspected.
+            shared.orders.set_replay_done();
+            shared.market.set_instrument_count(1);
+            shared.orders.note_an_order_without_a_slot();
+            client.req_global_cancel(py, None).unwrap();
+            let sent: Vec<ControlCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert!(
+                matches!(sent.as_slice(), [ControlCommand::Order(OrderRequest::CancelAll { instrument: 0 })]),
+                "what the book does hold is still withdrawn: {sent:?}",
+            );
+            let calls = wrapper.bind(py).getattr("calls").unwrap();
+            let heard: Vec<(String, i64, i64, i64, String, String)> = (0..calls.len().unwrap())
+                .filter_map(|i| calls.get_item(i).unwrap().extract().ok())
+                .collect();
+            assert!(
+                heard.iter().any(|(name, req_id, _, code, message, _)| {
+                    name == "error"
+                        && *req_id == -1
+                        && *code == crate::error_codes::Refusal::NO_ANSWER as i64
+                        && message.contains("no slot in this client's instrument table")
+                }),
+                "the caller is told what the withdrawal did not reach: {heard:?}",
+            );
+        });
+    }
+
+    /// An order left out of the engine's book for want of a slot is still
+    /// listed from the order cache, and nothing this session does follows it:
+    /// its fills are not booked, its status changes are not announced, and a
+    /// withdrawal of everything does not reach it. The caller is told so,
+    /// rather than reading the list as the orders this session is following.
+    #[test]
+    fn open_orders_say_when_one_of_them_has_no_slot_in_the_instrument_table() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, wrapper) = wired_client(py);
+            // The naming finished, and one of the orders it carried has no slot.
+            shared.orders.set_replay_done();
+            shared.orders.note_an_order_without_a_slot();
+            client.req_open_orders(py).unwrap();
+            let calls = wrapper.bind(py).getattr("calls").unwrap();
+            let told: Vec<(String, i64, i64, i64, String, String)> = (0..calls.len().unwrap())
+                .filter_map(|i| calls.get_item(i).unwrap().extract().ok())
+                .collect();
+            assert!(
+                told.iter().any(|(name, req_id, _, code, message, _)| {
+                    name == "error"
+                        && *req_id == -1
+                        && *code == crate::error_codes::Refusal::NO_ANSWER as i64
+                        && message.contains("no slot in this client's instrument table")
+                }),
+                "the caller is told which of the orders it lists it cannot act on: {told:?}",
             );
         });
     }

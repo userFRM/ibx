@@ -1028,6 +1028,15 @@ fn a_full_instrument_table_does_not_abort_the_recovery_path() {
         context.order(42).is_none(),
         "the order is not tracked, which is the acknowledged cost",
     );
+    // And the cost is counted rather than only logged. The order is working at
+    // the venue and absent from the book a withdrawal of everything composes
+    // its cancels from; uncounted, that withdrawal returns as though the
+    // account had been flattened.
+    assert_eq!(
+        shared.orders.orders_without_a_slot(), 1,
+        "the order the book could not hold is counted for the calls that answer \
+         for the whole account",
+    );
 }
 /// Build a fill report for order 42. `extra` adds or overrides tags.
 fn fill_frame(extra: &[(u32, &str)]) -> std::collections::HashMap<u32, String> {

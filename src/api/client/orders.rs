@@ -390,6 +390,10 @@ impl EClient {
     /// is still withdrawn and the call says so rather than returning as
     /// though every order were covered: a partial cancel that reads as one
     /// beats the same cancel in silence, which reads as a complete answer.
+    /// The same where the naming did finish and an order it named could not be
+    /// given a slot in this client's instrument table — the engine holds no
+    /// record of such an order, so no cancel here names it and it goes on
+    /// working at the venue.
     pub fn req_global_cancel(&self) -> Result<(), Refusal> {
         self.refuse_if_trading_is_over("a withdrawal of every order")?;
         self.core.refuse_if_readonly("a global cancel").map_err(Refusal::validation)?;
@@ -405,6 +409,19 @@ impl EClient {
         let count = self.shared.market.instrument_count();
         for instrument in 0..count {
             self.send(ControlCommand::Order(OrderRequest::CancelAll { instrument }))?;
+        }
+        // An order the venue named that could not be given a slot in this
+        // client's instrument table is in none of those requests: the engine
+        // holds no record of it to compose a cancel from, and it is still
+        // working there. Said before the naming is judged, because this is an
+        // omission that happened rather than one that may have.
+        let unheld = self.shared.orders.orders_without_a_slot();
+        if unheld > 0 {
+            return Err(Refusal::no_answer(format!(
+                "{unheld} of this account's working orders have no slot in this client's \
+                 instrument table, so no cancel was composed for them and they are still \
+                 working; the {count} that were sent cover the rest",
+            )));
         }
         // Only where the venue had begun naming and not finished. An account
         // working nothing is named with nothing, and the record that ends the
@@ -517,6 +534,26 @@ impl EClient {
                 Refusal::NO_ANSWER as i64,
                 "the venue had not finished naming this account's working orders within \
                  the wait, so what follows is what had arrived rather than what is working",
+                "",
+            );
+        }
+        // And where an order the venue named could not be given a slot in the
+        // instrument table. It is listed below, from the order cache, and the
+        // engine holds no record of it: no fill on it is booked, no status
+        // change on it is announced, and a withdrawal of everything does not
+        // reach it. Listed without that said, it reads as an order this
+        // session is following.
+        let unheld = self.shared.orders.orders_without_a_slot();
+        if unheld > 0 {
+            wrapper.error(
+                super::dispatch::NO_REQUEST,
+                Refusal::NO_ANSWER as i64,
+                &format!(
+                    "{unheld} of the orders below have no slot in this client's instrument \
+                     table and are absent from the engine's book: their fills are not \
+                     booked, their status changes are not announced, and a withdrawal of \
+                     every order does not reach them",
+                ),
                 "",
             );
         }

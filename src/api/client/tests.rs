@@ -3128,6 +3128,75 @@ fn open_orders_say_when_the_snapshot_is_not_known_to_be_whole() {
     );
 }
 
+/// An order the venue named that could not be given a slot in the instrument
+/// table is in none of the cancels a withdrawal of everything composes: those
+/// are composed from the engine's book, and the order never reached it. The
+/// call says so rather than returning, which would tell the caller the account
+/// had been flattened while that order was still working there.
+#[test]
+fn a_global_cancel_says_when_an_order_has_no_slot_in_the_instrument_table() {
+    let (client, rx, shared) = test_client();
+    // The naming finished. One of the orders it carried arrived with the table
+    // full, so this is the other case from a naming that never ended: what was
+    // left out is established rather than suspected.
+    shared.orders.set_replay_done();
+    shared.market.set_instrument_count(1);
+    shared.orders.note_an_order_without_a_slot();
+    let refusal = client.req_global_cancel().expect_err(
+        "a withdrawal that cannot reach every working order says so rather than returning",
+    );
+    let sent: Vec<ControlCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        matches!(sent.as_slice(), [ControlCommand::Order(OrderRequest::CancelAll { instrument: 0 })]),
+        "what the book does hold is still withdrawn: {sent:?}",
+    );
+    assert_eq!(
+        refusal.code, crate::error_codes::Refusal::NO_ANSWER,
+        "under this client's own number for an answer it cannot give",
+    );
+    assert!(
+        refusal.message.contains("no slot in this client's instrument table"),
+        "the caller is told what the withdrawal did not reach: {refusal}",
+    );
+}
+
+/// An order left out of the engine's book for want of a slot is still listed
+/// from the order cache, and nothing this session does follows it: its fills
+/// are not booked, its status changes are not announced, and a withdrawal of
+/// everything does not reach it. The caller is told so, rather than reading
+/// the list as the orders this session is following.
+#[test]
+fn open_orders_say_when_one_of_them_has_no_slot_in_the_instrument_table() {
+    #[derive(Default)]
+    struct Heard {
+        told: Vec<(i64, i64, String)>,
+        ended: usize,
+    }
+    impl Wrapper for Heard {
+        fn error(&mut self, req_id: i64, code: i64, message: &str, _adv: &str) {
+            self.told.push((req_id, code, message.to_string()));
+        }
+        fn open_order_end(&mut self) { self.ended += 1; }
+    }
+
+    let (client, _rx, shared) = test_client();
+    // The naming finished, and one of the orders it carried has no slot.
+    shared.orders.set_replay_done();
+    shared.orders.note_an_order_without_a_slot();
+    let mut heard = Heard::default();
+    client.req_all_open_orders(&mut heard);
+    assert_eq!(heard.ended, 1, "what is held is still delivered, and still ends");
+    assert!(
+        heard.told.iter().any(|(req_id, code, message)| {
+            *req_id == -1
+                && *code == crate::error_codes::Refusal::NO_ANSWER as i64
+                && message.contains("no slot in this client's instrument table")
+        }),
+        "the caller is told which of the orders it lists it cannot act on: {:?}",
+        heard.told,
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Order validation — aux_price guards
 // ═══════════════════════════════════════════════════════════════════

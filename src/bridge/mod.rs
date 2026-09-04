@@ -646,6 +646,24 @@ mod tests {
         assert!(!shared.orders.replay_done(), "and a reconnect starts over");
     }
 
+    /// The orders the last connection's naming could not find a slot for are
+    /// that connection's. The new one names them all again, against a table
+    /// whose slots may since have been freed — so the count starts over with
+    /// it. Carried across, it refuses for ever a withdrawal that in fact
+    /// reached every order the account is working.
+    #[test]
+    fn the_orders_a_naming_could_not_hold_are_counted_per_connection() {
+        let shared = SharedState::new();
+        assert_eq!(shared.orders.orders_without_a_slot(), 0, "nothing has been named yet");
+        shared.orders.note_an_order_without_a_slot();
+        assert_eq!(shared.orders.orders_without_a_slot(), 1);
+        shared.orders.replay_is_pending();
+        assert_eq!(
+            shared.orders.orders_without_a_slot(), 0,
+            "and a reconnect starts over",
+        );
+    }
+
     /// The bound the naming is waited on is spent from the moment the
     /// connection came up, not from the first caller to ask. A first request
     /// that waited the bound out otherwise spent it, and a global cancel
