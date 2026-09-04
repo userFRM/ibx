@@ -130,6 +130,17 @@ impl EClient {
             if shared.portfolio.account_download_complete() { break; }
             py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
         }
+        if !shared.portfolio.account_download_complete() {
+            // Reported to the caller as well as the log, as on the other
+            // surface. A caller reading holdings has no other way to tell a
+            // truncated answer from a complete one, and an account that says
+            // nothing within the wait reads exactly like one holding nothing.
+            let why = "the account had not finished stating its holdings within the wait, \
+                       so what follows is what this session already held rather than what \
+                       the account holds";
+            log::warn!("{why}");
+            self.report_refusal(py, -1, Refusal::validation(why))?;
+        }
         // A position feed names a holding by id and leaves the rest to the
         // definition, which the engine asks for as the feed is read. That
         // answer lands a moment after the account download is called complete,
