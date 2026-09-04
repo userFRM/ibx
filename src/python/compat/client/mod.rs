@@ -1127,6 +1127,18 @@ impl EClient {
             .is_some_and(|shared| shared.reference.session_over().is_some())
     }
 
+    /// Whether the engine has given the trading connection up for good.
+    ///
+    /// Its own state, apart from the session's: a quote feed the venue will
+    /// not serve again does not end the connection orders travel on.
+    pub(crate) fn the_engine_gave_the_trading_connection_up(&self) -> bool {
+        self.shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|shared| shared.reference.trading_over().is_some())
+    }
+
     /// The control channel, or nothing and the caller told why.
     ///
     /// A request issued before connecting is answered on the error callback
@@ -1135,6 +1147,29 @@ impl EClient {
     /// different path here than it takes there. What the handler raises is
     /// logged if ordinary, as `notify` logs it, and otherwise ends the call.
     pub(crate) fn tx_or_report(&self, req_id: i64) -> PyResult<Option<SyncSender<ControlCommand>>> {
+        self.tx_unless_it_is_over(req_id, self.the_engine_gave_the_session_up())
+    }
+
+    /// The channel an order goes down, or nothing and the caller told why.
+    ///
+    /// Read from the trading connection's own state rather than the session's,
+    /// which is what the other surface reads before it takes an order. The
+    /// session flag is raised by any transport being given up on, the quote
+    /// feed among them, and an order refused on that reading is one the live
+    /// trading connection would have carried — a caller could not withdraw a
+    /// working order because the prices had stopped.
+    pub(crate) fn tx_or_report_for_trading(
+        &self,
+        req_id: i64,
+    ) -> PyResult<Option<SyncSender<ControlCommand>>> {
+        self.tx_unless_it_is_over(req_id, self.the_engine_gave_the_trading_connection_up())
+    }
+
+    fn tx_unless_it_is_over(
+        &self,
+        req_id: i64,
+        over: bool,
+    ) -> PyResult<Option<SyncSender<ControlCommand>>> {
         // Taken before the arms run. The `None` arm calls user code, and a
         // handler that disconnects or issues another request would wait on
         // this same lock while holding the GIL.
@@ -1145,7 +1180,7 @@ impl EClient {
         // waits out its own timeout for an answer nobody is going to make.
         // Refused under the number a request made with no session is refused
         // under, which is what this has become.
-        let tx = tx.filter(|_| !self.the_engine_gave_the_session_up());
+        let tx = tx.filter(|_| !over);
         match tx {
             Some(tx) => Ok(Some(tx)),
             None => {

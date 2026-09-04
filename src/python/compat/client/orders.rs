@@ -70,7 +70,7 @@ impl EClient {
     /// not.
     fn place_order(&self, py: Python<'_>, order_id: i64, contract: &Contract, order: &Order) -> PyResult<()> {
         self.core.refuse_if_readonly("an order").map_err(PyRuntimeError::new_err)?;
-        let Some(tx) = self.tx_or_report(order_id)? else { return Ok(()) };
+        let Some(tx) = self.tx_or_report_for_trading(order_id)? else { return Ok(()) };
 
         if let Err(why) = ClientCore::validate_order_destination(&contract.exchange) {
             return self.report_refusal(py, order_id, why.into());
@@ -359,7 +359,7 @@ impl EClient {
         // against it. Without a session there is nothing to compare and nothing
         // to send, and the caller is told that rather than told about its
         // account.
-        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
+        let Some(tx) = self.tx_or_report_for_trading(req_id)? else { return Ok(()) };
         let (action, qty) = match ClientCore::validate_exercise(
             exercise_action, exercise_quantity, account, &self.account(),
         ) {
@@ -414,7 +414,7 @@ impl EClient {
     fn cancel_order(&self, py: Python<'_>, order_id: i64, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
         self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
         let uncarried = withdrawal_states(py, order_cancel.as_ref());
-        let Some(tx) = self.tx_or_report(order_id)? else { return Ok(()) };
+        let Some(tx) = self.tx_or_report_for_trading(order_id)? else { return Ok(()) };
         // As `place_order`. A negative id read as unsigned is a number above
         // nine quintillion, and the cancel names it.
         let Some(oid) = u64::try_from(order_id).ok().filter(|id| *id > 0) else {
@@ -470,7 +470,7 @@ impl EClient {
                 "cancel_order_by_perm_id: perm_id must be non-zero",
             ));
         }
-        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
+        let Some(_tx) = self.tx_or_report_for_trading(-1)? else { return Ok(()) };
         let shared = self.shared_state()?;
         let found = self.core.collect_open_orders(&shared)
             .into_iter()
@@ -506,7 +506,7 @@ impl EClient {
         if let Some(stated) = withdrawal_states(py, order_cancel.as_ref()) {
             self.say_the_annotation_did_not_travel(py, -1, stated)?;
         }
-        let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
+        let Some(tx) = self.tx_or_report_for_trading(-1)? else { return Ok(()) };
         // Everything held goes with everything working: an order the venue was
         // never given is withdrawn by forgetting it, and left queued it would
         // go out behind the next thing that transmits — after the caller had
@@ -1103,6 +1103,45 @@ w = W()",
                         && message.contains("no slot in this client's instrument table")
                 }),
                 "the caller is told which of the orders it lists it cannot act on: {told:?}",
+            );
+        });
+    }
+
+    /// A quote feed the engine has given up on does not stop this surface
+    /// withdrawing a live order.
+    ///
+    /// Every request here read the session's flag, which any transport being
+    /// given up on raises — so an order the trading connection would have
+    /// carried was refused because the prices had stopped, and a caller could
+    /// not withdraw what it already had working. The other surface reads the
+    /// trading connection's own state before it takes an order, and this one
+    /// now reads the same thing.
+    #[test]
+    fn a_quote_feed_that_ended_does_not_stop_an_order_being_withdrawn() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, shared, wrapper) = placed_client(py);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(4);
+            *client.control_tx.lock().unwrap() = Some(tx);
+
+            shared.reference.set_session_over("the market data farm");
+            client.cancel_order(py, 11, None).unwrap();
+            assert!(
+                matches!(
+                    rx.try_recv(),
+                    Ok(ControlCommand::Order(OrderRequest::Cancel { order_id: 11 })),
+                ),
+                "the trading connection still carries the withdrawal",
+            );
+            assert!(error_calls(py, &wrapper).is_empty(), "and nothing is reported");
+
+            // Once that connection is the one that has ended, it is refused.
+            shared.reference.set_trading_over("the trading connection");
+            client.cancel_order(py, 12, None).unwrap();
+            assert!(rx.try_recv().is_err(), "nothing reaches the engine");
+            assert_eq!(
+                error_calls(py, &wrapper).len(), 1,
+                "and the caller is told, on the callback a refusal is reported on",
             );
         });
     }

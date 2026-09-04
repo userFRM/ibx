@@ -158,6 +158,21 @@ impl RecoveryBudget {
         self.attempts
     }
 
+    /// Whether recovery has been running longer than the caller allowed.
+    ///
+    /// Asked on its own as well as by `may_retry`, because the two limits
+    /// bound different things: the attempt limit says how many more attempts
+    /// may start, and the elapsed limit says how long recovery may go on —
+    /// which includes the attempt that is running. One attempt outlasts a
+    /// short limit easily, a handshake waiting on an approval somebody gives
+    /// on their phone most of all.
+    pub fn out_of_time(&self, cfg: &ReconnectConfig, now: std::time::Instant) -> bool {
+        matches!(
+            (cfg.max_elapsed, self.started),
+            (Some(max), Some(started)) if now.duration_since(started) >= max
+        )
+    }
+
     /// Whether another attempt is within what the caller allowed.
     pub fn may_retry(&self, cfg: &ReconnectConfig, now: std::time::Instant) -> bool {
         if cfg.policy == ReconnectPolicy::Manual {
@@ -166,11 +181,7 @@ impl RecoveryBudget {
         if cfg.max_attempts.is_some_and(|max| self.attempts >= max) {
             return false;
         }
-        if let (Some(max), Some(started)) = (cfg.max_elapsed, self.started)
-            && now.duration_since(started) >= max {
-                return false;
-            }
-        true
+        !self.out_of_time(cfg, now)
     }
 }
 
