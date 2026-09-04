@@ -1056,6 +1056,33 @@ impl CcpState {
                 reason
             };
             shared.orders.push_order_inactive(clord_id, ORDER_INACTIVE_ERROR_CODE, told);
+            // And on the channel a refusal already travels on, so the record
+            // the surfaces read goes back with the engine's. Said only in the
+            // message above, the surfaces kept the terms of an attempt the
+            // venue had turned down: the caller was told the change did not
+            // happen and their own book went on stating that it had.
+            let stood = context.order(clord_id).map(|order| {
+                let status = if order.filled > 0 {
+                    crate::types::OrderStatus::PartiallyFilled
+                } else {
+                    crate::types::OrderStatus::Submitted
+                };
+                (order.instrument, status)
+            });
+            if let Some((instrument, status)) = stood {
+                let reject = crate::types::CancelReject {
+                    order_id: clord_id,
+                    instrument,
+                    // 102 refuses the revision, 103 the cancellation.
+                    reject_type: if restatement_reason == "102" { 2 } else { 1 },
+                    // The report carries no tag 102, and this says as much.
+                    reason_code: -1,
+                    still_working: Some(status),
+                    timestamp_ns: context.now_ns(),
+                };
+                shared.orders.push_cancel_reject(reject);
+                emit(event_tx, Event::CancelReject(reject));
+            }
         }
         // The gateway marks a report that restates history: 97=Y is PossResend
         // and 43=Y is PossDupFlag. Neither was read anywhere, and the only

@@ -5521,3 +5521,42 @@ fn a_holding_the_new_statement_never_names_is_closed() {
         "a caller watching holdings is told it went to nothing: {moves:?}",
     );
 }
+
+/// A revision the venue will not make reaches the surfaces as a refusal.
+///
+/// The venue refuses a revision on the report the order's own answers arrive
+/// on, and the engine put its book back and said why in a message. The record
+/// the surfaces read took the attempt ahead of that answer and had no way to
+/// learn it had been turned down, so a caller was told the change did not
+/// happen while their own book went on stating that it had.
+#[test]
+fn a_refused_revision_travels_on_the_channel_a_refusal_travels_on() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy,
+        100 * crate::types::QTY_SCALE, 150 * crate::types::PRICE_SCALE,
+        b'2', b'0', 0,
+    ));
+    let refused = exec_report_frame(&[
+        (11, "42.1"), (150, "8"), (39, "0"), (378, "102"),
+        (58, "the price is through the band"),
+    ]);
+    ccp.handle_exec_report(&refused, b"", &mut context, &shared, &None, "DU1");
+
+    let refusals = shared.orders.drain_cancel_rejects();
+    assert_eq!(refusals.len(), 1, "one refusal reaches the surfaces: {refusals:?}");
+    assert_eq!(refusals[0].order_id, 42);
+    assert_eq!(refusals[0].reject_type, 2, "it is the revision the venue refused");
+    assert_eq!(
+        refusals[0].still_working, Some(crate::types::OrderStatus::Submitted),
+        "and the order stands as it was",
+    );
+    let said = shared.orders.drain_order_inactive();
+    assert!(
+        said.iter().any(|(id, _, why)| *id == 42 && why.contains("band")),
+        "the venue's own words still reach the caller: {said:?}",
+    );
+}

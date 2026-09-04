@@ -326,6 +326,18 @@ impl EClient {
         // in the same step as the hold: the two apart were read between, and a
         // withdrawal that found the hold, took it and found no record reported
         // the order gone while the record was written behind it.
+        //
+        // A replace restates an order the venue is already working, so it
+        // states new terms and not a new order: recorded as one, a partly
+        // filled order came back as pending with nothing filled and its whole
+        // quantity outstanding. Its record goes down first for the same
+        // reason a placement's does — the venue can answer the replace before
+        // this call returns, and a restatement written behind that answer put
+        // the attempted terms over a refusal that had already put back the
+        // real ones.
+        if replacing {
+            self.core.restate_order(oid, api_contract.clone(), tracked_order.clone());
+        }
         if api_order.transmit {
             if !replacing {
                 self.core.track_order(
@@ -336,6 +348,8 @@ impl EClient {
                 Self::send_control(py, &tx, c).is_ok()
             });
             if let Err(why) = sent {
+                // Nothing left, so nothing was restated.
+                if replacing { self.core.undo_restatement(oid); }
                 return self.report_refusal(py, order_id, Refusal::not_connected(why));
             }
         } else if replacing {
@@ -345,13 +359,6 @@ impl EClient {
                 oid, api_order.parent_id, cmd,
                 api_contract.clone(), tracked_order.clone(), instrument,
             );
-        }
-        // A replace restates an order the venue is already working, so it
-        // states new terms and not a new order: recorded as one, a partly
-        // filled order came back as pending with nothing filled and its whole
-        // quantity outstanding.
-        if replacing {
-            self.core.restate_order(oid, api_contract, tracked_order);
         }
 
         Ok(())

@@ -1489,3 +1489,87 @@ fn a_replace_that_cannot_state_the_number_asked_for_is_refused() {
         "the caller is told which number cannot travel: {why}",
     );
 }
+
+/// The terms a restatement replaced come back when the venue refuses it, and
+/// stay put when it refuses something else.
+///
+/// The record takes the attempt ahead of the venue's answer, so the terms the
+/// venue holds are kept beside it. Three things used to spend or misapply
+/// them: a fill arriving while the replacement was still outstanding, a
+/// refused cancellation rolling the terms back over a replacement the venue
+/// may since have taken, and a replacement kept for an order the venue was
+/// never asked to change.
+fn working_at(price: f64) -> (ClientCore, ApiOrder) {
+    let core = ClientCore::new();
+    let order = |price: f64| ApiOrder {
+        order_id: 42, action: "BUY".into(), total_quantity: 100.0,
+        order_type: "LMT".into(), lmt_price: price, tif: "DAY".into(),
+        ..Default::default()
+    };
+    core.track_order(42, ApiContract::default(), order(price), 0);
+    (core, order(price + 1.0))
+}
+
+fn refusal(reject_type: u8) -> crate::types::CancelReject {
+    crate::types::CancelReject {
+        order_id: 42, instrument: 0, reject_type, reason_code: 0,
+        still_working: Some(crate::types::OrderStatus::Submitted), timestamp_ns: 0,
+    }
+}
+
+fn price_on_record(core: &ClientCore) -> f64 {
+    core.open_orders.lock().unwrap().get(&42).expect("tracked").order.lmt_price
+}
+
+#[test]
+fn a_fill_is_not_the_venues_answer_to_a_replacement() {
+    let (core, revision) = working_at(100.0);
+    core.restate_order(42, ApiContract::default(), revision);
+    // The venue fills part of the order it holds while it is still deciding.
+    let shared = SharedState::new();
+    core.update_order_status(
+        &shared, 42, crate::types::OrderStatus::PartiallyFilled, 10.0, 90.0,
+    );
+    // And then refuses the change.
+    core.retire_rejected(&refusal(2));
+
+    assert_eq!(price_on_record(&core), 100.0, "the record states what the venue holds");
+}
+
+#[test]
+fn a_refused_cancellation_does_not_roll_back_a_replacement() {
+    let (core, revision) = working_at(100.0);
+    core.restate_order(42, ApiContract::default(), revision);
+    core.retire_rejected(&refusal(1));
+
+    assert_eq!(
+        price_on_record(&core), 101.0,
+        "a cancellation the venue would not make changed no terms",
+    );
+}
+
+#[test]
+fn the_venue_working_the_order_again_settles_the_replacement() {
+    let (core, revision) = working_at(100.0);
+    core.restate_order(42, ApiContract::default(), revision);
+    let shared = SharedState::new();
+    core.update_order_status(&shared, 42, crate::types::OrderStatus::Submitted, 0.0, 100.0);
+    // A refusal behind the acceptance names something the venue has answered.
+    core.retire_rejected(&refusal(2));
+
+    assert_eq!(
+        price_on_record(&core), 101.0,
+        "the terms the venue took are not rolled back by a stale refusal",
+    );
+}
+
+#[test]
+fn a_restatement_that_never_left_is_undone() {
+    let (core, revision) = working_at(100.0);
+    core.restate_order(42, ApiContract::default(), revision);
+    core.undo_restatement(42);
+
+    assert_eq!(price_on_record(&core), 100.0, "the record states what the venue holds");
+    core.retire_rejected(&refusal(2));
+    assert_eq!(price_on_record(&core), 100.0, "and there is nothing left to put back twice");
+}

@@ -614,6 +614,15 @@ impl HeldOrder {
 ///
 /// Written by more than one path — held back, or sent — so the shape of a
 /// freshly placed order is stated once.
+/// Put back what a restatement replaced, and square the outstanding quantity
+/// with it. Does nothing where nothing was kept.
+fn put_back_the_terms(tracked: &mut TrackedOrder) {
+    if let Some(held) = tracked.before_the_replace.take() {
+        tracked.order = *held;
+        tracked.remaining = (tracked.order.total_quantity - tracked.filled).max(0.0);
+    }
+}
+
 fn tracked_as_placed(
     contract: ApiContract, order: ApiOrder, instrument: InstrumentId,
 ) -> TrackedOrder {
@@ -2444,6 +2453,14 @@ impl ClientCore {
         ))
     }
 
+    /// Put back the terms a restatement replaced, where the attempt did not
+    /// stand: the venue refused it, or it never left this process.
+    pub fn undo_restatement(&self, order_id: u64) {
+        if let Some(tracked) = self.open_orders.lock().unwrap().get_mut(&order_id) {
+            put_back_the_terms(tracked);
+        }
+    }
+
     /// Restate the terms of an order the venue is already working.
     ///
     /// A replace does not place an order, so what the order has done stands:
@@ -2577,15 +2594,14 @@ impl ClientCore {
             let mut orders = self.open_orders.lock().unwrap();
             if let Some(tracked) = orders.get_mut(&reject.order_id) {
                 tracked.status = crate::types::order_status::order_status_str(status).into();
-                // And the terms with it. The record took the attempt ahead of
-                // the answer, so a refusal that put back only the status left
-                // it stating a price the venue had said no to — and every
-                // later cancel and replace restates from the record.
-                if let Some(held) = tracked.before_the_replace.take() {
-                    tracked.order = *held;
-                    tracked.remaining =
-                        (tracked.order.total_quantity - tracked.filled).max(0.0);
-                }
+                // And the terms with it, where it was the modification the
+                // venue refused. The record took the attempt ahead of the
+                // answer, so a refusal that put back only the status left it
+                // stating a price the venue had said no to — and every later
+                // cancel and replace restates from the record. A refused
+                // cancellation changed no terms, and rolling them back on one
+                // undid a replacement the venue may since have taken.
+                if reject.reject_type == 2 { put_back_the_terms(tracked); }
             }
         }
         // 10147 is the order the venue could not find; 10148 is the order it
@@ -2615,11 +2631,16 @@ impl ClientCore {
     /// cache `collect_open_orders` reads, rather than leaving them blank.
     pub fn update_order_status(&self, shared: &SharedState, order_id: u64, status: OrderStatus, filled: f64, remaining: f64) {
         let mut orders = self.open_orders.lock().unwrap();
-        // A status the venue states for an order that is working again is the
-        // answer to whatever was outstanding on it, so what was kept against a
-        // refusal is spent: kept past that, a later refusal of something else
-        // would put back terms from before a replacement the venue took.
-        if matches!(status, OrderStatus::Submitted | OrderStatus::PartiallyFilled | OrderStatus::Filled)
+        // The venue working the order again is its answer to the replacement
+        // outstanding on it, so what was kept against a refusal is spent:
+        // kept past that, a later refusal of something else would put back
+        // terms from before a replacement the venue took.
+        //
+        // A fill is not that answer. The venue fills the order it holds while
+        // it is still deciding on the replacement, and spending the fallback
+        // there left a refusal that arrived behind the fill with nothing to
+        // put back — so the record stated terms the venue had said no to.
+        if matches!(status, OrderStatus::Submitted)
             && let Some(tracked) = orders.get_mut(&order_id)
         {
             tracked.before_the_replace = None;
