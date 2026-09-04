@@ -83,10 +83,6 @@ pub(crate) fn untracked_fill_target(
     Some((instrument, side))
 }
 
-/// The gateway's stated reason for a parked or rejected order: the tag 58 text
-/// with the tag 103 reason code. Either alone is ambiguous — the text is often
-/// generic and the code alone names no instrument — so both are reported when
-/// the report carries both. Empty when it carries neither.
 /// Which revision of an order a ClOrdID names.
 ///
 /// A revision is chained on the number: `90`, then `90.1`, then `90.2`. One
@@ -95,6 +91,10 @@ fn revision_of(clord: &str) -> u32 {
     clord.rsplit_once('.').and_then(|(_, v)| v.parse().ok()).unwrap_or(0)
 }
 
+/// The venue's stated reason for a parked or rejected order: the tag 58 text
+/// with the tag 103 reason code. Either alone is ambiguous — the text is often
+/// generic and the code alone names no instrument — so both are reported when
+/// the report carries both. Empty when it carries neither.
 pub(crate) fn stated_reason(parsed: &std::collections::HashMap<u32, String>) -> String {
     let text = parsed.get(&58).map(|s| s.as_str()).unwrap_or("");
     let code = parsed.get(&103).map(|s| s.as_str()).unwrap_or("");

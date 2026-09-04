@@ -2234,7 +2234,6 @@ impl ClientCore {
         ))
     }
 
-    /// Track a newly placed order.
     /// Restate the terms of an order the venue is already working.
     ///
     /// A replace does not place an order, so what the order has done stands:
@@ -2264,6 +2263,7 @@ impl ClientCore {
         }
     }
 
+    /// Track a newly placed order.
     pub fn track_order(&self, order_id: u64, contract: ApiContract, order: ApiOrder, instrument: InstrumentId) {
         let remaining = order.total_quantity;
         self.open_orders.lock().unwrap().insert(order_id, TrackedOrder {
