@@ -136,12 +136,6 @@ pub const ORD_TRAIL_LIMIT: u8 = 11;
 pub const ORD_PASSV_REL: u8 = 12;
 /// FIX "E2M" — Pegged to Best
 pub const ORD_PEG_BEST: u8 = 13;
-/// FIX "VO" — Volatility
-pub const ORD_VOL: u8 = 14;
-/// FIX "RL" — Relative-Limit Combination
-pub const ORD_REL_LMT: u8 = 15;
-/// FIX "RM" — Relative-Market Combination
-pub const ORD_REL_MKT: u8 = 16;
 
 
 /// Convert an `ord_type` discriminant to the FIX tag 40 string.
@@ -163,9 +157,6 @@ pub fn ord_type_fix_str(t: u8) -> &'static str {
         ORD_TRAIL_LIMIT => "TSL",
         ORD_PASSV_REL => "PSVR",
         ORD_PEG_BEST => "E2M",
-        ORD_VOL => "VO",
-        ORD_REL_LMT => "RL",
-        ORD_REL_MKT => "RM",
         b'1' => "1", b'2' => "2", b'3' => "3", b'4' => "4", b'5' => "5",
         b'B' => "B", b'E' => "E", b'J' => "J", b'K' => "K",
         b'P' => "P", b'R' => "R", b'U' => "U",
@@ -188,7 +179,7 @@ mod ord_type_round_trip {
         let every = [
             ORD_STP_PRT, ORD_MIDPX, ORD_SNAP_MKT, ORD_SNAP_MID, ORD_SNAP_PRI,
             ORD_PEG_MKT, ORD_PEG_MID, ORD_PEG_BENCH, ORD_LIT, ORD_TRAIL_LIMIT,
-            ORD_PASSV_REL, ORD_PEG_BEST, ORD_VOL, ORD_REL_LMT, ORD_REL_MKT,
+            ORD_PASSV_REL, ORD_PEG_BEST,
             b'1', b'2', b'3', b'4', b'5', b'B', b'J', b'K', b'P', b'U',
         ];
         // The instruction the venue states beside the name, for the kinds that
@@ -244,9 +235,6 @@ pub fn ord_type_from_fix(ord_type: &str, exec_inst: &str) -> u8 {
         "TSL" => ORD_TRAIL_LIMIT,
         "PSVR" => ORD_PASSV_REL,
         "E2M" => ORD_PEG_BEST,
-        "VO" => ORD_VOL,
-        "RL" => ORD_REL_LMT,
-        "RM" => ORD_REL_MKT,
         // Pegged to market, pegged to midpoint, a relative order and a
         // trailing stop all travel as `P`. The instruction names which.
         "P" if exec_inst.contains('P') => ORD_PEG_MKT,
@@ -1168,26 +1156,6 @@ pub enum OrderKind {
         /// Fill at this price or better, scaled by `PRICE_SCALE`.
         price: Price,
     },
-    /// Priced in volatility rather than in the contract's own terms: the
-    /// volatility is the order's price and rides the limit-price tag. What
-    /// manages it — the volatility's kind, whether the venue keeps
-    /// re-pricing it, the band of underlying prices it stays within — rides
-    /// the attribute block, where those already travelled.
-    Vol {
-        /// The volatility it is priced at, scaled by `PRICE_SCALE`.
-        volatility: Price,
-    },
-    /// A combination whose legs are worked the way a relative order is. It
-    /// extends the limit type, so the price it fills no worse than rides the
-    /// limit-price tag, and no peg offset rides beside the name.
-    RelLmt {
-        /// Fill at this price or better, scaled by `PRICE_SCALE`.
-        price: Price,
-    },
-    /// A combination whose legs are worked the way a relative order is and
-    /// finish as market orders. States no price of its own, and no peg
-    /// offset beside the name.
-    RelMkt,
     /// Stop that converts to another order type once `trigger_price` is hit.
     /// Tags: 6257=1, 6261=adjusted type, 6258=trigger, 6259=adjusted stop,
     /// 6262=adjusted limit, 6260/6269=trailing amount + unit.

@@ -3315,7 +3315,6 @@ impl ClientCore {
             "MKT" | "LMT" | "STP" | "STP LMT" | "TRAIL" | "TRAIL LIMIT"
             | "MOC" | "LOC" | "MIT" | "LIT" | "MTL" | "MKT PRT" | "STP PRT"
             | "REL" | "PASSV REL" | "PEG MKT" | "PEG MID" | "PEG MIDPT" | "PEG BEST"
-            | "VOL" | "REL + LMT" | "REL + MKT"
             | "MIDPX" | "MIDPRICE"
             | "SNAP MKT" | "SNAP MID" | "SNAP MIDPT" | "SNAP PRI" | "SNAP PRIM"
             | "PEG BENCH" | "PEGBENCH" | "BOX TOP" => {}
@@ -3358,22 +3357,6 @@ impl ClientCore {
             "PEG BEST" if order.lmt_price == 0.0 => {
                 return Err(
                     "PEG BEST order requires lmt_price (the order's price) but got 0.0".into()
-                );
-            }
-            // This type is priced in volatility and has no second tag for
-            // it to move to, so it is malformed the same way when nothing
-            // is stated: the field's sentinel for nothing and a stated zero
-            // are the same silence.
-            "VOL" if order.volatility == 0.0 || order.volatility == f64::MAX => {
-                return Err(
-                    "VOL order requires volatility (the order's price) but got none".into()
-                );
-            }
-            // This type extends the limit type, so its price is the limit
-            // price and it is malformed the same way without one.
-            "REL + LMT" if order.lmt_price == 0.0 => {
-                return Err(
-                    "REL + LMT order requires lmt_price (the order's price) but got 0.0".into()
                 );
             }
             _ => {}
@@ -3949,25 +3932,6 @@ impl ClientCore {
                     price: crate::types::price_from_f64(order.lmt_price),
                 })
             }
-            // Priced in volatility: the volatility is the order's price, and
-            // what manages it rides the order's attributes, where those
-            // already travelled.
-            "VOL" => {
-                ex(OrderKind::Vol {
-                    volatility: crate::types::price_from_f64(order.volatility),
-                })
-            }
-            // A combination whose legs are worked the way a relative order
-            // is. It extends the limit type, so the price rides the limit
-            // price the way a limit order's does.
-            "REL + LMT" => {
-                ex(OrderKind::RelLmt {
-                    price: crate::types::price_from_f64(order.lmt_price),
-                })
-            }
-            // The same combination finishing as a market order states no
-            // price of its own.
-            "REL + MKT" => ex(OrderKind::RelMkt),
             // Every reference field was already carried here and then read by
             // nobody: a caller setting all six got an order that mentioned none
             // of them.
