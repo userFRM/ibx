@@ -2672,23 +2672,64 @@ fn place_order_invalid_action_returns_error() {
     assert!(result.is_err());
 }
 
+/// A replace states new terms for an order the venue is working; it does not
+/// place a new one.
+///
+/// Recorded as a new one, a partly filled order came back from a snapshot as
+/// pending with nothing filled and its whole quantity outstanding — and a
+/// replace the venue then refused left it reading that way for the rest of the
+/// session.
 #[test]
-fn place_order_auto_assigns_id_when_zero() {
+fn replacing_an_order_keeps_what_it_has_already_filled() {
+    let (client, rx, shared) = test_client();
+    let order = |qty: f64, price: f64| Order {
+        order_id: 77,
+        action: "BUY".into(),
+        total_quantity: qty,
+        order_type: "LMT".into(),
+        lmt_price: price,
+        tif: "DAY".into(),
+        transmit: true,
+        ..Default::default()
+    };
+    client.place_order(77, &spy(), &order(100.0, 100.0)).expect("placed");
+    let _ = rx.try_recv();
+    // Thirty of it trades.
+    client.core.update_order_status(
+        &shared, 77, crate::types::OrderStatus::PartiallyFilled, 30.0, 70.0,
+    );
+
+    client.place_order(77, &spy(), &order(120.0, 101.0)).expect("replaced");
+
+    let held = client.core.open_orders.lock().unwrap();
+    let tracked = held.get(&77).expect("the order is still tracked");
+    assert_eq!(tracked.filled, 30.0, "what it has traded stands");
+    assert_eq!(tracked.status, "Submitted", "and it is still working, not pending again");
+    assert_eq!(tracked.remaining, 90.0, "the new quantity less what it filled");
+    assert_eq!(tracked.order.total_quantity, 120.0, "the terms follow the attempt");
+    assert_eq!(tracked.order.lmt_price, 101.0);
+}
+
+/// An order number is the caller's, or it is a refusal.
+///
+/// An id at or below zero names no order the venue will hold. One handed out in
+/// its place put the order on the market under a number the caller had never
+/// seen: every status about it arrived under an id they were not watching, and
+/// their own cancel named nothing. The other surface has always refused it.
+#[test]
+fn an_order_numbered_at_or_below_zero_is_refused_not_renumbered() {
     let (client, rx, shared) = test_client();
     shared.market.set_instrument_count(1);
     let order = Order {
         action: "BUY".into(), total_quantity: 100.0, order_type: "MKT".into(), ..Default::default()
     };
-    // order_id = 0 → auto-assign
-    client.place_order(0, &spy(), &order).unwrap();
-
-    let cmd = rx.try_recv().unwrap();
-    match cmd {
-        ControlCommand::Order(OrderRequest::SubmitEx { order_id, kind: OrderKind::Market, .. }) => {
-            assert!(order_id > 0);
-        }
-        _ => panic!("expected SubmitMarket"),
+    for stated in [0i64, -5] {
+        let why = client
+            .place_order(stated, &spy(), &order)
+            .expect_err("a number at or below zero names no order");
+        assert!(why.message.contains(&format!("order_id {stated}")), "{why}");
     }
+    assert!(rx.try_recv().is_err(), "and nothing reaches the engine");
 }
 
 #[test]

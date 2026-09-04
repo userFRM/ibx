@@ -150,13 +150,16 @@ impl EClient {
             contract
         };
 
-        let oid = if order_id > 0 {
-            order_id as u64
-        } else {
-            // Through the reservation, which persists the id. An id taken from
-            // the counter alone is not recorded, and a restart reuses it; the
-            // venue rejects a repeated tag 11.
-            self.reserve_order_ids(1) as u64
+        // An id at or below zero names no order the venue will hold. One handed
+        // out in its place put the order on the market under a number the
+        // caller had never seen: every status about it arrived under an id they
+        // were not watching, and their own cancel named nothing. Refused, as
+        // the other surface refuses it.
+        let Some(oid) = u64::try_from(order_id).ok().filter(|id| *id > 0) else {
+            return Err(Refusal::validation(format!(
+                "place_order: order_id {order_id} is not an order number; \
+                 ask for one with next_order_id()",
+            )));
         };
 
         let instrument = self.core.find_or_register_instrument(
@@ -170,7 +173,8 @@ impl EClient {
 
         // If orderId is already tracked, this is a modification — emit Modify instead
         // of Submit.
-        let cmd = if self.core.is_working_at_the_venue(oid) {
+        let replacing = self.core.is_working_at_the_venue(oid);
+        let cmd = if replacing {
             // A replace carries the order id and its fields, not the contract, so
             // the order stays on the instrument it was placed on. A contract naming
             // a different instrument is refused rather than recorded.
@@ -223,7 +227,20 @@ impl EClient {
             self.core.hold_until_transmitted(oid, order.parent_id, cmd);
         }
         self.core.cache_contract(contract.con_id, contract.clone());
-        self.core.track_order(oid, contract.clone(), order.clone(), instrument);
+        // The record carries the number the order went out under. Cached from
+        // the caller's object unchanged, an order placed without one read back
+        // from `open_order` naming no order at all.
+        let mut placed = order.clone();
+        placed.order_id = oid as i64;
+        // A replace restates an order the venue is already working, so it
+        // states new terms and not a new order: recorded as one, a partly
+        // filled order came back as pending with nothing filled and its whole
+        // quantity outstanding, and a refused replace left it reading that way.
+        if replacing {
+            self.core.restate_order(oid, contract.clone(), placed);
+        } else {
+            self.core.track_order(oid, contract.clone(), placed, instrument);
+        }
         Ok(())
     }
 

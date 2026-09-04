@@ -316,7 +316,7 @@ fn order_lifecycle_cancel_reject_on_filled_order() {
 
     // Attempt to cancel → reject
     shared.orders.push_cancel_reject(CancelReject {
-        order_id: 120, instrument: 0, reject_type: 1, reason_code: 0, timestamp_ns: 2000,
+        order_id: 120, instrument: 0, reject_type: 1, reason_code: 0, still_working: None, timestamp_ns: 2000,
     });
     w.events.clear();
     client.process_msgs(&mut w);

@@ -237,7 +237,8 @@ impl EClient {
 
         // If orderId is already tracked, this is a modification — emit Modify instead
         // of Submit.
-        let cmd = if self.core.is_working_at_the_venue(oid) {
+        let replacing = self.core.is_working_at_the_venue(oid);
+        let cmd = if replacing {
             // A replace carries the order id and its fields, not the contract, so
             // the order stays on the instrument it was placed on. A contract naming
             // a different instrument is refused rather than recorded.
@@ -312,7 +313,15 @@ impl EClient {
         let mut tracked_order = api_order.clone();
         tracked_order.order_id = oid as i64;
         self.core.cache_contract(contract.con_id, api_contract.clone());
-        self.core.track_order(oid, api_contract, tracked_order, instrument);
+        // A replace restates an order the venue is already working, so it
+        // states new terms and not a new order: recorded as one, a partly
+        // filled order came back as pending with nothing filled and its whole
+        // quantity outstanding.
+        if replacing {
+            self.core.restate_order(oid, api_contract, tracked_order);
+        } else {
+            self.core.track_order(oid, api_contract, tracked_order, instrument);
+        }
 
         Ok(())
     }

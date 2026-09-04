@@ -2217,6 +2217,35 @@ impl ClientCore {
     }
 
     /// Track a newly placed order.
+    /// Restate the terms of an order the venue is already working.
+    ///
+    /// A replace does not place an order, so what the order has done stands:
+    /// recorded as a new one, a partly filled order came back from
+    /// `req_open_orders` as pending with nothing filled and its whole quantity
+    /// outstanding, and a replace the venue then refused left it reading that
+    /// way for the rest of the session. The terms follow the attempt, because
+    /// every later action restates from here; the execution history does not.
+    ///
+    /// Falls back to recording it afresh where nothing is held under the id,
+    /// which is a caller replacing an order this client did not place.
+    pub fn restate_order(&self, order_id: u64, contract: ApiContract, order: ApiOrder) {
+        let mut orders = self.open_orders.lock().unwrap();
+        match orders.get_mut(&order_id) {
+            Some(tracked) => {
+                tracked.remaining = (order.total_quantity - tracked.filled).max(0.0);
+                tracked.contract = contract;
+                tracked.order = order;
+            }
+            None => {
+                let remaining = order.total_quantity;
+                orders.insert(order_id, TrackedOrder {
+                    contract, order, status: "PendingSubmit".into(), filled: 0.0, remaining,
+                    instrument: 0, rejected: false,
+                });
+            }
+        }
+    }
+
     pub fn track_order(&self, order_id: u64, contract: ApiContract, order: ApiOrder, instrument: InstrumentId) {
         let remaining = order.total_quantity;
         self.open_orders.lock().unwrap().insert(order_id, TrackedOrder {
