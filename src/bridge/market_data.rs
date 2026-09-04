@@ -608,9 +608,6 @@ mod option_model_tests {
     use super::*;
     use crate::types::OptionComputation;
 
-    /// An answer worked out here does not become the venue's model for a
-    /// contract.
-    ///
     /// A book started again does not open with the failure of the one before it.
     ///
     /// Withdrawing is how a caller starts again after a book was given up on,
@@ -645,6 +642,9 @@ mod option_model_tests {
     /// so stored it lands on slot zero, which is a real contract. The next
     /// question about that contract would then be answered against the last
     /// caller's own volatility and price, and against a record saying nothing
+    /// An answer worked out here does not become the venue's model for a
+    /// contract.
+    ///
     /// about which model the venue used.
     #[test]
     fn a_local_answer_does_not_become_the_venues_model() {
