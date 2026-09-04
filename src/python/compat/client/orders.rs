@@ -237,7 +237,7 @@ impl EClient {
 
         // If orderId is already tracked, this is a modification — emit Modify instead
         // of Submit.
-        let cmd = if self.core.is_order_tracked(oid) {
+        let cmd = if self.core.is_working_at_the_venue(oid) {
             // A replace carries the order id and its fields, not the contract, so
             // the order stays on the instrument it was placed on. A contract naming
             // a different instrument is refused rather than recorded.
@@ -290,76 +290,11 @@ impl EClient {
         // on the error callback, under the number a lost session is reported
         // under, and the call returns.
         if api_order.transmit {
-            // The transmitting order leaves the hold whatever happens: it is
-            // the one that asked to go, and it cannot stay queued to go out
-            // behind a later transmit.
-            self.core.withdraw_held(oid);
-            let family = self.core.family_before(oid, api_order.parent_id);
-            let mut reached: Vec<u64> = Vec::new();
-            let mut cmd_went = false;
-            for member in family.iter() {
-                if Self::send_control(py, &tx, member.command.clone()).is_ok() {
-                    reached.push(member.order_id);
-                } else {
-                    // The engine takes its commands in order, so a send that
-                    // did not reach it means none behind it will.
-                    break;
-                }
-            }
-            if reached.len() == family.len() {
-                cmd_went = Self::send_control(py, &tx, cmd).is_ok();
-            }
-            let all_went = cmd_went && reached.len() == family.len();
-            if !all_went {
-                // What did not reach the engine comes out of the hold, as
-                // what did: left queued, it would go out behind the next
-                // thing that transmits, after the caller had been told it
-                // did not go. Left held where nothing went at all, so a
-                // caller that opens another session on this client can send
-                // the family again.
-                if !reached.is_empty() {
-                    for member in &family {
-                        self.core.withdraw_held(member.order_id);
-                    }
-                }
-                let name = |ids: &[u64]| {
-                    let list = ids.iter()
-                        .map(|id| id.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    if ids.len() == 1 { format!("order {list}") } else { format!("orders {list}") }
-                };
-                let message = if reached.is_empty() {
-                    if family.is_empty() {
-                        format!("the engine stopped before order {oid} went out: nothing was sent")
-                    } else {
-                        let ids: Vec<u64> = family.iter().map(|m| m.order_id).collect();
-                        format!(
-                            "the engine stopped before the family of order {oid} went out: \
-                             nothing was sent, and {} {} still held",
-                            name(&ids),
-                            if ids.len() == 1 { "is" } else { "are" },
-                        )
-                    }
-                } else {
-                    let mut missed: Vec<u64> = family.iter()
-                        .map(|m| m.order_id)
-                        .filter(|id| !reached.contains(id))
-                        .collect();
-                    if !cmd_went {
-                        missed.push(oid);
-                    }
-                    format!(
-                        "the engine stopped while the family of order {oid} was going out: \
-                         {} reached the engine and may be live at the venue; {} did not \
-                         reach it",
-                        name(&reached), name(&missed),
-                    )
-                };
-                return self.report_refusal(py, order_id, Refusal::not_connected(message));
-            }
-            for member in &family {
-                self.core.withdraw_held(member.order_id);
+            let sent = self.core.transmit_family(oid, api_order.parent_id, cmd, |c| {
+                Self::send_control(py, &tx, c).is_ok()
+            });
+            if let Err(why) = sent {
+                return self.report_refusal(py, order_id, Refusal::not_connected(why));
             }
         } else {
             self.core.hold_until_transmitted(oid, api_order.parent_id, cmd);
@@ -482,6 +417,17 @@ impl EClient {
         // order learns what will not travel before it is told the order went.
         if let Some(stated) = uncarried {
             self.say_the_annotation_did_not_travel(py, order_id, stated)?;
+        }
+        // An order still held never reached the venue, so withdrawing it is
+        // forgetting a command rather than sending one, as it is on the other
+        // surface. Sent, the venue answers that it knows no such order and the
+        // command stays queued to go out behind the next thing that transmits:
+        // a caller that cancelled a parent and then sent its stop-loss had the
+        // parent it had cancelled placed for it. The record goes with the
+        // command, so the id stops reading as a working order's.
+        if self.core.withdraw_held(oid) {
+            self.core.untrack_order(oid);
+            return Ok(());
         }
         Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: oid }))
     }
@@ -1192,6 +1138,46 @@ w = W()",
             assert!(message.contains("orders 3, 4 are still held"), "{message}");
             assert!(client.core.withdraw_held(3), "the parent is still held");
             assert!(client.core.withdraw_held(4), "the child is still held");
+        });
+    }
+
+    /// Cancelling an order the venue was never given forgets it, rather than
+    /// asking the venue to withdraw something it does not have.
+    ///
+    /// Sent, the venue answers that it knows no such order and the command
+    /// stays queued to go out behind the next thing that transmits: a caller
+    /// that cancelled a parent and then sent its stop-loss had the parent it
+    /// had cancelled placed for it.
+    #[test]
+    fn cancelling_a_held_order_forgets_it_rather_than_placing_it_later() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _shared, _wrapper) = placed_client(py);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(64);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            client.core.con_id_to_instrument.lock().unwrap().insert(756733, 0);
+
+            client.place_order(py, 3, &bracket_contract(), &bracket_order(false, 0)).unwrap();
+            client.cancel_order(py, 3, None).unwrap();
+            client.place_order(py, 4, &bracket_contract(), &bracket_order(true, 0)).unwrap();
+
+            let sent: Vec<ControlCommand> = std::iter::from_fn(|| rx.try_recv().ok())
+                .filter(|c| matches!(c, ControlCommand::Order(_)))
+                .collect();
+            for cmd in &sent {
+                if let ControlCommand::Order(OrderRequest::SubmitEx { order_id, .. }) = cmd {
+                    assert_ne!(
+                        *order_id, 3,
+                        "the order that was cancelled is not placed later: {sent:?}",
+                    );
+                }
+                assert!(
+                    !matches!(cmd, ControlCommand::Order(OrderRequest::Cancel { order_id: 3 })),
+                    "and the venue is not asked to withdraw one it never had: {sent:?}",
+                );
+            }
+            assert!(!client.core.is_held(3), "nothing of it is left queued");
+            assert!(!client.core.is_order_tracked(3), "and its id no longer reads as an order");
         });
     }
 

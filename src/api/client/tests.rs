@@ -297,6 +297,90 @@ fn transmitting_a_parent_releases_what_hangs_from_it() {
     assert_eq!(sent.len(), 2, "the child held under it goes too: {sent:?}");
 }
 
+/// A held order is not a working one, so placing again under its id submits.
+///
+/// Both are tracked here and only one is known to the venue. Read as the same
+/// question, the second placement built a replace of an order nothing had ever
+/// submitted — which the venue refuses — and the submit that was held stayed
+/// queued to go out behind the next thing that transmits, under the terms the
+/// caller had just replaced.
+#[test]
+fn placing_again_under_a_held_id_submits_it_rather_than_replacing_it() {
+    let (client, rx, _shared) = test_client();
+    let leg = |transmit: bool, price: f64| Order {
+        order_id: 90,
+        transmit,
+        action: "BUY".into(),
+        total_quantity: 100.0,
+        order_type: "LMT".into(),
+        lmt_price: price,
+        tif: "DAY".into(),
+        ..Default::default()
+    };
+
+    client.place_order(90, &spy(), &leg(false, 100.0)).expect("held");
+    client.place_order(90, &spy(), &leg(true, 105.0)).expect("the same id transmits");
+
+    let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert_eq!(sent.len(), 1, "one order goes out, not a replace and a stale submit: {sent:?}");
+    match &sent[0] {
+        ControlCommand::Order(OrderRequest::SubmitEx { order_id, kind, .. }) => {
+            assert_eq!(*order_id, 90);
+            let crate::types::OrderKind::Limit { price } = kind else {
+                panic!("expected a limit, got {kind:?}")
+            };
+            assert_eq!(
+                *price,
+                crate::types::price_from_f64(105.0),
+                "at the price this placement states",
+            );
+        }
+        other => panic!("expected a submit, got {other:?}"),
+    }
+    assert!(!client.core.is_held(90), "and nothing of it is left queued");
+}
+
+/// A family that cannot all reach the engine is not half sent and forgotten.
+///
+/// Taken out of the hold first and then sent one by one, a send that failed
+/// partway left the parent live at the venue with its protective children
+/// already forgotten, and the caller was told only that the call had failed.
+#[test]
+fn a_family_the_engine_stops_receiving_says_what_reached_it() {
+    let (client, rx, _shared) = test_client();
+    let leg = |id: i64, parent: i64, transmit: bool| Order {
+        order_id: id,
+        parent_id: parent,
+        transmit,
+        action: if parent == 0 { "BUY".into() } else { "SELL".into() },
+        total_quantity: 100.0,
+        order_type: "LMT".into(),
+        lmt_price: 100.0,
+        tif: "DAY".into(),
+        ..Default::default()
+    };
+
+    client.place_order(90, &spy(), &leg(90, 0, false)).expect("held");
+    client.place_order(91, &spy(), &leg(91, 90, false)).expect("held under it");
+    client.place_order(92, &spy(), &leg(92, 90, false)).expect("held under it");
+    drop(rx);
+
+    let why = client
+        .place_order(90, &spy(), &leg(90, 0, true))
+        .expect_err("the engine is gone, so the family cannot go out");
+    assert!(
+        why.message.contains("nothing was sent") && why.message.contains("still held"),
+        "the caller is told nothing went and the family is still there: {why}",
+    );
+    for id in [91u64, 92] {
+        assert!(client.core.is_held(id), "order {id} is still held to be sent again");
+    }
+    assert!(
+        !client.core.is_held(90),
+        "the order that asked to go does not stay queued under the terms it replaced",
+    );
+}
+
 /// A bracket built the way the reference client's own sample builds one.
 ///
 /// It places a parent and a take-profit held back and lets the stop-loss send

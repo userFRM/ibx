@@ -1006,6 +1006,89 @@ impl ClientCore {
         going
     }
 
+    /// Send an order and whatever of its family was held, accounting for each.
+    ///
+    /// The family goes out as one thing or not at all, as far as the engine
+    /// allows: it stays held while it is sent, and each member leaves the hold
+    /// only once its send is accounted for. Taken out of the hold first and
+    /// then sent one by one, a send that failed partway left the parent live
+    /// at the venue with its protective children already forgotten, and the
+    /// caller was told only that the call had failed.
+    ///
+    /// `send` says whether the command reached the engine. Answers `Ok` when
+    /// everything went, and otherwise the message naming what reached the
+    /// engine and what did not.
+    pub fn transmit_family(
+        &self,
+        order_id: u64,
+        parent_id: i64,
+        own: ControlCommand,
+        mut send: impl FnMut(ControlCommand) -> bool,
+    ) -> Result<(), String> {
+        // The transmitting order leaves the hold whatever happens: it is the
+        // one that asked to go, and it cannot stay queued to go out behind a
+        // later transmit under the terms this call has just replaced.
+        self.withdraw_held(order_id);
+        let family = self.family_before(order_id, parent_id);
+        let mut reached: Vec<u64> = Vec::new();
+        for member in family.iter() {
+            // The engine takes its commands in order, so a send that did not
+            // reach it means none behind it will.
+            if !send(member.command.clone()) {
+                break;
+            }
+            reached.push(member.order_id);
+        }
+        let all_before_went = reached.len() == family.len();
+        let own_went = all_before_went && send(own);
+        if all_before_went && own_went {
+            for member in &family {
+                self.withdraw_held(member.order_id);
+            }
+            return Ok(());
+        }
+        // What did not reach the engine comes out of the hold, as what did:
+        // left queued, it would go out behind the next thing that transmits,
+        // after the caller had been told it did not go. Left held where
+        // nothing went at all, so a caller that opens another session on this
+        // client can send the family again.
+        if !reached.is_empty() {
+            for member in &family {
+                self.withdraw_held(member.order_id);
+            }
+        }
+        let name = |ids: &[u64]| {
+            let list = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
+            if ids.len() == 1 { format!("order {list}") } else { format!("orders {list}") }
+        };
+        Err(if reached.is_empty() {
+            if family.is_empty() {
+                format!("the engine stopped before order {order_id} went out: nothing was sent")
+            } else {
+                let ids: Vec<u64> = family.iter().map(|m| m.order_id).collect();
+                format!(
+                    "the engine stopped before the family of order {order_id} went out: \
+                     nothing was sent, and {} {} still held",
+                    name(&ids),
+                    if ids.len() == 1 { "is" } else { "are" },
+                )
+            }
+        } else {
+            let mut missed: Vec<u64> = family.iter()
+                .map(|m| m.order_id)
+                .filter(|id| !reached.contains(id))
+                .collect();
+            if !own_went {
+                missed.push(order_id);
+            }
+            format!(
+                "the engine stopped while the family of order {order_id} was going out: \
+                 {} reached the engine and may be live at the venue; {} did not reach it",
+                name(&reached), name(&missed),
+            )
+        })
+    }
+
     /// The held orders an order that transmits releases, in the order they go.
     ///
     /// Its own parent first, then anything else held that hangs from the same
@@ -2002,6 +2085,23 @@ impl ClientCore {
     /// Check if an order with this ID is currently tracked (for modify detection).
     pub fn is_order_tracked(&self, order_id: u64) -> bool {
         self.open_orders.lock().unwrap().contains_key(&order_id)
+    }
+
+    /// Whether this id names an order the venue is working.
+    ///
+    /// A held order is tracked here and unknown to the venue, so the two are
+    /// not the same question. Asked as one, placing again under a held id
+    /// built a replace of an order nothing had ever submitted: the venue
+    /// refuses it, and the submit that was held stays queued to go out behind
+    /// the next thing that transmits — under the terms the caller had just
+    /// replaced.
+    pub fn is_working_at_the_venue(&self, order_id: u64) -> bool {
+        self.is_order_tracked(order_id) && !self.is_held(order_id)
+    }
+
+    /// Whether this id names an order built and kept rather than sent.
+    pub fn is_held(&self, order_id: u64) -> bool {
+        self.held_orders.lock().unwrap().iter().any(|h| h.order_id == order_id)
     }
 
     /// The order a tracked id was submitted with, if it is tracked.

@@ -170,7 +170,7 @@ impl EClient {
 
         // If orderId is already tracked, this is a modification — emit Modify instead
         // of Submit.
-        let cmd = if self.core.is_order_tracked(oid) {
+        let cmd = if self.core.is_working_at_the_venue(oid) {
             // A replace carries the order id and its fields, not the contract, so
             // the order stays on the instrument it was placed on. A contract naming
             // a different instrument is refused rather than recorded.
@@ -213,10 +213,12 @@ impl EClient {
         // refused. One that does sends whatever of its family was kept, in the
         // order it was placed, and then itself.
         if order.transmit {
-            for waiting in self.core.release_before(oid, order.parent_id) {
-                self.send(waiting)?;
+            let tx = self.control_tx.clone();
+            if let Err(why) = self.core.transmit_family(oid, order.parent_id, cmd, |c| {
+                tx.send(c).is_ok()
+            }) {
+                return Err(Refusal::not_connected(why));
             }
-            self.send(cmd)?;
         } else {
             self.core.hold_until_transmitted(oid, order.parent_id, cmd);
         }
