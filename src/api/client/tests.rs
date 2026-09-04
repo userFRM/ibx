@@ -240,13 +240,6 @@ fn a_held_order_that_is_withdrawn_does_not_go_out_later() {
     assert_eq!(sent.len(), 1, "only the order that transmitted: {sent:?}");
 }
 
-/// A placement is recorded before its command can be taken.
-///
-/// The engine answers on its own thread. Recorded after the command went out,
-/// an acknowledgement — or a refusal, which retires the order — could arrive
-/// while there was nothing here to record it against, and the insertion behind
-/// it put a fresh PendingSubmit over the venue's own word or brought back an
-
 /// Withdrawing a held order frees the id it was placed under.
 ///
 /// The venue was never given the order, so the id is not spent there — but
