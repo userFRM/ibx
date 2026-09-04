@@ -39,45 +39,44 @@ impl EClient {
     /// The venue's clock, as `reqCurrentTime` reports it.
     ///
     /// Every message the venue sends is stamped with the time it sent it, and
-    /// the last one is held. A caller asking for the server's time is asking
-    /// how far apart the two clocks are, which this machine's own clock cannot
-    /// answer. Where no message has been stamped yet — before the session is
-    /// up — there is nothing to report but the local clock.
+    /// the last one is held; the logon itself is stamped, so a session holds
+    /// one from the moment it is up. A caller asking for the server's time is
+    /// asking how far apart the two clocks are, which this machine's own
+    /// clock cannot answer — where no stamp is held the request is reported
+    /// on `error` rather than answered with it.
     pub fn req_current_time(&self, wrapper: &mut impl Wrapper) {
+        if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         let stated = self.shared.market.venue_time()
             .as_deref()
             .and_then(crate::protocol::datetime::ib_datetime_to_unix);
-        let now = stated.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64
-        });
+        let Some(now) = stated else {
+            return wrapper.error(-1, Refusal::NOT_CONNECTED as i64,
+                "the venue has stamped no message yet, so its clock cannot be stated", "");
+        };
         wrapper.current_time(now);
     }
 
     /// The venue's clock in milliseconds, as `reqCurrentTimeInMillis` reports it.
     ///
     /// The same clock [`req_current_time`](Self::req_current_time) reports and
-    /// read the same way — the venue's own last stamp, falling back to this
-    /// machine only before the session has been stamped at all. What differs
-    /// is the precision kept: asking in seconds throws away a fraction where
-    /// the stamp carries one.
+    /// read the same way — the venue's own last stamp, reported on `error`
+    /// where none is held rather than answered with this machine's. What
+    /// differs is the precision kept: asking in seconds throws away a fraction
+    /// where the stamp carries one.
     ///
     /// Every stamp a session has seen from this venue carried no fraction, and
     /// each lands on a whole second. So this call reads the precision the
     /// stamp states and no more; whether the venue ever states a finer one is
     /// not something a session here has answered.
     pub fn req_current_time_in_millis(&self, wrapper: &mut impl Wrapper) {
+        if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         let stated = self.shared.market.venue_time()
             .as_deref()
             .and_then(crate::protocol::datetime::ib_datetime_to_unix_millis);
-        let now = stated.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64
-        });
+        let Some(now) = stated else {
+            return wrapper.error(-1, Refusal::NOT_CONNECTED as i64,
+                "the venue has stamped no message yet, so its clock cannot be stated", "");
+        };
         wrapper.current_time_in_millis(now);
     }
 

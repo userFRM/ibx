@@ -974,9 +974,49 @@ impl HmdsState {
                         }
                     }
                     else {
-                        // Warn, not debug: a drop in the W cascade is visible
-                        // to an application logging at info.
-                        log::warn!("HMDS unmatched W response (len={}): {:?}", xml_tag.len(), xml_tag);
+                        // A reply that names one of this client's queries and
+                        // cannot be read is still that query's answer. Left on
+                        // its list, the request waits out its whole deadline
+                        // for a reply that has already arrived. Failed the way
+                        // a refusal the venue stated is failed. A request kept
+                        // up to date has no terminal answer — an unreadable
+                        // page is warned below and the stream goes on.
+                        let mut released_req_id: Option<u32> = None;
+                        let mut from_historical = false;
+                        if let Some(stated) = crate::control::xml::tag(xml_tag, "id") {
+                            if let Some(pos) = self.pending_historical.iter()
+                                .position(|(q, _)| states(stated, q.as_str()))
+                            {
+                                let (_, req_id) = self.pending_historical[pos];
+                                if !self.keep_up_to_date_reqs.contains(&req_id) {
+                                    self.pending_historical.remove(pos);
+                                    self.held.retain(|a| a.req_id != req_id);
+                                    released_req_id = Some(req_id);
+                                    from_historical = true;
+                                }
+                            } else if let Some(pos) = self.pending_head_ts.iter()
+                                .position(|(q, _)| states(stated, q.as_str()))
+                            {
+                                released_req_id = Some(self.pending_head_ts.remove(pos).1);
+                            }
+                        }
+                        match released_req_id {
+                            Some(req_id) => {
+                                log::warn!(
+                                    "HMDS reply for req_id={req_id} named a query but could not be read"
+                                );
+                                super::push_hmds_error(
+                                    shared, req_id,
+                                    "the venue's answer arrived but could not be read".to_string(),
+                                    from_historical,
+                                );
+                            }
+                            None => {
+                                // Warn, not debug: a drop in the W cascade is visible
+                                // to an application logging at info.
+                                log::warn!("HMDS unmatched W response (len={}): {:?}", xml_tag.len(), xml_tag);
+                            }
+                        }
                     }
                 } else {
                     // A W message with no 6118 payload carries no bars; it is

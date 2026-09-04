@@ -4276,6 +4276,31 @@ fn a_public_identifier_rides_the_tags_its_own_kind_uses() {
     }
 }
 
+/// A kind of identifier this client carries no source for is refused rather
+/// than asked for by symbol: that is a different question, and its answer
+/// would read as the one the caller put.
+#[test]
+fn an_identifier_of_an_unknown_kind_is_refused_not_asked_by_symbol() {
+    use std::io::Read;
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn = Some(conn);
+    let filters = crate::types::SecDefFilters {
+        sec_id: "XS1234567890".to_string(),
+        sec_id_type: "SEDOL".to_string(),
+        ..Default::default()
+    };
+    let why = ccp.send_secdef_request_by_symbol(
+        16, "AAPL", "STK", "SMART", "USD", &filters, &mut conn, &mut hb,
+    ).expect_err("the lookup is refused, and says what it could not ask");
+    assert!(why.contains("SEDOL"), "the refusal names what it could not carry: {why}");
+    assert!(ccp.pending_secdef.is_empty(), "and nothing is queued for an answer");
+    peer.set_nonblocking(true).unwrap();
+    let mut buf = [0u8; 4096];
+    assert!(peer.read(&mut buf).is_err(), "and nothing reached the wire");
+}
+
 /// A lookup states the symbol and the venue's local symbol as two separate
 /// fields, because they are two separate statements about the contract. Sending
 /// only the local symbol asked a narrower question than the caller put, and a

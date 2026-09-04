@@ -1782,8 +1782,6 @@ impl CcpState {
             )
         };
         match outcome {
-            // The filters built here name no identifier, so a refusal is not
-            // one the venue can make; what is refused is told, not dropped.
             Ok(()) => self.pending_md_subscribe.push((req_id, pending, Instant::now())),
             Err(reason) => {
                 log::warn!("subscription lookup refused: {reason}");
@@ -1874,6 +1872,10 @@ impl CcpState {
         // sent at all — the lookup fell through to whatever the symbol
         // matched. When one is set the lookup rides the identifier and
         // drops the symbol/secType/filters.
+        //
+        // A kind this wire carries no source for is refused rather than
+        // asked by symbol: that is a different question, and its answer
+        // would read as the one the caller put.
         let sec_id = filters.sec_id.as_str();
         let identifier_fields: Vec<(u32, &str)> = if sec_id.is_empty() {
             Vec::new()
@@ -1903,6 +1905,7 @@ impl CcpState {
             }
         };
         let identifier_lookup = !identifier_fields.is_empty();
+
         if let Some(conn) = ccp_conn.as_mut() {
             let req_id_str = req_id.to_string();
             let ts = chrono_free_timestamp();

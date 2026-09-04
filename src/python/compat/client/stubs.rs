@@ -188,9 +188,11 @@ impl EClient {
     // and cannot be useful.
     //
     // Every message the venue sends is stamped with the time it sent it, so
-    // the answer is the stamp on the last one. Before any message has arrived
-    // there is nothing to report but this machine's clock, and that is the
-    // only case where it is used.
+    // the answer is the stamp on the last one, and the logon itself is
+    // stamped, so a session holds one from the moment it exists. Where none
+    // is held the request is reported on `error`, the way a request made with
+    // no session is, and this machine's clock is not handed back as the
+    // venue's.
     /// Ask the venue for its own clock. Answered on `current_time`.
     ///
     /// Before a session exists there is no venue clock to report, so this is
@@ -208,18 +210,12 @@ impl EClient {
             .and_then(|s| s.market.venue_time())
             .and_then(|stamped| crate::protocol::datetime::ib_datetime_to_unix(&stamped));
 
-        let seconds = match from_venue {
-            Some(secs) => secs,
-            None => {
-                log::warn!(
-                    "current_time: the venue has stamped no message yet, so this \
-                     reports the local clock"
-                );
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64
-            }
+        let Some(seconds) = from_venue else {
+            return self.notify(py, "error", (
+                -1_i64, super::raised_now(), super::NOT_CONNECTED_CODE,
+                "the venue has stamped no message yet, so its clock cannot be stated",
+                "",
+            ));
         };
         self.deliver(py, "current_time", (seconds,))?;
         Ok(())
@@ -236,9 +232,7 @@ impl EClient {
     ///
     /// Before a session exists this is reported on `error`, as
     /// `req_current_time` is: an answer waits for a dispatch pass, and with
-    /// no session there is nothing to make one. Before anything has been
-    /// stamped there is nothing to report but this machine's clock, and the
-    /// log says so.
+    /// no session there is nothing to make one.
     fn req_current_time_in_millis(&self, py: Python<'_>) -> PyResult<()> {
         let Some(_connected) = self.tx_or_report(-1)? else { return Ok(()) };
         let from_venue = self
@@ -249,18 +243,12 @@ impl EClient {
             .and_then(|s| s.market.venue_time())
             .and_then(|stamped| crate::protocol::datetime::ib_datetime_to_unix_millis(&stamped));
 
-        let millis = match from_venue {
-            Some(ms) => ms,
-            None => {
-                log::warn!(
-                    "current_time_in_millis: the venue has stamped no message yet, so \
-                     this reports the local clock"
-                );
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64
-            }
+        let Some(millis) = from_venue else {
+            return self.notify(py, "error", (
+                -1_i64, super::raised_now(), super::NOT_CONNECTED_CODE,
+                "the venue has stamped no message yet, so its clock cannot be stated",
+                "",
+            ));
         };
         self.deliver(py, "current_time_in_millis", (millis,))?;
         Ok(())

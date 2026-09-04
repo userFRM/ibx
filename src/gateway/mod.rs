@@ -906,6 +906,9 @@ fn reconnect_ccp_attempt(
     // the venue names counts as another client, so the reconnect gives the
     // account up rather than taking it from somebody who may hold it fairly.
     let mut logged_in_at = String::new();
+    // The venue's own stamp, kept apart from the local fallback a silent
+    // logon gets: the connection carries only what the venue stated.
+    let mut venue_stamp: Option<String> = None;
 
     // TLS + DH key exchange
     let addr = format!("{host}:{AUTH_PORT}")
@@ -1134,7 +1137,8 @@ fn reconnect_ccp_attempt(
                 // the difference does not reach anything — noted because it is
                 // the same last-wins hazard the read above works around, and
                 // the next tag read here may not be as forgiving.
-                logged_in_at = fields.get(&52).cloned()
+                venue_stamp = fields.get(&52).cloned();
+                logged_in_at = venue_stamp.clone()
                     .unwrap_or_else(|| chrono_free_timestamp().to_string());
                 acked = true;
                 break;
@@ -1175,7 +1179,7 @@ fn reconnect_ccp_attempt(
     // Where this attempt actually landed. A redirect followed here is followed
     // again on every later attempt unless the session remembers it.
     conn.connected_host = Some(host.to_string());
-    conn.logged_in_at = Some(logged_in_at);
+    conn.logged_in_at = venue_stamp;
     Ok(conn)
 }
 
@@ -1906,6 +1910,13 @@ impl Gateway {
         // Auth connection (non-blocking TLS for hot loop)
         let mut ccp_conn = Connection::new(tls)?;
         ccp_conn.seq = ccp_seq;
+        // The venue's stamp on this logon, where it gave one. The clock a
+        // caller asks for reads from it; left None where the venue stamped
+        // nothing, because the local fallback the session keeps below is not
+        // the venue's time.
+        if !logged_in_at.is_empty() {
+            ccp_conn.logged_in_at = Some(logged_in_at.clone());
+        }
         // CCP HMAC signing IV: derived by AES-CBC encrypting the logon message.
         // The logon was sent as plaintext over TLS, but the AES-CBC computation
         // evolves the IV — last 16 bytes of ciphertext = new IV for HMAC signing.

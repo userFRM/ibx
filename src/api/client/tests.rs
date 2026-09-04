@@ -6394,31 +6394,37 @@ fn a_local_option_calculation_answers_the_request_that_asked() {
 ///
 /// A caller asks it to learn how far apart the two are, and the local clock is
 /// the one number that cannot tell them. The venue stamps every message it
-/// sends; the last stamp is the answer.
+/// sends; the last stamp is the answer, and where no stamp is held the
+/// request is refused rather than answered with this machine's clock.
 #[test]
 fn the_current_time_is_the_venues_own() {
     #[derive(Default)]
-    struct Heard(Vec<i64>);
+    struct Heard { times: Vec<i64>, errors: Vec<(i64, String)> }
     impl Wrapper for Heard {
-        fn current_time(&mut self, t: i64) { self.0.push(t); }
+        fn current_time(&mut self, t: i64) { self.times.push(t); }
+        fn error(&mut self, _req_id: i64, code: i64, msg: &str, _: &str) {
+            self.errors.push((code, msg.to_string()));
+        }
     }
 
     let (client, _rx, shared) = test_client();
     let mut heard = Heard::default();
 
-    // Before the venue has said anything, there is nothing but this clock.
+    // Before the venue has stamped anything, the question is refused rather
+    // than answered with this machine's clock.
     client.req_current_time(&mut heard);
-    let local = heard.0[0];
-    assert!(local > 1_700_000_000, "a plausible instant");
+    assert!(heard.times.is_empty(), "no time is handed back");
+    assert_eq!(heard.errors.len(), 1);
+    assert_eq!(heard.errors[0].0, 504);
 
-    // Once it has, its own stamp is what a caller is told.
+    // Once it has stamped, its own stamp is what a caller is told.
     shared.market.note_venue_time("20260815-12:00:00");
     client.req_current_time(&mut heard);
     assert_eq!(
-        heard.0[1], 1_786_795_200,
+        heard.times[0], 1_786_795_200,
         "the venue's stamp, read back to seconds",
     );
-    assert_ne!(heard.0[1], local, "and not this machine's clock");
+    assert_eq!(heard.errors.len(), 1, "and nothing new is refused");
 }
 
 /// Asking in milliseconds keeps the fraction asking in seconds throws away.

@@ -789,7 +789,10 @@ impl EClient {
                 Py::new(py, ContractDescription {
                     con_id: m.con_id as i64,
                     symbol: m.symbol.clone(),
-                    sec_type: m.sec_type.to_fix().to_string(),
+                    // The user-visible spelling, the same one the Rust
+                    // surface hands back: a stock reaches this as CS, the
+                    // wire name for it, which no request accepts.
+                    sec_type: m.sec_type.to_api_str().to_string(),
                     currency: m.currency.clone(),
                     primary_exchange: m.primary_exchange.clone(),
                     derivative_sec_types: m.derivative_types.clone(),

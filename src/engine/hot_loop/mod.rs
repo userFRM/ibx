@@ -348,6 +348,12 @@ impl HotLoop {
         // to the one this client proposed.
         hot_loop.set_ccp_heartbeat_interval(gateway.heartbeat_interval);
         hot_loop.farm_conn = Some(farm_conn);
+        // The venue stamps the logon answer with its own clock. Seeded from
+        // it, so a caller asking the venue's time before any other message
+        // has arrived is answered from the venue and not from this machine.
+        if let Some(stamped) = &ccp_conn.logged_in_at {
+            hot_loop.shared.market.note_venue_time(stamped);
+        }
         hot_loop.ccp_conn = Some(ccp_conn);
         // This connection has not named what it has working yet, and the
         // bound that naming is waited on starts now, when the connection
@@ -457,9 +463,12 @@ impl HotLoop {
         hl.set_control_rx(rx);
         hl.set_account_id(account_id);
         hl.farm_conn = Some(farm_conn);
+        // As `for_session`: seeded from the logon stamp, and the bound that
+        // naming is waited on starts when the connection is taken.
+        if let Some(stamped) = &ccp_conn.logged_in_at {
+            hl.shared.market.note_venue_time(stamped);
+        }
         hl.ccp_conn = Some(ccp_conn);
-        // As `for_session`: the bound that naming is waited on starts when
-        // the connection is taken.
         hl.shared.orders.replay_is_pending();
         hl.hmds_conn = hmds_conn;
         (hl, tx)
@@ -1265,7 +1274,8 @@ impl HotLoop {
                     // As above: the answers already queued go with it.
                     self.shared.reference.purge_head_timestamp_for(req_id);
                     if let Some(pos) = self.hmds.pending_head_ts.iter().position(|(_, rid)| *rid == req_id) {
-                        self.hmds.pending_head_ts.remove(pos);
+                        let (query_id, _) = self.hmds.pending_head_ts.remove(pos);
+                        self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::FetchMatchingSymbols { req_id, pattern } => {
@@ -1375,7 +1385,8 @@ impl HotLoop {
                     // As above: the answers already queued go with it.
                     self.shared.reference.purge_histogram_for(req_id);
                     if let Some(pos) = self.hmds.pending_histogram.iter().position(|(_, rid)| *rid == req_id) {
-                        self.hmds.pending_histogram.remove(pos);
+                        let (query_id, _) = self.hmds.pending_histogram.remove(pos);
+                        self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::FetchHistoricalTicks { contract, req_id, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth, include_expired, .. } => {
@@ -1903,11 +1914,13 @@ impl HotLoop {
         self.hb.set_ccp_interval(conn.heartbeat_secs.unwrap_or(crate::config::CCP_HEARTBEAT));
         // This session's logon is now the newer one. Left at the first, every
         // later reconnect would find its own previous logon listed as a
-        // competing session and give the account up to itself.
-        if let Some(stamped) = conn.logged_in_at.clone()
-            && let Some(auth) = self.reconnect_auth.as_mut()
-        {
-            auth.logged_in_at = stamped;
+        // competing session and give the account up to itself. The stamp is
+        // also the venue's clock, which a caller asking the server time reads.
+        if let Some(stamped) = conn.logged_in_at.clone() {
+            self.shared.market.note_venue_time(&stamped);
+            if let Some(auth) = self.reconnect_auth.as_mut() {
+                auth.logged_in_at = stamped;
+            }
         }
         // Where this attempt landed. A reconnect can be redirected, and a
         // session that does not remember it dials the door again every time
@@ -3473,6 +3486,51 @@ mod tests {
         assert!(!sent.contains("rt_4"), "and not by a name it never issued: {sent}");
     }
 
+    /// A head-timestamp or histogram query still waiting on its answer is
+    /// withdrawn from the venue, not just dropped from this client's list.
+    ///
+    /// Dropped without a withdrawal, the venue keeps working the query and
+    /// its eventual answer names a request nobody holds any more.
+    #[test]
+    fn cancelling_a_head_timestamp_or_histogram_withdraws_the_query_from_the_venue() {
+        use std::io::Read;
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let (tx2, rx2) = std::sync::mpsc::sync_channel(4);
+        let req_id = 11u32;
+
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.hmds_conn = Some(conn);
+        hl.hmds.pending_head_ts.push(("TickHeadClient1;;265598@BEST TRADES;;0;;true;;0;;U".to_string(), req_id));
+        hl.set_control_rx(rx);
+        tx.send(crate::types::ControlCommand::CancelHeadTimestamp { req_id }).unwrap();
+        hl.poll_control_commands();
+        assert!(hl.hmds.pending_head_ts.is_empty(), "the local record goes with it");
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let sent = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(
+            sent.contains("CancelQuery") && sent.contains("ticker:TickHeadClient1;;265598@BEST TRADES;;0;;true;;0;;U"),
+            "the venue was told to stop the query by the id it went out under: {sent}",
+        );
+
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.hmds_conn = Some(conn);
+        hl.hmds.pending_histogram.push(("hg_1000;;265598@BEST Histogram;;0;;true;;0;;U".to_string(), req_id));
+        hl.set_control_rx(rx2);
+        tx2.send(crate::types::ControlCommand::CancelHistogramData { req_id }).unwrap();
+        hl.poll_control_commands();
+        assert!(hl.hmds.pending_histogram.is_empty(), "the local record goes with it");
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let sent = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(
+            sent.contains("CancelQuery") && sent.contains("ticker:hg_1000;;265598@BEST Histogram;;0;;true;;0;;U"),
+            "the venue was told to stop the query by the id it went out under: {sent}",
+        );
+    }
+
     /// A subscription still waiting to be told which contract it is for.
     ///
     /// The pending record carries the slot, not the contract — the contract is
@@ -3783,6 +3841,25 @@ mod tests {
             started.elapsed() < Duration::from_secs(1),
             "the bound began when the connection was taken, so a first waiter arriving \
              after it has passed is answered at once, not held for a fresh bound",
+        );
+    }
+
+    /// A session holds the venue's clock from the stamp on its logon, so a
+    /// caller asking the server time before any other message has arrived is
+    /// answered from the venue and not from this machine.
+    #[test]
+    fn the_logon_stamp_seeds_the_venues_clock() {
+        let shared = Arc::new(SharedState::new());
+        let (farm_conn, _farm_peer) = crate::protocol::connection::Connection::for_test();
+        let (mut ccp_conn, _ccp_peer) = crate::protocol::connection::Connection::for_test();
+        ccp_conn.logged_in_at = Some("20260904-09:30:00".to_string());
+        let (_hl, _tx) = HotLoop::with_connections(
+            shared.clone(), None, "DU1".into(), farm_conn, ccp_conn, None, None,
+        );
+        assert_eq!(
+            shared.market.venue_time().as_deref(),
+            Some("20260904-09:30:00"),
+            "the clock a caller asks for is seeded from the logon stamp",
         );
     }
 
