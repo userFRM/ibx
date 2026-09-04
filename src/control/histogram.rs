@@ -134,25 +134,14 @@ pub fn parse_histogram_response(xml: &str) -> Option<Vec<HistogramEntry>> {
         let abs_start = search_start + tick_start;
         // A row never closed is an answer cut short: the whole of it is
         // refused rather than what is in hand delivered as though complete.
-        let tick_end = match xml[abs_start..].find("</Tick>") {
-            Some(e) => abs_start + e + 7,
-            None => return None,
-        };
+        let tick_end = abs_start + xml[abs_start..].find("</Tick>")? + 7;
         let tick_xml = &xml[abs_start..tick_end];
 
         // A price or a count the row does not state is not nought: read that
         // way a row that went missing its numbers is invented, and a caller
         // charts a level nothing traded at.
-        let Some(price) = crate::control::xml::tag(tick_xml, "price")
-            .and_then(|s| s.parse().ok())
-        else {
-            return None;
-        };
-        let Some(count) = crate::control::xml::tag(tick_xml, "size")
-            .and_then(|s| s.parse().ok())
-        else {
-            return None;
-        };
+        let price = crate::control::xml::tag(tick_xml, "price")?.parse().ok()?;
+        let count = crate::control::xml::tag(tick_xml, "size")?.parse().ok()?;
 
         entries.push(HistogramEntry { price, count });
         search_start = tick_end;
