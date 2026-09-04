@@ -905,6 +905,8 @@ fn states_a_limit_price(ord_type: u8) -> bool {
     matches!(ord_type, b'2' | b'4' | b'B')
         || ord_type == crate::types::ORD_LIT
         || ord_type == crate::types::ORD_PEG_BEST
+        || ord_type == crate::types::ORD_VOL
+        || ord_type == crate::types::ORD_REL_LMT
 }
 
 /// The currency an order states for a contract (tag 15).
@@ -1259,6 +1261,9 @@ fn tracked_shape(kind: &crate::types::OrderKind) -> (u8, i64, i64) {
         K::Rel { offset } => (b'P', 0, *offset),
         K::PassiveRel { offset, .. } => (crate::types::ORD_PASSV_REL, 0, *offset),
         K::PegBest { price } => (crate::types::ORD_PEG_BEST, *price, 0),
+        K::Vol { volatility } => (crate::types::ORD_VOL, *volatility, 0),
+        K::RelLmt { price } => (crate::types::ORD_REL_LMT, *price, 0),
+        K::RelMkt => (crate::types::ORD_REL_MKT, 0, 0),
         K::AdjustableStop { stop_price, .. } => (b'3', 0, *stop_price),
         K::Adaptive { price, .. } | K::Algo { price, .. } => (b'2', *price, 0),
             // Tracked under the what-if marker so the response is recognised as a
@@ -1430,6 +1435,25 @@ fn push_type_and_prices(fields: &mut Vec<(u32, String)>, kind: &crate::types::Or
         K::PegBest { price } => {
             fields.push((40, "E2M".to_string()));
             fields.push((44, format_price(*price).to_string()));
+        }
+        // Priced in volatility: the volatility is the order's price and rides
+        // the limit-price tag. What manages it rides the attribute block,
+        // where those already travelled.
+        K::Vol { volatility } => {
+            fields.push((40, "VO".to_string()));
+            fields.push((44, format_price(*volatility).to_string()));
+        }
+        // A combination whose legs are worked the way a relative order is.
+        // It extends the limit type: the price rides the limit-price tag,
+        // and no peg offset rides beside the name.
+        K::RelLmt { price } => {
+            fields.push((40, "RL".to_string()));
+            fields.push((44, format_price(*price).to_string()));
+        }
+        // The same combination finishing as a market order: the name is the
+        // whole of it, and no price or peg offset rides beside it.
+        K::RelMkt => {
+            fields.push((40, "RM".to_string()));
         }
         K::Adaptive { price, .. } => {
             // Adaptive requires `18=e`. Without it the order is rejected with

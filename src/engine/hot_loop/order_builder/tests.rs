@@ -3331,6 +3331,9 @@ fn a_preview_states_everything_the_order_states() {
         K::Rel { offset: scale / 100 },
         K::PassiveRel { offset: scale / 100, price_cap: 0 },
         K::PegBest { price: 100 * scale },
+        K::Vol { volatility: 40 * scale },
+        K::RelLmt { price: 100 * scale },
+        K::RelMkt,
         K::PegMkt { offset: scale / 100, price_cap: 0 },
         K::PegMid { offset: scale / 100, price_cap: 0 },
         K::StpPrt { stop_price: 99 * scale },
@@ -3518,4 +3521,81 @@ fn a_peg_best_order_up_to_the_mid_states_its_mid_offsets() {
     assert_eq!(stated(&msg, "8403=").as_deref(), Some("0.020000"), "the offset at the whole spread: {msg}");
     assert_eq!(stated(&msg, "8404=").as_deref(), Some("0.010000"), "the offset at half the spread: {msg}");
     assert_eq!(stated(&msg, "8412="), None, "no compete offset beside them: {msg}");
+}
+
+/// A volatility order is priced in volatility: the volatility rides the
+/// limit-price tag under its own name, and no peg offset or instruction
+/// rides beside it. What manages it rides where those fields already
+/// travelled.
+#[test]
+fn a_volatility_order_states_its_volatility_under_its_own_name() {
+    use crate::types::OrderKind as K;
+    let scale = crate::types::PRICE_SCALE;
+    let stated = |msg: &str, t: &str| {
+        msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string))
+    };
+
+    let msg = send_kind_for_test(
+        K::Vol { volatility: 40 * scale },
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    assert_eq!(stated(&msg, "40=").as_deref(), Some("VO"), "its own name: {msg}");
+    assert_eq!(stated(&msg, "44=").as_deref(), Some("40"), "the volatility is its price: {msg}");
+    assert_eq!(stated(&msg, "211="), None, "no peg offset to state: {msg}");
+    assert_eq!(stated(&msg, "18="), None, "no instruction beside the name: {msg}");
+
+    let managed = send_kind_for_test(
+        K::Vol { volatility: 40 * scale },
+        b'0',
+        crate::types::OrderAttrs {
+            volatility: 40.0,
+            volatility_type: 2,
+            ..Default::default()
+        },
+    );
+    assert_eq!(stated(&managed, "9816=").as_deref(), Some("40.000000"), "the volatility it is managed at: {managed}");
+    assert_eq!(stated(&managed, "6280=").as_deref(), Some("2"), "the kind of volatility: {managed}");
+}
+
+/// A relative combination that extends the limit type states its price on
+/// the limit-price tag under its own name, and no peg offset or instruction
+/// rides beside it.
+#[test]
+fn a_relative_limit_combination_states_its_price_under_its_own_name() {
+    use crate::types::OrderKind as K;
+    let scale = crate::types::PRICE_SCALE;
+    let stated = |msg: &str, t: &str| {
+        msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string))
+    };
+
+    let msg = send_kind_for_test(
+        K::RelLmt { price: 100 * scale },
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    assert_eq!(stated(&msg, "40=").as_deref(), Some("RL"), "its own name: {msg}");
+    assert_eq!(stated(&msg, "44=").as_deref(), Some("100"), "the price is stated: {msg}");
+    assert_eq!(stated(&msg, "211="), None, "no peg offset beside the name: {msg}");
+    assert_eq!(stated(&msg, "18="), None, "no instruction beside the name: {msg}");
+}
+
+/// A relative combination that finishes as a market order states nothing
+/// beside its own name: no price, no peg offset, no instruction.
+#[test]
+fn a_relative_market_combination_states_no_price_beside_its_name() {
+    use crate::types::OrderKind as K;
+    let stated = |msg: &str, t: &str| {
+        msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string))
+    };
+
+    let msg = send_kind_for_test(
+        K::RelMkt,
+        b'0',
+        crate::types::OrderAttrs::default(),
+    );
+    assert_eq!(stated(&msg, "40=").as_deref(), Some("RM"), "its own name: {msg}");
+    assert_eq!(stated(&msg, "44="), None, "no price to state: {msg}");
+    assert_eq!(stated(&msg, "211="), None, "no peg offset beside the name: {msg}");
+    assert_eq!(stated(&msg, "18="), None, "no instruction beside the name: {msg}");
 }
