@@ -25,6 +25,39 @@ mod hot_loop_panic_tests {
         assert_eq!(trim_session_endpoint("short"), "short");
     }
 
+    /// The endpoint conversion names components of a date and a time, and a
+    /// reply is not bound to carry possible ones. A day of 32 or an hour of
+    /// 25 used to abort the loop that was rendering it; it must instead fall
+    /// back to the hours as the wire carried them.
+    #[test]
+    fn sessions_string_survives_an_impossible_endpoint() {
+        let impossible = [
+            ("20260432-13:30:00", "20260432-20:00:00"), // a 32nd day
+            ("20260427-25:30:00", "20260427-26:00:00"), // a 25th hour
+            ("20260027-13:30:00", "20260027-20:00:00"), // a zeroth month
+            ("20260427-13:99:00", "20260427-20:00:00"), // a 99th minute
+        ];
+        for (start, end) in impossible {
+            let s = ScheduleSession {
+                start: start.into(),
+                end: end.into(),
+                trade_date: start[..8].into(),
+            };
+            let out = format_sessions_string(&[s], "US/Eastern");
+            assert!(!out.is_empty(), "an impossible endpoint must still render");
+        }
+        // The fallback is the wire's own hours, unchanged.
+        let s = ScheduleSession {
+            start: "20260432-13:30:00".into(),
+            end: "20260432-20:00:00".into(),
+            trade_date: "20260432".into(),
+        };
+        assert_eq!(
+            format_sessions_string(&[s], "US/Eastern"),
+            "20260432:1330-20260432:2000",
+        );
+    }
+
     /// The closed-session branch is the one that slices trade_date/start, and
     /// it is only taken when start == end. The previous version of this test
     /// set them differently, so it never reached the slice at all and passed

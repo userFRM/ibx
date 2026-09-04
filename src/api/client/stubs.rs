@@ -512,4 +512,20 @@ mod expiry_tests {
         let far = years_to_expiry("20351231").expect("a date further ahead");
         assert!(near > 0.0 && far > near, "{near} then {far}");
     }
+
+    /// An expiry that cannot exist measures nothing. The day count is
+    /// arithmetic and would place a thirteenth month or a thirty-second day
+    /// somewhere regardless, so a solve measuring from it would answer from a
+    /// day the venue never stated.
+    #[test]
+    fn an_impossible_expiry_measures_nothing() {
+        assert!(years_to_expiry("20301301").is_none(), "a thirteenth month");
+        assert!(years_to_expiry("20300001").is_none(), "a zeroth month");
+        assert!(years_to_expiry("20300132").is_none(), "a thirty-second day");
+        assert!(years_to_expiry("20300100").is_none(), "a zeroth day");
+        assert!(years_to_expiry("20310229").is_none(), "February the 29th on a common year");
+        assert!(years_to_expiry("21000229").is_none(), "February the 29th on a century year");
+        // The calendar edge that must not be refused: leap day where one is.
+        assert!(years_to_expiry("20320229").is_some(), "February the 29th on a leap year");
+    }
 }

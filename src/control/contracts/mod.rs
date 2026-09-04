@@ -1451,9 +1451,12 @@ fn stated_on(endpoint: &str, zone: &jiff::tz::TimeZone) -> Option<String> {
     }
     let n = |at: usize, len: usize| date.get(at..at + len)?.parse::<i16>().ok();
     let t = |at: usize| time.get(at..at + 2)?.parse::<i8>().ok();
-    let civil = jiff::civil::datetime(
+    // The reply is not bound to carry a possible date. The fallible
+    // constructor refuses one; the free constructor of the same shape would
+    // panic and take the loop down with it.
+    let civil = jiff::civil::DateTime::new(
         n(0, 4)?, n(4, 2)? as i8, n(6, 2)? as i8, t(0)?, t(2)?, 0, 0,
-    );
+    ).ok()?;
     let there = civil.to_zoned(jiff::tz::TimeZone::UTC).ok()?.with_time_zone(zone.clone());
     Some(there.strftime("%Y%m%d:%H%M").to_string())
 }

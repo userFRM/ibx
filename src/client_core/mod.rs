@@ -794,6 +794,11 @@ pub(crate) fn years_to_expiry(expiry: &str) -> Option<f64> {
     let year: i64 = digits[0..4].parse().ok()?;
     let month: i64 = digits[4..6].parse().ok()?;
     let day: i64 = digits[6..8].parse().ok()?;
+    // The count below is arithmetic, not a calendar: it places a thirteenth
+    // month or a thirty-second day somewhere regardless, and a solve measuring
+    // from there answers from a day the venue never stated. A date that cannot
+    // exist measures nothing.
+    jiff::civil::Date::new(year as i16, month as i8, day as i8).ok()?;
     let expiry_day = days_from_civil(year, month, day);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
