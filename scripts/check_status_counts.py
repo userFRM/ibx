@@ -216,6 +216,31 @@ def capabilities() -> tuple[int, int]:
     return verified, len(marks)
 
 
+def order_types() -> int:
+    """How many order types a caller can place.
+
+    Read off the one list that decides it: the check every placement passes
+    before anything is built. Aliases the same type answers to are counted
+    once — the venue is asked for one type whichever spelling the caller used.
+    """
+    text = (ROOT / "src/client_core/mod.rs").read_text()
+    at = text.index('match order_type.as_str() {')
+    block = text[at:text.index("_ => return Err", at)]
+    spellings = set(re.findall(r'"([A-Z][A-Z0-9 +]*)"', block))
+    # The spellings that name a type already in the set under another name.
+    same = {
+        "PEG MIDPT": "PEG MID",
+        "MIDPRICE": "MIDPX",
+        "SNAP MIDPT": "SNAP MID",
+        "SNAP PRIM": "SNAP PRI",
+        "PEGBENCH": "PEG BENCH",
+    }
+    for alias, named in same.items():
+        if alias in spellings and named in spellings:
+            spellings.discard(alias)
+    return len(spellings)
+
+
 def readme_says() -> tuple[int, int] | None:
     """What the matrix's own test row states, offline and session-only.
 
@@ -326,6 +351,15 @@ def main() -> int:
         )
     else:
         print(f"capabilities: {verified} of {total} verified")
+
+    types = order_types()
+    if f"| {types} order types |" not in matrix_text:
+        wrong.append(
+            f"docs/capabilities.md does not say {types} order types, which is what "
+            f"the check every placement passes accepts"
+        )
+    else:
+        print(f"order types: {types}")
 
     stated = readme_says()
     if stated is None:

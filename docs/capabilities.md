@@ -125,7 +125,7 @@ entitlement is answered with.
 
 | Capability | Status | Verification |
 | --- | :---: | --- |
-| 23 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat`. Every type this client places is previewed as itself |
+| 24 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat`. Every type this client places is previewed as itself |
 | Order fields | ✅ Supported | An order has 154 fields. 114 are sent. 33 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. 6 more are what the venue fills on the way back, which an order does not carry out. One is acted on here rather than sent: an order held back is kept until one in its family transmits, which is what the counterpart this replaces does with it. A check on every commit fails if a field starts being dropped |
 | Non-US markets | ✅ Supported | Previews accepted on DE, NL, GB, CH, AU, CA, US equities and FX; JP and HK rejected for lot size, which is the exchange rule and is surfaced to the caller |
 | Modify, cancel, global cancel | ✅ Supported | `scripts/sdk_lifecycle.py` (place → modify → cancel), `tests/ib_paper_compat` Phase 9 / 9b |
