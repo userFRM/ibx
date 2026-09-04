@@ -411,8 +411,12 @@ impl MarketDataState {
     #[doc(hidden)] pub fn purge_depth_updates(&self, req_id: u32) {
         self.depth_updates.lock().unwrap().retain(|u| u.req_id != req_id);
         // Withdrawing is how a caller starts again, so this is where a book
-        // that was dropped stops being refused.
+        // that was dropped stops being refused — and where the notice of that
+        // drop goes with it. Left queued, a subscription started again under
+        // the same number opened with the failure of the one before it: the
+        // caller was told a healthy book had been given up on.
         self.depth_dropped.lock().unwrap().remove(&req_id);
+        self.depth_drops_unsaid.lock().unwrap().retain(|(id, _)| *id != req_id);
     }
 
     /// Whether a book was dropped for running away and has not been asked for
@@ -607,6 +611,36 @@ mod option_model_tests {
     /// An answer worked out here does not become the venue's model for a
     /// contract.
     ///
+    /// A book started again does not open with the failure of the one before it.
+    ///
+    /// Withdrawing is how a caller starts again after a book was given up on,
+    /// and the notice of that giving up was left queued. The next subscription
+    /// under the same number then opened with it: a healthy book, receiving a
+    /// fresh picture, reported as one this client had abandoned.
+    #[test]
+    fn a_withdrawal_takes_the_notice_of_a_dropped_book_with_it() {
+        let market = MarketDataState::new();
+        for _ in 0..STREAM_BACKLOG_LIMIT + 1 {
+            market.push_depth_update(DepthUpdate {
+                req_id: 4, position: 0, market_maker: String::new(), operation: 0,
+                side: 1, price: 100.0, size: 1.0, is_smart_depth: false,
+            });
+        }
+        assert!(market.depth_was_dropped(4), "the book was given up on");
+        assert!(
+            !market.depth_drops_unsaid.lock().unwrap().is_empty(),
+            "and the caller has not been told yet",
+        );
+
+        market.purge_depth_updates(4);
+
+        assert!(!market.depth_was_dropped(4), "asked for again, it is not refused");
+        assert!(
+            market.depth_drops_unsaid.lock().unwrap().is_empty(),
+            "and the notice of the last one does not open the next",
+        );
+    }
+
     /// It names no contract — a solve answers a request, not an instrument —
     /// so stored it lands on slot zero, which is a real contract. The next
     /// question about that contract would then be answered against the last

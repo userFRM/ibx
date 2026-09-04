@@ -1462,3 +1462,30 @@ fn a_family_send_that_stops_partway_forgets_what_it_did_not_send() {
         "nor did the sibling behind it, so neither is an order to withdraw or revise",
     );
 }
+
+/// and every later action restated from the nine this client had recorded.
+#[test]
+fn a_replace_that_cannot_state_the_number_asked_for_is_refused() {
+    let core = ClientCore::new();
+    let placed = ApiOrder {
+        order_id: 42, action: "BUY".into(), total_quantity: 1.0,
+        order_type: "TRAIL LIMIT".into(), aux_price: 5.0, lmt_price_offset: 1.0,
+        tif: "DAY".into(), ..Default::default()
+    };
+    core.track_order(42, ApiContract::default(), placed.clone(), 0);
+
+    // A number the replacement does not name leaves the placed one in force,
+    // which is how a caller moves the quantity alone.
+    let fewer = ApiOrder { total_quantity: 2.0, ..placed.clone() };
+    assert!(
+        core.modify_refusal(42, &fewer).is_none(),
+        "the quantity is on the replace and travels",
+    );
+
+    let wider = ApiOrder { aux_price: 9.0, ..placed };
+    let why = core.modify_refusal(42, &wider).expect("the trail has nowhere to go");
+    assert!(
+        why.contains("the trail amount"),
+        "the caller is told which number cannot travel: {why}",
+    );
+}

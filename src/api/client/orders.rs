@@ -172,32 +172,43 @@ impl EClient {
             )));
         };
 
-        let instrument = self.core.find_or_register_instrument(
-            &self.control_tx,
-            contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
-            &crate::types::model::contract_identity(
-                &contract.last_trade_date_or_contract_month, contract.strike,
-                &contract.right, &contract.multiplier, &contract.currency,
-            ),
-        )?;
+        let replacing = self.core.is_working_at_the_venue(oid);
+        // Where a replace names a contract other than the one the order is
+        // working on, that is settled before anything is registered: asking
+        // for a slot first spent one of the table's on a contract this call
+        // then refused, and the table does not grow.
+        let placed_on = if replacing { self.core.tracked_instrument(oid) } else { None };
+        let wrong_contract = || Refusal::validation(format!(
+            "order {oid} is working on another contract, and a replace names \
+             the order rather than the contract: withdraw it and place a new \
+             order to trade {}",
+            contract.symbol,
+        ));
+        let instrument = match placed_on {
+            Some(placed_on) if contract.con_id != 0 => {
+                if self.core.cached_instrument(contract.con_id) != Some(placed_on) {
+                    return Err(wrong_contract());
+                }
+                placed_on
+            }
+            _ => self.core.find_or_register_instrument(
+                &self.control_tx,
+                contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
+                &crate::types::model::contract_identity(
+                    &contract.last_trade_date_or_contract_month, contract.strike,
+                    &contract.right, &contract.multiplier, &contract.currency,
+                ),
+            )?,
+        };
 
         // If orderId is already tracked, this is a modification — emit Modify instead
         // of Submit.
-        let replacing = self.core.is_working_at_the_venue(oid);
         let cmd = if replacing {
             // A replace carries the order id and its fields, not the contract, so
             // the order stays on the instrument it was placed on. A contract naming
             // a different instrument is refused rather than recorded.
-            let placed_on = self.core.open_orders.lock().unwrap()
-                .get(&oid)
-                .map(|tracked| tracked.instrument);
             if placed_on.is_some_and(|placed_on| placed_on != instrument) {
-                return Err(Refusal::validation(format!(
-                    "order {oid} is working on another contract, and a replace names \
-                     the order rather than the contract: withdraw it and place a new \
-                     order to trade {}",
-                    contract.symbol,
-                )));
+                return Err(wrong_contract());
             }
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one, so refuse

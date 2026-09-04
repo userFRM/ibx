@@ -2250,6 +2250,14 @@ impl ClientCore {
             .any(|h| h.order_id == order_id && h.places_the_order())
     }
 
+    /// The slot a tracked order was placed on, if it is tracked.
+    ///
+    /// A replace names the order and not the contract, so this is the
+    /// instrument a replacement stays on whatever contract it carries.
+    pub fn tracked_instrument(&self, order_id: u64) -> Option<InstrumentId> {
+        self.open_orders.lock().unwrap().get(&order_id).map(|t| t.instrument)
+    }
+
     /// The order a tracked id was submitted with, if it is tracked.
     pub fn tracked_order(&self, order_id: u64) -> Option<ApiOrder> {
         self.open_orders.lock().unwrap().get(&order_id).map(|t| t.order.clone())

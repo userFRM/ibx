@@ -446,27 +446,32 @@ impl ReferenceState {
     /// Throw away bars still queued under a request.
     pub fn purge_historical_for(&self, req_id: u32) {
         self.historical_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.forget_a_refusal(req_id);
     }
 
     /// Throw away a head timestamp still queued under a request.
     pub fn purge_head_timestamp_for(&self, req_id: u32) {
         self.head_timestamps.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.forget_a_refusal(req_id);
     }
 
     /// Throw away calendar answers still queued under a request.
     pub fn purge_calendar_for(&self, req_id: u32) {
         self.calendar_meta_data.lock().unwrap().retain(|(id, _)| *id != req_id);
         self.calendar_events.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.forget_a_refusal(req_id);
     }
 
     /// Throw away a report still queued under a request.
     pub fn purge_fundamental_for(&self, req_id: u32) {
         self.fundamental_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.forget_a_refusal(req_id);
     }
 
     /// Throw away a histogram still queued under a request.
     pub fn purge_histogram_for(&self, req_id: u32) {
         self.histogram_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.forget_a_refusal(req_id);
     }
 
     /// Bars answering one request. The venue may answer in several parts, so
@@ -623,6 +628,18 @@ impl ReferenceState {
     }
 
     /// The venue's words about one request, if it refused it.
+    /// Throw away a refusal still queued under a request.
+    ///
+    /// Every answer has a queue of its own that a withdrawal empties; refusals
+    /// share one, keyed on the number alone. Left there, the refusal of a
+    /// request that was withdrawn was read as the answer to the next request
+    /// to take that number — and a query nothing was wrong with came back
+    /// refused. A withdrawal gives the number up entirely, so everything
+    /// queued under it goes.
+    pub fn forget_a_refusal(&self, req_id: u32) {
+        self.historical_errors.lock().unwrap().retain(|(id, _, _)| *id != req_id);
+    }
+
     pub fn take_error_for(&self, req_id: u32) -> Option<(i32, String)> {
         let mut q = self.historical_errors.lock().unwrap();
         let at = q.iter().position(|(id, _, _)| *id == req_id)?;
@@ -837,6 +854,7 @@ impl ReferenceState {
     /// and for a set of bars, and withdrawing one must not take the other's.
     pub fn purge_scanner_data_for(&self, req_id: u32) {
         self.scanner_data.lock().unwrap().retain(|(id, _)| *id != req_id);
+        self.forget_a_refusal(req_id);
     }
 
     #[doc(hidden)] pub fn push_scanner_data(&self, req_id: u32, result: ScannerResult) {
@@ -1370,5 +1388,32 @@ mod adjustments_store_tests {
         // The plain reader is unchanged: it states what is known about the
         // contract, which is a different question from whose answer it is.
         assert!(state.adjustments_for("4815747").is_some());
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    /// A withdrawal gives up the refusal queued under its number.
+    ///
+    /// Every answer has a queue of its own that a withdrawal empties; refusals
+    /// share one, keyed on the number alone. Left there, the refusal of a
+    /// request that was withdrawn was read as the answer to the next request
+    /// to take that number, and a query nothing was wrong with came back
+    /// refused.
+    #[test]
+    fn a_withdrawal_gives_up_the_refusal_queued_under_its_number() {
+        let state = ReferenceState::new();
+        state.push_historical_error(7, 162, "no data permission".into());
+        assert!(state.take_error_for(7).is_some(), "the refusal is there to read");
+
+        state.push_historical_error(7, 162, "no data permission".into());
+        state.purge_histogram_for(7);
+
+        assert!(
+            state.take_error_for(7).is_none(),
+            "the number was given up, so nothing queued under it answers the next request",
+        );
     }
 }

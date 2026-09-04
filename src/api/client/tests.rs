@@ -240,6 +240,96 @@ fn a_held_order_that_is_withdrawn_does_not_go_out_later() {
     assert_eq!(sent.len(), 1, "only the order that transmitted: {sent:?}");
 }
 
+/// order the refusal had already taken out.
+#[test]
+fn a_placement_is_recorded_before_its_command_can_be_taken() {
+    let shared = Arc::new(SharedState::new());
+    // A channel that hands over one command at a time. The placement stays
+    // inside its send until something takes it, which is what makes the moment
+    // before the command exists anywhere observable.
+    let (tx, rx) = std::sync::mpsc::sync_channel(0);
+    let client = EClient::from_parts(shared, tx, std::thread::spawn(|| {}), "DU123".into());
+    client.core.con_id_to_instrument.lock().unwrap().insert(756733, 0);
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), transmit: true, ..Default::default()
+    };
+
+    let recorded = std::thread::scope(|scope| {
+        scope.spawn(|| client.place_order(77, &spy(), &order).expect("the order goes out"));
+        // Nothing has taken the command yet, so the placement is still inside
+        // its send, and the record has to be here by now.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !client.core.is_order_tracked(77) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let recorded = client.core.is_order_tracked(77);
+        rx.recv().expect("the submit");
+        recorded
+    });
+    // The client's own shutdown goes down this channel when it is dropped, and
+    // a channel that hands over one at a time waits for somebody to take it.
+    // Taken before the assertion, so a failing one is a failure and not a wait.
+    std::thread::spawn(move || while rx.recv().is_ok() {});
+    assert!(
+        recorded,
+        "the order was published before this client had anywhere to record what \
+         the venue goes on to say about it",
+    );
+}
+
+/// The other surface waited for the naming all along.
+#[test]
+fn an_order_id_waits_for_the_venue_to_name_the_working_orders() {
+    let (client, _rx, shared) = test_client();
+    let venue = shared.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        venue.orders.push_order_info(4242, crate::bridge::RichOrderInfo {
+            contract: Default::default(),
+            order: crate::types::model::Order { order_id: 4242, ..Default::default() },
+            order_state: Default::default(),
+            last_exec: Default::default(),
+        });
+        venue.orders.set_replay_done();
+    });
+
+    assert_eq!(
+        client.next_order_id(), 4243,
+        "the id counts past what the venue named, which had not arrived when it was asked for",
+    );
+}
+
+/// because its children are the first plus one and two.
+#[test]
+fn the_allocator_stops_at_the_last_id_a_report_can_name() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.set_replay_done();
+    shared.orders.push_order_info(crate::bridge::MAX_ORDER_ID - 1, crate::bridge::RichOrderInfo {
+        contract: Default::default(),
+        order: crate::types::model::Order::default(),
+        order_state: Default::default(),
+        last_exec: Default::default(),
+    });
+
+    assert_eq!(
+        client.next_order_id(), crate::bridge::MAX_ORDER_ID as i64,
+        "the last id there is, is handed out",
+    );
+    assert_eq!(
+        client.next_order_id(), 0,
+        "and nothing past it, rather than an id that reads as negative",
+    );
+    let why = client
+        .place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 90.0)
+        .expect_err("a bracket needs three ids that fit, children included");
+    assert!(
+        why.message.contains("no run of 3 order ids left"),
+        "the caller is told what there is not enough of: {}",
+        why.message,
+    );
+}
+
 /// Withdrawing a held order frees the id it was placed under.
 ///
 /// The venue was never given the order, so the id is not spent there — but
