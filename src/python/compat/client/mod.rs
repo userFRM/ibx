@@ -247,6 +247,22 @@ pub(crate) fn wire_u32(what: &str, value: i64) -> PyResult<u32> {
     })
 }
 
+/// Narrow a contract id the way the request surface narrows it, refusing a
+/// zero or a negative one the same way: this surface and that one carry the
+/// same number on the same wire, and agreeing on one and not the other asks
+/// the venue about a contract that does not exist.
+pub(crate) fn wire_con_id(what: &str, con_id: i64) -> PyResult<u32> {
+    crate::api::client::reference::wire_con_id(con_id, what)
+        .map_err(|refusal| PyRuntimeError::new_err(refusal.message))
+}
+
+/// Check a value a caller stated the way the request surface checks it, so a
+/// byte that separates fields on the wire is refused here as it is there.
+pub(crate) fn wire_text(what: &str, value: &str) -> PyResult<()> {
+    crate::api::client::wire_text(what, value)
+        .map_err(|refusal| PyRuntimeError::new_err(refusal.message))
+}
+
 /// The client id, given under this client's spelling or the reference
 /// client's. Given under both, the caller has said two things, and is told so
 /// rather than having one of them picked.

@@ -209,18 +209,86 @@ fn push_u32_padded<const N: usize>(buf: &mut Vec<u8>, val: u32) {
     buf.extend_from_slice(&digits);
 }
 
+/// The fields of a message, in wire order.
+///
+/// A field a length prefixes is not walked like the rest: tag 95 states the
+/// length and tag 96 carries it, and the value is the bytes that length
+/// states, delimiter or not. Splitting one on the delimiter reads whatever it
+/// carries as fields of its own — a corporate action or a calendar entry
+/// arriving under some other tag's number, and the field it came in cut short
+/// at its first delimiter.
+struct Fields<'a> {
+    data: &'a [u8],
+    at: usize,
+    /// A raw field read ahead of the walk, so the length beside it stays the
+    /// walk's own.
+    queued: Option<(u32, usize, usize, usize)>,
+}
+
+impl<'a> Fields<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, at: 0, queued: None }
+    }
+}
+
+/// One field: its tag, the offset it starts at, and the span of its value.
+impl Iterator for Fields<'_> {
+    type Item = (u32, usize, usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(item) = self.queued.take() {
+            return Some(item);
+        }
+        let data = self.data;
+        while self.at < data.len() {
+            let seg_end = data[self.at..]
+                .iter()
+                .position(|&b| b == SOH)
+                .map(|p| self.at + p)
+                .unwrap_or(data.len());
+            let eq = data[self.at..seg_end].iter().position(|&b| b == b'=');
+            let start = self.at;
+            self.at = seg_end + 1;
+            let Some(eq) = eq else { continue };
+            let Some(tag) = std::str::from_utf8(&data[start..start + eq])
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let val = (start + eq + 1, seg_end);
+            if tag == TAG_RAW_DATA_LENGTH && self.at < data.len() {
+                // The length states how much follows under the next tag. Read
+                // that span whole, then walk on behind it. A length the bytes
+                // do not satisfy is a message cut inside the block: what is
+                // here is read, and nothing past the end is.
+                if let Some(n) = std::str::from_utf8(&data[val.0..val.1])
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+                    && data[self.at..].starts_with(b"96=")
+                {
+                    let v0 = self.at + 3;
+                    let v1 = v0 + n.min(data.len().saturating_sub(v0));
+                    self.queued = Some((TAG_RAW_DATA, self.at, v0, v1));
+                    self.at = v1;
+                }
+            }
+            return Some((tag, start, val.0, val.1));
+        }
+        None
+    }
+}
+
+/// FIX tag 95: the length of the raw data field that follows it.
+pub const TAG_RAW_DATA_LENGTH: u32 = 95;
+/// FIX tag 96: raw data, carried whole under the length tag 95 states.
+pub const TAG_RAW_DATA: u32 = 96;
+
 /// Parse a SOH-delimited FIX message into {tag: value}.
 pub fn fix_parse(data: &[u8]) -> HashMap<u32, String> {
     let mut result = HashMap::new();
-    for part in data.split(|&b| b == SOH) {
-        if part.is_empty() {
-            continue;
-        }
-        let text = String::from_utf8_lossy(part);
-        if let Some((tag_str, val)) = text.split_once('=')
-            && let Ok(tag) = tag_str.parse::<u32>() {
-                result.insert(tag, val.to_string());
-            }
+    for (tag, _, v0, v1) in Fields::new(data) {
+        result.insert(tag, String::from_utf8_lossy(&data[v0..v1]).into_owned());
     }
     result
 }
@@ -475,17 +543,15 @@ pub fn fix_unsign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>, b
         None => return (msg_bytes, iv.to_vec(), false),
     };
 
-    // Find the 8349 signature field. Matched with its leading delimiter: a
-    // bare `8349=` search also matches the same text inside a field *value* —
-    // a reject reason quoting it, say — and then the body boundary lands in the
-    // middle of the message and a legitimate frame reports invalid.
-    let sig_needle = b"\x018349=";
-    let t8349 = match msg_bytes
-        .windows(sig_needle.len())
-        .position(|w| w == sig_needle)
+    // Find the 8349 signature field. Walked as a field rather than matched
+    // as a substring: the same text can sit inside a field *value* — a reject
+    // reason quoting it, say — or inside a length-prefixed raw block the
+    // message carries, and matched there the body boundary lands in the middle
+    // of the message and a legitimate frame reports invalid.
+    let (t8349, sig) = match Fields::new(&msg_bytes)
+        .find(|&(tag, _, _, _)| tag == TAG_HMAC_SIGNATURE)
     {
-        // Keep the delimiter in the body, where the un-delimited match left it.
-        Some(p) => p + 1,
+        Some((_, start, v0, v1)) => (start, &msg_bytes[v0..v1]),
         None => return (msg_bytes, iv.to_vec(), false),
     };
 
@@ -504,14 +570,8 @@ pub fn fix_unsign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>, b
     let hmac_res = mac.finalize().into_bytes();
     let expected = xor_fold_bytes(&hmac_res);
 
-    // Extract actual signature and compare as bytes (no String alloc)
-    let sig_start = t8349 + (sig_needle.len() - 1);
-    let sig_end = msg_bytes[sig_start..]
-        .iter()
-        .position(|&b| b == SOH)
-        .map(|p| sig_start + p)
-        .unwrap_or(msg_bytes.len());
-    let sig_valid = sig_hex_eq(&expected, &msg_bytes[sig_start..sig_end]);
+    // The field's value, as the walk read it.
+    let sig_valid = sig_hex_eq(&expected, sig);
 
     // 3. IV chain
     let mut new_iv = [0u8; 16];
@@ -1103,5 +1163,38 @@ mod hostile_frame_tests {
         let hostile = b"8=FIX.4.1\x018349=00000000\x01";
         let (_, _, valid) = fix_unsign(hostile, &[0u8; 20], &[0u8; 16]);
         assert!(!valid, "a frame this shape must be refused, not accepted");
+    }
+
+    /// A raw block is one field's value, not a run of fields: what it carries
+    /// is not walked. A block quoting the signature's own text does not stand
+    /// in for the signature, and the field it came in arrives whole rather
+    /// than cut at its first delimiter with the rest of it injected as tags.
+    #[test]
+    fn a_raw_block_is_read_whole_and_not_walked_as_fields() {
+        let payload = b"row1\x0158=injected\x018349=DEADBEEF\x01more";
+        let mut body = Vec::new();
+        body.extend_from_slice(b"35=U\x016118=<R/>\x01");
+        body.extend_from_slice(format!("95={}\x01", payload.len()).as_bytes());
+        body.extend_from_slice(b"96=");
+        body.extend_from_slice(payload);
+        body.push(SOH);
+
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"8=FIX.4.1\x019=0000\x01");
+        msg.extend_from_slice(&body);
+        msg.extend_from_slice(b"10=000\x01");
+
+        let iv = [7u8; 16];
+        let (signed, _) = fix_sign(&msg, b"key0000000000000", &iv);
+        let (unsigned, _, valid) = fix_unsign(&signed, b"key0000000000000", &iv);
+        assert!(valid, "a signature quoted inside a raw block is not one");
+
+        let parsed = fix_parse(&unsigned);
+        assert_eq!(
+            parsed.get(&96).map(|s| s.as_bytes()),
+            Some(&payload[..]),
+            "the block arrives whole",
+        );
+        assert!(!parsed.contains_key(&58), "what a block carries is not fields");
     }
 }

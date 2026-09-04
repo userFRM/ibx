@@ -3,7 +3,7 @@
 use crate::types::*;
 use crate::error_codes::Refusal;
 
-use super::{wire_req_id, Contract, EClient, TagValue};
+use super::{wire_req_id, wire_text, Contract, EClient, TagValue};
 use crate::client_core::ClientCore;
 
 /// What this client reports when a market rule has not been seen.
@@ -16,7 +16,7 @@ const MARKET_RULE_NOT_KNOWN: i64 = 321;
 /// A contract with no id names contract zero, and one with a negative id names
 /// the largest id there is. The venue answers both with silence, which reads
 /// as the venue holding nothing.
-fn wire_con_id(con_id: i64, what: &str) -> Result<u32, Refusal> {
+pub(crate) fn wire_con_id(con_id: i64, what: &str) -> Result<u32, Refusal> {
     u32::try_from(con_id).ok().filter(|id| *id > 0).ok_or_else(|| {
         Refusal::validation(format!(
             "{what} names its contract by its venue id, and {con_id} is not one:              qualify the contract first and pass what comes back",
@@ -132,6 +132,7 @@ impl EClient {
 
     /// Request matching symbols. Matches `reqMatchingSymbols` in C++.
     pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Refusal> {
+        wire_text("a matching-symbols pattern", pattern)?;
         self.send(ControlCommand::FetchMatchingSymbols {
             req_id: wire_req_id(req_id)?,
             pattern: pattern.into(),

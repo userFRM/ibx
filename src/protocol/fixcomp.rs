@@ -88,11 +88,15 @@ pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
     let mut decoder = ZlibDecoder::new(raw).take(MAX_INFLATED + 1);
     let mut decompressed = Vec::new();
     if let Err(e) = decoder.read_to_end(&mut decompressed) {
-        // On inflate failure, dump the raw zlib payload and the full
+        // On inflate failure, dump the head of the raw zlib payload and the
         // enclosing frame as hex: that is what separates a slicing error, a
-        // deflate stream cut mid-message, and genuinely corrupt bytes.
-        let raw_hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-        let unsigned_hex: String = data.iter().map(|b| format!("{b:02x}")).collect();
+        // deflate stream cut mid-message, and genuinely corrupt bytes. A head
+        // rather than the whole of each — a frame can sit at the ceiling this
+        // reader holds, and a diagnostic built about it must not ask for more
+        // memory than the frame that provoked it. The lengths beside the dump
+        // say what the dump does not carry.
+        let raw_hex = hex_head(raw);
+        let unsigned_hex = hex_head(data);
         log::warn!(
             "fixcomp tee: inflate failed ({}); unsigned_len={} raw_payload_len={} raw_hex={} unsigned_hex={}",
             e, data.len(), raw.len(), raw_hex, unsigned_hex,
@@ -226,6 +230,20 @@ fn find_tag(data: &[u8], needle: &[u8]) -> Option<usize> {
     data.windows(needle.len()).position(|w| w == needle)
 }
 
+/// How many bytes of a frame a diagnostic dumps, as hex.
+///
+/// A diagnostic is built about a frame that failed to read, and a frame can
+/// sit at the ceiling this reader holds: dumped whole, the diagnostic asks
+/// for more memory than the frame that provoked it, twice over. A head and
+/// the lengths beside it still separate a slicing error, a stream cut
+/// mid-message, and genuinely corrupt bytes.
+const HEX_HEAD: usize = 64;
+
+/// The head of some bytes as hex, for a diagnostic.
+fn hex_head(bytes: &[u8]) -> String {
+    bytes.iter().take(HEX_HEAD).map(|b| format!("{b:02x}")).collect()
+}
+
 /// Split decompressed content into individual messages.
 ///
 /// Returns the messages read and how many bytes were left unread behind them.
@@ -357,6 +375,17 @@ fn split_messages(buf: &[u8]) -> (Vec<Vec<u8>>, usize) {
 mod tests {
     use super::*;
     use crate::protocol::fix::{fix_build, fix_parse};
+
+    /// A diagnostic built about a frame that failed to read must not ask for
+    /// more memory than the frame that provoked it: a frame can sit at the
+    /// ceiling this reader holds, and dumped whole the diagnostic doubles it.
+    #[test]
+    fn a_diagnostic_is_bounded_by_the_frame_it_is_about() {
+        let frame = vec![0xABu8; 1 << 20];
+        let dumped = hex_head(&frame);
+        assert_eq!(dumped.len(), HEX_HEAD * 2, "two hex digits a byte, no more");
+        assert!(dumped.starts_with(&"ab".repeat(4)));
+    }
 
     /// A stated length no frame can have is not a length to add.
     ///

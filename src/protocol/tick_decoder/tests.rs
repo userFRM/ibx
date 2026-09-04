@@ -248,6 +248,28 @@ fn a_tick_too_wide_to_read_does_not_discard_the_rest_of_the_message() {
     );
 }
 
+/// A frame stating more bits than it holds is a frame cut short, and is
+/// refused rather than read as the shorter frame it is not: read short, part
+/// of the ticks would arrive as the whole of them.
+#[test]
+fn a_frame_cut_short_by_its_own_length_is_refused() {
+    let mut b = PayloadBuilder::new();
+    b.server_tag(1, 9);
+    b.tick(2, 0, 2, 501, false);
+    b.server_tag(0, 10);
+    b.tick(3, 0, 2, 502, false);
+    let mut body = b.build();
+    assert_eq!(decode_ticks_35p(&body).len(), 2, "the whole frame reads");
+
+    // Cut so the first tick is whole and the second is not. Read short, the
+    // first tick would pass as the frame's whole content.
+    body.truncate(body.len() - 3);
+    assert!(
+        decode_ticks_35p(&body).is_empty(),
+        "the cut one is refused, not shortened",
+    );
+}
+
 // ── decode_ticks_35p tests ──────────────────────────────────────────
 
 #[test]

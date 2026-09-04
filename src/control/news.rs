@@ -233,13 +233,23 @@ fn extract_zip_entry(data: &[u8]) -> Option<Vec<u8>> {
         8 => {
             // deflate — feed all remaining data; decoder stops at stream end.
             // Use chunked reads to tolerate trailing garbage after the deflate stream.
+            //
+            // Held to what one inflated frame may become: the zip this entry
+            // sits in is bounded on the wire, and what it inflates to is not,
+            // so without a ceiling a small frame could ask this process for
+            // every byte it has.
             let mut decoder = flate2::read::DeflateDecoder::new(entry_data);
             let mut out = Vec::new();
             let mut buf = [0u8; 4096];
             loop {
                 match decoder.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(n) => out.extend_from_slice(&buf[..n]),
+                    Ok(n) => {
+                        out.extend_from_slice(&buf[..n]);
+                        if out.len() as u64 > crate::protocol::fixcomp::MAX_INFLATED {
+                            return None;
+                        }
+                    }
                     Err(_) => break, // trailing data after deflate stream
                 }
             }
@@ -536,9 +546,15 @@ pub fn parse_article_payload(raw: &[u8]) -> Option<(i32, String)> {
 
     if let Some(encoded) = &body_encoded {
         let compressed = decode_byte_array(encoded);
-        let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
+        // Held to what one inflated frame may become, as the zip above is:
+        // the article this came in on is bounded on the wire, and what it
+        // inflates to is not.
+        let mut decoder = flate2::read::GzDecoder::new(&compressed[..])
+            .take(crate::protocol::fixcomp::MAX_INFLATED + 1);
         let mut article = String::new();
-        if decoder.read_to_string(&mut article).is_ok() {
+        if decoder.read_to_string(&mut article).is_ok()
+            && article.len() as u64 <= crate::protocol::fixcomp::MAX_INFLATED
+        {
             return Some((0, article));
         }
     }
@@ -696,6 +712,73 @@ mod tests {
             }
         }
         !crc
+    }
+
+    /// The frame an entry arrives in is bounded on the wire, and what it
+    /// inflates to is not: an entry past the ceiling is refused rather than
+    /// read, and an entry within it still is.
+    #[test]
+    fn a_zip_entry_inflating_past_the_ceiling_is_refused() {
+        use flate2::Compression;
+        use flate2::write::DeflateEncoder;
+        use std::io::Write;
+
+        let huge = vec![0u8; (crate::protocol::fixcomp::MAX_INFLATED + 4096) as usize];
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&huge).unwrap();
+        let payload = encoder.finish().unwrap();
+        assert!(payload.len() < 1 << 20, "the entry itself is small: {}", payload.len());
+
+        let mut zip = vec![0u8; 30];
+        zip[0..4].copy_from_slice(b"PK\x03\x04");
+        zip[8..10].copy_from_slice(&8u16.to_le_bytes()); // deflate
+        zip[18..22].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+        zip.extend_from_slice(&payload);
+        assert!(
+            extract_zip_entry(&zip).is_none(),
+            "what inflates past the ceiling is not extracted",
+        );
+
+        let small = build_test_zip(b"ENTRY", b"hello");
+        assert_eq!(extract_zip_entry(&small).as_deref(), Some(&b"hello"[..]));
+    }
+
+    /// An article body is a gzip stream inside the zip the answer arrived in,
+    /// and what it inflates to is bounded the same way the zip itself is:
+    /// past the ceiling the article is not read, and the answer falls back to
+    /// what could be.
+    #[test]
+    fn an_article_inflating_past_the_ceiling_is_refused() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+
+        let huge = vec![0u8; (crate::protocol::fixcomp::MAX_INFLATED + 4096) as usize];
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&huge).unwrap();
+        let bomb = encoder.finish().unwrap();
+        assert!(bomb.len() < 1 << 20, "the body itself is small: {}", bomb.len());
+
+        // The array encoding the venue states the body in: a length, a hash,
+        // and each byte as a signed number led by its sign.
+        let mut encoded = format!("{}#", bomb.len());
+        for &b in &bomb {
+            let v = b as i8 as i16;
+            if v >= 0 {
+                encoded.push_str(&format!("+{v}"));
+            } else {
+                encoded.push_str(&format!("{v}"));
+            }
+        }
+        let props = format!("b={encoded}\n");
+        let zip = build_test_zip(b"article", props.as_bytes());
+        // jc header stating no escaped newlines, then the zip.
+        let mut raw = vec![0u8; 8];
+        raw.extend_from_slice(&zip);
+
+        let (kind, text) = parse_article_payload(&raw).expect("the answer still reads");
+        assert_eq!(kind, 1, "the article past the ceiling is not delivered as one");
+        assert!(text.starts_with("b="), "the fallback carries what could be read");
     }
 }
 

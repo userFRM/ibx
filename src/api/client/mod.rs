@@ -38,7 +38,7 @@ pub use ask::{AccountValue, OptionChain, OrderReport, PositionRow, ScanRow, Sche
 mod market_data;
 mod orders;
 mod account;
-mod reference;
+pub(crate) mod reference;
 mod dispatch;
 mod stubs;
 
@@ -396,6 +396,24 @@ pub(crate) fn wire_req_id(req_id: i64) -> Result<u32, Refusal> {
         )));
     }
     Ok(id)
+}
+
+/// Check a value a caller stated before it rides the wire as one field.
+///
+/// The byte that separates fields cannot sit inside one: carried anyway, the
+/// value stops where the byte sits and everything after it arrives as fields
+/// the caller never wrote. Nothing this protocol sends can carry the byte in
+/// a value, so the request is refused rather than sent stating something
+/// else.
+pub(crate) fn wire_text(what: &str, value: &str) -> Result<(), Refusal> {
+    if value.contains(crate::protocol::fix::SOH as char) {
+        return Err(Refusal::validation(format!(
+            "{what} carries the byte that separates fields on the wire, and a field \
+             cannot hold it: what follows the byte would go out as fields this request \
+             never stated",
+        )));
+    }
+    Ok(())
 }
 
 /// The request a refusal is reported against, or the mark for none.

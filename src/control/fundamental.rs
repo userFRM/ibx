@@ -122,10 +122,18 @@ pub fn parse_fundamental_response_id(xml: &str) -> Option<String> {
 }
 
 /// Decompress gzip-compressed fundamental data (FIX tag 96).
+///
+/// Held to what one inflated frame may become: the frame this came in on is
+/// bounded on the wire, and a payload inside it is not, so without a ceiling
+/// a small frame could ask this process for every byte it has.
 pub fn decompress_fundamental_data(compressed: &[u8]) -> Option<String> {
-    let mut decoder = flate2::read::GzDecoder::new(compressed);
+    let mut decoder = flate2::read::GzDecoder::new(compressed)
+        .take(crate::protocol::fixcomp::MAX_INFLATED + 1);
     let mut result = String::new();
     decoder.read_to_string(&mut result).ok()?;
+    if result.len() as u64 > crate::protocol::fixcomp::MAX_INFLATED {
+        return None;
+    }
     Some(result)
 }
 
@@ -188,6 +196,22 @@ mod tests {
 
         let decompressed = decompress_fundamental_data(&compressed).unwrap();
         assert_eq!(decompressed, original);
+    }
+
+    /// The frame this arrives on is bounded on the wire, and what it inflates
+    /// to is not: a payload past the ceiling is refused rather than read.
+    #[test]
+    fn a_payload_inflating_past_the_ceiling_is_refused() {
+        let huge = vec![0u8; (crate::protocol::fixcomp::MAX_INFLATED + 4096) as usize];
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&huge).unwrap();
+        let bomb = encoder.finish().unwrap();
+        assert!(bomb.len() < 1 << 20, "the frame itself is small: {}", bomb.len());
+
+        assert!(
+            decompress_fundamental_data(&bomb).is_none(),
+            "what inflates past the ceiling is not read",
+        );
     }
 
     #[test]

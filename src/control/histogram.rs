@@ -132,18 +132,27 @@ pub fn parse_histogram_response(xml: &str) -> Option<Vec<HistogramEntry>> {
 
     while let Some(tick_start) = xml[search_start..].find("<Tick>") {
         let abs_start = search_start + tick_start;
+        // A row never closed is an answer cut short: the whole of it is
+        // refused rather than what is in hand delivered as though complete.
         let tick_end = match xml[abs_start..].find("</Tick>") {
             Some(e) => abs_start + e + 7,
-            None => break,
+            None => return None,
         };
         let tick_xml = &xml[abs_start..tick_end];
 
-        let price = crate::control::xml::tag(tick_xml, "price")
+        // A price or a count the row does not state is not nought: read that
+        // way a row that went missing its numbers is invented, and a caller
+        // charts a level nothing traded at.
+        let Some(price) = crate::control::xml::tag(tick_xml, "price")
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
-        let count = crate::control::xml::tag(tick_xml, "size")
+        else {
+            return None;
+        };
+        let Some(count) = crate::control::xml::tag(tick_xml, "size")
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+        else {
+            return None;
+        };
 
         entries.push(HistogramEntry { price, count });
         search_start = tick_end;
@@ -326,5 +335,28 @@ mod tests {
     fn parse_histogram_rejects_non_histogram() {
         assert!(parse_histogram_response("<ResultSetBar>...</ResultSetBar>").is_none());
         assert!(parse_histogram_response("not xml at all").is_none());
+    }
+
+    /// An answer cut short, or carrying a row whose numbers do not read, is
+    /// not an answer: the whole of it is refused rather than delivered
+    /// shortened, or with rows invented at nought.
+    #[test]
+    fn a_histogram_reply_that_cannot_be_read_is_not_an_answer() {
+        let truncated = r#"<ResultSetHistogram>
+            <Events>
+                <Tick><price>270.50</price><size>1500</size></Tick>
+                <Tick><price>271.00</price><size"#;
+        assert!(
+            parse_histogram_response(truncated).is_none(),
+            "a reply cut short is not read as the rows it managed to carry",
+        );
+
+        let unpriced = r#"<ResultSetHistogram>
+            <Events><Tick><size>1500</size></Tick></Events>
+        </ResultSetHistogram>"#;
+        assert!(
+            parse_histogram_response(unpriced).is_none(),
+            "a row stating no price is not read as a row at nought",
+        );
     }
 }

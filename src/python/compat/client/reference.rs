@@ -157,6 +157,7 @@ impl EClient {
 
     /// Search for matching symbols.
     pub(crate) fn req_matching_symbols(&self, py: Python<'_>, req_id: i64, pattern: &str) -> PyResult<()> {
+        super::wire_text("a matching-symbols pattern", pattern)?;
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchMatchingSymbols {
             req_id: wire_req_id(req_id)?,
@@ -316,7 +317,7 @@ impl EClient {
         }
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalNews {
             req_id: wire_req_id(req_id)?,
-            con_id: super::wire_u32("con_id", con_id)?,
+            con_id: super::wire_con_id("a request for headlines", con_id)?,
             provider_codes: provider_codes.to_string(),
             start_time: start_date_time.to_string(),
             end_time: end_date_time.to_string(),
@@ -399,7 +400,7 @@ impl EClient {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         Self::send_control(py, &tx, ControlCommand::FetchFundamentalData {
             req_id: wire_req_id(req_id)?,
-            con_id: super::wire_u32("con_id", contract.con_id)?,
+            con_id: super::wire_con_id("a request for a fundamental report", contract.con_id)?,
             report_type: report_type.to_string(),
         })?;
         Ok(())
@@ -506,7 +507,7 @@ impl EClient {
         let contract = &*by_venue;
         Self::send_control(py, &tx, ControlCommand::FetchHistogramData {
             req_id: wire_req_id(req_id)?,
-            con_id: super::wire_u32("con_id", contract.con_id)?,
+            con_id: super::wire_con_id("a request for a histogram", contract.con_id)?,
             sec_type: contract.sec_type.clone(),
             exchange: contract.exchange.clone(),
             use_rth,
@@ -730,6 +731,57 @@ mod tests {
             let options = [namespace(py, "tag='priceAbove', value=10")];
             assert!(scanner_filters(py, &sub, &options).is_err(),
                 "and neither is an explicit filter whose value cannot be read");
+        });
+    }
+
+    /// A contract id of zero names no contract, and this surface narrows it
+    /// the way the request surface does: the venue answers a question about
+    /// contract zero with silence, which reads as a contract with no news.
+    #[test]
+    fn a_contract_id_of_zero_is_refused_where_the_request_surface_refuses_it() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+            let ns = pyo3::types::PyDict::new(py);
+            py.run(
+                c"class W:\n    def __getattr__(self, name):\n        return lambda *args: None\nw = W()",
+                None,
+                Some(&ns),
+            ).unwrap();
+            let wrapper = ns.get_item("w").unwrap().unwrap().unbind();
+            client.__init__(wrapper).unwrap();
+            let (tx, _rx) = std::sync::mpsc::sync_channel(16);
+            *client.control_tx.lock().unwrap() = Some(tx);
+
+            let err = client
+                .req_historical_news(py, 1, 0, "BRFG", "", "", 10, Vec::new())
+                .expect_err("a contract id of zero names no contract");
+            assert!(err.to_string().contains("is not one"), "{err}");
+        });
+    }
+
+    /// The pattern rides the wire as one field's value, so this surface
+    /// refuses one carrying the byte that separates fields the way the
+    /// request surface does: sent anyway, what follows the byte would go out
+    /// as fields the request never stated.
+    #[test]
+    fn a_pattern_carrying_the_field_separator_is_refused() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+            let ns = pyo3::types::PyDict::new(py);
+            py.run(
+                c"class W:\n    def __getattr__(self, name):\n        return lambda *args: None\nw = W()",
+                None,
+                Some(&ns),
+            ).unwrap();
+            let wrapper = ns.get_item("w").unwrap().unwrap().unbind();
+            client.__init__(wrapper).unwrap();
+
+            let err = client
+                .req_matching_symbols(py, 1, "AAPL\x011=999")
+                .expect_err("a pattern cannot carry the byte that separates fields");
+            assert!(err.to_string().contains("separates fields"), "{err}");
         });
     }
 }

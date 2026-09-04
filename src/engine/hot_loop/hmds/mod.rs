@@ -998,6 +998,10 @@ impl HmdsState {
                                 .position(|(q, _)| states(stated, q.as_str()))
                             {
                                 released_req_id = Some(self.pending_head_ts.remove(pos).1);
+                            } else if let Some(pos) = self.pending_histogram.iter()
+                                .position(|(q, _)| states(stated, q.as_str()))
+                            {
+                                released_req_id = Some(self.pending_histogram.remove(pos).1);
                             }
                         }
                         match released_req_id {

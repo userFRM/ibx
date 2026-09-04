@@ -201,6 +201,12 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
 
     let bit_count = ((body[0] as usize) << 8) | (body[1] as usize);
     let payload = &body[2..];
+    // A length the bytes do not satisfy is a frame cut short: refused rather
+    // than read as the shorter frame it is not, which would deliver part of
+    // the ticks as the whole of them.
+    if bit_count > payload.len() * 8 {
+        return;
+    }
     let mut reader = BitReader::new(payload, bit_count);
 
     while reader.remaining() > 32 {

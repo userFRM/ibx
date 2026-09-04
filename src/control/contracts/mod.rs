@@ -868,7 +868,15 @@ pub fn parse_secdef_response(
     let mut def = ContractDefinition::default();
 
     if let Some(v) = tags.get(&TAG_IB_CON_ID) {
-        def.con_id = v.parse().unwrap_or(0);
+        // An id that does not read is not the id zero: zero states there is
+        // no definition on this exchange, and a definition that stated one
+        // and sent it unreadably would be answered to a caller as a contract
+        // that does not exist.
+        let Some(id) = v.parse().ok() else {
+            log::warn!("a definition states a contract id that does not read: {v:?}");
+            return None;
+        };
+        def.con_id = id;
     }
     if let Some(v) = tags.get(&TAG_SYMBOL) {
         def.symbol = v.clone();

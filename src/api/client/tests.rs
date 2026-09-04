@@ -4066,6 +4066,18 @@ fn req_matching_symbols_sends_fetch() {
     }
 }
 
+/// The pattern rides the wire as one field's value: carrying the byte that
+/// separates fields would send, after it, fields this request never stated.
+/// Refused rather than sent stating something else.
+#[test]
+fn a_pattern_carrying_the_field_separator_is_refused() {
+    let (client, _rx, _shared) = test_client();
+    let err = client
+        .req_matching_symbols(8, "AAPL\x011=999")
+        .expect_err("a pattern cannot carry the byte that separates fields");
+    assert!(err.message.contains("separates fields"), "{}", err.message);
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Positions
 // ═══════════════════════════════════════════════════════════════════

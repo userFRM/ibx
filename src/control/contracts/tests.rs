@@ -226,6 +226,33 @@ fn parse_rejects_non_secdef() {
     assert!(super::parse_secdef_response(&msg, true).is_none());
 }
 
+/// A definition whose id does not read is not the definition of contract
+/// zero: zero states there is nothing on this exchange, and a definition
+/// that arrived with an unreadable id would otherwise be answered to a
+/// caller as a contract that does not exist.
+#[test]
+fn a_definition_whose_id_cannot_be_read_is_not_a_negative_answer() {
+    let msg = fix::fix_build(
+        &[
+            (TAG_MSG_TYPE, "d"),
+            (TAG_IB_CON_ID, "not-a-number"),
+            (TAG_SYMBOL, "AAPL"),
+            (TAG_SECURITY_TYPE, "CS"),
+            (TAG_CURRENCY, "USD"),
+        ],
+        1,
+    );
+    assert!(
+        super::parse_secdef_response(&msg, true).is_none(),
+        "an unreadable id is refused, not read as zero",
+    );
+
+    // A definition stating no id at all still states there is none.
+    let none = fix::fix_build(&[(TAG_MSG_TYPE, "d"), (TAG_SYMBOL, "AAPL")], 1);
+    let def = super::parse_secdef_response(&none, true).expect("an absent id is the venue's to state");
+    assert_eq!(def.con_id, 0);
+}
+
 // A US equity secdef carries an inline price-increment block whose start
 // sentinel is `6019=1`. Tag 6019 is not min_tick — reading it as one
 // yields 1.0; min_tick is the smallest increment the block states.

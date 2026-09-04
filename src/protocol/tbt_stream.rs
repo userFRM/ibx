@@ -276,7 +276,10 @@ pub fn decode_frame(
     }
     let bits_stated = ((body[0] as usize) << 8) | body[1] as usize;
     let bytes_stated = bits_stated.div_ceil(8);
-    let payload = body.get(2..2 + bytes_stated.min(body.len() - 2))?;
+    // A length the bytes do not satisfy is a frame cut short: refused rather
+    // than read as the shorter frame it is not, which would deliver part of
+    // a moment's records as the whole of them.
+    let payload = body.get(2..2 + bytes_stated)?;
 
     let mut bits = Bits::new(payload);
     let mut records = Vec::new();
@@ -313,7 +316,7 @@ pub fn frame_ticker_id(body: &[u8]) -> Option<u64> {
         return None;
     }
     let bits_stated = ((body[0] as usize) << 8) | body[1] as usize;
-    let payload = body.get(2..2 + bits_stated.div_ceil(8).min(body.len() - 2))?;
+    let payload = body.get(2..2 + bits_stated.div_ceil(8))?;
     Bits::new(payload).unsigned()
 }
 
@@ -670,6 +673,22 @@ mod tests {
             TbtRecord::Quote(q) => assert!((q.bid - 1.15515).abs() < 1e-9, "{}", q.bid),
             other => panic!("expected a quote, got {other:?}"),
         }
+    }
+
+    /// A frame stating more bits than it holds is a frame cut short, and is
+    /// refused rather than read as the shorter frame it is not: read short,
+    /// part of a moment's records would arrive as the whole of them.
+    #[test]
+    fn a_frame_cut_short_by_its_own_length_is_refused() {
+        let body = frame(&[quote(23_102, 23_103, 1, 1)]);
+        let cut = &body[..body.len() - 3];
+        let mut running = RunningPrice::default();
+        assert!(
+            decode_frame(cut, TbtKind::BidAsk, 0.00005, &mut running).is_none(),
+            "a frame short of its stated length is not a frame",
+        );
+        assert!(frame_ticker_id(cut).is_none(), "and it names no subscription");
+        assert_eq!(running, RunningPrice::default(), "nothing it carried was read");
     }
 
     /// The stated bit length bounds the payload. A message carries a field

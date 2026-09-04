@@ -1302,6 +1302,50 @@ mod hmds_correlation_tests {
         );
     }
 
+    /// A histogram reply that names a query and cannot be read fails that
+    /// query rather than leaving it waiting on an answer that has already
+    /// arrived.
+    #[test]
+    fn an_unreadable_histogram_reply_fails_the_query_it_names() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        let qid = crate::control::histogram::histogram_query_id(
+            &crate::control::histogram::HistogramRequest {
+                query_id: "hg_1".to_string(),
+                con_id: 265598,
+                sec_type: "STK".to_string(),
+                exchange: "SMART".to_string(),
+                use_rth: true,
+                period: "1 week".to_string(),
+                end_time: "20260320-21:00:00".to_string(),
+            },
+        );
+        hmds.pending_histogram.push((qid.clone(), 71));
+
+        let xml = format!(
+            "<ResultSetHistogram><id>{qid}</id><Events>\
+             <Tick><price>not-a-number</price><size>1500</size></Tick>\
+             </Events></ResultSetHistogram>",
+        );
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"35=W\x016118=");
+        msg.extend_from_slice(xml.as_bytes());
+        msg.push(0x01);
+        hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+        assert!(hmds.pending_histogram.is_empty(), "the request is spent either way");
+        assert!(
+            shared.reference.drain_histogram_data().is_empty(),
+            "there were no entries to deliver",
+        );
+        assert!(
+            shared.reference.drain_historical_errors_for_dispatch().iter().any(|(id, _, _)| *id == 71),
+            "and the caller is told, rather than left waiting",
+        );
+    }
+
     /// A news response names the query it answers, and is matched on that
     /// name. Two searches can be in flight at once.
     #[test]

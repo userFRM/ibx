@@ -203,9 +203,20 @@ pub struct Connection {
     /// the peer does not share. There is no resuming mid-frame: the transport
     /// is finished and the reconnect path takes it from here.
     write_failed: bool,
-    /// Set when a frame failed to verify. The chain cannot advance past one,
-    /// so nothing further on this socket can be read.
+    /// Set when a frame failed to verify, or when what arrived stopped being
+    /// readable at all. The chain cannot advance past either, so nothing
+    /// further on this socket can be read.
     read_failed: bool,
+    /// Bytes discarded as unreadable since a frame was last extracted.
+    ///
+    /// A peer that sends traffic this client cannot read still counts as
+    /// arriving while the bytes keep coming, so the liveness deadlines never
+    /// fire and it holds the connection open for as long as it sends. Once
+    /// more has arrived unreadable than one frame can be, what is arriving is
+    /// not a frame this lost the start of but traffic that is not readable,
+    /// and the connection is given up the way one is for a frame that failed
+    /// to verify.
+    unreadable: u64,
 }
 
 impl Connection {
@@ -248,6 +259,7 @@ impl Connection {
             routing: Default::default(),
             write_failed: false,
             read_failed: false,
+            unreadable: 0,
         })
     }
 
@@ -330,6 +342,10 @@ impl Connection {
     /// Handles compressed, standard, and binary protocols.
     pub fn extract_frames(&mut self) -> Vec<Frame> {
         let mut frames = Vec::new();
+        // What this call threw away without reading. Kept beside the walk
+        // because a stream of it is traffic this client cannot read, which is
+        // accounted for at the end of the walk rather than as it happens.
+        let mut discarded = 0usize;
         loop {
             if self.buf.is_empty() {
                 break;
@@ -369,6 +385,7 @@ impl Connection {
                              first {head_n}B ascii={head_ascii:?}",
                         );
                         self.buf.drain(..dropped);
+                        discarded += dropped;
                         continue;
                     }
                 }
@@ -426,6 +443,7 @@ impl Connection {
                         );
                     }
                     self.buf.drain(..dropped);
+                    discarded += dropped;
                     break;
                 }
             };
@@ -433,6 +451,7 @@ impl Connection {
             // Skip garbage before earliest message
             if earliest > 0 {
                 self.buf.drain(..earliest);
+                discarded += earliest;
                 continue;
             }
 
@@ -463,6 +482,7 @@ impl Connection {
                          length; resynchronising past it",
                     );
                     self.buf.drain(..1);
+                    discarded += 1;
                     continue;
                 }
                 break; // incomplete
@@ -487,6 +507,7 @@ impl Connection {
                          length; resynchronising past it",
                     );
                     self.buf.drain(..1);
+                    discarded += 1;
                     continue;
                 }
                 break; // incomplete
@@ -494,6 +515,26 @@ impl Connection {
 
             // Unknown prefix — skip one byte and retry
             self.buf.drain(..1);
+            discarded += 1;
+        }
+        // Unreadable traffic still counts as traffic arriving while the bytes
+        // keep coming, so the liveness deadlines never fire on a peer sending
+        // nothing this can read. Past what one frame can be, what is arriving
+        // is not a frame this lost the start of: the connection is given up
+        // the way it is for a frame that failed to verify, and the reconnect
+        // path takes it over.
+        if frames.is_empty() {
+            self.unreadable = self.unreadable.saturating_add(discarded as u64);
+            if self.unreadable > MAX_BUFFERED as u64 && !self.read_failed {
+                self.read_failed = true;
+                log::warn!(
+                    "extract_frames: {}B of traffic arrived that this client could not \
+                     read; giving up the transport",
+                    self.unreadable,
+                );
+            }
+        } else {
+            self.unreadable = 0;
         }
         frames
     }
@@ -586,6 +627,7 @@ impl Connection {
             routing: Default::default(),
             write_failed: false,
             read_failed: false,
+            unreadable: 0,
         };
         (conn, peer)
     }
@@ -946,6 +988,7 @@ mod tests {
             routing: Default::default(),
             write_failed: false,
             read_failed: false,
+            unreadable: 0,
         }
     }
 
@@ -1078,6 +1121,7 @@ mod tests {
             routing: Default::default(),
             write_failed: false,
             read_failed: false,
+            unreadable: 0,
         };
         // States near a gigabyte; the largest frame this protocol carries is
         // a compressed one, and nothing is used that inflates past a small
@@ -1520,6 +1564,7 @@ mod tests {
             routing: Default::default(),
             write_failed: false,
             read_failed: false,
+            unreadable: 0,
         };
         let sent = conn.send_raw(b"8=FIX.4.1\x0135=V\x0110=000\x01");
         assert!(sent.is_ok(), "the frame goes out once the peer reads again: {sent:?}");
@@ -1646,5 +1691,43 @@ mod wedge_tests {
         assert_eq!(binary_msg_length(huge.as_bytes()), None);
         let huge_fix = format!("8=FIX.4.1\x019={}\x01body", usize::MAX);
         assert_eq!(fix_msg_length(huge_fix.as_bytes()), None);
+    }
+
+    /// A peer sending nothing this client can read still keeps bytes
+    /// arriving, and bytes arriving is what the liveness deadlines measure —
+    /// so without a bound of its own it held the connection open for as long
+    /// as it sent. Once more has arrived unreadable than one frame can be,
+    /// the transport is given up the way one is for a frame that failed to
+    /// verify, and the reconnect path takes it over.
+    #[test]
+    fn traffic_that_cannot_be_read_does_not_hold_the_connection_open_for_ever() {
+        let (mut conn, _peer) = Connection::for_test();
+        assert!(!conn.read_failed(), "nothing has failed yet");
+
+        let chunk = vec![0xABu8; 8 * 1024 * 1024];
+        let mut fed = 0usize;
+        while fed <= MAX_BUFFERED && !conn.read_failed() {
+            conn.inject_buf(&chunk);
+            assert!(conn.extract_frames().is_empty(), "garbage frames nothing");
+            fed += chunk.len();
+        }
+        assert!(
+            conn.read_failed(),
+            "the transport is given up once what it cannot read passes what one frame can be",
+        );
+
+        // And a stream that does deliver frames is not measured against the
+        // bound at all: what could not be read before the frame is let go
+        // with it.
+        let (mut conn, _peer) = Connection::for_test();
+        conn.inject_buf(&vec![0xABu8; 4096]);
+        let msg = crate::protocol::fix::fix_build(&[(35, "0")], 1);
+        conn.inject_buf(&msg);
+        let frames = conn.extract_frames();
+        assert_eq!(frames.len(), 1, "the frame behind the garbage survives it");
+        conn.inject_buf(&vec![0xABu8; 4096]);
+        conn.inject_buf(&msg);
+        assert_eq!(conn.extract_frames().len(), 1);
+        assert!(!conn.read_failed(), "a delivering stream is not finished");
     }
 }
