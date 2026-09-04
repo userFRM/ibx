@@ -85,6 +85,15 @@ jobs:
           IB_USERNAME: ${{ secrets.IB_USERNAME }}
           IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
         run: cargo test --test ib_paper_compat -- --test-threads=1
+      # Each of these opens a session of its own, which the account allows one
+      # of, so they cannot run beside the suite above or beside each other.
+      # Left out of every run, they proved nothing: what they were written to
+      # check went unchecked from the day they were written.
+      - name: the phases that each need a session to themselves
+        env:
+          IB_USERNAME: ${{ secrets.IB_USERNAME }}
+          IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
+        run: cargo test --test ib_paper_compat -- --ignored --test-threads=1
 
   live_python:
     name: the Python suites that need a session
