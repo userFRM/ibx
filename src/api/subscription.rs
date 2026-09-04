@@ -168,6 +168,21 @@ impl<T> Subscription<T> {
                 self.done = true;
                 return None;
             }
+            // A book this client could not keep whole ends the stream that
+            // asked for it. It is the one failure a stream cannot tell from a
+            // quiet market — the subscription is up, the venue is still
+            // sending it, and nothing further is kept — so a stream reading
+            // only the venue's own refusals sat through its idle span and
+            // ended saying nothing had gone wrong. Withdrawn as well as
+            // ended: the venue is still serving a book nobody can use, and
+            // withdrawing is how a caller starts one again.
+            if let Some(reason) = self.shared.market.take_depth_drop_for(self.req_id as u32) {
+                self.refusal = Some((
+                    crate::api::client::dispatch::DEPTH_NOT_SERVED, reason,
+                ));
+                self.cancel();
+                return None;
+            }
             // A session that has ended produces nothing more. Left waiting,
             // a caller blocked here waits for what is not coming and nobody
             // says so — the stream that waits as long as it takes waits

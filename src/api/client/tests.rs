@@ -6950,6 +6950,57 @@ fn solving_an_option_answers_against_the_venues_own_model() {
     }
 }
 
+/// A question asked from inside a callback is told why rather than left
+/// waiting.
+///
+/// A read hands every message it drains to the wrapper it was given, and a
+/// wrapper is a caller's own code. A question asked from one waits for the
+/// turn that same thread is already holding, on a lock that is not
+/// re-entrant, and the read that would have answered it is the one it is
+/// inside — so the thread stopped for good, with no deadline anywhere to say
+/// so. The two shapes are one session and a program is told to mix them; this
+/// is the one way of mixing them that cannot work, and it says so on the spot.
+#[test]
+fn a_question_asked_from_inside_a_callback_is_refused_rather_than_left_waiting() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let told: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let read = Arc::new(AtomicBool::new(false));
+    let (t, r) = (Arc::clone(&told), Arc::clone(&read));
+    // On a thread of its own, and never joined: a wedged read cannot be, and
+    // the harness has to report a failure rather than stop on one.
+    std::thread::spawn(move || {
+        let (client, _rx, shared) = test_client();
+        shared.reference.push_historical_error(9, 321, "the venue said no".to_string());
+
+        struct AsksBack<'a> { client: &'a EClient, told: &'a Mutex<Option<String>> }
+        impl Wrapper for AsksBack<'_> {
+            fn error(&mut self, _req_id: i64, _code: i64, _message: &str, _advanced: &str) {
+                *self.told.lock().unwrap() = Some(
+                    match self.client.contract_details(&Contract::default()) {
+                        Ok(_) => "answered".to_string(),
+                        Err(refused) => refused.to_string(),
+                    },
+                );
+            }
+        }
+        let mut asking = AsksBack { client: &client, told: &t };
+        client.process_msgs(&mut asking);
+        r.store(true, Ordering::Release);
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !read.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(read.load(Ordering::Acquire), "the read never returned from the callback");
+    let answer = told.lock().unwrap().clone().expect("the callback asked its question");
+    assert!(
+        answer.contains("from inside a callback"),
+        "the question was not told why it cannot be answered here: {answer}",
+    );
+}
+
 /// A dispatch loop reads the session, so it takes the session's turn.
 ///
 /// The calls that answer pump the loop themselves and keep what carries their
@@ -7277,23 +7328,25 @@ fn two_questions_asked_at_once_do_not_consume_each_other() {
 
 /// Every question takes its turn before it sends.
 ///
-/// The test above holds the lock itself, so it stays green if the lock is taken
+/// The test above holds the turn itself, so it stays green if the turn is taken
 /// nowhere in the code that ships. This reads the questions instead: one that
 /// waits for an answer and does not take a turn is one that can be handed
 /// another question's reply, and there is no way to observe that from a test
 /// with no session to answer it.
 #[test]
 fn a_question_takes_its_turn_before_it_sends() {
-    let source = include_str!("ask.rs");
-    let waits_for_an_answer: Vec<&str> = source
-        .split("\n    pub fn ")
-        .skip(1)
+    // Both shapes: the answering calls here, and the ones the shape that
+    // returns its answers asks. A schedule was the one of the second set that
+    // took no turn, and nothing said so.
+    let waits_for_an_answer: Vec<&str> = [include_str!("ask.rs"), include_str!("../direct.rs")]
+        .iter()
+        .flat_map(|source| source.split("\n    pub fn ").skip(1))
         .filter(|body| body.contains("self.wait_for(") || body.contains("holding_the_turn("))
         .collect();
-    assert!(waits_for_an_answer.len() >= 10, "the reader found the questions");
+    assert!(waits_for_an_answer.len() >= 15, "the reader found the questions");
     let without: Vec<&str> = waits_for_an_answer
         .iter()
-        .filter(|body| !body.contains("self.asking.lock()"))
+        .filter(|body| !body.contains("take_the_turn()"))
         .map(|body| body.split('(').next().unwrap_or(body))
         .collect();
     assert!(without.is_empty(), "asks without taking a turn: {without:?}");
@@ -7302,7 +7355,7 @@ fn a_question_takes_its_turn_before_it_sends() {
     let placing = include_str!("simple.rs");
     let place = placing.split("pub fn place(").nth(1).expect("place is there");
     let body = place.split("\n    }").next().unwrap_or(place);
-    let turn = body.find("self.asking.lock()").expect("place takes a turn");
+    let turn = body.find("self.take_the_turn()").expect("place takes a turn");
     let send = body.find("self.place_order(").expect("place sends the order");
     assert!(turn < send, "the order is sent before the turn is taken");
 }

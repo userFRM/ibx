@@ -1297,7 +1297,7 @@ mod hmds_correlation_tests {
             "there was no article to deliver",
         );
         assert!(
-            shared.reference.drain_historical_errors_for_dispatch().iter().any(|(id, _, _)| *id == 61),
+            shared.reference.drain_historical_errors().iter().any(|(id, _, _)| *id == 61),
             "and the caller is told, rather than left waiting",
         );
     }
@@ -1341,7 +1341,7 @@ mod hmds_correlation_tests {
             "there were no entries to deliver",
         );
         assert!(
-            shared.reference.drain_historical_errors_for_dispatch().iter().any(|(id, _, _)| *id == 71),
+            shared.reference.drain_historical_errors_for_dispatch(|_| false).iter().any(|(id, _, _)| *id == 71),
             "and the caller is told, rather than left waiting",
         );
     }

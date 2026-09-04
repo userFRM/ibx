@@ -389,7 +389,7 @@ mod tests {
         let shared = SharedState::new();
         let mut state = SecDefState::new();
         state.send_calendar_meta_data_request(7, &mut None, &mut HeartbeatState::new(), &shared);
-        let told = shared.reference.drain_historical_errors_for_dispatch();
+        let told = shared.reference.drain_historical_errors();
         assert_eq!(told.len(), 1);
         assert!(told[0].2.contains("does not have"), "{:?}", told[0]);
     }
@@ -406,7 +406,7 @@ mod tests {
         let query = crate::types::CalendarQuery { con_id: Some(265598), ..Default::default() };
         state.send_calendar_events_request(9, &query, &mut conn, &mut HeartbeatState::new(), &shared);
         assert!(
-            shared.reference.drain_historical_errors_for_dispatch().is_empty(),
+            shared.reference.drain_historical_errors().is_empty(),
             "nothing refuses it before it leaves",
         );
         assert_eq!(state.pending.len(), 1, "and it is outstanding on the wire");
@@ -454,13 +454,13 @@ mod tests {
         assert_eq!(
             state.pending.len(), 2,
             "both requests are outstanding; errors so far: {:?}",
-            shared.reference.drain_historical_errors_for_dispatch(),
+            shared.reference.drain_historical_errors(),
         );
 
         let reject = b"35=3\x0158=Request not supported  #155\x01";
         state.handle(reject, &mut conn, &shared, &None, &mut HeartbeatState::new());
 
-        let told = shared.reference.drain_historical_errors_for_dispatch();
+        let told = shared.reference.drain_historical_errors();
         assert_eq!(told.len(), 2, "somebody was left waiting");
         assert!(state.pending.is_empty());
     }
@@ -485,7 +485,7 @@ mod tests {
         // this passed without checking anything in exactly the case it is
         // named for, where the dead connection is still installed.
         assert!(conn.is_none(), "the dead connection was put down");
-        let told = shared.reference.drain_historical_errors_for_dispatch();
+        let told = shared.reference.drain_historical_errors();
         assert!(!told.is_empty(), "the caller was left waiting on a dead socket");
     }
 
@@ -502,7 +502,7 @@ mod tests {
             Instant::now() - std::time::Duration::from_secs(1),
         ));
         state.sweep(&shared);
-        let told = shared.reference.drain_historical_errors_for_dispatch();
+        let told = shared.reference.drain_historical_errors();
         assert_eq!(told.len(), 1, "the caller was left waiting");
         assert!(state.pending.is_empty());
     }
@@ -531,7 +531,7 @@ mod tests {
             shared.reference.drain_calendar_meta_data_for_dispatch().is_empty(),
             "nothing readable arrived, so nothing is handed over as an answer",
         );
-        let told = shared.reference.drain_historical_errors_for_dispatch();
+        let told = shared.reference.drain_historical_errors();
         assert!(
             told.iter().any(|(id, _, why)| *id == 7 && why.contains("no payload")),
             "and the caller is told why: {told:?}",

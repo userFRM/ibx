@@ -41,7 +41,7 @@ const VENUE_REPORTED: i64 = 321;
 /// served. A book this client has given up on is not being served: the venue
 /// goes on sending it and nothing further is kept, until the caller withdraws
 /// it and asks again.
-const DEPTH_NOT_SERVED: i64 = 354;
+pub(crate) const DEPTH_NOT_SERVED: i64 = 354;
 
 impl EClient {
     // ── Message Processing ──
@@ -57,6 +57,13 @@ impl EClient {
     /// turn is released before this returns, so a loop calling it holds
     /// nothing between reads.
     pub fn process_msgs(&self, wrapper: &mut impl Wrapper) {
+        // A read from inside a read is served by the one it is inside. The
+        // turn this thread holds is not re-entrant, so waiting for it here
+        // ends the program; and what this would drain is the outer read's to
+        // deliver, to the wrapper that read was given.
+        if super::reading_now() == self.which_session() {
+            return;
+        }
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         self.read_the_session(wrapper);
     }
@@ -66,6 +73,10 @@ impl EClient {
     /// The turn is not re-entrant, and a question that took it before sending
     /// pumps this loop while it waits.
     pub(crate) fn read_the_session(&self, wrapper: &mut impl Wrapper) {
+        // Said for the length of the read, so a question asked from inside one
+        // of the callbacks below is told why it cannot be answered rather than
+        // left waiting on this thread's own turn.
+        let _reading = super::Reading::begin(self.which_session());
         self.dispatch_positions(wrapper);
         self.dispatch_orders(wrapper);
         self.dispatch_quotes(wrapper);
@@ -466,7 +477,7 @@ impl EClient {
 
         // Depth updates → update_mkt_depth / update_mkt_depth_l2
         for du in self.shared.market.drain_depth_updates_for_dispatch(
-            |id| self.shared.reference.is_ours(i64::from(id)),
+            |id| self.shared.reference.left_for_its_reader(id),
         ) {
             if du.market_maker.is_empty() {
                 wrapper.update_mkt_depth(du.req_id as i64, du.position, du.operation, du.side, du.price, du.size);
@@ -561,7 +572,9 @@ impl EClient {
         // A book this client could not keep whole, on the request that asked
         // for it. Nothing further is kept for it, so a caller not told reads a
         // subscription that is up and a book that has stopped moving.
-        for (req_id, reason) in self.shared.market.drain_depth_drops() {
+        for (req_id, reason) in self.shared.market.drain_depth_drops_for_dispatch(
+            |id| self.shared.reference.left_for_its_reader(id),
+        ) {
             wrapper.error(i64::from(req_id), DEPTH_NOT_SERVED, &reason, "");
         }
 
@@ -575,7 +588,9 @@ impl EClient {
         // HMDS query errors → error. Drain before historical_data so a
         // QueryError that also queued an empty terminal HistoricalResponse fires
         // wrapper.error first, then wrapper.historical_data_end.
-        for (req_id, code, msg) in self.shared.reference.drain_historical_errors() {
+        for (req_id, code, msg) in self.shared.reference.drain_historical_errors_for_dispatch(
+            |id| self.shared.reference.left_for_its_reader(id),
+        ) {
             wrapper.error(
                 crate::bridge::ReferenceState::request_id_reported(req_id),
                 code as i64, &msg, "",
@@ -686,7 +701,9 @@ impl EClient {
         // arrived in `<ScanResponse>` have already been resolved via 35=d.
         // The Some-arm fills the rich fields; the fallback covers deadline-
         // flushed partials where a secdef reply never arrived.
-        for (req_id, result) in self.shared.reference.drain_scanner_data() {
+        for (req_id, result) in self.shared.reference.drain_scanner_data_for_dispatch(
+            |id| self.shared.reference.left_for_its_reader(id),
+        ) {
             // A refused scan arrives in the shape of a completed one and carries
             // the reason. Reported against the requesting id, so a refusal is not
             // delivered as an empty result.
@@ -747,7 +764,7 @@ impl EClient {
         // The two arrive on one feed and are told apart by whether the request
         // has already answered with its history.
         for (req_id, bar) in self.shared.market.drain_real_time_bars_for_dispatch(
-            |id| self.shared.reference.is_ours(i64::from(id)),
+            |id| self.shared.reference.left_for_its_reader(id),
         ) {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
                 // A forming bar is stamped at its open, in seconds since the

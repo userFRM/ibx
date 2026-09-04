@@ -39,7 +39,7 @@ mod market_data;
 mod orders;
 mod account;
 pub(crate) mod reference;
-mod dispatch;
+pub(crate) mod dispatch;
 mod stubs;
 
 #[cfg(test)]
@@ -340,6 +340,41 @@ impl Answering {
 impl Drop for Answering {
     fn drop(&mut self) {
         ANSWERING.set(self.0);
+    }
+}
+
+thread_local! {
+    /// Which session this thread is inside a read of, if any.
+    ///
+    /// A read hands every message it drains to a wrapper, and a wrapper is a
+    /// caller's own code. A question asked from inside one waits for the turn
+    /// that same thread is already holding, on a lock that is not re-entrant,
+    /// and the read that would have answered it is the one it is inside — so
+    /// neither ever runs again, and the deadline that would have said so is
+    /// set inside a wait that never starts.
+    ///
+    /// Held as the session being read rather than as a flag, so a callback on
+    /// one session may still ask a question of another.
+    static READING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Which session this thread is inside a read of. Zero: none.
+pub(crate) fn reading_now() -> usize {
+    READING.with(std::cell::Cell::get)
+}
+
+/// Mark this thread as inside a read of one session, until dropped.
+pub(crate) struct Reading(usize);
+
+impl Reading {
+    pub(crate) fn begin(session: usize) -> Self {
+        Self(READING.replace(session))
+    }
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        READING.set(self.0);
     }
 }
 
@@ -744,6 +779,31 @@ impl EClient {
     /// The session's own state, for reading what has arrived.
     pub fn shared_state(&self) -> &Arc<SharedState> {
         &self.shared
+    }
+
+    /// What tells this session apart from another in the same process.
+    pub(crate) fn which_session(&self) -> usize {
+        Arc::as_ptr(&self.shared) as usize
+    }
+
+    /// Take the session's turn to ask one question.
+    ///
+    /// One question at a time: see [`EClient::asking`]. Refused rather than
+    /// waited on where this thread is the one reading the session — a question
+    /// asked from inside a callback waits for a turn its own thread holds, and
+    /// the read that would answer it is the read it is inside. Told on the
+    /// spot, a caller can do something about it; left waiting, nothing about
+    /// that program runs again.
+    pub(crate) fn take_the_turn(&self) -> Result<std::sync::MutexGuard<'_, ()>, Refusal> {
+        if reading_now() == self.which_session() {
+            return Err(Refusal::validation(
+                "a question cannot be asked from inside a callback: this thread is the \
+                 one reading the session, and the answer would arrive on the read it is \
+                 inside. Ask from another thread, or keep what you need and ask once the \
+                 read has returned".to_string(),
+            ));
+        }
+        Ok(self.asking.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// What the venue last stated for a contract, and the contract as it named

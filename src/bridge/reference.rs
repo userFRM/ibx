@@ -257,8 +257,6 @@ impl ReferenceState {
         out
     }
 
-    /// Take every historical errors a dispatch loop should deliver, leaving behind
-    /// what a waiting answering call will take.
     /// What a refusal against no request at all is carried as.
     ///
     /// The queue holds the request id unsigned, and a refusal that answers no
@@ -272,12 +270,17 @@ impl ReferenceState {
         if stored == Self::NO_REQUEST { -1 } else { i64::from(stored) }
     }
 
-    pub fn drain_historical_errors_for_dispatch(&self) -> Vec<(u32, i32, String)> {
+    /// Take the refusals a dispatch loop should deliver, leaving behind those a
+    /// reader is going to take by id. `mine` says which ids those are, because
+    /// the two dispatch loops answer their own questions differently.
+    pub fn drain_historical_errors_for_dispatch(
+        &self, mine: impl Fn(u32) -> bool,
+    ) -> Vec<(u32, i32, String)> {
         let mut g = self.historical_errors.lock().unwrap();
         let mut out = Vec::new();
         let mut i = 0;
         while i < g.len() {
-            if self.is_ours(g[i].0 as i64) { i += 1; } else { out.push(g.remove(i)); }
+            if mine(g[i].0) { i += 1; } else { out.push(g.remove(i)); }
         }
         out
     }
@@ -325,6 +328,19 @@ impl ReferenceState {
     /// never mistaken for one of these.
     pub fn is_ours(&self, req_id: i64) -> bool {
         self.ours_in_flight.lock().unwrap().contains(&req_id)
+    }
+
+    /// Whether a record under this id belongs to a reader that takes it out of
+    /// the queue itself, so a dispatch loop has to leave it there.
+    ///
+    /// The streams the answering shape hands back read by id and hold no turn,
+    /// because a stream outlives any one read of the session. This client's own
+    /// answering calls are recorded the same way and are not that: they pump a
+    /// dispatch loop themselves and receive through it, so their answers must go
+    /// on being delivered to it or they are withheld from the call waiting for
+    /// them. The band the second are numbered in is what tells the two apart.
+    pub fn left_for_its_reader(&self, req_id: u32) -> bool {
+        !Self::is_ask_id(req_id) && self.is_ours(i64::from(req_id))
     }
 
     /// Drain what a dispatch loop should deliver, leaving behind what a waiting
@@ -612,6 +628,24 @@ impl ReferenceState {
     /// Take every scanner data waiting, leaving none.
     pub fn drain_scanner_data(&self) -> Vec<(u32, ScannerResult)> {
         self.scanner_data.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take the scan results a dispatch loop should deliver, leaving behind
+    /// those a stream is going to read by id.
+    ///
+    /// A scan answers repeatedly for as long as it runs, and the stream that
+    /// opened it reads its batches out of this queue. Drained whole beside one,
+    /// a batch went to a callback and the stream waited for the next.
+    pub fn drain_scanner_data_for_dispatch(
+        &self, mine: impl Fn(u32) -> bool,
+    ) -> Vec<(u32, ScannerResult)> {
+        let mut held = self.scanner_data.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < held.len() {
+            if mine(held[i].0) { i += 1; } else { out.push(held.remove(i)); }
+        }
+        out
     }
 
     /// The scan results arrived under one request, leaving the rest.

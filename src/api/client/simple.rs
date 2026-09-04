@@ -134,7 +134,7 @@ impl EClient {
         // Taken only for the waiting, a question starting between the two would
         // pump this order's reply into its own collector and discard it, and
         // the order would be reported unanswered although the venue answered.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         let order_id = self.next_order_id();
         self.place_order(order_id, contract, order)?;
         self.await_order_holding_the_turn(order_id, SETTLE)

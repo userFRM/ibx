@@ -88,7 +88,23 @@ impl Drop for AskId {
 }
 
 pub(crate) fn ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> AskId {
-    let id = NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed);
+    hold_id(shared, NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Hold a number as this session's own until the guard is dropped.
+///
+/// For a stream, whose number is taken before the request goes out: the engine
+/// can queue the stream's first record — or the venue's refusal of it — before
+/// the call that sent it has built anything to read them with, and a dispatch
+/// loop reaching them first sees a number nobody has claimed and hands them to
+/// a callback. The first positional entry of a book is the worst one to lose:
+/// every entry after it describes a book that never had a start.
+///
+/// Released on drop, so a request that could not be sent does not leave its
+/// number held; [`AskId::keep`] passes the hold to the stream.
+pub(crate) fn hold_id(
+    shared: &std::sync::Arc<crate::bridge::SharedState>, id: i64,
+) -> AskId {
     shared.reference.note_ours(id);
     AskId { id, shared: Some(std::sync::Arc::clone(shared)) }
 }
@@ -337,7 +353,7 @@ impl EClient {
         // starts. `what_if_order` and `place` name theirs here for the same
         // reason; these four asked inside the turn instead.
         let contract = &*self.named_by_the_venue(contract)?;
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -387,7 +403,7 @@ impl EClient {
         &self, contract: &Contract, start_date: &str, end_date: &str,
     ) -> Result<Vec<crate::control::adjustments::Adjustment>, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -486,7 +502,7 @@ impl EClient {
         &self, underlying: &Contract,
     ) -> Result<Vec<OptionChain>, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -552,7 +568,7 @@ impl EClient {
         // starts. `what_if_order` and `place` name theirs here for the same
         // reason; these four asked inside the turn instead.
         let contract = &*self.named_by_the_venue(contract)?;
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -587,7 +603,7 @@ impl EClient {
         &self, pattern: &str,
     ) -> Result<Vec<crate::types::model::ContractDescription>, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -636,7 +652,7 @@ impl EClient {
         start_date_time: &str, end_date_time: &str, total_results: i32,
     ) -> Result<Vec<Headline>, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -706,7 +722,7 @@ impl EClient {
         // starts. `what_if_order` and `place` name theirs here for the same
         // reason; these four asked inside the turn instead.
         let contract = &*self.named_by_the_venue(contract)?;
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -741,7 +757,7 @@ impl EClient {
         &self, contract: &Contract, report_type: &str,
     ) -> Result<String, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -801,7 +817,7 @@ impl EClient {
             contract
         };
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -853,7 +869,7 @@ impl EClient {
     /// Every holding in the account.
     pub fn positions(&self) -> Result<Vec<PositionRow>, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -895,7 +911,7 @@ impl EClient {
     /// them. `tags` is a comma-separated list, or `All`.
     pub fn account_summary(&self, tags: &str) -> Result<Vec<AccountValue>, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -948,7 +964,7 @@ impl EClient {
         &self, order_id: i64, timeout: Duration,
     ) -> Result<OrderReport, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -1055,7 +1071,7 @@ impl EClient {
     ///
     pub fn contract_details(&self, contract: &Contract) -> Result<Vec<ContractDetails>, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -1232,7 +1248,7 @@ impl EClient {
         &self, instrument: &str, location: &str, scan_code: &str, most: u32,
     ) -> Result<Vec<ScanRow>, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -1290,7 +1306,7 @@ impl EClient {
         // starts. `what_if_order` and `place` name theirs here for the same
         // reason; these four asked inside the turn instead.
         let contract = &*self.named_by_the_venue(contract)?;
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();
@@ -1344,7 +1360,7 @@ impl EClient {
 
     fn ask_wsh(&self, con_id: Option<i64>) -> Result<String, Refusal> {
         // One question at a time: see `EClient::asking`.
-        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.take_the_turn()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else.
         let _answering = super::Answering::begin();

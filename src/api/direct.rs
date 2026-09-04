@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::api::client::{EClient, EClientConfig};
+use crate::api::client::ask::hold_id;
 use crate::types::model::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
 use crate::error_codes::Refusal;
@@ -318,11 +319,18 @@ impl Client {
         // connected" they read as a session problem, so a caller retried
         // for ever a request that no session could carry. The one refusal
         // that states a session problem carries that number already.
+        // Named before the turn is taken. A contract given by the venue's id
+        // alone is filled in by asking the venue for it, which is one of the
+        // calls that waits for this same turn — asked while this one holds it,
+        // on a lock that is not re-entrant, neither ever runs again and the
+        // deadline that would have said so is set inside the wait that never
+        // starts.
+        let contract = &*self.inner.named_by_the_venue(contract)?;
         // One question at a time, and the session's own reader waits on it:
         // this takes its answer out of the queue by id rather than off a
         // callback, and a dispatch loop running beside it would take that
         // answer first. See `EClient::asking`.
-        let _turn = self.inner.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.inner.take_the_turn()?;
         self.inner.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1)?;
         let what = format!("the earliest data for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
@@ -338,7 +346,7 @@ impl Client {
         // this takes its answer out of the queue by id rather than off a
         // callback, and a dispatch loop running beside it would take that
         // answer first. See `EClient::asking`.
-        let _turn = self.inner.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.inner.take_the_turn()?;
         self.inner.req_matching_symbols(req_id, pattern)?;
         let what = format!("a symbol search for {pattern}");
         self.wait_for(req_id, &what, |sh| {
@@ -354,11 +362,13 @@ impl Client {
         period: &str,
     ) -> Result<Vec<crate::control::histogram::HistogramEntry>, Refusal> {
         let req_id = self.stream_id();
+        // Named before the turn is taken; see `head_timestamp`.
+        let contract = &*self.inner.named_by_the_venue(contract)?;
         // One question at a time, and the session's own reader waits on it:
         // this takes its answer out of the queue by id rather than off a
         // callback, and a dispatch loop running beside it would take that
         // answer first. See `EClient::asking`.
-        let _turn = self.inner.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.inner.take_the_turn()?;
         self.inner.req_histogram_data(req_id, contract, use_rth, period)?;
         let what = format!("a histogram for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
@@ -377,7 +387,7 @@ impl Client {
         // this takes its answer out of the queue by id rather than off a
         // callback, and a dispatch loop running beside it would take that
         // answer first. See `EClient::asking`.
-        let _turn = self.inner.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = self.inner.take_the_turn()?;
         self.inner.req_fundamental_data(req_id, contract, report_type)?;
         let what = format!("a {report_type} report for {}", contract.symbol);
         self.wait_for(req_id, &what, |sh| {
@@ -402,7 +412,14 @@ impl Client {
         use_rth: bool,
     ) -> Result<Subscription<RealTimeBar>, Refusal> {
         let req_id = self.stream_id();
+        // Held before the request goes out. Claimed afterwards, the first
+        // record — or the venue's refusal — can arrive and be taken by a
+        // dispatch loop running beside this, which sees a number nobody has
+        // claimed. Given up again if the request cannot be sent.
+        let held = hold_id(&self.inner.shared, req_id);
         self.inner.req_real_time_bars(req_id, contract, 5, what_to_show, use_rth)?;
+        // The hold passes to the stream, which gives it up when it ends.
+        let req_id = held.keep();
         // Withdraw through a clone of the session's control channel rather
         // than a borrow of the client: a stream may outlive the borrow that
         // made it, and a stream that cannot withdraw itself is one the venue
@@ -426,7 +443,13 @@ impl Client {
         smart_depth: bool,
     ) -> Result<Subscription<DepthUpdate>, Refusal> {
         let req_id = self.stream_id();
+        // Held before the request goes out. Claimed afterwards, the first
+        // record — or the venue's refusal — can arrive and be taken by a
+        // dispatch loop running beside this, which sees a number nobody has
+        // claimed. Given up again if the request cannot be sent.
+        let held = hold_id(&self.inner.shared, req_id);
         self.inner.req_mkt_depth(req_id, contract, num_rows, smart_depth)?;
+        let req_id = held.keep();
         let tx = self.inner.control_tx.clone();
         Ok(Subscription::new(
             req_id,
@@ -578,6 +601,13 @@ impl Client {
         use_rth: bool,
     ) -> Result<crate::types::HistoricalScheduleResponse, Refusal> {
         let req_id = self.stream_id();
+        // Named before the turn is taken; see `head_timestamp`.
+        let contract = &*self.inner.named_by_the_venue(contract)?;
+        // One question at a time, and the session's own reader waits on it:
+        // this takes its answer out of the queue by id rather than off a
+        // callback, and a dispatch loop running beside it would take that
+        // answer first. See `EClient::asking`.
+        let _turn = self.inner.take_the_turn()?;
         self.inner.req_historical_schedule(req_id, contract, end_date_time, duration, use_rth)?;
         let what = format!("a schedule for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
@@ -634,9 +664,12 @@ impl Client {
         filters: &[crate::types::model::TagValue],
     ) -> Result<Subscription<crate::control::scanner::ScannerResult>, Refusal> {
         let req_id = self.stream_id();
+        // Held before the request goes out; see `realtime_bars`.
+        let held = hold_id(&self.inner.shared, req_id);
         self.inner.req_scanner_subscription(
             req_id, instrument, location_code, scan_code, max_items, filters,
         )?;
+        let req_id = held.keep();
         let tx = self.inner.control_tx.clone();
         Ok(Subscription::new(
             req_id,
@@ -1107,6 +1140,245 @@ mod tests {
             shared.market.take_real_time_bars_for(asked as u32).len(), 1,
             "the bar the stream was going to read went to a callback instead",
         );
+    }
+
+    /// Runs a call on a thread of its own and says whether it came back.
+    ///
+    /// A wedged call cannot be joined, so it is left where it is and the
+    /// harness reports a failure rather than stopping on one.
+    fn came_back(call: impl FnOnce() + Send + 'static) -> bool {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let done = Arc::new(AtomicBool::new(false));
+        let d = Arc::clone(&done);
+        std::thread::spawn(move || {
+            call();
+            d.store(true, Ordering::Release);
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if done.load(Ordering::Acquire) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    /// A contract named by the venue's id alone is named before the turn is
+    /// taken.
+    ///
+    /// The venue routes on the contract's type and its exchange, and a caller
+    /// that gave neither has stated neither: filling them in is a question of
+    /// its own, and one that waits for this same turn. Asked while one of
+    /// these held it, on a lock that is not re-entrant, neither ever ran again
+    /// — and the deadline that would have said so is set inside the wait that
+    /// never starts, so the thread stopped for good rather than for fifteen
+    /// seconds.
+    #[test]
+    fn a_contract_named_by_id_alone_does_not_wedge_the_call_asking_about_it() {
+        let (client, rx, _shared) = test_direct_client();
+        // Nothing carries a request, so the lookup each of these makes on its
+        // own is refused at once rather than waited out.
+        drop(rx);
+        let client = Arc::new(client);
+
+        let c = Arc::clone(&client);
+        assert!(
+            came_back(move || {
+                let _ = c.head_timestamp(
+                    &Contract { con_id: 265598, ..Default::default() }, "TRADES", true,
+                );
+            }),
+            "the earliest data for a contract named by id alone never came back",
+        );
+        let c = Arc::clone(&client);
+        assert!(
+            came_back(move || {
+                let _ = c.histogram_data(
+                    &Contract { con_id: 265598, ..Default::default() }, true, "3 days",
+                );
+            }),
+            "a histogram for a contract named by id alone never came back",
+        );
+        let c = Arc::clone(&client);
+        assert!(
+            came_back(move || {
+                let _ = c.historical_schedules(
+                    &Contract { con_id: 265598, ..Default::default() }, "", "1 D", true,
+                );
+            }),
+            "a schedule for a contract named by id alone never came back",
+        );
+    }
+
+    /// A schedule holds the session while it waits, as the four questions
+    /// beside it do.
+    ///
+    /// It reads its answer out of the queue by id rather than off a callback,
+    /// so a dispatch loop running beside it took that answer first and handed
+    /// it to a wrapper — and the question waited out its whole deadline for a
+    /// reply that had already arrived.
+    #[test]
+    fn a_schedule_holds_the_session_while_it_waits() {
+        let (client, _rx, shared) = test_direct_client();
+        let asked = client.next_request_id();
+        std::thread::scope(|s| {
+            let asking = s.spawn(|| {
+                client.historical_schedules(&Contract::default(), "", "1 D", true)
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(
+                client.inner.asking.try_lock().is_err(),
+                "the session was free to be read while a question was waiting on it",
+            );
+            shared.reference.push_historical_schedule(
+                asked as u32,
+                crate::types::HistoricalScheduleResponse {
+                    query_id: String::new(), timezone: "US/Eastern".to_string(),
+                    start_date_time: "20260101-09:30:00".to_string(),
+                    end_date_time: "20260102-16:00:00".to_string(),
+                    sessions: Vec::new(),
+                },
+            );
+            assert!(asking.join().unwrap().is_ok(), "the question was answered");
+        });
+    }
+
+    /// A stream's number is its own before the request goes out.
+    ///
+    /// Claimed after the send instead, the engine can queue the stream's first
+    /// record — or the venue's refusal of it — in between, and a dispatch loop
+    /// running beside this sees a number nobody has claimed and hands what
+    /// arrived to a callback. Losing the first entry of a book is the worst of
+    /// them: every entry after it names a position in a book that never had a
+    /// start.
+    #[test]
+    fn a_streams_number_is_its_own_before_the_request_goes_out() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (client, rx, shared) = test_direct_client();
+        let asked = client.next_request_id();
+        // Filled to the brim, so the request below stops inside its own send.
+        // That is the window this is about, held open.
+        for _ in 0..64 {
+            client.inner.control_tx.send(ControlCommand::Logout).expect("room");
+        }
+
+        let client = Arc::new(client);
+        let opening = Arc::clone(&client);
+        let opened = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&opened);
+        std::thread::spawn(move || {
+            let stream = opening.realtime_bars(
+                &Contract { symbol: "SPY".into(), ..Default::default() }, "TRADES", true,
+            );
+            drop(stream);
+            flag.store(true, Ordering::Release);
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            shared.reference.is_ours(asked),
+            "the stream's number was nobody's while its request was going out",
+        );
+
+        // Read out again so the thread finishes rather than being left in the
+        // send for the rest of the suite.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !opened.load(Ordering::Acquire) && Instant::now() < deadline {
+            let _ = rx.recv_timeout(Duration::from_millis(20));
+        }
+        assert!(opened.load(Ordering::Acquire), "the stream never opened");
+    }
+
+    /// A scan's rows are left where the stream that asked for it will read
+    /// them.
+    ///
+    /// A scan answers repeatedly for as long as it runs, and the stream reads
+    /// its batches by id. Drained whole by a dispatch loop running beside it,
+    /// a batch went to a callback and the stream waited for the next one — or
+    /// for its idle span to end.
+    #[test]
+    fn a_scans_rows_are_kept_from_a_dispatch_loop_for_the_stream_that_asked() {
+        let (client, _rx, shared) = test_direct_client();
+        let asked = client.next_request_id();
+        let _scan = client
+            .scanner_subscription("STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 10, &[])
+            .expect("the scan opened");
+        shared.reference.push_scanner_data(
+            asked as u32,
+            crate::control::scanner::ScannerResult {
+                con_ids: Vec::new(), entries: Vec::new(),
+                scan_time: String::new(), error_text: String::new(),
+            },
+        );
+
+        let mut heard = crate::api::wrapper::tests::RecordingWrapper::default();
+        client.inner.process_msgs(&mut heard);
+
+        assert_eq!(
+            shared.reference.take_scanner_data_for(asked as u32).len(), 1,
+            "the batch the stream was going to read went to a callback instead",
+        );
+    }
+
+    /// And the venue's refusal of a stream ends that stream.
+    ///
+    /// A refusal is how a stream tells "the venue said no" from "nothing
+    /// came". Drained by a dispatch loop running beside it, the stream found
+    /// none, sat through its idle span and ended reporting that the venue had
+    /// simply gone quiet.
+    #[test]
+    fn the_refusal_of_a_stream_reaches_that_stream_and_not_a_callback() {
+        let (client, _rx, shared) = test_direct_client();
+        let asked = client.next_request_id();
+        let mut bars = client
+            .realtime_bars(&Contract { symbol: "SPY".into(), ..Default::default() }, "TRADES", true)
+            .expect("the stream opened");
+        shared.reference.push_historical_error(
+            asked as u32, 354, "Requested market data is not subscribed".to_string(),
+        );
+
+        let mut heard = crate::api::wrapper::tests::RecordingWrapper::default();
+        client.inner.process_msgs(&mut heard);
+
+        assert_eq!(bars.next_item().map(|_| ()), None, "a refused stream carries nothing");
+        let (code, why) = bars.refusal().expect("the venue's reason");
+        assert_eq!(*code, 354, "the stream was told it simply went quiet: {why}");
+    }
+
+    /// A book this client gave up on ends the stream that asked for it.
+    ///
+    /// It is the one failure a stream cannot tell from a quiet market: the
+    /// subscription is up, the venue is still sending, and nothing further is
+    /// kept because part of a book is not a book. Reading only the venue's own
+    /// refusals, the stream sat through its idle span and ended saying nothing
+    /// had gone wrong.
+    #[test]
+    fn a_book_given_up_on_ends_the_stream_that_asked_for_it() {
+        let (client, _rx, shared) = test_direct_client();
+        let mut book = client
+            .market_depth(&Contract { symbol: "SPY".into(), ..Default::default() }, 10, false)
+            .expect("the stream opened");
+        let asked = book.req_id() as u32;
+        // One past what is kept: the push that finds the queue full is the
+        // one that walks it and gives the longest book up.
+        for _ in 0..=crate::bridge::STREAM_BACKLOG_LIMIT {
+            shared.market.push_depth_update(DepthUpdate {
+                req_id: asked, position: 0, market_maker: String::new(),
+                operation: 0, side: 1, price: 1.0, size: 1.0, is_smart_depth: false,
+            });
+        }
+        assert!(shared.market.depth_was_dropped(asked), "the book was given up");
+
+        // And a dispatch loop running beside the stream leaves it there, the
+        // way it leaves the stream's own records: told to a callback instead,
+        // the stream is the one thing left with no way to find out.
+        let mut heard = crate::api::wrapper::tests::RecordingWrapper::default();
+        client.inner.process_msgs(&mut heard);
+
+        assert!(book.next_item().is_none(), "nothing is kept for a book given up on");
+        let (code, why) = book.refusal().expect("the reason the book was given up");
+        assert_eq!(*code, 354, "the stream read the drop as a quiet market: {why}");
+        assert!(why.contains("part of a book is not a book"), "{why}");
     }
 
     /// The profit subscriptions open nothing: their figures arrive on a

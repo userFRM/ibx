@@ -427,6 +427,32 @@ impl MarketDataState {
         self.depth_drops_unsaid.lock().unwrap().drain(..).collect()
     }
 
+    /// The same, leaving behind the books a stream is going to read by id.
+    ///
+    /// A dropped book is the one failure a stream cannot tell from a quiet
+    /// market, so it has to reach the stream that asked for the book. Drained
+    /// whole beside one, it was reported to a callback and the stream sat
+    /// through its idle span and ended saying nothing had gone wrong.
+    pub fn drain_depth_drops_for_dispatch(
+        &self, mine: impl Fn(u32) -> bool,
+    ) -> Vec<(u32, String)> {
+        let mut held = self.depth_drops_unsaid.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < held.len() {
+            if mine(held[i].0) { i += 1; } else { out.push(held.remove(i)); }
+        }
+        out
+    }
+
+    /// The book given up on under one request, if there is one, leaving the
+    /// rest.
+    pub fn take_depth_drop_for(&self, req_id: u32) -> Option<String> {
+        let mut held = self.depth_drops_unsaid.lock().unwrap();
+        let at = held.iter().position(|(id, _)| *id == req_id)?;
+        Some(held.remove(at).1)
+    }
+
     #[doc(hidden)] pub fn push_tick_news(&self, news: TickNews) {
         push_bounded(&self.tick_news, news, STREAM_BACKLOG_LIMIT, "tick_news");
     }
