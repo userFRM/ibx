@@ -110,6 +110,12 @@ impl EClient {
         if replay_done {
             shared.orders.set_replay_done();
         }
+        // A real session opens on a message the venue stamps, and that stamp is
+        // what this client answers "what time does the venue say it is" from.
+        // A test session that carried none had every such request refused for
+        // want of one, which is the answer for a session that has heard
+        // nothing — not for one that has just opened.
+        shared.market.note_venue_time(&crate::protocol::datetime::chrono_free_timestamp());
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
         *self.shared.lock().unwrap() = Some(shared);
