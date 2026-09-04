@@ -702,7 +702,7 @@ impl FarmState {
                 Ok(0) => {}
                 Err(e) => {
                     log::error!("Farm connection lost: {e}");
-                    self.handle_disconnect(context, event_tx);
+                    self.handle_disconnect(farm_conn, context, event_tx);
                     return;
                 }
                 Ok(n) => {
@@ -2237,8 +2237,22 @@ impl FarmState {
         }
     }
 
-    pub(crate) fn handle_disconnect(&mut self, context: &mut Context, event_tx: &Option<EventSink>) {
+    /// Give this farm up, and the socket it was carried on with it.
+    ///
+    /// The connection goes here rather than at the reconnect that replaces it.
+    /// A liveness timeout says the venue has stopped answering, not that the
+    /// socket is closed, so one kept through the outage is a session this
+    /// client still holds while it dials another — and on a hard error it is a
+    /// descriptor held for as long as the outage lasts. The historical and
+    /// calendar farms clear theirs on the same transition.
+    pub(crate) fn handle_disconnect(
+        &mut self,
+        farm_conn: &mut Option<Connection>,
+        context: &mut Context,
+        event_tx: &Option<EventSink>,
+    ) {
         self.disconnected = true;
+        *farm_conn = None;
         // Anything the replay had not reached goes back where the next
         // reconnect looks for it. A subscription that was sent is recorded
         // again as it goes out; one still waiting was never sent, so dropping

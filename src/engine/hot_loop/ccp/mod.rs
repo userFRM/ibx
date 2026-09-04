@@ -2340,13 +2340,24 @@ impl CcpState {
         shared.reference.push_depth_exchanges(descs);
     }
 
+    /// Give the trading connection up, and the socket it was carried on with
+    /// it.
+    ///
+    /// The connection goes here rather than at the reconnect that replaces it.
+    /// A liveness timeout says the venue has stopped answering, not that the
+    /// socket is closed, and this account permits one session at a time: kept
+    /// through the outage, the reconnect competes with a session this client
+    /// is still holding open. On a hard error it is a descriptor held for as
+    /// long as the outage lasts.
     pub(crate) fn handle_disconnect(
         &mut self,
+        ccp_conn: &mut Option<Connection>,
         context: &mut Context,
         shared: &SharedState,
         event_tx: &Option<EventSink>,
     ) {
         self.disconnected = true;
+        *ccp_conn = None;
         self.recovery_sweep_at = None;
         // The engine stops believing these statuses here, and said so to
         // nobody — so the API layer went on reporting the pre-disconnect

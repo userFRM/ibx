@@ -669,6 +669,10 @@ impl HotLoop {
                 .or_else(|| payload.downcast_ref::<&'static str>().copied())
                 .unwrap_or("<non-string panic payload>");
             log::error!("Engine hot loop panicked, emitting Disconnected: {msg}");
+            // Before anything is told the engine died, because a worker still
+            // dialling outlives the notice: taken back first, none of them can
+            // open a session on behalf of a loop that is gone.
+            self.take_back_the_recovery_still_in_flight();
             // Recorded before anything is told of the loss, so a reader woken
             // by it finds the reason already there. Written afterwards, a
             // caller that wakes in between cannot tell this from a loss the
@@ -847,7 +851,7 @@ impl HotLoop {
                 self.maybe_spawn_hmds_reconnect();
                 self.maybe_spawn_secdef_reconnect();
             }
-            self.refuse_the_buffered_orders_once_recovery_is_over();
+            self.end_the_trading_connection_once_recovery_is_over();
 
             // 6. Wake any waiting consumers (e.g. Python event loop)
             self.shared.notify();
@@ -871,13 +875,46 @@ impl HotLoop {
             }
         }
 
-        // The loop has stopped. Take back whatever recovery is still in
-        // flight and wait it out, so nothing this loop started keeps opening
-        // sessions at the venue on its behalf.
+        self.take_back_the_recovery_still_in_flight();
+    }
+
+    /// Take back whatever recovery is still in flight, wait it out, and say
+    /// goodbye on anything it opened after being taken back.
+    ///
+    /// A worker reads the flag between the phases of a handshake, so one that
+    /// is past the last of those reads finishes and hands back a session that
+    /// is open at the venue. Dropped in silence that is a session the venue
+    /// has to time out, and this account permits one at a time: the next
+    /// connection then races one the venue still believes is live. It is told
+    /// the session is going, which is what a stop tells it on the connection
+    /// the loop holds.
+    ///
+    /// What the other three return is closed by being dropped, and dropped
+    /// here rather than left in the channel: this loop can be run again, and
+    /// a landed connection left behind would be installed by the next run —
+    /// a socket from the session before it, resubscribed and announced as
+    /// that session's own.
+    ///
+    /// Run where the loop returns, and again where it left by panicking,
+    /// which does not reach the return. Dropping the handles there instead
+    /// detached the workers with the flag still down, and they went on
+    /// resolving, connecting and authenticating after the engine had
+    /// announced its death.
+    fn take_back_the_recovery_still_in_flight(&mut self) {
         self.reconnect_cancel.store(true, Ordering::Relaxed);
         for worker in self.reconnect_workers.drain(..) {
             let _ = worker.join();
         }
+        if let Some(rx) = self.pending_ccp_reconnect.take()
+            && let Ok(Ok(conn)) = rx.try_recv()
+        {
+            log::warn!("a trading session opened after the stop — saying so before it goes");
+            let mut landed_too_late = Some(conn);
+            self.ccp.send_logout(&mut landed_too_late, &mut self.hb);
+        }
+        self.pending_farm_reconnect = None;
+        self.pending_hmds_reconnect = None;
+        self.pending_secdef_reconnect = None;
     }
 
     fn emit_hmds_unavailable(&self, req_id: u32, from_historical: bool) {
@@ -1567,6 +1604,14 @@ impl HotLoop {
                     self.force_ccp_disconnect();
                 }
                 ControlCommand::Shutdown => {
+                    // Read here, so a worker sees it while the rest of this
+                    // arm withdraws what the session holds — a subscription
+                    // apiece, and an account that carries many. Raised only
+                    // where the loop returns, a reconnect went on climbing
+                    // through all of that and could pass the last of its own
+                    // checks meanwhile, which is a session opened at the venue
+                    // after the caller asked for the one it had to end.
+                    self.reconnect_cancel.store(true, Ordering::Relaxed);
                     // Orders handed over before the stop go out before it.
                     // They are drained at the top of a lap and this arm runs
                     // further down one, so an order batched with the stop was
@@ -1770,7 +1815,9 @@ impl HotLoop {
             if since_recv > self.hb.ccp_test_after() {
                 if since_recv > self.hb.ccp_dead_after() {
                     log::error!("CCP liveness timeout ({since_recv}s silent) — connection lost");
-                    self.ccp.handle_disconnect(&mut self.context, &self.shared, &self.event_tx);
+                    self.ccp.handle_disconnect(
+                        &mut self.ccp_conn, &mut self.context, &self.shared, &self.event_tx,
+                    );
                 } else if self.hb.pending_ccp_test.is_none() {
                     let test_id = self.hb.next_test_id();
                     let _ = conn.send_fix(&[
@@ -1806,7 +1853,9 @@ impl HotLoop {
             if since_recv > HeartbeatState::farm_test_after(stated) {
                 if since_recv > HeartbeatState::farm_dead_after(stated) {
                     log::error!("Farm liveness timeout ({since_recv}s silent) — connection lost");
-                    self.farm.handle_disconnect(&mut self.context, &self.event_tx);
+                    self.farm.handle_disconnect(
+                        &mut self.farm_conn, &mut self.context, &self.event_tx,
+                    );
                 } else if self.hb.pending_farm_test.is_none() {
                     let test_id = self.hb.next_test_id();
                     let _ = conn.send_fix(&[
@@ -2017,13 +2066,17 @@ impl HotLoop {
             && self.ccp_conn.as_ref().is_some_and(|c| c.write_failed() || c.read_failed())
         {
             log::error!("CCP transport can no longer carry traffic — giving it up");
-            self.ccp.handle_disconnect(&mut self.context, &self.shared, &self.event_tx);
+            self.ccp.handle_disconnect(
+                &mut self.ccp_conn, &mut self.context, &self.shared, &self.event_tx,
+            );
         }
         if !self.farm.disconnected
             && self.farm_conn.as_ref().is_some_and(|c| c.write_failed() || c.read_failed())
         {
             log::error!("Farm transport can no longer carry traffic — giving it up");
-            self.farm.handle_disconnect(&mut self.context, &self.event_tx);
+            self.farm.handle_disconnect(
+                &mut self.farm_conn, &mut self.context, &self.event_tx,
+            );
         }
         if !self.hmds.disconnected
             && self.hmds_conn.as_ref().is_some_and(|c| c.write_failed() || c.read_failed())
@@ -2067,10 +2120,32 @@ impl HotLoop {
     /// Said once where every request can read it, too: a session nothing is
     /// trying to rebuild answers nothing, and a caller that is not told waits
     /// out a timeout per call for an answer that cannot come.
+    ///
+    /// Once, on the first transport to reach it. What the cancellation above
+    /// takes back comes home as a failed attempt of its own, and its poller
+    /// reads that as one more thing ending the session — so the notice went
+    /// out twice for the one loss. The Rust surface latches its own and shows
+    /// one; the Python surface folds only the events one dispatch drains, and
+    /// a dispatch between the two announced connectivity lost a second time.
     fn halt_recovery(&mut self, reason: retry::DisconnectReason) {
         self.reconnect_cancel.store(true, Ordering::Relaxed);
+        if self.reconnect_halted.is_some() {
+            return;
+        }
         self.reconnect_halted = Some(reason);
         self.shared.reference.set_session_over(reason.as_str());
+        // And the trading connection's own, where that is the connection that
+        // is down — whichever transport heard the answer that ended recovery,
+        // because nothing dials any of them again once this is set. Said with
+        // the notice rather than after it, so a caller answering the notice
+        // with an order reads it. Only where that connection is actually down:
+        // a quote feed spending the budget while trading carries on happily
+        // would otherwise refuse orders that connection would have taken.
+        if self.ccp.disconnected {
+            self.shared.reference.set_trading_over(reason.as_str());
+        }
+        self.shared.set_connection_lost();
+        emit(&self.event_tx, Event::Disconnected);
     }
 
     /// Give up recovery that has outrun the time the caller allowed it, while
@@ -2102,53 +2177,56 @@ impl HotLoop {
     /// Say once that recovery has stopped, so a caller waiting on a connection
     /// that is never coming back is told rather than left waiting.
     fn report_recovery_exhausted(&mut self, which: &str) {
-        if self.reconnect_halted.is_some() {
-            // Already given up on, and said. What is left to do is take back
-            // the attempt still in flight: the budget that ran out was spent
-            // on that one as well.
-            self.reconnect_cancel.store(true, Ordering::Relaxed);
-            return;
-        }
-        log::error!(
-            "{which} recovery abandoned after {} attempts — the limits the caller set are spent",
-            self.budget.attempts(),
-        );
-        self.halt_recovery(retry::DisconnectReason::ByDesign);
-        // And the trading connection's own, where that is the connection that
-        // is down. The halt this just set is never lifted, so nothing will
-        // dial it again — and an order taken meanwhile is recorded, given an
-        // id, and buffered for a connection that is not coming. Only where it
-        // is actually down: a market-data farm spending the budget while
-        // trading carries on happily would otherwise refuse orders that
-        // connection would have taken.
-        if self.ccp.disconnected {
-            self.shared.reference.set_trading_over(retry::DisconnectReason::ByDesign.as_str());
-        }
-        self.shared.set_connection_lost();
-        emit(&self.event_tx, Event::Disconnected);
-    }
-
-    /// Say what is still buffered once the trading connection's recovery has
-    /// been given up.
-    ///
-    /// Orders accepted while the connection was down wait in the buffer for it
-    /// to come back, and their callers were told they were accepted and given
-    /// ids. Once recovery is over there is nothing left that can carry them —
-    /// a halt is never cleared and no further attempt is scheduled — so they
-    /// are refused rather than left until the engine stops, which may be
-    /// never. Not while an attempt is still in flight: it may yet land, and
-    /// what is buffered would go out on it. A repeat pass finds nothing,
-    /// because the refusal drains the buffer.
-    fn refuse_the_buffered_orders_once_recovery_is_over(&mut self) {
-        if self.ccp.disconnected
-            && self.pending_ccp_reconnect.is_none()
-            && self.reconnect_halted.is_some()
-        {
-            order_builder::refuse_what_is_left(
-                &mut self.context, &self.shared,
-                "recovery of the trading connection was given up",
+        // Said on the first transport to reach it, and not again: what the
+        // halt takes back comes home as a failed attempt of its own. The halt
+        // itself is raised either way, because it is what takes that attempt
+        // back — the budget that ran out was spent on it as well.
+        if self.reconnect_halted.is_none() {
+            log::error!(
+                "{which} recovery abandoned after {} attempts — the limits the caller set are spent",
+                self.budget.attempts(),
             );
         }
+        self.halt_recovery(retry::DisconnectReason::ByDesign);
+    }
+
+    /// End the trading connection once the recovery of it has been given up,
+    /// and say what is still buffered for it.
+    ///
+    /// Recovery is the session's rather than one transport's: the answer that
+    /// ends it can come back on the quote feed, and nothing dials the trading
+    /// connection again afterwards. Told only that the session ended, both
+    /// order surfaces went on taking orders — they read this connection's own
+    /// state, so that a quote feed the venue will not serve again does not
+    /// refuse what a live trading connection would carry — and the engine
+    /// buffered each one for a connection that was never coming.
+    ///
+    /// Read every pass as well as written where the halt is installed, because
+    /// the connection can go after it: a session already given up on schedules
+    /// nothing for a transport that drops next, and says nothing about it
+    /// either.
+    ///
+    /// Orders accepted while the connection was down were accepted and given
+    /// ids, and they are refused here rather than left until the engine stops,
+    /// which may be never. An attempt still in flight is no reason to hold
+    /// them: what a halt leaves running is dropped where it lands, so nothing
+    /// it returns can carry them. A repeat pass finds nothing, because the
+    /// refusal drains the buffer.
+    fn end_the_trading_connection_once_recovery_is_over(&mut self) {
+        let Some(reason) = self.reconnect_halted.filter(|why| why.is_terminal()) else {
+            return;
+        };
+        if !self.ccp.disconnected {
+            return;
+        }
+        // Said here as well as where the halt is installed, because the
+        // connection can go after it: a session already given up on schedules
+        // nothing for a transport that drops next.
+        self.shared.reference.set_trading_over(reason.as_str());
+        order_builder::refuse_what_is_left(
+            &mut self.context, &self.shared,
+            "recovery of the trading connection was given up",
+        );
     }
 
     /// Tell the client a transport it was told about is carrying traffic
@@ -2192,7 +2270,17 @@ impl HotLoop {
             return;
         }
         if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) {
-            self.report_recovery_exhausted("farm");
+            // Not while the trading connection is still dialling on an attempt
+            // this budget allowed. The count says how many more may start, not
+            // how long the one running may take, and giving up here takes that
+            // one back — so with a single attempt permitted the connection that
+            // spent it was cancelled by the scheduler beside it, and a recovery
+            // that would have landed on its only try never got it. Only the
+            // elapsed limit ends an attempt in flight; this is said once the
+            // last of them has resolved.
+            if self.pending_ccp_reconnect.is_none() {
+                self.report_recovery_exhausted("farm");
+            }
             return;
         }
         // Given back before the delay below is read off it, and only by a
@@ -2237,7 +2325,11 @@ impl HotLoop {
             return;
         }
         if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) {
-            self.report_recovery_exhausted("ccp");
+            // Not while the quote feed is still dialling on an attempt this
+            // budget allowed: see the farm's own scheduler.
+            if self.pending_farm_reconnect.is_none() {
+                self.report_recovery_exhausted("ccp");
+            }
             return;
         }
         // Given back before the delay below is read off it, and only by a
@@ -2282,8 +2374,6 @@ impl HotLoop {
                      The connection has to be rebuilt by the caller.",
                 );
                 self.halt_recovery(retry::DisconnectReason::AuthorizationFailed);
-                self.shared.set_connection_lost();
-                emit(&self.event_tx, Event::Disconnected);
                 return;
             }
         };
@@ -2328,8 +2418,9 @@ impl HotLoop {
                 // still dialling, and the halt that ended it is never lifted.
                 // Installed, this is a live socket — resubscribed, and
                 // announced to the caller as data back — on a session the
-                // caller was told was over. Dropped rather than logged out,
-                // which is what a stop does with an attempt that lands after
+                // caller was told was over. Dropped, which closes it: the
+                // goodbye this protocol has is the trading connection's, and
+                // dropping is what a stop does with a farm that lands after
                 // it.
                 if self.the_session_ended_while_it_dialled() {
                     log::warn!(
@@ -2366,8 +2457,6 @@ impl HotLoop {
                     );
                     self.halt_recovery(reason);
                     self.pending_farm_reconnect = None;
-                    self.shared.set_connection_lost();
-                    emit(&self.event_tx, Event::Disconnected);
                     return;
                 }
                 self.farm_next_attempt_at = Some(
@@ -2389,6 +2478,23 @@ impl HotLoop {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("Farm reconnect thread dropped without result");
                 self.pending_farm_reconnect = None;
+                // A worker that never answered is a spent attempt like any
+                // other: one the machine had no thread to give, or one that
+                // stopped before it sent. Left with no schedule the next pass
+                // dials at once and every pass after it, and left out of the
+                // notice below a caller is never told the connection is gone
+                // however often this repeats — the session reads as connected
+                // on both surfaces for the whole of an outage nothing is
+                // getting out of.
+                self.farm_next_attempt_at = Some(
+                    Instant::now() + reconnect_backoff(self.farm_reconnect_attempt),
+                );
+                if self.farm_reconnect_attempt == 3 {
+                    log::error!("Farm auto-reconnect failed 3 times — notifying (retries continue)");
+                    self.loss_announced = true;
+                    self.shared.set_connection_lost();
+                    emit(&self.event_tx, Event::Disconnected);
+                }
             }
         }
     }
@@ -2408,14 +2514,6 @@ impl HotLoop {
                      The connection has to be rebuilt by the caller.",
                 );
                 self.halt_recovery(retry::DisconnectReason::AuthorizationFailed);
-                // And the trading connection's own, which is what an order
-                // asks about. Reached only with that connection down and
-                // nothing left to rebuild it with, so an order taken here is
-                // recorded, given an id, and buffered for a connection that is
-                // not coming.
-                self.shared.reference.set_trading_over(retry::DisconnectReason::AuthorizationFailed.as_str());
-                self.shared.set_connection_lost();
-                emit(&self.event_tx, Event::Disconnected);
                 return;
             }
         };
@@ -2448,13 +2546,23 @@ impl HotLoop {
                 // still dialling, and the halt that ended it is never lifted.
                 // Installed, this is a live socket — resubscribed, and
                 // announced to the caller as data back — on a session the
-                // caller was told was over. Dropped rather than logged out,
-                // which is what a stop does with an attempt that lands after
-                // it.
+                // caller was told was over. Told the session is going and
+                // then dropped, which is what a stop does with an attempt
+                // that lands after it.
                 if self.the_session_ended_while_it_dialled() {
+                    // Told the session is going, rather than dropped in
+                    // silence. The venue holds one session per account and has
+                    // to time out one that just goes, so the next connection
+                    // races a session the venue still believes is live —
+                    // which is why a stop says this on the connection the loop
+                    // holds, and why one that arrives after the stop is no
+                    // different.
                     log::warn!(
-                        "trading reconnect landed after the session ended — dropping it",
+                        "trading reconnect landed after the session ended — saying so \
+                         before it goes",
                     );
+                    let mut landed_too_late = Some(conn);
+                    self.ccp.send_logout(&mut landed_too_late, &mut self.hb);
                     self.pending_ccp_reconnect = None;
                     return;
                 }
@@ -2479,14 +2587,7 @@ impl HotLoop {
                         reason.as_str(),
                     );
                     self.halt_recovery(reason);
-                    // And the trading connection's own, which is what an order
-                    // asks about. The session flag is set by any transport
-                    // ending, a quote feed included, and an order refused on
-                    // that reading is one this connection would have carried.
-                    self.shared.reference.set_trading_over(reason.as_str());
                     self.pending_ccp_reconnect = None;
-                    self.shared.set_connection_lost();
-                    emit(&self.event_tx, Event::Disconnected);
                     return;
                 }
                 self.ccp_next_attempt_at = Some(
@@ -2506,6 +2607,17 @@ impl HotLoop {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("CCP reconnect thread dropped without result");
                 self.pending_ccp_reconnect = None;
+                // A spent attempt like any other, and told like one: see the
+                // farm path.
+                self.ccp_next_attempt_at = Some(
+                    Instant::now() + reconnect_backoff(self.ccp_reconnect_attempt),
+                );
+                if self.ccp_reconnect_attempt == 3 {
+                    log::error!("CCP auto-reconnect failed 3 times — notifying (retries continue)");
+                    self.loss_announced = true;
+                    self.shared.set_connection_lost();
+                    emit(&self.event_tx, Event::Disconnected);
+                }
             }
         }
     }
@@ -2516,6 +2628,30 @@ impl HotLoop {
     /// FAILED and the gateway dropped the socket.
     fn maybe_spawn_hmds_reconnect(&mut self) {
         if self.hmds_conn.is_some() { return; }
+        // The time the caller allowed this farm, read while the attempt
+        // spending it is still running. The check below returns as soon as it
+        // finds one in flight, so the budget further down bounded when the
+        // next attempt could start and nothing about how long this one may
+        // take: a dial against a host that never answers held the deadline
+        // open for as long as that dial lasted, and what it finally returned
+        // was installed on a farm the session had stopped waiting for. The
+        // attempt goes with the recovery — nothing is left to hand its answer
+        // to, so a connection that lands after this is closed where it was
+        // built. The attempt limit is not read here, for the reason the
+        // session's own is not: one the caller allowed is left to finish.
+        if self.pending_hmds_reconnect.is_some()
+            && self.hmds_halted.is_none()
+            && self.hmds_budget.out_of_time(&self.reconnect_cfg, Instant::now())
+        {
+            log::error!(
+                "historical farm recovery abandoned {} attempts in — the time the \
+                 caller allowed it is spent; historical data is unavailable for the \
+                 rest of this session",
+                self.hmds_budget.attempts(),
+            );
+            self.hmds_halted = Some(retry::DisconnectReason::ByDesign);
+            self.pending_hmds_reconnect = None;
+        }
         if self.pending_hmds_reconnect.is_some() { return; }
         // A session that has ended for good is not one to keep dialling for.
         // Without this, a connection refused because the account was taken
@@ -2608,6 +2744,21 @@ impl HotLoop {
     /// others: a farm that goes is not a session that ends.
     fn maybe_spawn_secdef_reconnect(&mut self) {
         if self.secdef_conn.is_some() { return; }
+        // And the time it was allowed, while it is being spent: see the
+        // historical farm.
+        if self.pending_secdef_reconnect.is_some()
+            && self.secdef_halted.is_none()
+            && self.secdef_budget.out_of_time(&self.reconnect_cfg, Instant::now())
+        {
+            log::error!(
+                "calendar farm recovery abandoned {} attempts in — the time the \
+                 caller allowed it is spent; the calendar is unavailable for the \
+                 rest of this session",
+                self.secdef_budget.attempts(),
+            );
+            self.secdef_halted = Some(retry::DisconnectReason::ByDesign);
+            self.pending_secdef_reconnect = None;
+        }
         if self.pending_secdef_reconnect.is_some() { return; }
         // A session that has ended for good is not one to keep dialling for.
         // Without this, a connection refused because the account was taken
@@ -2707,8 +2858,9 @@ impl HotLoop {
                 // still dialling, and the halt that ended it is never lifted.
                 // Installed, this is a live socket — resubscribed, and
                 // announced to the caller as data back — on a session the
-                // caller was told was over. Dropped rather than logged out,
-                // which is what a stop does with an attempt that lands after
+                // caller was told was over. Dropped, which closes it: the
+                // goodbye this protocol has is the trading connection's, and
+                // dropping is what a stop does with a farm that lands after
                 // it.
                 if self.the_session_ended_while_it_dialled() {
                     log::warn!(
@@ -2772,8 +2924,9 @@ impl HotLoop {
                 // still dialling, and the halt that ended it is never lifted.
                 // Installed, this is a live socket — resubscribed, and
                 // announced to the caller as data back — on a session the
-                // caller was told was over. Dropped rather than logged out,
-                // which is what a stop does with an attempt that lands after
+                // caller was told was over. Dropped, which closes it: the
+                // goodbye this protocol has is the trading connection's, and
+                // dropping is what a stop does with a farm that lands after
                 // it.
                 if self.the_session_ended_while_it_dialled() {
                     log::warn!(
@@ -3822,6 +3975,16 @@ mod tests {
         hl.poll_control_commands();
 
         assert!(!hl.running, "the stop was processed");
+        // And read by whatever is still dialling, while the rest of this pass
+        // withdraws what the session holds — a subscription apiece, and an
+        // account that carries many. Raised only where the loop returns, a
+        // reconnect climbed through all of that and could pass the last of its
+        // own checks meanwhile, opening a session at the venue after the caller
+        // had asked for the one it had to end.
+        assert!(
+            hl.reconnect_cancel.load(Ordering::Relaxed),
+            "a reconnect went on dialling through the whole of the stop",
+        );
         let told = shared.orders.drain_order_inactive();
         assert!(
             told.iter().any(|(id, code, said)| *id == 41
@@ -4105,6 +4268,389 @@ mod tests {
         );
     }
 
+    /// The attempt limit says how many attempts may start, not how long the
+    /// one running may take: the scheduler beside an attempt does not take
+    /// back the last one the caller allowed.
+    ///
+    /// Both connections recover side by side off one budget. With a single
+    /// attempt permitted, whichever became due first spent it and started
+    /// dialling — and the other then found the budget spent, gave recovery up,
+    /// and the cancellation that carries reached the attempt still in flight.
+    /// A recovery that would have landed on its only try never got it.
+    #[test]
+    fn the_scheduler_beside_an_attempt_does_not_take_back_the_last_one_allowed() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.set_reconnect_config(
+            crate::reliability::ReconnectConfig::default().with_max_attempts(1),
+        );
+        hl.farm.disconnected = true;
+        hl.ccp.disconnected = true;
+
+        // The quote feed became due first, spent the one attempt the caller
+        // allowed, and is dialling on it.
+        hl.budget.record_attempt(Instant::now());
+        let (_worker, farm_rx) = std::sync::mpsc::sync_channel(1);
+        hl.pending_farm_reconnect = Some(farm_rx);
+
+        hl.maybe_spawn_ccp_reconnect();
+
+        assert!(
+            !hl.reconnect_cancel.load(Ordering::Relaxed),
+            "the scheduler beside it took back the only attempt the caller allowed",
+        );
+        assert!(
+            hl.reconnect_halted.is_none(),
+            "and gave recovery up while it was still being carried out",
+        );
+        assert!(
+            shared.reference.session_over().is_none(),
+            "and told every caller the session was over while it was still being rebuilt",
+        );
+
+        // Once nothing is left dialling there is nothing to wait for, and the
+        // count that was spent is said.
+        hl.pending_farm_reconnect = None;
+        hl.maybe_spawn_ccp_reconnect();
+        assert!(
+            hl.reconnect_halted.is_some(),
+            "recovery is given up once the last attempt the caller allowed has resolved",
+        );
+
+        // And the same the other way round, because either scheduler can be
+        // the one that finds the budget spent.
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.set_reconnect_config(
+            crate::reliability::ReconnectConfig::default().with_max_attempts(1),
+        );
+        hl.farm.disconnected = true;
+        hl.ccp.disconnected = true;
+        hl.budget.record_attempt(Instant::now());
+        let (_worker, ccp_rx) = std::sync::mpsc::sync_channel(1);
+        hl.pending_ccp_reconnect = Some(ccp_rx);
+
+        hl.maybe_spawn_farm_reconnect();
+
+        assert!(
+            !hl.reconnect_cancel.load(Ordering::Relaxed),
+            "the quote feed's scheduler took back the trading connection's only attempt",
+        );
+    }
+
+    /// An answer that ends recovery ends the trading connection with it,
+    /// whichever connection heard it.
+    ///
+    /// The connections recover side by side and the halt is the session's:
+    /// nothing dials the trading connection again once the quote feed has been
+    /// told something final. Told only that the session was over, both order
+    /// surfaces went on taking orders — they read this connection's own state,
+    /// so that a quote feed the venue will not serve again does not refuse what
+    /// a live trading connection would carry — and the engine buffered each one
+    /// for a connection that was never coming.
+    #[test]
+    fn a_final_answer_on_one_connection_ends_the_trading_connection_that_is_down() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.farm.disconnected = true;
+        hl.ccp.disconnected = true;
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(Err(io::Error::new(
+            io::ErrorKind::PermissionDenied, "the venue would not take the credentials",
+        ))).unwrap();
+        hl.pending_farm_reconnect = Some(rx);
+
+        hl.poll_farm_reconnect();
+
+        assert!(hl.reconnect_halted.is_some(), "recovery is over");
+        assert_eq!(
+            shared.reference.trading_over(),
+            Some(retry::DisconnectReason::AuthorizationFailed.as_str()),
+            "orders go on being taken and buffered for a connection nothing will dial again",
+        );
+    }
+
+    /// The time the caller allowed a farm reaches the attempt spending it.
+    ///
+    /// The scheduler returns as soon as it finds an attempt in flight, so the
+    /// budget beside it bounded when the next attempt could start and nothing
+    /// about how long this one may take: a dial against a host that never
+    /// answers held the deadline open for as long as that dial lasted, and what
+    /// it finally returned was installed on a farm the session had stopped
+    /// waiting for.
+    #[test]
+    fn the_time_an_optional_farm_was_allowed_reaches_the_attempt_spending_it() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.set_reconnect_config(
+            crate::reliability::ReconnectConfig::default()
+                .with_max_elapsed(Duration::from_secs(30)),
+        );
+        // An attempt in flight, started further back than the caller allowed
+        // the whole of this farm's recovery.
+        hl.hmds_budget.record_attempt(Instant::now() - Duration::from_secs(31));
+        let (_worker, worker_rx) = std::sync::mpsc::sync_channel(1);
+        hl.pending_hmds_reconnect = Some(worker_rx);
+
+        hl.maybe_spawn_hmds_reconnect();
+
+        assert_eq!(
+            hl.hmds_halted, Some(retry::DisconnectReason::ByDesign),
+            "the farm went on dialling past the time the caller allowed it",
+        );
+        assert!(
+            hl.pending_hmds_reconnect.is_none(),
+            "and what that dial finally returned would have been installed",
+        );
+
+        // And the calendar's, rebuilt on the same terms as the historical
+        // farm and bounded on them too.
+        hl.secdef_budget.record_attempt(Instant::now() - Duration::from_secs(31));
+        let (_worker, worker_rx) = std::sync::mpsc::sync_channel(1);
+        hl.pending_secdef_reconnect = Some(worker_rx);
+
+        hl.maybe_spawn_secdef_reconnect();
+
+        assert_eq!(
+            hl.secdef_halted, Some(retry::DisconnectReason::ByDesign),
+            "the calendar went on dialling past the time the caller allowed it",
+        );
+        assert!(
+            hl.pending_secdef_reconnect.is_none(),
+            "and what that dial finally returned would have been installed",
+        );
+    }
+
+    /// A loop that leaves by panicking takes its reconnects back on the way,
+    /// as one that returns does.
+    ///
+    /// Unwinding skips the return, so the flag stayed down and the handles
+    /// were dropped rather than waited for — which detaches the threads. A
+    /// worker went on resolving, connecting and authenticating after the
+    /// engine had announced its death, and opened a session at the venue on
+    /// behalf of a loop that was gone.
+    #[test]
+    fn a_loop_that_panics_takes_back_the_reconnects_it_left_running() {
+        use std::io::Read;
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+
+        // A worker midway through a handshake. It reads the flag between the
+        // phases, and finishes once the flag is raised.
+        let cancel = Arc::clone(&hl.reconnect_cancel);
+        let (finished, has_finished) = std::sync::mpsc::sync_channel(1);
+        hl.reconnect_workers.push(
+            std::thread::Builder::new()
+                .name("reconnect-under-a-panic".into())
+                .spawn(move || {
+                    while !cancel.load(Ordering::Relaxed) {
+                        std::thread::yield_now();
+                    }
+                    let _ = finished.send(());
+                })
+                .expect("a thread for the attempt"),
+        );
+        let cancel = Arc::clone(&hl.reconnect_cancel);
+
+        // A lap the loop cannot finish: the counter it opens with is at its
+        // last value. A build with the overflow unchecked runs the lap
+        // instead and finds its control channel gone, which stops it the
+        // ordinary way rather than leaving this waiting on a loop that never
+        // ends.
+        let (control, control_rx) = std::sync::mpsc::sync_channel(1);
+        drop(control);
+        hl.set_control_rx(control_rx);
+        // And an attempt that finished between the flag going up and the wait
+        // for it: a session open at the venue, which holds one per account and
+        // has to time out one that just goes.
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let (landed, landed_rx) = std::sync::mpsc::sync_channel(1);
+        landed.send(Ok(conn)).unwrap();
+        hl.pending_ccp_reconnect = Some(landed_rx);
+        hl.context.loop_iterations = u64::MAX;
+        hl.run_with_panic_recovery();
+
+        assert!(
+            cancel.load(Ordering::Relaxed),
+            "a worker was left dialling with the flag down after the engine said it died",
+        );
+        assert!(
+            has_finished.try_recv().is_ok(),
+            "and was detached rather than waited for, so it went on opening a session",
+        );
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).expect("the goodbye that session is owed");
+        assert!(
+            String::from_utf8_lossy(&buf[..n]).contains("35=5"),
+            "the venue is left holding a session it has to time out",
+        );
+
+        // And a loop that runs again does not install what the last one left
+        // dialling. Running again starts with the flag down, so a connection
+        // left in its channel is a socket from the session before it —
+        // resubscribed, and announced as this session's own.
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+        let (landed, landed_rx) = std::sync::mpsc::sync_channel(1);
+        landed.send(Ok(conn)).unwrap();
+        hl.pending_farm_reconnect = Some(landed_rx);
+
+        hl.take_back_the_recovery_still_in_flight();
+
+        assert!(
+            hl.pending_farm_reconnect.is_none(),
+            "the next run installs a socket the session before it opened",
+        );
+    }
+
+    /// A trading session that lands after the session ended is told the
+    /// session is going, rather than dropped in silence.
+    ///
+    /// The venue holds one session per account and has to time out one that
+    /// just goes, so the next connection races a session the venue still
+    /// believes is live. That is why a stop says this on the connection the
+    /// loop holds, and one that arrives after the stop is no different.
+    #[test]
+    fn a_trading_session_that_lands_after_the_end_is_told_the_session_is_going() {
+        use std::io::Read;
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.ccp.disconnected = true;
+        // The session ended for good while this attempt was still dialling.
+        hl.reconnect_halted = Some(retry::DisconnectReason::TakenOver);
+
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        let (worker, rx) = std::sync::mpsc::sync_channel(1);
+        worker.send(Ok(conn)).unwrap();
+        hl.pending_ccp_reconnect = Some(rx);
+
+        hl.poll_ccp_reconnect();
+
+        assert!(
+            hl.ccp_conn.is_none(),
+            "a session the caller was told was over is not installed",
+        );
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).expect("the goodbye this connection is owed");
+        let sent = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(
+            sent.contains("35=5"),
+            "the venue is left holding a session it has to time out, and this account \
+             permits one at a time: {sent}",
+        );
+    }
+
+    /// A transport the engine has given up does not go on owning the socket it
+    /// was carried on.
+    ///
+    /// A liveness timeout says the venue stopped answering, not that the socket
+    /// closed: kept through the outage it is a session this client still holds
+    /// while it dials another, and this account permits one at a time. On a
+    /// hard error it is a descriptor held for the whole of the outage. The
+    /// historical and calendar farms have always cleared theirs here.
+    #[test]
+    fn a_transport_given_up_does_not_go_on_owning_its_socket() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (ccp, _ccp_peer) = crate::protocol::connection::Connection::for_test();
+        let (farm, _farm_peer) = crate::protocol::connection::Connection::for_test();
+        hl.ccp_conn = Some(ccp);
+        hl.farm_conn = Some(farm);
+
+        hl.ccp.handle_disconnect(
+            &mut hl.ccp_conn, &mut hl.context, &hl.shared, &hl.event_tx,
+        );
+        hl.farm.handle_disconnect(&mut hl.farm_conn, &mut hl.context, &hl.event_tx);
+
+        assert!(
+            hl.ccp_conn.is_none(),
+            "the trading socket is held for the whole of the outage",
+        );
+        assert!(hl.farm_conn.is_none(), "and the quote feed's with it");
+    }
+
+    /// Recovery given up is said once, however many attempts the giving-up
+    /// takes back.
+    ///
+    /// Cancelling the attempt in flight brings it home as a failure of its
+    /// own, and its poller reads that as one more thing ending the session.
+    /// Said twice, the Rust surface latches its own notice and shows one while
+    /// the Python surface, which folds only the events a single dispatch
+    /// drains, announces connectivity lost a second time.
+    #[test]
+    fn recovery_given_up_is_said_once_however_many_attempts_it_takes_back() {
+        let shared = Arc::new(SharedState::new());
+        let (tx, heard) = std::sync::mpsc::sync_channel(64);
+        let mut hl = HotLoop::new(
+            shared.clone(), Some(EventSink::new(tx, Default::default())), None,
+        );
+        hl.ccp.disconnected = true;
+
+        // The limits run out with the attempt still dialling.
+        hl.report_recovery_exhausted("ccp");
+        // And that attempt comes home carrying the cancellation it was given.
+        let (worker, rx) = std::sync::mpsc::sync_channel(1);
+        worker.send(Err(io::Error::new(
+            io::ErrorKind::Interrupted, "CCP reconnect cancelled by the client",
+        ))).unwrap();
+        hl.pending_ccp_reconnect = Some(rx);
+        hl.poll_ccp_reconnect();
+
+        let losses = heard.try_iter().filter(|e| matches!(e, Event::Disconnected)).count();
+        assert_eq!(losses, 1, "one loss, and one notice of it");
+    }
+
+    /// A reconnect worker that never answered is a spent attempt like any
+    /// other.
+    ///
+    /// The machine can refuse a thread, and a worker can stop before it sends.
+    /// Its receiver comes back disconnected, which was cleared and nothing
+    /// else: no rung was scheduled, so the next pass dialled at once and every
+    /// pass after it, and the notice that the connection is gone lived only on
+    /// the path where the venue answered. However often this repeated, both
+    /// surfaces went on reporting the session as connected.
+    #[test]
+    fn a_reconnect_worker_that_never_answered_is_a_spent_attempt() {
+        let shared = Arc::new(SharedState::new());
+        let (tx, heard) = std::sync::mpsc::sync_channel(64);
+        let mut hl = HotLoop::new(
+            shared.clone(), Some(EventSink::new(tx, Default::default())), None,
+        );
+        hl.ccp.disconnected = true;
+        // The third attempt, which is the one the loss is announced on.
+        hl.ccp_reconnect_attempt = 3;
+        let (worker, rx) = std::sync::mpsc::sync_channel::<io::Result<Connection>>(1);
+        drop(worker);
+        hl.pending_ccp_reconnect = Some(rx);
+
+        hl.poll_ccp_reconnect();
+
+        assert!(
+            hl.ccp_next_attempt_at.is_some(),
+            "the next attempt is on the ladder rather than at once, and at once again",
+        );
+        assert!(
+            matches!(heard.try_recv(), Ok(Event::Disconnected)),
+            "and the caller is told the connection is gone",
+        );
+        assert!(shared.take_connection_lost(), "and a caller without an event channel too");
+
+        // And the quote feed's own, which failed the same way and was told the
+        // same way.
+        hl.farm.disconnected = true;
+        hl.farm_reconnect_attempt = 3;
+        let (worker, rx) = std::sync::mpsc::sync_channel::<io::Result<Connection>>(1);
+        drop(worker);
+        hl.pending_farm_reconnect = Some(rx);
+
+        hl.poll_farm_reconnect();
+
+        assert!(
+            hl.farm_next_attempt_at.is_some(),
+            "the next attempt is on the ladder rather than at once, and at once again",
+        );
+        assert!(
+            matches!(heard.try_recv(), Ok(Event::Disconnected)),
+            "and the caller is told the connection is gone",
+        );
+    }
+
     /// A reconnect worker that has finished is let go of, rather than held to
     /// the end of the session.
     ///
@@ -4161,6 +4707,12 @@ mod tests {
     /// connection's recovery has been given up there is nothing left that can
     /// carry it, so it is refused then rather than left in a buffer nothing
     /// will read again.
+    ///
+    /// An attempt still dialling is not a reason to hold it. A halt is never
+    /// lifted and what it leaves running is dropped where it lands, so held
+    /// for that attempt an order waited on a connection that would be closed
+    /// rather than installed — for as long as the dial took, which is well
+    /// past the bound the caller put on the whole of recovery.
     #[test]
     fn buffered_orders_are_refused_when_recovery_is_given_up() {
         let shared = Arc::new(SharedState::new());
@@ -4176,24 +4728,22 @@ mod tests {
             attrs: crate::types::OrderAttrs::default(),
         });
 
-        // An attempt still in flight may land and carry what is waiting, so
-        // nothing is refused while one is about.
         hl.reconnect_halted = Some(retry::DisconnectReason::ByDesign);
         hl.pending_ccp_reconnect = Some(sync_channel::<io::Result<Connection>>(1).1);
-        hl.refuse_the_buffered_orders_once_recovery_is_over();
-        assert!(
-            shared.orders.drain_order_inactive().is_empty(),
-            "nothing is refused while an attempt may still carry it",
-        );
+        hl.end_the_trading_connection_once_recovery_is_over();
 
-        hl.pending_ccp_reconnect = None;
-        hl.refuse_the_buffered_orders_once_recovery_is_over();
         let refused = shared.orders.drain_order_inactive();
         assert_eq!(refused.len(), 1, "the order is told about, not dropped");
         assert_eq!(refused[0].0, 31, "under the id its caller was given");
         assert!(
             refused[0].2.contains("never placed"),
             "and told it was never placed: {}", refused[0].2,
+        );
+        assert_eq!(
+            shared.reference.trading_over(),
+            Some(retry::DisconnectReason::ByDesign.as_str()),
+            "and the connection they travel on is over, so the next order is refused \
+             where it is given rather than buffered behind this one",
         );
     }
 

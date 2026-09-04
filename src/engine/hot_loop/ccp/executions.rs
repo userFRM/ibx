@@ -675,7 +675,7 @@ impl CcpState {
                     Ok(0) => {}
                     Err(e) => {
                         log::error!("CCP connection lost: {e}");
-                        self.handle_disconnect(context, shared, event_tx);
+                        self.handle_disconnect(ccp_conn, context, shared, event_tx);
                         return;
                     }
                     Ok(_) => {

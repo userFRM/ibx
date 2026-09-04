@@ -366,7 +366,7 @@ mod resub_tests {
             756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
             false, &mut None, &mut hb,
         );
-        farm.handle_disconnect(&mut context, &None);
+        farm.handle_disconnect(&mut None, &mut context, &None);
         assert!(farm.instrument_md_reqs.is_empty(), "the disconnect clears the request list");
 
         let targets = farm.take_resub_targets(&context.market);
@@ -420,7 +420,7 @@ mod resub_tests {
         assert!(!farm.greeks_subs.is_empty(), "so is the modelling ask");
         assert!(!farm.quotes_for_no_one.is_empty(), "so is the unclaimed number");
 
-        farm.handle_disconnect(&mut context, &None);
+        farm.handle_disconnect(&mut None, &mut context, &None);
 
         assert!(
             farm.depth_fanout_exchange.is_empty(),
@@ -446,7 +446,7 @@ mod resub_tests {
             756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
             false, &mut None, &mut hb,
         );
-        farm.handle_disconnect(&mut context, &None);
+        farm.handle_disconnect(&mut None, &mut context, &None);
         farm.send_mktdata_unsubscribe(instrument, &mut None, &mut hb);
 
         assert!(
@@ -475,7 +475,7 @@ mod resub_tests {
             assert!(farm.holds_market_data(instrument), "subscribed: held");
 
             if down {
-                farm.handle_disconnect(&mut context, &None);
+                farm.handle_disconnect(&mut None, &mut context, &None);
                 // The record deliberately survives a disconnect, so the slot
                 // stays held — that is what makes the resubscribe possible.
                 assert!(farm.holds_market_data(instrument), "disconnected: still held");
@@ -597,7 +597,7 @@ mod resub_tests {
         assert_eq!(farm.replay_queue.len(), 3);
 
         // And the farm goes before the rest of them do.
-        farm.handle_disconnect(&mut context, &None);
+        farm.handle_disconnect(&mut None, &mut context, &None);
 
         assert!(farm.replay_queue.is_empty(), "nothing is left holding them");
         assert_eq!(
