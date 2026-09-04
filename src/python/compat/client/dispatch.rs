@@ -838,6 +838,14 @@ impl EClient {
         // Drain scanner data -> scannerData + scannerDataEnd
         let scanner_results = shared.reference.drain_scanner_data();
         for (req_id, result) in scanner_results {
+            // A refused scan arrives in the shape of a completed one and
+            // carries the reason, as on the other surface. Reported against
+            // the requesting id, so a refusal is not delivered as an empty
+            // result.
+            if !result.error_text.is_empty() {
+                call_wrapper!(self.wrapper, py, "error",
+                    (req_id as i64, 0i64, 321i64, result.error_text.as_str(), ""));
+            }
             for (rank, entry) in result.entries.iter().enumerate() {
                 let cd = ContractDetails::new_default(py);
                 {
@@ -1129,6 +1137,55 @@ mod withdrawal_tests {
             );
 
             client.dispatch_once(py, &shared).expect("the pass ends, saying nothing of the withdrawal");
+        });
+    }
+}
+
+#[cfg(test)]
+mod scanner_tests {
+    use super::*;
+
+    /// A scan the venue refused arrives in the shape of a completed one.
+    /// Handed over as an empty result, the caller was told the market held
+    /// no matches where the venue declined the question — told instead, as
+    /// on the other surface.
+    #[test]
+    fn a_refused_scan_is_reported_not_delivered_as_an_empty_result() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+            let wrapper = py
+                .eval(c"__import__('builtins').type('W', (), {'__init__': lambda s: setattr(s, 'calls', []), '__getattr__': lambda s, n: (lambda *a: s.calls.append((n, a)))})()", None, None)
+                .unwrap()
+                .unbind();
+            client.__init__(wrapper.clone_ref(py)).unwrap();
+            let shared = Arc::new(SharedState::new());
+            shared.reference.push_scanner_data(3, crate::control::scanner::ScannerResult {
+                con_ids: Vec::new(),
+                entries: Vec::new(),
+                scan_time: String::new(),
+                error_text: "Scanner subscription not allowed".to_string(),
+            });
+
+            client.dispatch_once(py, &shared).expect("the pass ends");
+
+            let calls = wrapper.getattr(py, "calls").unwrap();
+            let list = calls.cast_bound::<pyo3::types::PyList>(py).unwrap();
+            let names: Vec<String> = list.iter()
+                .map(|c| c.get_item(0).unwrap().extract::<String>().unwrap())
+                .collect();
+            assert!(names.contains(&"error".to_string()),
+                "the refusal is reported: {names:?}");
+            assert!(!names.contains(&"scanner_data".to_string()),
+                "and nothing is delivered as a row: {names:?}");
+            let error_call = list.iter()
+                .find(|c| c.get_item(0).unwrap().extract::<String>().unwrap() == "error")
+                .unwrap();
+            let args = error_call.get_item(1).unwrap();
+            assert_eq!(args.get_item(0).unwrap().extract::<i64>().unwrap(), 3,
+                "against the requesting id");
+            assert_eq!(args.get_item(3).unwrap().extract::<String>().unwrap(),
+                "Scanner subscription not allowed", "in the venue's own words");
         });
     }
 }

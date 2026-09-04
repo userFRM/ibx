@@ -1550,7 +1550,7 @@ fn a_chain_request_states_its_tags_in_order() {
 /// A caller is waiting for the end of a request that never reached the
 /// wire. Nothing on the socket will ever end it, so the client does.
 #[test]
-fn a_chain_request_that_could_not_be_sent_is_still_answered() {
+fn a_chain_request_that_could_not_be_sent_is_refused_not_answered_empty() {
     let mut ccp = CcpState::new();
     let mut hb = HeartbeatState::new();
     let shared = SharedState::new();
@@ -1559,9 +1559,12 @@ fn a_chain_request_that_could_not_be_sent_is_still_answered() {
     ccp.send_option_params_request(7, "AAPL", "", "STK", 265598, &mut no_conn, &mut hb, &shared);
 
     assert!(ccp.pending_option_params.is_empty(), "nothing was sent, so nothing is awaited");
-    let answered = shared.reference.drain_option_params();
-    assert_eq!(answered.len(), 1, "the request still ends");
-    assert!(answered[0].2.is_empty(), "with nothing in the chain");
+    // An empty chain is one the venue enumerated and found nothing in; a
+    // request that never went out is refused instead.
+    assert!(shared.reference.drain_option_params().is_empty());
+    let refused = shared.reference.drain_historical_errors();
+    assert_eq!(refused.len(), 1, "the caller is told it was not sent");
+    assert_eq!(refused[0].0, 7);
 }
 
 /// The reply states no request id, so the symbol it names is what ties it
@@ -1618,9 +1621,12 @@ fn an_unanswered_chain_request_is_given_up_on() {
 
     assert_eq!(ccp.pending_option_params.len(), 1, "the expired one is dropped");
     assert_eq!(ccp.pending_option_params[0].0, 8, "and the live one is kept");
-    let answered = shared.reference.drain_option_params();
-    assert_eq!(answered.len(), 1, "the caller of the expired one is told it is over");
-        assert_eq!(answered[0].0, 7);
+    // Told it is over, and told as a refusal: an empty chain is one the
+    // venue enumerated and found nothing in, and the venue never answered.
+    assert!(shared.reference.drain_option_params().is_empty());
+    let refused = shared.reference.drain_historical_errors();
+    assert_eq!(refused.len(), 1, "the caller of the expired one is told it is over");
+    assert_eq!(refused[0].0, 7);
 }
 
 /// Nothing expired an unanswered request, so it stayed queued for the life
@@ -2688,7 +2694,7 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
     };
 
     assert!(
-        ccp.hold_until_named(bars, &mut None, &mut HeartbeatState::new()).is_none(),
+        ccp.hold_until_named(bars, &mut None, &mut HeartbeatState::new(), &shared).is_none(),
         "held rather than sent under no id",
     );
     assert_eq!(ccp.pending_named.len(), 1);
@@ -2698,7 +2704,7 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
     let (_, mut held, _) = ccp.pending_named.remove(0);
     name_the_contract(&mut held, 756_733);
     let _ = lookup;
-    match ccp.hold_until_named(held, &mut None, &mut HeartbeatState::new()) {
+    match ccp.hold_until_named(held, &mut None, &mut HeartbeatState::new(), &shared) {
         Some(crate::types::ControlCommand::FetchHistorical { contract: crate::types::ContractRef { con_id, .. }, req_id, .. }) => {
             assert_eq!((req_id, con_id), (7, 756_733), "sent under the id it was given");
         }
@@ -2707,7 +2713,7 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
 
     // And one the venue never names is reported rather than left waiting.
     let unnamed = crate::types::ControlCommand::FetchHistorical { contract: crate::types::ContractRef { con_id: 0, symbol: "NOSUCH".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(), ..Default::default() }, end_date_time: String::new(), req_id: 8, duration: "1 D".into(), bar_size: "1 hour".into(), what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, include_expired: false, filters: Default::default() };
-    ccp.hold_until_named(unnamed, &mut None, &mut HeartbeatState::new());
+    ccp.hold_until_named(unnamed, &mut None, &mut HeartbeatState::new(), &shared);
     ccp.pending_named[0].2 -= CcpState::NAMING_TIMEOUT + Duration::from_secs(1);
     ccp.sweep_pending_named(&shared);
     assert!(ccp.pending_named.is_empty());
@@ -2735,7 +2741,7 @@ fn a_subscription_the_venue_never_names_is_reported() {
         multiplier: String::new(),
         mode_9887: 0, regulatory_snapshot: false,
     };
-    ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new());
+    ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new(), &shared);
 
     ccp.sweep_pending_subscribes(&shared);
     assert_eq!(ccp.pending_md_subscribe.len(), 1, "still within its wait");
@@ -2773,7 +2779,7 @@ fn a_subscription_waits_for_the_lookup_that_names_its_contract() {
         multiplier: String::new(),
         mode_9887: 0, regulatory_snapshot: false,
     };
-    ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new());
+    ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new(), &shared);
     let req_id = ccp.pending_md_subscribe[0].0;
     assert!(req_id >= 0xF000_0000, "asked for on the engine's own account, not a caller's");
     assert!(ccp.resolved_md_subscribe.is_empty(), "nothing to send until it is named");
@@ -4034,25 +4040,33 @@ fn a_leg_that_answers_twice_does_not_end_the_fanout() {
 }
 
 /// A request the transport could not carry, and one the venue never answered,
-/// both leave a caller waiting on an end that nothing on the wire will send.
+/// are refused rather than answered empty: an empty answer is a search the
+/// venue ran and nothing matched, which is not what happened in either case.
 #[test]
-fn a_matching_symbols_request_that_goes_nowhere_still_answers() {
+fn a_matching_symbols_request_that_goes_nowhere_is_refused() {
     let mut ccp = CcpState::new();
     let mut hb = HeartbeatState::new();
     let shared = SharedState::new();
 
     let mut no_conn: Option<Connection> = None;
     ccp.send_matching_symbols_request(7, "AAPL", &mut no_conn, &mut hb, &shared);
-    assert_eq!(
-        shared.reference.drain_matching_symbols().len(), 1,
-        "a request that never went out is answered rather than dropped",
+    assert!(
+        shared.reference.drain_matching_symbols().is_empty(),
+        "a request that never went out is not a search that found nothing",
     );
+    let refused = shared.reference.drain_historical_errors();
+    assert_eq!(refused.len(), 1, "the caller is told it was not sent");
+    assert_eq!(refused[0].0, 7);
 
     ccp.pending_matching_symbols.push((8, Instant::now() - Duration::from_secs(1)));
     ccp.sweep_pending_matching_symbols(&shared);
-    let answered = shared.reference.drain_matching_symbols();
-    assert_eq!(answered.len(), 1, "and so is one the venue never answered");
-    assert_eq!(answered[0].0, 8);
+    assert!(
+        shared.reference.drain_matching_symbols().is_empty(),
+        "and neither is one the venue never answered",
+    );
+    let refused = shared.reference.drain_historical_errors();
+    assert_eq!(refused.len(), 1, "the caller of the unanswered one is told");
+    assert_eq!(refused[0].0, 8);
 }
 
 /// A bulletin whose urgency names no type here is still a message the venue
@@ -4200,6 +4214,27 @@ fn price_management_is_read_from_its_own_field() {
     }
 }
 
+/// A lookup named by an identifier this client carries no wire source for is
+/// refused. Asked by symbol instead, it answered a different question than
+/// the one the caller put, under the caller's own number — whatever the
+/// symbol matched.
+#[test]
+fn an_identifier_this_client_cannot_carry_refuses_the_lookup() {
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut no_conn: Option<Connection> = None;
+    let filters = crate::types::SecDefFilters {
+        sec_id: "B04KRF9".to_string(),
+        sec_id_type: "SEDOL".to_string(),
+        ..Default::default()
+    };
+    let reason = ccp.send_secdef_request_by_symbol(
+        9, "AAPL", "STK", "SMART", "USD", &filters, &mut no_conn, &mut hb,
+    ).expect_err("a kind this client cannot carry is not looked up by symbol");
+    assert!(reason.contains("SEDOL"), "the refusal names the kind: {reason}");
+    assert!(ccp.pending_secdef.is_empty(), "nothing was queued to be answered");
+}
+
 /// Each public identifier rides the tags the venue reads it on. A CUSIP was
 /// going out as `22=1|48=<id>`, which is the pair an ISIN uses, and a FIGI was
 /// not going out at all — the lookup fell through to the symbol and answered
@@ -4221,9 +4256,10 @@ fn a_public_identifier_rides_the_tags_its_own_kind_uses() {
             sec_id_type: kind.to_string(),
             ..Default::default()
         };
-        ccp.send_secdef_request_by_symbol(
+        let sent = ccp.send_secdef_request_by_symbol(
             9, "AAPL", "STK", "SMART", "USD", &filters, &mut conn, &mut hb,
         );
+        sent.expect("a CUSIP lookup is one this client can ask");
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -4258,7 +4294,7 @@ fn a_lookup_states_both_the_symbol_and_the_local_symbol() {
     };
     ccp.send_secdef_request_by_symbol(
         11, "ES", "FUT", "CME", "USD", &filters, &mut conn, &mut hb,
-    );
+    ).expect("a symbol lookup is one this client can ask");
 
     let mut buf = [0u8; 4096];
     let n = peer.read(&mut buf).unwrap();
@@ -4287,7 +4323,7 @@ fn a_news_feed_states_its_provider_not_a_venue() {
         };
         ccp.send_secdef_request_by_symbol(
             13, "BRF:BRF_ALL", "NEWS", exchange, "USD", &filters, &mut conn, &mut hb,
-        );
+        ).expect("a news lookup is one this client can ask");
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -4322,7 +4358,7 @@ fn a_continuous_future_is_a_future_that_names_its_lead_month() {
         };
         ccp.send_secdef_request_by_symbol(
             14, "GBL", stated, "EUREX", "EUR", &filters, &mut conn, &mut hb,
-        );
+        ).expect("a continuous future lookup is one this client can ask");
 
         let mut buf = [0u8; 4096];
         let n = peer.read(&mut buf).unwrap();
@@ -4352,7 +4388,8 @@ fn a_contract_named_by_its_issuer_is_asked_for_as_fixed_income() {
         issuer_id: "e1453318".to_string(),
         ..Default::default()
     };
-    ccp.send_secdef_request_by_symbol(15, "", "", "", "", &filters, &mut conn, &mut hb);
+    ccp.send_secdef_request_by_symbol(15, "", "", "", "", &filters, &mut conn, &mut hb)
+        .expect("an issuer lookup is one this client can ask");
 
     let mut buf = [0u8; 4096];
     let n = peer.read(&mut buf).unwrap();

@@ -241,7 +241,10 @@ impl EClient {
             // picks, and so does its absence here.
             let rows = stated!("numberOfRows", i64, -1);
             let max_items = if rows < 0 { 50 } else { rows.min(u32::MAX as i64) as u32 };
-            let filters = scanner_filters(py, &subscription, &scanner_subscription_filter_options);
+            let filters = match scanner_filters(py, &subscription, &scanner_subscription_filter_options) {
+                Ok(filters) => filters,
+                Err(why) => return self.report_refusal(py, req_id, why),
+            };
             Self::send_control(py, &tx, ControlCommand::SubscribeScanner {
                 req_id: wire_req_id(req_id)?, instrument, location_code, scan_code, max_items, filters,
             })
@@ -578,51 +581,94 @@ fn stk_types_code(name: &str) -> &'static str {
 }
 
 /// One filter value, or `None` when the attribute is missing or left at its unset
-/// default.
-fn scanner_filter_value(py: Python<'_>, sub: &Py<PyAny>, attr: &str) -> Option<String> {
-    let value = sub.getattr(py, attr).ok()?;
+/// default. One that is present and cannot be read is a refusal, not an unset
+/// filter: sent without it, the scan would run narrower or wider than the one
+/// described.
+fn scanner_filter_value(py: Python<'_>, sub: &Py<PyAny>, attr: &str) -> Result<Option<String>, crate::error_codes::Refusal> {
+    let Ok(value) = sub.getattr(py, attr) else { return Ok(None) };
+    if value.is_none(py) {
+        return Ok(None);
+    }
     if let Ok(n) = value.extract::<f64>(py) {
         // An unset numeric filter arrives as `sys.float_info.max` or `2**31 - 1`, and
         // sending either as a bound would empty the scan.
         if n == f64::MAX || n == f64::from(i32::MAX) {
-            return None;
+            return Ok(None);
         }
-        return Some(n.to_string());
+        return Ok(Some(n.to_string()));
     }
-    let text = value.extract::<String>(py).ok()?;
-    (!text.is_empty()).then_some(text)
+    if let Ok(text) = value.extract::<String>(py) {
+        return Ok((!text.is_empty()).then_some(text));
+    }
+    Err(unreadable_filter(attr))
+}
+
+/// What a filter that is stated and cannot be read is reported as. Left off,
+/// it would be no filter; stated it narrows the scan, and one run without it
+/// is not the scan asked for.
+fn unreadable_filter(what: &str) -> crate::error_codes::Refusal {
+    crate::error_codes::Refusal::validation(format!(
+        "the scan's {what} is stated but cannot be read, and a scan run \
+         without it is not the scan asked for",
+    ))
 }
 
 /// Collect the subscription's filters, then the caller's explicit filter tags, which
 /// win
 /// over the named attribute selecting the same code.
-fn scanner_filters(py: Python<'_>, sub: &Py<PyAny>, filter_options: &[Py<PyAny>]) -> Vec<(String, String)> {
-    let mut filters: Vec<(String, String)> = SCANNER_FILTERS.iter()
-        .filter_map(|(attr, code)| Some(((*code).to_string(), scanner_filter_value(py, sub, attr)?)))
-        .collect();
-
-    if sub.getattr(py, "excludeConvertible").and_then(|v| v.extract::<bool>(py)).unwrap_or(false) {
-        filters.push(("excludeConvertible".to_string(), "true".to_string()));
-    }
-    let stk_types = sub.getattr(py, "stockTypeFilter")
-        .and_then(|v| v.extract::<String>(py)).unwrap_or_default();
-    let stk_types = stk_types_code(&stk_types);
-    if !stk_types.is_empty() {
-        filters.push(("stkTypes".to_string(), stk_types.to_string()));
+fn scanner_filters(py: Python<'_>, sub: &Py<PyAny>, filter_options: &[Py<PyAny>]) -> Result<Vec<(String, String)>, crate::error_codes::Refusal> {
+    let mut filters: Vec<(String, String)> = Vec::new();
+    for (attr, code) in SCANNER_FILTERS {
+        if let Some(value) = scanner_filter_value(py, sub, attr)? {
+            filters.push(((*code).to_string(), value));
+        }
     }
 
-    for option in filter_options {
-        let (Ok(tag), Ok(value)) = (
-            option.getattr(py, "tag").and_then(|v| v.extract::<String>(py)),
-            option.getattr(py, "value").and_then(|v| v.extract::<String>(py)),
-        ) else { continue };
+    match sub.getattr(py, "excludeConvertible") {
+        Err(_) => {}
+        Ok(v) if v.is_none(py) => {}
+        Ok(v) => match v.extract::<bool>(py) {
+            Ok(true) => filters.push(("excludeConvertible".to_string(), "true".to_string())),
+            Ok(false) => {}
+            Err(_) => return Err(unreadable_filter("excludeConvertible")),
+        },
+    }
+    match sub.getattr(py, "stockTypeFilter") {
+        Err(_) => {}
+        Ok(v) if v.is_none(py) => {}
+        Ok(v) => {
+            let Ok(name) = v.extract::<String>(py) else {
+                return Err(unreadable_filter("stockTypeFilter"));
+            };
+            let stk_types = stk_types_code(&name);
+            if !stk_types.is_empty() {
+                filters.push(("stkTypes".to_string(), stk_types.to_string()));
+            }
+        }
+    }
+
+    for (at, option) in filter_options.iter().enumerate() {
+        let what = format!("filter tag at position {at}");
+        let Ok(tag) = option.getattr(py, "tag") else {
+            return Err(unreadable_filter(&what));
+        };
+        let Ok(tag) = tag.extract::<String>(py) else {
+            return Err(unreadable_filter(&what));
+        };
         if tag.is_empty() {
             continue;
         }
+        let value = match option.getattr(py, "value") {
+            Err(_) => return Err(unreadable_filter(&format!("value of {tag}"))),
+            Ok(v) => v,
+        };
+        let Ok(value) = value.extract::<String>(py) else {
+            return Err(unreadable_filter(&format!("value of {tag}")));
+        };
         filters.retain(|(code, _)| *code != tag);
         filters.push((tag, value));
     }
-    filters
+    Ok(filters)
 }
 
 #[cfg(test)]
@@ -642,7 +688,7 @@ mod tests {
                 aboveVolume=2147483647, marketCapAbove=1.7976931348623157e+308, \
                 moodyRatingAbove='', spRatingAbove='A', averageOptionVolumeAbove=500, \
                 excludeConvertible=True, stockTypeFilter='etf'");
-            assert_eq!(scanner_filters(py, &sub, &[]), vec![
+            assert_eq!(scanner_filters(py, &sub, &[]).unwrap(), vec![
                 ("priceAbove".to_string(), "10".to_string()),
                 ("spRatingAbove".to_string(), "A".to_string()),
                 ("avgOptVolumeAbove".to_string(), "500".to_string()),
@@ -661,10 +707,29 @@ mod tests {
                 namespace(py, "tag='priceAbove', value='20'"),
                 namespace(py, "tag='usdMarketCapAbove', value='10000'"),
             ];
-            assert_eq!(scanner_filters(py, &sub, &options), vec![
+            assert_eq!(scanner_filters(py, &sub, &options).unwrap(), vec![
                 ("priceAbove".to_string(), "20".to_string()),
                 ("usdMarketCapAbove".to_string(), "10000".to_string()),
             ]);
+        });
+    }
+
+    /// A filter that is stated and cannot be read narrows the scan it is
+    /// dropped from, and a scan run narrower is not the one asked for.
+    /// Refused rather than dropped.
+    #[test]
+    fn a_filter_that_cannot_be_read_refuses_the_scan() {
+        Python::initialize();
+        Python::attach(|py| {
+            let sub = namespace(py, "abovePrice=[1, 2]");
+            let why = scanner_filters(py, &sub, &[])
+                .expect_err("a stated filter that cannot be read is not dropped");
+            assert!(why.message.contains("abovePrice"), "{}", why.message);
+
+            let sub = namespace(py, "");
+            let options = [namespace(py, "tag='priceAbove', value=10")];
+            assert!(scanner_filters(py, &sub, &options).is_err(),
+                "and neither is an explicit filter whose value cannot be read");
         });
     }
 }

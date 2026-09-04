@@ -168,7 +168,7 @@ fn build_secdef_by_symbol_for_news_states_the_topic_code() {
 /// stated: stating the caller's own type was refused by the venue.
 #[test]
 fn build_secdef_by_symbol_for_an_issuer_names_the_issuer_and_fixed_income() {
-    let msg = build_secdef_request_by_symbol("R5", "", SecurityType::Other, "", "", "e1453318", 5);
+    let msg = build_secdef_request_by_symbol("R5", "", SecurityType::Other(String::new()), "", "", "e1453318", 5);
     let tags = fix::fix_parse(&msg);
     assert_eq!(tags.get(&TAG_ISSUER_ID).map(String::as_str), Some("e1453318"));
     assert_eq!(tags[&TAG_SECURITY_TYPE], "FIXED", "forced, whatever the caller stated");
@@ -691,14 +691,14 @@ fn schedule_closed_day_is_kept_and_renders_closed() {
 // An unrecognized security type must not be encoded as a stock.
 #[test]
 fn to_fix_other_is_not_stock() {
-    assert_eq!(SecurityType::Other.to_fix(), "");
-    assert_eq!(SecurityType::from_fix(""), SecurityType::Other);
+    assert_eq!(SecurityType::Other("NOPE".to_string()).to_fix(), "");
+    assert_eq!(SecurityType::from_fix(""), SecurityType::Other(String::new()));
 }
 
 // User-visible sec_type must be the official API string, and
 // an unclassifiable instrument must not masquerade as a stock.
 #[test]
-fn sec_type_to_api_str_round_trips_and_other_is_empty() {
+fn sec_type_to_api_str_round_trips_and_other_keeps_what_the_venue_said() {
     assert_eq!(SecurityType::Stock.to_api_str(), "STK");
     assert_eq!(SecurityType::Forex.to_api_str(), "CASH");
     assert_eq!(SecurityType::Warrant.to_api_str(), "WAR");
@@ -729,9 +729,14 @@ fn sec_type_to_api_str_round_trips_and_other_is_empty() {
         assert_eq!(ty.to_api_str(), wire, "{ty:?} states itself as {wire}");
         assert_eq!(SecurityType::from_fix(wire), ty, "and is read back from {wire}");
     }
-    assert_eq!(SecurityType::from_fix("NOPE"), SecurityType::Other);
-    assert_eq!(SecurityType::Other.to_fix(), "", "unknown stays unroutable, not a stock");
-    assert_eq!(SecurityType::Other.to_api_str(), "");
+    // A type the venue states and this client does not enumerate is kept
+    // under the venue's own name: emptied, the definition lost a value the
+    // venue had stated, and a request fed the emptied contract back went out
+    // asking about a stock. What goes out on the wire stays unroutable —
+    // nothing here invents an encoding for it.
+    assert_eq!(SecurityType::from_fix("NOPE"), SecurityType::Other("NOPE".to_string()));
+    assert_eq!(SecurityType::Other("NOPE".to_string()).to_fix(), "", "unknown stays unroutable, not a stock");
+    assert_eq!(SecurityType::Other("NOPE".to_string()).to_api_str(), "NOPE");
     // Every non-Other variant survives the round trip back through the
     // inbound parser (which accepts API strings too), so a reported
     // Contract can be fed into another request.
@@ -1531,12 +1536,15 @@ fn an_option_definition_keeps_what_identifies_it() {
         let details = crate::types::model::ContractDetails::from_definition(&def);
         assert_eq!(details.contract.sec_type, "STK", "not the Debug derive 'Stock'");
         assert_eq!(details.market_name, "NMS");
-        // Unclassifiable instruments must not claim to be stocks.
+        // A type the venue states and this client does not enumerate is
+        // handed back under the venue's own name: emptied, the contract came
+        // back with no type, and a request fed it went out asking about a
+        // stock.
         let def = super::ContractDefinition {
-            sec_type: super::SecurityType::Other,
+            sec_type: super::SecurityType::Other("MMT".to_string()),
             ..Default::default()
         };
-        assert_eq!(crate::types::model::ContractDetails::from_definition(&def).contract.sec_type, "");
+        assert_eq!(crate::types::model::ContractDetails::from_definition(&def).contract.sec_type, "MMT");
     }
 
 }

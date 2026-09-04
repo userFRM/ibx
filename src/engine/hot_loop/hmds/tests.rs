@@ -292,6 +292,25 @@ fn query_error_releases_head_timestamp_without_sentinel() {
     assert!(shared.reference.drain_historical_data().is_empty());
 }
 
+/// The request carries no number of its own, but it is still told when it
+/// cannot be made: returned as though the question had gone out, the caller
+/// waited on an answer nothing was ever going to send.
+#[test]
+fn scanner_parameters_on_a_dead_connection_is_reported_not_dropped() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+
+    hmds.send_scanner_params_request(&mut conn, &mut hb, &shared);
+
+    assert!(!hmds.pending_scanner_params, "nothing was sent, so nothing is awaited");
+    let errors = shared.reference.drain_historical_errors();
+    assert_eq!(errors.len(), 1, "the caller is told it was not sent");
+    assert_eq!(errors[0].0, crate::bridge::ReferenceState::NO_REQUEST);
+    assert_eq!(errors[0].1, 162);
+}
+
 // ── unknown bar_size rejects at the engine too (backstop for
 // raw control-channel callers; the client validates synchronously) ──
 

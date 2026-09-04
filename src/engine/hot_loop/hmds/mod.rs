@@ -135,11 +135,11 @@ pub(crate) struct HmdsState {
 /// than embedded: a caller-supplied `&` or `<` would otherwise produce a
 /// malformed query instead of a refused one.
 ///
-/// This helps a caller that states the type itself. It does not recover one the
-/// client has already lost: a contract returned by `req_contract_details` for
-/// an unlisted type arrives with an empty `sec_type`, because the enum cannot
-/// carry it, and an empty type still means stock here. That round trip needs
-/// the enum to stop discarding what it cannot name.
+/// This helps a caller that states the type itself, and one the venue stated:
+/// a contract returned by `req_contract_details` for an unlisted type carries
+/// the venue's own name for it, because the enum keeps what it cannot
+/// classify, and the name passes through here as it does for a listed type.
+/// Only a contract that states no type at all falls back to the stock guess.
 fn hist_sec_type(sec_type: &str) -> String {
     if sec_type.is_empty() {
         // The last resort, and a guess: it names a US stock, so anything else
@@ -2001,18 +2001,32 @@ fn build_tbt_query(
         self.pending_head_ts.push((query_id, req_id));
     }
 
-    pub(crate) fn send_scanner_params_request(&mut self, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
-        if let Some(conn) = hmds_conn.as_mut() {
-            let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
-                (fix::TAG_MSG_TYPE, "U"),
-                (fix::TAG_SENDING_TIME, &ts),
-                (crate::control::scanner::TAG_SUB_PROTOCOL, "10001"),
-            ]);
-            self.pending_scanner_params = true;
-            hb.last_hmds_sent = Instant::now();
-            log::info!("Sent scanner params request");
+    pub(crate) fn send_scanner_params_request(&mut self, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
+        // The request carries no number of its own, so a failure is reported
+        // under none: left unreported, the call returned as though the
+        // question had been asked and the answer simply had not come.
+        let Some(conn) = hmds_conn.as_mut() else {
+            super::push_hmds_unavailable(
+                shared, crate::bridge::ReferenceState::NO_REQUEST, false,
+            );
+            return;
+        };
+        let ts = chrono_free_timestamp();
+        if let Err(e) = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (crate::control::scanner::TAG_SUB_PROTOCOL, "10001"),
+        ]) {
+            super::push_hmds_error(
+                shared, crate::bridge::ReferenceState::NO_REQUEST,
+                format!("scanner parameters request could not be sent: {e}"),
+                false,
+            );
+            return;
         }
+        self.pending_scanner_params = true;
+        hb.last_hmds_sent = Instant::now();
+        log::info!("Sent scanner params request");
     }
 
     pub(crate) fn send_scanner_subscribe(&mut self, req_id: u32, instrument: &str, location_code: &str, scan_code: &str, max_items: u32, filters: Vec<(String, String)>, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {

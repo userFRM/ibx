@@ -908,7 +908,7 @@ impl HotLoop {
             // A caller who passed the contract it wrote down rather than the
             // venue's id for it gets the lookup made on its behalf, and the
             // request arrives here again once the venue has named it.
-            let Some(cmd) = self.ccp.hold_until_named(cmd, &mut self.ccp_conn, &mut self.hb)
+            let Some(cmd) = self.ccp.hold_until_named(cmd, &mut self.ccp_conn, &mut self.hb, &self.shared)
             else {
                 continue;
             };
@@ -1033,6 +1033,7 @@ impl HotLoop {
                                     },
                                     &mut self.ccp_conn,
                                     &mut self.hb,
+                                    &self.shared,
                                 );
                             } else {
                                 let (sec_type, exchange) =
@@ -1249,8 +1250,15 @@ impl HotLoop {
                     let ContractRef { con_id, symbol, sec_type, exchange, currency, .. } = contract;
                     if con_id > 0 {
                         self.ccp.send_secdef_request(req_id, con_id, &mut self.ccp_conn, &mut self.hb);
-                    } else {
-                        self.ccp.send_secdef_request_by_symbol(req_id, &symbol, &sec_type, &exchange, &currency, &filters, &mut self.ccp_conn, &mut self.hb);
+                    } else if let Err(reason) = self.ccp.send_secdef_request_by_symbol(req_id, &symbol, &sec_type, &exchange, &currency, &filters, &mut self.ccp_conn, &mut self.hb) {
+                        // A lookup this client cannot ask is refused rather
+                        // than made: ended like a definition the venue did
+                        // not hold, so no caller waits on rows that nothing
+                        // will send.
+                        self.shared.reference.push_historical_error(
+                            req_id, crate::error_codes::Refusal::VALIDATION, reason,
+                        );
+                        self.shared.reference.push_contract_details_end(req_id);
                     }
                 }
                 ControlCommand::CancelHeadTimestamp { req_id } => {
@@ -1294,7 +1302,7 @@ impl HotLoop {
                     self.ccp.send_mkt_depth_exchanges_request(&mut self.ccp_conn, &mut self.hb, &self.shared);
                 }
                 ControlCommand::FetchScannerParams => {
-                    self.hmds.send_scanner_params_request(&mut self.hmds_conn, &mut self.hb);
+                    self.hmds.send_scanner_params_request(&mut self.hmds_conn, &mut self.hb, &self.shared);
                 }
                 ControlCommand::SubscribeScanner { req_id, instrument, location_code, scan_code, max_items, filters } => {
                     if self.hmds_conn.is_none() {

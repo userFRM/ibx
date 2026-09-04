@@ -123,7 +123,7 @@ pub const TAG_PRICE_INCREMENT_COUNT: u32 = 6026;
 pub const TAG_SIZE_INCREMENT_COUNT: u32 = 6030;
 
 /// Security types (IB internal encoding).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecurityType {
     /// CS
     Stock,
@@ -171,8 +171,14 @@ pub enum SecurityType {
     IcsContract,
     /// PHYSS
     PhysicalSettlement,
-    /// Anything the venue named that this client does not.
-    Other,
+    /// Anything the venue named that this client does not, under the
+    /// venue's own name for it.
+    ///
+    /// The name is kept rather than dropped: a definition that states a type
+    /// this client does not enumerate still states one, and handing the
+    /// contract back with nothing where the type stood asked the next request
+    /// about it as a stock.
+    Other(String),
 }
 
 impl SecurityType {
@@ -181,10 +187,11 @@ impl SecurityType {
     /// The one mapping everything user-visible reads, so a contract a callback
     /// hands back can be fed straight into another call. A name no request
     /// path accepts would make the returned contract unusable.
-    /// `Other` maps to "" on purpose: an instrument the engine could not
-    /// classify must not masquerade as a stock — the order path is
-    /// STK-only and that one wrong guess would not be caught downstream.
-    pub fn to_api_str(&self) -> &'static str {
+    /// `Other` hands back the venue's own name for the type: emptying it
+    /// dropped a value the venue stated, and a request fed the emptied
+    /// contract went out as one for a stock. Nothing here invents a known
+    /// type for it either.
+    pub fn to_api_str(&self) -> &str {
         match self {
             Self::Stock => "STK",
             Self::Option => "OPT",
@@ -209,7 +216,7 @@ impl SecurityType {
             Self::IcuContract => "ICU",
             Self::IcsContract => "ICS",
             Self::PhysicalSettlement => "PHYSS",
-            Self::Other => "",
+            Self::Other(name) => name,
         }
     }
 
@@ -242,8 +249,10 @@ impl SecurityType {
             // An unrecognized security type must not be sent as a stock —
             // that misroutes the request silently. Empty draws a
             // visible gateway error instead, matching its own
-            // unknown-to-none handling.
-            Self::Other => "",
+            // unknown-to-none handling. The venue's name for it is kept for
+            // what a caller reads, but the wire encoding is not this
+            // client's to invent.
+            Self::Other(_) => "",
         }
     }
 
@@ -280,7 +289,10 @@ impl SecurityType {
             "ICS" => Self::IcsContract,
             "PHYSS" => Self::PhysicalSettlement,
 
-            _ => Self::Other,
+            // Kept under the name the venue gave it. Emptied here, a
+            // definition of such a type reached callers with no type at all,
+            // and a request fed that definition back asked about a stock.
+            other => Self::Other(other.to_string()),
         }
     }
 }
@@ -494,7 +506,7 @@ impl Default for ContractDefinition {
             // a definition that carries no security type as a stock, and an
             // order built from it names a stock the venue does not hold.
             // `Other` states nothing, which is what is known.
-            sec_type: SecurityType::Other,
+            sec_type: SecurityType::Other(String::new()),
             exchange: String::new(),
             primary_exchange: String::new(),
             currency: String::new(),
@@ -1605,7 +1617,7 @@ pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> 
                     symbol: val.clone(),
                     // As above: a match the venue stated no type for is not a
                     // stock, it is a match with no type stated.
-                    sec_type: SecurityType::Other,
+                    sec_type: SecurityType::Other(String::new()),
                     currency: String::new(),
                     primary_exchange: String::new(),
                     description: String::new(),

@@ -125,11 +125,17 @@ pub fn parse_scanner_response(xml: &str) -> Option<ScannerResult> {
         };
         let contract_xml = &xml[abs_start..c_end];
 
-        let con_id = crate::control::xml::tag(contract_xml, "contractID")
-            .and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-        if con_id != 0 {
-            con_ids.push(con_id);
-        }
+        // A row is its contract id and nothing else, so a row whose id did
+        // not arrive readable states nothing at all. Handed over as zero, it
+        // named a contract the venue never stated — the same reason a bar
+        // whose prices did not arrive is not read either.
+        let Some(con_id) = crate::control::xml::tag(contract_xml, "contractID")
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            log::warn!("a scan row states no readable contract id, so the scan is not read");
+            return None;
+        };
+        con_ids.push(con_id);
         entries.push(ScannerEntry { con_id });
         search_start = c_end;
     }
@@ -239,6 +245,25 @@ mod tests {
         let result = parse_scanner_response(xml).expect("the response parses");
         assert_eq!(result.error_text, "Scanner subscription not allowed");
         assert!(result.con_ids.is_empty(), "and it found nothing to report");
+    }
+
+    /// A row is its contract id and nothing else. One whose id did not
+    /// arrive readable states nothing, and delivering it named contract zero
+    /// — a contract the venue never stated.
+    #[test]
+    fn a_scan_row_with_no_readable_contract_is_not_read() {
+        let xml = r#"<ScanResponse>
+            <id>APISCAN31:3</id>
+            <Contracts>
+                <Contract>
+                    <contractID>265598</contractID>
+                </Contract>
+                <Contract>
+                    <contractID>not-a-number</contractID>
+                </Contract>
+            </Contracts>
+        </ScanResponse>"#;
+        assert!(parse_scanner_response(xml).is_none());
     }
 
     #[test]

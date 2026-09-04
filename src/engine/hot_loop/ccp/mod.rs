@@ -1756,6 +1756,7 @@ impl CcpState {
         pending: PendingSubscribe,
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
+        shared: &SharedState,
     ) {
         let req_id = self.next_internal_secdef_id;
         self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
@@ -1771,13 +1772,23 @@ impl CcpState {
             pending.exchange.clone(), pending.currency.clone(),
         );
         let con_id = pending.con_id;
-        self.pending_md_subscribe.push((req_id, pending, Instant::now()));
-        if con_id != 0 {
+        let instrument = pending.instrument;
+        let outcome = if con_id != 0 {
             self.send_secdef_request(req_id, con_id, ccp_conn, hb);
+            Ok(())
         } else {
             self.send_secdef_request_by_symbol(
                 req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb,
-            );
+            )
+        };
+        match outcome {
+            // The filters built here name no identifier, so a refusal is not
+            // one the venue can make; what is refused is told, not dropped.
+            Ok(()) => self.pending_md_subscribe.push((req_id, pending, Instant::now())),
+            Err(reason) => {
+                log::warn!("subscription lookup refused: {reason}");
+                shared.market.push_subscription_failure(instrument, reason);
+            }
         }
     }
 
@@ -1791,6 +1802,7 @@ impl CcpState {
         cmd: crate::types::ControlCommand,
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
+        shared: &SharedState,
     ) -> Option<crate::types::ControlCommand> {
         // Cloned rather than borrowed: the command is moved onto the pending
         // list below, and what it named has to outlive it.
@@ -1801,11 +1813,23 @@ impl CcpState {
         let filters = filters_named(&cmd);
         let req_id = self.next_internal_secdef_id;
         self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
-        self.pending_named.push((req_id, cmd, Instant::now()));
-        self.send_secdef_request_by_symbol(
+        if let Err(reason) = self.send_secdef_request_by_symbol(
             req_id, &named.symbol, &named.sec_type, &named.exchange, &named.currency,
             &filters, ccp_conn, hb,
-        );
+        ) {
+            // The lookup it would be held for cannot be made, so it is not
+            // held: told the reason under its own number, the way the sweep
+            // tells a request the venue never named.
+            log::warn!("Request abandoned: {reason}");
+            if let Some(caller_req_id) = request_id(&cmd) {
+                super::push_hmds_error(
+                    shared, caller_req_id, reason,
+                    matches!(cmd, crate::types::ControlCommand::FetchHistorical { .. }),
+                );
+            }
+            return None;
+        }
+        self.pending_named.push((req_id, cmd, Instant::now()));
         None
     }
 
@@ -1841,7 +1865,44 @@ impl CcpState {
         }
     }
 
-    pub(crate) fn send_secdef_request_by_symbol(&mut self, req_id: u32, symbol: &str, sec_type: &str, exchange: &str, currency: &str, filters: &crate::types::SecDefFilters, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    pub(crate) fn send_secdef_request_by_symbol(&mut self, req_id: u32, symbol: &str, sec_type: &str, exchange: &str, currency: &str, filters: &crate::types::SecDefFilters, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) -> Result<(), String> {
+        // A public identifier and the tags it rides on. Each kind has its
+        // own: a CUSIP goes out as 454=1|455=<id>|456=1, and 22/48 carry an
+        // ISIN or a FIGI under the character that names the source rather
+        // than a number. Sent as 22=1|48=<cusip>, a CUSIP named a source on
+        // the pair that carries an ISIN, and a FIGI was not
+        // sent at all — the lookup fell through to whatever the symbol
+        // matched. When one is set the lookup rides the identifier and
+        // drops the symbol/secType/filters.
+        let sec_id = filters.sec_id.as_str();
+        let identifier_fields: Vec<(u32, &str)> = if sec_id.is_empty() {
+            Vec::new()
+        } else {
+            match filters.sec_id_type.to_uppercase().as_str() {
+                "CUSIP" => vec![(454, "1"), (455, sec_id), (456, "1")],
+                "ISIN" => vec![(22, "4"), (48, sec_id)],
+                "FIGI" => vec![(22, "S"), (48, sec_id)],
+                // The caller named an identifier of a kind this client
+                // carries no wire source for. Asking by symbol instead is a
+                // different question, and answering it under the caller's
+                // number hands back whatever the symbol matches — so the
+                // lookup is refused rather than made.
+                other => {
+                    let kind = if other.is_empty() {
+                        "an identifier of no stated kind".to_string()
+                    } else {
+                        format!("a {other} identifier")
+                    };
+                    return Err(format!(
+                        "the lookup names {kind} this client carries no wire \
+                         source for, and asked by symbol it would answer a \
+                         different question: name the contract by its symbol \
+                         or by the venue's id",
+                    ));
+                }
+            }
+        };
+        let identifier_lookup = !identifier_fields.is_empty();
         if let Some(conn) = ccp_conn.as_mut() {
             let req_id_str = req_id.to_string();
             let ts = chrono_free_timestamp();
@@ -1883,37 +1944,6 @@ impl CcpState {
             } else {
                 ""
             };
-            // A public identifier and the tags it rides on. Each kind has its
-            // own: a CUSIP goes out as 454=1|455=<id>|456=1, and 22/48 carry an
-            // ISIN or a FIGI under the character that names the source rather
-            // than a number. Sent as 22=1|48=<cusip>, a CUSIP named a source on
-            // the pair that carries an ISIN, and a FIGI was not
-            // sent at all — the lookup fell through to whatever the symbol
-            // matched. When one is set the lookup rides the identifier and
-            // drops the symbol/secType/filters.
-            let sec_id = filters.sec_id.as_str();
-            let identifier_fields: Vec<(u32, &str)> = if sec_id.is_empty() {
-                Vec::new()
-            } else {
-                match filters.sec_id_type.to_uppercase().as_str() {
-                    "CUSIP" => vec![(454, "1"), (455, sec_id), (456, "1")],
-                    "ISIN" => vec![(22, "4"), (48, sec_id)],
-                    "FIGI" => vec![(22, "S"), (48, sec_id)],
-                    // The caller named an identifier and a kind this client
-                    // states no source for, so the lookup below asks by symbol
-                    // instead. That is a different question, and answering it
-                    // without saying so hands back whatever the symbol matches.
-                    other => {
-                        log::warn!(
-                            "contract lookup states a {other} identifier, which this client \
-                             carries no source for; asking by symbol instead",
-                        );
-                        Vec::new()
-                    }
-                }
-            };
-            let identifier_lookup = !identifier_fields.is_empty();
-
             let strike_str = if filters.strike > 0.0 { format!("{}", filters.strike) } else { String::new() };
             // PutOrCall: Call = 1, Put = 0.
             let right_code = match filters.right.to_uppercase().as_str() {
@@ -2000,6 +2030,7 @@ impl CcpState {
         // by counting per-exchange fan-out replies (see `pending_fanout`).
         self.details_delivered.remove(&req_id);
         self.pending_secdef.push((req_id, false, Instant::now() + unanswered_after(req_id)));
+        Ok(())
     }
 
     /// Send a per-exchange fan-out request after a by-symbol master reply.
@@ -2034,10 +2065,12 @@ impl CcpState {
         // wire to answer it.
         let Some(conn) = ccp_conn.as_mut() else {
             log::warn!("Matching symbols request req_id={req_id} pattern='{pattern}' not sent: no CCP transport");
-            // Answered empty rather than left unanswered, the same as a chain
-            // request that cannot go out: the caller is blocked on the end of a
-            // request nothing on the wire will ever end.
-            shared.reference.push_matching_symbols(req_id, Vec::new());
+            // Refused rather than answered empty: an empty answer is a search
+            // the venue ran and nothing matched, which is not what happened.
+            shared.reference.push_historical_error(
+                req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+                "matching symbols request could not be sent: no connection to the venue".to_string(),
+            );
             return;
         };
         let req_id_str = req_id.to_string();
@@ -2050,7 +2083,10 @@ impl CcpState {
             (58, pattern),
         ]) {
             log::warn!("Matching symbols request req_id={req_id} pattern='{pattern}' not sent: {e}");
-            shared.reference.push_matching_symbols(req_id, Vec::new());
+            shared.reference.push_historical_error(
+                req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+                format!("matching symbols request could not be sent: {e}"),
+            );
             return;
         }
         hb.last_ccp_sent = Instant::now();
@@ -2074,9 +2110,13 @@ impl CcpState {
                 log::warn!("Matching symbols request req_id={req_id} unanswered after {MATCHING_SYMBOLS_TIMEOUT:?} — giving up");
                 // The timeout is answered, not merely recorded: a caller
                 // told nothing waits on a request this session has abandoned.
-                // An empty answer is the shape of a lookup that found nothing,
-                // which is what a timeout amounts to.
-                shared.reference.push_matching_symbols(*req_id, Vec::new());
+                // Refused rather than answered empty: an empty answer is a
+                // search the venue ran and nothing matched, and the venue
+                // never answered this one at all.
+                shared.reference.push_historical_error(
+                    *req_id, 200,
+                    "matching symbols request timed out — no reply from the gateway".to_string(),
+                );
                 false
             } else {
                 true
@@ -2086,9 +2126,9 @@ impl CcpState {
 
     /// Ask for the option chain of an underlying.
     ///
-    /// A request that cannot go out is answered with an empty chain rather than
-    /// left unanswered, because the caller is waiting on the end of a request
-    /// nothing on the wire will ever end.
+    /// A request that cannot go out is refused rather than left unanswered,
+    /// because the caller is waiting on the end of a request nothing on the
+    /// wire will ever end.
     pub(crate) fn send_option_params_request(
         &mut self,
         req_id: u32,
@@ -2119,7 +2159,13 @@ impl CcpState {
         let con_id_tag = if futures_option { 6457 } else { 6346 };
         let Some(conn) = ccp_conn.as_mut() else {
             log::warn!("Option chain request req_id={req_id} symbol={symbol} not sent: no CCP transport");
-            shared.reference.push_option_params(req_id, underlying_con_id, Vec::new());
+            // Refused rather than answered empty: an empty answer is a chain
+            // the venue enumerated and found nothing in, which is not what
+            // happened.
+            shared.reference.push_historical_error(
+                req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+                "option chain request could not be sent: no connection to the venue".to_string(),
+            );
             return;
         };
         let con_id_str = underlying_con_id.to_string();
@@ -2141,7 +2187,10 @@ impl CcpState {
         }
         if let Err(e) = conn.send_fix(&fields) {
             log::warn!("Option chain request req_id={req_id} symbol={symbol} not sent: {e}");
-            shared.reference.push_option_params(req_id, underlying_con_id, Vec::new());
+            shared.reference.push_historical_error(
+                req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+                format!("option chain request could not be sent: {e}"),
+            );
             return;
         }
         hb.last_ccp_sent = Instant::now();
@@ -2204,18 +2253,24 @@ impl CcpState {
             return;
         }
         let now = Instant::now();
-        let mut expired: Vec<(u32, i64)> = Vec::new();
-        self.pending_option_params.retain(|(req_id, symbol, con_id, deadline)| {
+        let mut expired: Vec<u32> = Vec::new();
+        self.pending_option_params.retain(|(req_id, symbol, _con_id, deadline)| {
             if now >= *deadline {
                 log::warn!("Option chain request req_id={req_id} symbol={symbol} unanswered after {OPTION_CHAIN_TIMEOUT:?} — giving up");
-                expired.push((*req_id, *con_id));
+                expired.push(*req_id);
                 false
             } else {
                 true
             }
         });
-        for (req_id, con_id) in expired {
-            shared.reference.push_option_params(req_id, con_id, Vec::new());
+        // Refused rather than answered empty: an empty answer is a chain the
+        // venue enumerated and found nothing in, and the venue never answered
+        // these at all.
+        for req_id in expired {
+            shared.reference.push_historical_error(
+                req_id, 200,
+                "option chain request timed out — no reply from the gateway".to_string(),
+            );
         }
     }
 
