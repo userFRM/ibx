@@ -213,6 +213,19 @@ impl MarketDataState {
         *self.venue_time.lock().unwrap() = Some(stamped.to_string());
     }
 
+    /// Record the clock a connection opened on, clearing it where the
+    /// connection stated none.
+    ///
+    /// Put in place of whatever the last connection left, rather than merged
+    /// with it. The stamp belongs to the connection that carried it, and a
+    /// reconnect the venue stamped nothing on has stated no time at all — kept
+    /// from the connection before it, a caller asking the venue's clock is
+    /// answered from one that no longer exists. The first stamped message on
+    /// the new connection fills it in again.
+    pub fn note_connection_time(&self, stamped: Option<&str>) {
+        *self.venue_time.lock().unwrap() = stamped.map(str::to_string);
+    }
+
     /// The venue's clock as of its last message, if it has sent one.
     pub fn venue_time(&self) -> Option<String> {
         self.venue_time.lock().unwrap().clone()

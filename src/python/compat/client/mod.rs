@@ -613,9 +613,17 @@ impl EClient {
         Ok(())
     }
 
-    /// Check if connected.
+    /// Whether there is a session to make requests on.
+    ///
+    /// False before `connect` and after `disconnect`, and false from the
+    /// moment the engine gives the session up — which it writes down itself.
+    /// The notice saying so goes out on a channel that drops what it cannot
+    /// hold, and a program that drives its own loop, or none at all, is told
+    /// nowhere else: it read connected on a session that was over, and went
+    /// on issuing requests into it. The Rust surface answers this the same
+    /// way.
     fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
+        self.connected.load(Ordering::Relaxed) && !self.the_engine_gave_the_session_up()
     }
 
     // ── What the reference client holds after connecting ──
@@ -645,9 +653,14 @@ impl EClient {
     /// of it. A session that ended without being closed is connecting again
     /// from the moment `connect` is called on it, though what it held stays in
     /// place until the logon answers.
+    ///
+    /// A session the engine has given up is `DISCONNECTED` from the moment it
+    /// writes that down, however the caller drives its loop — read from the
+    /// cached flags alone it stayed `CONNECTED` for as long as the program
+    /// went without dispatching.
     #[getter]
     fn conn_state(&self) -> i32 {
-        if !self.connected.load(Ordering::Acquire) {
+        if !self.connected.load(Ordering::Acquire) || self.the_engine_gave_the_session_up() {
             Self::DISCONNECTED
         } else if self.session_ended.load(Ordering::Acquire)
             || self.shared.lock().unwrap().is_none()
@@ -1084,6 +1097,20 @@ impl EClient {
         self.notify(py, "error", (req_id, raised_now(), refusal.code, refusal.message, ""))
     }
 
+    /// Whether the engine has given this session up for good.
+    ///
+    /// Read from the session's own state rather than from the flags this
+    /// client caches: those are written by the dispatch pass, and the engine
+    /// records why it stopped the moment it stops. A caller that has not
+    /// dispatched since is holding flags from before the session ended.
+    pub(crate) fn the_engine_gave_the_session_up(&self) -> bool {
+        self.shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|shared| shared.reference.session_over().is_some())
+    }
+
     /// The control channel, or nothing and the caller told why.
     ///
     /// A request issued before connecting is answered on the error callback
@@ -1096,6 +1123,13 @@ impl EClient {
         // handler that disconnects or issues another request would wait on
         // this same lock while holding the GIL.
         let tx = self.control_tx.lock().unwrap().clone();
+        // A sender outlives the session it was made for: the engine gives the
+        // session up and stops, and this end still holds the channel. Queued
+        // into that, a request is neither sent nor refused, and the caller
+        // waits out its own timeout for an answer nobody is going to make.
+        // Refused under the number a request made with no session is refused
+        // under, which is what this has become.
+        let tx = tx.filter(|_| !self.the_engine_gave_the_session_up());
         match tx {
             Some(tx) => Ok(Some(tx)),
             None => {
@@ -1637,6 +1671,62 @@ w = W()",
             assert!(
                 !client.connected.load(Ordering::Relaxed),
                 "a finished session still reads as connected",
+            );
+        });
+    }
+
+    /// A session the engine has given up is over on this surface too, whether
+    /// or not the caller has dispatched since.
+    ///
+    /// `is_connected` and `conn_state` read flags the dispatch pass writes,
+    /// and the sender outlives the session it was made for. A program driving
+    /// its own loop, or none, was told connected on a session that had ended
+    /// and went on queueing requests into it, each waiting out its own timeout
+    /// for an answer nobody was going to make — while the Rust surface, which
+    /// reads the state the engine writes, reported it gone at once.
+    #[test]
+    fn a_session_the_engine_gave_up_is_neither_connected_nor_admitting() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, shared, wrapper) = wired_client(py);
+            let client = client.borrow(py);
+            assert!(client.is_connected());
+            assert_eq!(client.conn_state(), EClient::CONNECTED);
+
+            // The engine gives the session up. Nothing is dispatched here:
+            // this is the notice dropped, or a caller that never reads for it.
+            shared.reference.set_session_over(
+                crate::reliability::retry::DisconnectReason::EngineStopped.as_str(),
+            );
+
+            assert!(!client.is_connected(), "a finished session reads as connected");
+            assert_eq!(
+                client.conn_state(), EClient::DISCONNECTED,
+                "a finished session is not a session being connected",
+            );
+            assert!(
+                client.tx_or_report(7).unwrap().is_none(),
+                "a request was admitted into a session that has ended",
+            );
+            assert!(
+                rx.try_recv().is_err(),
+                "and queued for an engine that has stopped",
+            );
+
+            // Refused the way a request made with no session is refused, on
+            // the error callback and under that number.
+            let calls = wrapper.bind(py).getattr("calls").unwrap();
+            let heard = calls
+                .extract::<Vec<(String, i64, i64, i64, String, String)>>()
+                .unwrap();
+            assert!(
+                heard.iter().any(|(name, req_id, _, code, message, _)| {
+                    name == "error"
+                        && *req_id == 7
+                        && *code == NOT_CONNECTED_CODE
+                        && message == "Not connected"
+                }),
+                "the caller is told on the error callback: {heard:?}",
             );
         });
     }

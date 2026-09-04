@@ -263,6 +263,7 @@ impl EClient {
         exercise_quantity: i32, account: &str, override_: bool,
         stated: crate::client_core::ExerciseStates,
     ) -> Result<(), Refusal> {
+        self.refuse_if_trading_is_over("an exercise")?;
         self.core.refuse_if_readonly("an exercise").map_err(Refusal::validation)?;
         if !override_ {
             log::warn!(
@@ -681,6 +682,7 @@ impl EClient {
     ) -> Result<[i64; 3], Refusal> {
         // Checked here rather than in `place_bracket`: every surface that places a
         // bracket routes through this.
+        self.refuse_if_trading_is_over("a bracket")?;
         self.core.refuse_if_readonly("a bracket").map_err(Refusal::validation)?;
         // The checks `place_order` applies. An order on a security type the account
         // is not permitted is returned Inactive with tag 58 empty, so the reason is

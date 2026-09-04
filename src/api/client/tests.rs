@@ -1707,6 +1707,34 @@ fn an_order_is_refused_once_the_trading_connection_has_stopped() {
     assert!(rx.try_recv().is_err(), "nothing reaches the wire");
 }
 
+/// An exercise and a bracket are refused on the same terms as an order.
+///
+/// Both take an id and queue an instruction, and both were taken while the
+/// trading connection was gone for good — recorded, given ids, and buffered
+/// for a connection nothing is rebuilding. Every other order call on this
+/// surface answers that condition; these two did not.
+#[test]
+fn an_exercise_and_a_bracket_are_refused_once_the_trading_connection_has_stopped() {
+    let (client, rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    let opt = Contract {
+        con_id: 999002, symbol: "AAPL".into(), sec_type: "OPT".into(),
+        last_trade_date_or_contract_month: "20260619".into(), strike: 230.0,
+        right: "C".into(), multiplier: "100".into(), ..Default::default()
+    };
+    shared.reference.set_trading_over("the trading connection");
+
+    let err = client.exercise_options(1, &opt, 1, 1, "DU123", false, Default::default())
+        .expect_err("an exercise is refused");
+    assert!(err.message.contains("never sent"), "{err}");
+
+    let err = client.place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 90.0)
+        .expect_err("and so is a bracket");
+    assert!(err.message.contains("never sent"), "{err}");
+
+    assert!(rx.try_recv().is_err(), "nothing reaches the wire");
+}
+
 #[test]
 fn place_order_market() {
     let (client, rx, shared) = test_client();
