@@ -638,13 +638,13 @@ mod option_model_tests {
         );
     }
 
+    /// An answer worked out here does not become the venue's model for a
+    /// contract.
+    ///
     /// It names no contract — a solve answers a request, not an instrument —
     /// so stored it lands on slot zero, which is a real contract. The next
     /// question about that contract would then be answered against the last
     /// caller's own volatility and price, and against a record saying nothing
-    /// An answer worked out here does not become the venue's model for a
-    /// contract.
-    ///
     /// about which model the venue used.
     #[test]
     fn a_local_answer_does_not_become_the_venues_model() {
