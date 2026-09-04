@@ -22,6 +22,13 @@ pub struct PortfolioState {
     account_download_complete: AtomicBool,
     /// Position info (conId -> PositionInfo) for reqPositions and P&L.
     position_infos: Mutex<HashMap<i64, PositionInfo>>,
+    /// Holdings a download in progress has not restated yet.
+    ///
+    /// The venue states every holding the account has while the request is
+    /// open, so one it does not state is one the account no longer has. Filled
+    /// the moment a download begins and emptied as the rows arrive, whatever
+    /// is still here when the download ends went unstated.
+    awaiting_restatement: Mutex<std::collections::HashSet<i64>>,
     /// Holdings that have moved since a caller last read them.
     ///
     /// `reqPositions` is a real-time subscription, so a caller is told each
@@ -55,6 +62,7 @@ impl PortfolioState {
             account_data_received: AtomicBool::new(false),
             account_download_complete: AtomicBool::new(false),
             position_infos: Mutex::new(HashMap::new()),
+            awaiting_restatement: Mutex::new(std::collections::HashSet::new()),
             position_changes: Mutex::new(std::collections::BTreeSet::new()),
             positions_elsewhere: Mutex::new(HashMap::new()),
             values_elsewhere: Mutex::new(HashMap::new()),
@@ -152,8 +160,29 @@ impl PortfolioState {
     }
 
     /// Mark account download as complete (init burst processed).
-    #[doc(hidden)] pub fn set_account_download_complete(&self) {
+    ///
+    /// Returns the holdings the download never restated. The venue states
+    /// every holding the account has while the request is open, so one it did
+    /// not name is one the account no longer has — left standing it goes on
+    /// being reported as held and every exposure decision reads it that way.
+    /// Their rows are set to nothing here; the instrument slots beside them
+    /// belong to the caller, which is the side that can name an instrument.
+    #[doc(hidden)] pub fn set_account_download_complete(&self) -> Vec<i64> {
         self.account_download_complete.store(true, Ordering::Release);
+        let unstated = std::mem::take(&mut *self.awaiting_restatement.lock().unwrap());
+        let mut held = self.position_infos.lock().unwrap();
+        let mut moved = self.position_changes.lock().unwrap();
+        unstated.into_iter().filter(|con_id| match held.get_mut(con_id) {
+            Some(info) if info.position != 0.0 => {
+                info.position = 0.0;
+                // Recorded as a move like any other, so a caller watching
+                // holdings is told this one went to nothing rather than
+                // reading the last figure it was given for ever.
+                moved.insert(*con_id);
+                true
+            }
+            _ => false,
+        }).collect()
     }
 
     /// True once the CCP init burst has been fully processed.
@@ -171,10 +200,14 @@ impl PortfolioState {
     /// connection was down is handed back as though it still stood.
     #[doc(hidden)] pub fn account_download_is_pending(&self) {
         self.account_download_complete.store(false, Ordering::Release);
+        *self.awaiting_restatement.lock().unwrap() =
+            self.position_infos.lock().unwrap().keys().copied().collect();
     }
 
     #[doc(hidden)] pub fn set_position_info(&self, info: PositionInfo) {
         let con_id = info.con_id;
+        // Restated by the download in progress, where there is one.
+        self.awaiting_restatement.lock().unwrap().remove(&con_id);
         let mut map = self.position_infos.lock().unwrap();
         match map.get_mut(&info.con_id) {
             Some(existing) => {

@@ -5464,3 +5464,60 @@ fn a_rejection_with_no_replace_outstanding_finishes_the_order() {
         "the venue answered about the order itself, so it is finished and let go",
     );
 }
+
+/// A holding closed while the connection was down.
+///
+/// The venue states every holding the account has while an account request is
+/// open, so one it never names over the whole of that request is one the
+/// account no longer has. The rows were only ever written over, never cleared,
+/// so a holding that closed in the gap kept the size it had before the drop:
+/// `req_positions` handed it back, the instrument slot behind `position` read
+/// it, and every exposure decision was taken against stock nobody owned.
+#[test]
+fn a_holding_the_new_statement_never_names_is_closed() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let kept = context.register_instrument(756733);
+    let closed = context.register_instrument(140148322);
+
+    // What the account held when the connection dropped.
+    let holding = |con_id: i64, qty: f64| crate::types::PositionInfo {
+        con_id, position: qty, ..Default::default()
+    };
+    shared.portfolio.set_position_info(holding(756733, 300.0));
+    shared.portfolio.set_position(kept, 300.0);
+    context.update_position(kept, 300.0);
+    shared.portfolio.set_position_info(holding(140148322, 3.0));
+    shared.portfolio.set_position(closed, 3.0);
+    context.update_position(closed, 3.0);
+    shared.portfolio.drain_position_changes();
+
+    let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp_conn: Option<Connection> = None;
+    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &context.market, &shared);
+
+    // The new connection states one of the two, and then says it is done.
+    let restated = b"35=UP\x016529=AR.1\x016068=SPY\x016064=300\x016008=756733\x01";
+    ccp.process_ccp_message(
+        restated, &mut None, &mut context, &shared, &None, &mut hb, "DU1",
+    );
+    ccp.process_ccp_message(
+        b"35=EB\x016529=AR.1\x01", &mut None, &mut context, &shared, &None, &mut hb, "DU1",
+    );
+
+    let held = |con_id: i64| shared.portfolio.position_info(con_id)
+        .map(|i| i.position)
+        .unwrap_or_else(|| panic!("con {con_id} is still known"));
+    assert_eq!(held(756733), 300.0, "the holding the venue restated stands");
+    assert_eq!(held(140148322), 0.0, "the one it never named is gone");
+    assert_eq!(shared.portfolio.position(closed), 0.0, "and so is its slot");
+    assert_eq!(context.position(closed), 0.0, "and the book behind it");
+    assert_eq!(context.position(kept), 300.0, "which the other one keeps");
+    let moves = shared.portfolio.drain_position_changes();
+    assert!(
+        moves.iter().any(|m| m.con_id == 140148322 && m.position == 0.0),
+        "a caller watching holdings is told it went to nothing: {moves:?}",
+    );
+}

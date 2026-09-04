@@ -730,7 +730,18 @@ impl CcpState {
                 let ends = parsed.get(&6529).map(String::as_str).unwrap_or("");
                 if ends.starts_with("AR") {
                     log::info!("Account request {ends} is complete");
-                    shared.portfolio.set_account_download_complete();
+                    for con_id in shared.portfolio.set_account_download_complete() {
+                        let avg_cost = shared.portfolio.position_info(con_id)
+                            .map(|i| i.avg_cost).unwrap_or_default();
+                        let Some(instrument) = context.market.instrument_by_con_id(con_id)
+                        else { continue };
+                        let standing = context.position(instrument);
+                        if standing != 0.0 { context.update_position(instrument, -standing); }
+                        shared.portfolio.set_position(instrument, 0.0);
+                        emit(event_tx, Event::PositionUpdate {
+                            instrument, con_id, position: 0.0, avg_cost,
+                        });
+                    }
                 }
             }
             "UT" | "UM" | "RL" => positions::handle_account_update(msg, context, shared),
