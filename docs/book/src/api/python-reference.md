@@ -65,7 +65,7 @@ def disconnect()
 
 #### `is_connected`
 
-Check if connected.
+Whether there is a session to make requests on.  False before `connect` and after `disconnect`, and false from the moment the engine gives the session up — which it writes down itself. The notice saying so goes out on a channel that drops what it cannot hold, and a program that drives its own loop, or none at all, is told nowhere else: it read connected on a session that was over, and went on issuing requests into it. The Rust surface answers this the same way.
 
 ```python
 def is_connected()
@@ -75,7 +75,7 @@ def is_connected()
 
 #### `conn_state`
 
-Which of `DISCONNECTED`, `CONNECTING` and `CONNECTED` this client is in.  `CONNECTING` is the span of `connect`, as read from another thread: the connection is claimed at the top of that call and the session's state handed over at the bottom, and `is_connected` reads true for the whole of it. A session that ended without being closed is connecting again from the moment `connect` is called on it, though what it held stays in place until the logon answers.
+Which of `DISCONNECTED`, `CONNECTING` and `CONNECTED` this client is in.  `CONNECTING` is the span of `connect`, as read from another thread: the connection is claimed at the top of that call and the session's state handed over at the bottom, and `is_connected` reads true for the whole of it. A session that ended without being closed is connecting again from the moment `connect` is called on it, though what it held stays in place until the logon answers.  A session the engine has given up is `DISCONNECTED` from the moment it writes that down, however the caller drives its loop — read from the cached flags alone it stayed `CONNECTED` for as long as the program went without dispatching.
 
 ```python
 client.conn_state  # read-only attribute
@@ -1575,7 +1575,7 @@ def req_current_time()
 
 #### `req_current_time_in_millis`
 
-Ask the venue for its own clock in milliseconds. Answered on `current_time_in_millis`.  The same clock `req_current_time` reports and read the same way. What differs is the precision kept: the venue sometimes stamps a fraction of a second, and asking in seconds throws it away. A stamp with no fraction lands on a whole second, which is the precision the venue stated rather than a rounding of something finer.  Before a session exists this is reported on `error`, as `req_current_time` is: an answer waits for a dispatch pass, and with no session there is nothing to make one. Before anything has been stamped there is nothing to report but this machine's clock, and the log says so.
+Ask the venue for its own clock in milliseconds. Answered on `current_time_in_millis`.  The same clock `req_current_time` reports and read the same way. What differs is the precision kept: the venue sometimes stamps a fraction of a second, and asking in seconds throws it away. A stamp with no fraction lands on a whole second, which is the precision the venue stated rather than a rounding of something finer.  Before a session exists this is reported on `error`, as `req_current_time` is: an answer waits for a dispatch pass, and with no session there is nothing to make one.
 
 ```python
 def req_current_time_in_millis()

@@ -63,9 +63,9 @@ nothing reaches and is counted as one on the limits page.
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 2,090 | No |
+| Rust unit and integration | 2,089 | No |
 | Rust, live | 9 | Yes |
-| Python | 774 | No |
+| Python | 775 | No |
 | Python, live | 137 | Yes |
 | Paper compatibility suite (153 phases) | 46 tests | Yes |
 
