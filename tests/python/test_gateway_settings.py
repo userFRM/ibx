@@ -32,6 +32,53 @@ def test_a_gateway_setting_with_no_counterpart_says_so_rather_than_vanishing():
     assert "readonly" in ibx.UNAVAILABLE["ApiOnly"]
 
 
+#: Every setting a gateway carries, less the ones that only move a window
+#: about, and the name this client answers each by. `None` means the answer is
+#: recorded under the gateway's own spelling.
+#:
+#: A caller migrating looks a name up and expects an answer, so the names have
+#: to be written down somewhere or the claim is only a claim. Several settings
+#: spell the same thing differently here, and the seven debug switches are one
+#: log level.
+_A_GATEWAY_CARRIES = {
+    "ApiOnly": None,
+    "LocalApiPort": None,
+    "LocalServerPort": None,
+    "Local_Port": "LocalApiPort",
+    "TrustedIPs": None,
+    "Local_FIX_Server_Settings": None,
+    "useSsl": None,
+    "UseSSL": None,
+    "reconnectOnSocketErr": None,
+    "RemoteHostOrderRouting": None,
+    "RemotePortOrderRouting": None,
+    "Select_account_type": None,
+    "Verbose_logging": "log_level",
+    "Market_Data_Connection": "market_data_host",
+    "Debug": "log_level",
+    "Error": "log_level",
+    "Internal": "log_level",
+    "WriteDebug": "log_level",
+    "OutOfBandDebug": "log_level",
+    "ServiceDebug": "log_level",
+    "ssoDebug": "log_level",
+}
+
+
+def test_every_setting_a_gateway_carries_is_answered_here():
+    """A name a gateway carries is either a setting here or a stated reason.
+
+    Silence is the one answer that leaves a caller migrating with nowhere to
+    go: they cannot tell a setting this client does not have from one it
+    spells differently.
+    """
+    answered = set(ibx.settings()) | set(ibx.UNAVAILABLE)
+    unanswered = sorted(
+        name for name, here in _A_GATEWAY_CARRIES.items() if (here or name) not in answered
+    )
+    assert not unanswered, f"a gateway carries these and this client answers neither way: {unanswered}"
+
+
 def test_a_setting_reaches_the_variable_the_client_reads_it_from():
     """A setting that reads back but changes nothing is decoration.
 

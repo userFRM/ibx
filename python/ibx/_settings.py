@@ -61,24 +61,26 @@ _SETTINGS: dict[str, tuple[str, str]] = {
     ),
 }
 
-#: Gateway settings with nothing to stand in for here, and why. Named rather
-#: than dropped: a caller migrating from a gateway will look for them, and
-#: "there is no such thing here" is an answer where silence is not.
+#: Gateway settings that are not settings here, and what to do instead. Named
+#: rather than dropped: a caller migrating from a gateway will look for them,
+#: and "there is no such thing here" is an answer where silence is not. Some do
+#: have a stand-in — it is simply not one of the settings above — and the reason
+#: names it.
 UNAVAILABLE: dict[str, str] = {
     "ApiMsgsPerSlice": "nothing paces what a caller sends; the pacing here is the subscription burst a reconnect replays, stated on ReconnectConfig",
     "ApiTimeSliceMillis": "nothing paces what a caller sends; the pacing here is the subscription burst a reconnect replays, stated on ReconnectConfig",
     "TimestampZone": "no setting chooses the zone a timestamp is stated in; a bar is stated on the zone the venue names beside it, or as seconds since the epoch where the request asked for that",
-    "useSsl": "the connection to the venue is encrypted and there is nothing to turn off: every session is opened through TLS",
-    "UseSSL": "the connection to the venue is encrypted and there is nothing to turn off: every session is opened through TLS",
-    "reconnectOnSocketErr": "stated per session rather than once for a process: `policy` on ReconnectConfig, which is Automatic by default and Manual for a caller that would rather be told and decide",
-    "RemoteHostOrderRouting": "stated per session rather than once for a process: `host` on the client config, which is where to knock — the venue names the server this account belongs on and the session moves there",
-    "RemotePortOrderRouting": "stated per session rather than once for a process: `port` on the client config",
-    "Select_account_type": "stated per session rather than once for a process: `paper` on the client config",
-    "Local_FIX_Server_Settings": "no local socket to listen on; this client is the client",
     "LocalServerPort": "no local socket to listen on; this client is the client",
     "LocalApiPort": "no local socket to listen on; this client is the client",
     "TrustedIPs": "nothing connects to this client, so nothing needs trusting",
+    "Local_FIX_Server_Settings": "no local socket to listen on; this client is the client, and the only sockets it holds are the ones it opened to the venue",
     "ApiOnly": "stated per session rather than once for a process: `readonly` on the client config, or connect(readonly=True)",
+    "RemoteHostOrderRouting": "orders are routed on the connection the login opened, so this is `host` on the client config, or connect(host=...); left unset, the venue names the server this account is on",
+    "RemotePortOrderRouting": "one port, fixed by the protocol: a redirect naming another is accepted at the socket and then reset, and the session only completes on the fixed one",
+    "useSsl": "no switch: the login and the order connection are TLS with no plaintext path, and a farm connection is opened the one way the venue answers — a key exchange, an enciphered logon, then messages signed rather than enciphered",
+    "UseSSL": "no switch: the login and the order connection are TLS with no plaintext path, and a farm connection is opened the one way the venue answers — a key exchange, an enciphered logon, then messages signed rather than enciphered",
+    "reconnectOnSocketErr": "recovery is on unless a session turns it off, which is `reconnect` on the Rust client config, where ReconnectPolicy::Manual reports the loss and waits instead; a Python session always recovers",
+    "Select_account_type": "nothing here selects one: the login decides, the venue names the accounts it holds at logon, and whether a session is a paper one is stated as `paper` on the client config, or connect(paper=True)",
     "MainWindow.Width": "no window",
     "MainWindow.Height": "no window",
     "vmoptions": "no runtime to size",
