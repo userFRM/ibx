@@ -56,6 +56,13 @@ pub struct MarketDataState {
     /// again. Handing back what arrives next would be handing back a book that
     /// reads correct and is not.
     depth_dropped: Mutex<std::collections::HashSet<u32>>,
+    /// The books given up on that the caller has not been told about yet, and
+    /// what happened, under the request each was asked for.
+    ///
+    /// A dropped book is the one failure here a caller cannot see: the
+    /// subscription reads as healthy and the entries simply stop arriving,
+    /// which is what a quiet market looks like. Said once per drop.
+    depth_drops_unsaid: Mutex<Vec<(u32, String)>>,
     tick_news: Mutex<Vec<TickNews>>,
     news_bulletins: Mutex<Vec<NewsBulletin>>,
     option_computations: Mutex<Vec<crate::types::OptionComputation>>,
@@ -92,6 +99,7 @@ impl MarketDataState {
             real_time_bars: Mutex::new(Vec::with_capacity(64)),
             depth_updates: Mutex::new(Vec::with_capacity(64)),
             depth_dropped: Mutex::new(std::collections::HashSet::new()),
+            depth_drops_unsaid: Mutex::new(Vec::new()),
             tick_news: Mutex::new(Vec::with_capacity(32)),
             news_bulletins: Mutex::new(Vec::with_capacity(16)),
             option_computations: Mutex::new(Vec::with_capacity(16)),
@@ -299,6 +307,20 @@ impl MarketDataState {
                 if let Some((&worst, &how_many)) = per_book.iter().max_by_key(|(_, n)| **n) {
                     held.retain(|u| u.req_id != worst);
                     self.depth_dropped.lock().unwrap().insert(worst);
+                    // Told on the request that asked for it, once. The venue
+                    // goes on sending this book and nothing further is kept,
+                    // so a caller not told reads a subscription that is up and
+                    // a book that has stopped moving — which is what a quiet
+                    // market looks like.
+                    self.depth_drops_unsaid.lock().unwrap().push((
+                        worst,
+                        format!(
+                            "the book on this request went past the {STREAM_BACKLOG_LIMIT} \
+                             entries kept for one and was given up whole ({how_many} \
+                             entries), because part of a book is not a book — withdraw it \
+                             and ask again to start another",
+                        ),
+                    ));
                     if worst == update.req_id {
                         // Including the one that arrived. It is usually the
                         // book that ran away that pushes next, and kept, it
@@ -350,6 +372,12 @@ impl MarketDataState {
     /// again. Nothing is kept for one until it is.
     #[doc(hidden)] pub fn depth_was_dropped(&self, req_id: u32) -> bool {
         self.depth_dropped.lock().unwrap().contains(&req_id)
+    }
+
+    /// Take the books given up on that the caller has not been told about,
+    /// leaving none.
+    pub fn drain_depth_drops(&self) -> Vec<(u32, String)> {
+        self.depth_drops_unsaid.lock().unwrap().drain(..).collect()
     }
 
     #[doc(hidden)] pub fn push_tick_news(&self, news: TickNews) {

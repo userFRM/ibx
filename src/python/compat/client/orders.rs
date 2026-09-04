@@ -607,8 +607,23 @@ impl EClient {
         // The venue names the working orders unprompted after a connect.
         // Answering before that replay lands reports none of them, and a
         // caller that reads "nothing" places the same order twice.
-        self.wait_for_the_replay(py);
+        let named = self.wait_for_the_replay(py);
         let shared = self.shared_state()?;
+        // Only where the venue had begun naming and not finished. An account
+        // working nothing is named with nothing, and the record that ends the
+        // naming cannot be told from the one that precedes it, so an empty
+        // account never sees it finish — reporting there would cry wolf on
+        // every reading of an idle account.
+        if !named && shared.orders.naming_began() {
+            // Said to the caller rather than only to the log, and said ahead of
+            // the orders: what follows is what had arrived, which is otherwise
+            // indistinguishable from an account with nothing working, and a
+            // caller reading it as the whole set places what it already has on.
+            self.report_refusal(py, -1, Refusal::no_answer(
+                "the venue had not finished naming this account's working orders within \
+                 the wait, so what follows is what had arrived rather than what is working",
+            ))?;
+        }
         let orders = self.core.collect_open_orders(&shared);
         for (order_id, tracked) in &orders {
             let c_py = Py::new(py, Contract::from_api(py, &tracked.contract)?)?.into_any();
@@ -948,6 +963,37 @@ w = W()",
                         && message.contains("had not finished naming")
                 }),
                 "the caller is told on the error callback what was and was not covered: {heard:?}",
+            );
+        });
+    }
+
+    /// Asking what the account is working before the venue has finished
+    /// naming it answers with what had arrived, and that is what an account
+    /// working nothing looks like. The caller is told which of the two it is
+    /// reading, so a strategy does not take a partial snapshot for a flat
+    /// account and place again what it already has on.
+    #[test]
+    fn open_orders_say_when_the_snapshot_is_not_known_to_be_whole() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, wrapper) = wired_client(py);
+            // The venue began naming and never said it had finished. An
+            // account named nothing at all is the other case, and is told
+            // nothing — there is no missing order to warn about.
+            shared.orders.note_naming_began();
+            client.req_open_orders(py).unwrap();
+            let calls = wrapper.bind(py).getattr("calls").unwrap();
+            let told: Vec<(String, i64, i64, i64, String, String)> = (0..calls.len().unwrap())
+                .filter_map(|i| calls.get_item(i).unwrap().extract().ok())
+                .collect();
+            assert!(
+                told.iter().any(|(name, req_id, _, code, message, _)| {
+                    name == "error"
+                        && *req_id == -1
+                        && *code == crate::error_codes::Refusal::NO_ANSWER as i64
+                        && message.contains("had not finished naming")
+                }),
+                "the caller is told the snapshot is not known to be whole: {told:?}",
             );
         });
     }

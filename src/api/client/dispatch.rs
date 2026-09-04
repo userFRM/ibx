@@ -37,6 +37,12 @@ pub(crate) const NO_REQUEST: i64 = -1;
 /// says only that the venue is the one saying it.
 const VENUE_REPORTED: i64 = 321;
 
+/// What the reference client reports when data a caller asked for is not being
+/// served. A book this client has given up on is not being served: the venue
+/// goes on sending it and nothing further is kept, until the caller withdraws
+/// it and asks again.
+const DEPTH_NOT_SERVED: i64 = 354;
+
 impl EClient {
     // ── Message Processing ──
 
@@ -531,6 +537,13 @@ impl EClient {
         for (instrument, reason) in self.shared.market.drain_subscription_failures() {
             let req_id = self.core.req_id_for_instrument(instrument);
             wrapper.error(req_id, NO_SECURITY_DEFINITION, &reason, "");
+        }
+
+        // A book this client could not keep whole, on the request that asked
+        // for it. Nothing further is kept for it, so a caller not told reads a
+        // subscription that is up and a book that has stopped moving.
+        for (req_id, reason) in self.shared.market.drain_depth_drops() {
+            wrapper.error(i64::from(req_id), DEPTH_NOT_SERVED, &reason, "");
         }
 
         // News bulletins → update_news_bulletin (only when subscribed)

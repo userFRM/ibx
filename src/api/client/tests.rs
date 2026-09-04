@@ -3090,6 +3090,44 @@ fn a_global_cancel_says_when_the_venue_has_not_finished_naming() {
     );
 }
 
+/// Asking what the account is working before the venue has finished naming it
+/// answers with what had arrived, and that is exactly what an account working
+/// nothing looks like. The caller is told which of the two it is reading, so a
+/// strategy does not take a partial snapshot for a flat account and place
+/// again what it already has on.
+#[test]
+fn open_orders_say_when_the_snapshot_is_not_known_to_be_whole() {
+    #[derive(Default)]
+    struct Heard {
+        told: Vec<(i64, i64, String)>,
+        ended: usize,
+    }
+    impl Wrapper for Heard {
+        fn error(&mut self, req_id: i64, code: i64, message: &str, _adv: &str) {
+            self.told.push((req_id, code, message.to_string()));
+        }
+        fn open_order_end(&mut self) { self.ended += 1; }
+    }
+
+    let (client, _rx, shared) = test_client();
+    // The venue began naming and never said it had finished. An account that
+    // was named nothing at all is the other case, and says nothing — there is
+    // no missing order to warn about.
+    shared.orders.note_naming_began();
+    let mut heard = Heard::default();
+    client.req_all_open_orders(&mut heard);
+    assert_eq!(heard.ended, 1, "what had arrived is still delivered, and still ends");
+    assert!(
+        heard.told.iter().any(|(req_id, code, message)| {
+            *req_id == -1
+                && *code == crate::error_codes::Refusal::NO_ANSWER as i64
+                && message.contains("had not finished naming")
+        }),
+        "the caller is told the snapshot is not known to be whole: {:?}",
+        heard.told,
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Order validation — aux_price guards
 // ═══════════════════════════════════════════════════════════════════
@@ -7509,5 +7547,51 @@ fn a_withdrawal_against_an_account_working_nothing_says_nothing() {
     // The venue named nothing at all: no naming began, and none finished.
     client.req_global_cancel().expect(
         "an account the venue named nothing for is withdrawn without complaint",
+    );
+}
+
+/// A book this client gives up on is said to the caller that asked for it.
+///
+/// The venue goes on sending that book and nothing further is kept for it, so
+/// a caller not told reads a subscription that is up and a book that has
+/// simply stopped changing — which is exactly what a quiet market looks like.
+#[test]
+fn a_book_given_up_on_is_said_to_the_caller_that_asked_for_it() {
+    #[derive(Default)]
+    struct Heard {
+        told: Vec<(i64, i64, String)>,
+    }
+    impl Wrapper for Heard {
+        fn error(&mut self, req_id: i64, code: i64, message: &str, _adv: &str) {
+            self.told.push((req_id, code, message.to_string()));
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let flooding = 7u32;
+    for _ in 0..=crate::bridge::STREAM_BACKLOG_LIMIT {
+        shared.market.push_depth_update(crate::types::DepthUpdate {
+            req_id: flooding,
+            position: 0,
+            market_maker: String::new(),
+            operation: 0,
+            side: 1,
+            price: 1.0,
+            size: 1.0,
+            is_smart_depth: false,
+        });
+    }
+    assert!(shared.market.depth_was_dropped(flooding), "the runaway book was given up");
+
+    let mut heard = Heard::default();
+    client.process_msgs(&mut heard);
+    assert!(
+        heard.told.iter().any(|(req_id, code, message)| {
+            *req_id == i64::from(flooding)
+                && *code == 354
+                && message.contains("given up whole")
+        }),
+        "the request that asked for the book is told it is no longer served: {:?}",
+        heard.told,
     );
 }

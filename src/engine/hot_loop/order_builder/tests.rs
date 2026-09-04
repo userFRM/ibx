@@ -3519,3 +3519,40 @@ fn a_peg_best_order_up_to_the_mid_states_its_mid_offsets() {
     assert_eq!(stated(&msg, "8404=").as_deref(), Some("0.010000"), "the offset at half the spread: {msg}");
     assert_eq!(stated(&msg, "8412="), None, "no compete offset beside them: {msg}");
 }
+
+/// A withdrawal of the whole account that never left this client is said to
+/// the caller, not only written to the log.
+///
+/// It names no order, so there is no order to report it against and nothing
+/// on the order callback carries it. Both surfaces had already returned
+/// success and given the caller nothing afterwards, so a kill switch that
+/// never fired read exactly like one that did.
+#[test]
+fn a_withdrawal_of_everything_that_never_went_is_said_to_the_caller() {
+    let mut context = Context::new();
+    let shared = Arc::new(SharedState::new());
+    // One per instrument, which is how a caller asking for everything back
+    // reaches the engine.
+    context.pending_orders.push(OrderRequest::CancelAll { instrument: 0 });
+    context.pending_orders.push(OrderRequest::CancelAll { instrument: 1 });
+
+    refuse_what_is_left(
+        &mut context, &shared, "recovery of the trading connection was given up",
+    );
+
+    let told = shared.reference.drain_historical_errors();
+    assert_eq!(
+        told.len(), 1,
+        "one refusal for the withdrawal, not one per instrument: {told:?}",
+    );
+    let (req_id, code, message) = &told[0];
+    assert_eq!(
+        *req_id, crate::bridge::ReferenceState::NO_REQUEST,
+        "against no request of the caller's, which is what it asked under",
+    );
+    assert_eq!(*code, crate::error_codes::Refusal::NOT_CONNECTED);
+    assert!(
+        message.contains("withdrawal of every order"),
+        "and it says what did not reach the venue: {message}",
+    );
+}

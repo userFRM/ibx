@@ -138,10 +138,9 @@ fn configure_socket(stream: &TcpStream) -> io::Result<()> {
 /// Outbound frames are HMAC-chained, so a frame that went out in part is
 /// unrecoverable: the peer has a prefix it cannot verify and every later frame
 /// is signed from state it does not share. A write that made no progress at all
-/// put nothing on the wire — the chain is intact, the frame can be sent again,
-/// and a peer that is merely slow does not cost the transport. Only the
-/// stalled-forever case reaches the liveness deadlines, which is where it
-/// belongs.
+/// put nothing on the wire — the chain is intact, so the frame is offered again
+/// where `write_frame` reads this, and a peer that is merely slow does not cost
+/// the transport. One that takes nothing for the whole frame's budget does.
 fn write_is_recoverable(err: &io::Error, written: usize, tls: bool) -> bool {
     // Never on TLS. The count here is plaintext accepted by the TLS layer, not
     // bytes on the socket: a stalled write can report none accepted while a
@@ -596,9 +595,16 @@ impl Connection {
     /// Tracks how much of the frame reached the socket, because that is what
     /// separates a transport that can carry on from one that cannot: a frame
     /// sent in part leaves the signature chain desynchronised and the first
-    /// such failure is final, while a write that moved nothing can be retried. Once
+    /// such failure is final, while a write that moved nothing is offered again
+    /// here until the frame's budget is spent. Once
     /// final, every later send fails fast rather than putting
     /// more frames on a wire the peer can no longer verify.
+    ///
+    /// So a failure from here always means the transport has been given up,
+    /// and the loop's own sweep of unwritable transports reconnects and replays
+    /// what was on them. That is what a caller which does not read the result
+    /// of a send is relying on: without it, a frame could be lost while the
+    /// transport stayed installed, and nothing would ever put it back.
     fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()> {
         if self.write_failed {
             return Err(io::Error::new(
@@ -641,8 +647,16 @@ impl Connection {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => {
                     if write_is_recoverable(&e, written, matches!(self.stream, Stream::Tls(_))) {
-                        log::warn!("write made no progress ({e}) — frame not sent");
-                        return Err(e);
+                        // Offered again inside the budget the whole frame has,
+                        // because nothing above this layer offers it again.
+                        // Handed back instead, the frame was simply gone: the
+                        // transport stayed installed, so no reconnect and no
+                        // replay put it back, and every caller of a send whose
+                        // result is not read had been told its request was on
+                        // the wire. A peer that takes nothing for the whole
+                        // budget finishes the transport at the top of the loop.
+                        log::warn!("write made no progress ({e}) — offering the frame again");
+                        continue;
                     }
                     self.write_failed = true;
                     log::warn!("write failed after {written} of {} bytes ({e}) \
@@ -1433,9 +1447,9 @@ mod tests {
     /// What separates a transport that can carry on from one that cannot. A
     /// frame that went out in part left the peer a prefix it cannot verify and
     /// the chain cannot be rejoined; a write that moved nothing put nothing on
-    /// the wire, so a merely slow peer does not cost the transport — that case
-    /// belongs to the liveness deadlines, which is where the stalled-forever
-    /// peer is caught.
+    /// the wire, so a merely slow peer does not cost the transport — that frame
+    /// is offered again, and the peer that never takes it runs out the frame's
+    /// budget instead.
     #[test]
     fn only_a_frame_that_partly_went_out_finishes_the_transport() {
         for kind in [io::ErrorKind::WouldBlock, io::ErrorKind::TimedOut] {
@@ -1451,6 +1465,65 @@ mod tests {
             let e = io::Error::new(kind, "gone");
             assert!(!write_is_recoverable(&e, 0, false), "{kind:?} is not a stall");
         }
+    }
+
+    /// A peer that will take nothing right now is offered the frame again,
+    /// rather than the frame being handed back as gone.
+    ///
+    /// Nothing above this layer sends a frame a second time, so a stall
+    /// reported here was a request that simply vanished — and because the
+    /// transport was left installed, no reconnect and no replay put it back.
+    /// A subscribe or a withdrawal whose result nobody reads had already been
+    /// written into this session's own record as sent.
+    #[test]
+    fn a_peer_that_takes_nothing_now_is_offered_the_frame_again() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(addr).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        client.set_nonblocking(true).unwrap();
+
+        // Filled through a second handle on the same socket, so the filling is
+        // not itself a part-written frame on the connection under test. The
+        // kernel reports a stall only when it can place no byte at all, so
+        // there is no room left when this stops.
+        let mut filler = client.try_clone().unwrap();
+        let block = vec![0u8; 64 * 1024];
+        loop {
+            match filler.write(&block) {
+                Ok(_) => continue,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("the transport would not fill: {e}"),
+            }
+        }
+
+        // The peer starts reading a moment later, so the frame below is
+        // offered into a transport that is still full when it is first tried.
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let mut sink = vec![0u8; 64 * 1024];
+            while peer.read(&mut sink).is_ok_and(|n| n > 0) {}
+        });
+
+        let mut conn = Connection {
+            stream: Stream::Raw(client),
+            buf: Vec::new(),
+            seq: 0,
+            sign_key: Vec::new(),
+            sign_iv: Vec::new(),
+            read_key: Vec::new(),
+            read_iv: Vec::new(),
+            connected_host: None,
+            logged_in_at: None,
+            competing: None,
+            heartbeat_secs: None,
+            routing: Default::default(),
+            write_failed: false,
+            read_failed: false,
+        };
+        let sent = conn.send_raw(b"8=FIX.4.1\x0135=V\x0110=000\x01");
+        assert!(sent.is_ok(), "the frame goes out once the peer reads again: {sent:?}");
+        assert!(!conn.write_failed(), "and a peer that took it did not cost the transport");
     }
 
     /// The bound has to stay under the interval at which the loop probes a

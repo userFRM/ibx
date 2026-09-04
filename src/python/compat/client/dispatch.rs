@@ -480,6 +480,15 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "error", (req_id, 0i64, 200i64, reason, ""));
         }
 
+        // A book this client could not keep whole, on the request that asked
+        // for it. Nothing further is kept for it, so a caller not told reads a
+        // subscription that is up and a book that has stopped moving. 354 is
+        // what the reference client reports when data asked for is not served.
+        for (req_id, reason) in shared.market.drain_depth_drops() {
+            call_wrapper!(self.wrapper, py, "error",
+                (i64::from(req_id), super::raised_now(), 354i64, reason, ""));
+        }
+
         // A calculation asked for before the venue had stated a model waited on
         // the watch that asking opened. Answer it here, before the drain, so
         // the caller gets the question they asked rather than only the model.

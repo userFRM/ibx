@@ -953,7 +953,14 @@ impl HotLoop {
                         // again: one contract holds one subscription on the
                         // wire, and the caller watches the one that is up, so
                         // two parts of one program may watch one contract.
-                        Some(id) if self.farm.holds_market_data(id) => {
+                        //
+                        // Except the chargeable snapshot, which is a request of
+                        // its own and not a share of somebody's stream. Handed
+                        // the stream instead it was never sent, never billed
+                        // and never refused for want of the entitlement, and
+                        // the caller heard the snapshot end off ticks it did
+                        // not ask for — a paid answer that reached nobody.
+                        Some(id) if self.farm.holds_market_data(id) && !regulatory_snapshot => {
                             if let Some(tx) = &reply_tx {
                                 let _ = tx.try_send(Ok(id));
                             }
@@ -4433,6 +4440,54 @@ mod tests {
         assert_eq!(
             hl.context.market.instrument_by_server_tag(910_002), Some(id),
             "news routes through this map, so its tag outlives the L1 request",
+        );
+    }
+
+    /// A chargeable snapshot is a request of its own, not a share of a stream
+    /// somebody else opened.
+    ///
+    /// A contract already being streamed serves the next caller off the stream
+    /// that is up, which is right for a subscription and wrong for the one-shot
+    /// the venue bills for: nothing went out, nothing was billed, and the venue
+    /// never got the chance to refuse it for want of the entitlement — while
+    /// the caller was handed the snapshot's end off ticks it never asked for.
+    #[test]
+    fn a_chargeable_snapshot_is_asked_for_even_where_the_contract_is_streaming() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        let contract = || ContractRef {
+            con_id: 756733,
+            symbol: "SPY".into(),
+            exchange: "SMART".into(),
+            sec_type: "STK".into(),
+            currency: "USD".into(),
+            ..Default::default()
+        };
+        // One caller streams the contract; another asks for the one-shot on it.
+        for chargeable in [false, true] {
+            tx.send(ControlCommand::Subscribe {
+                contract: contract(),
+                mode_9887: 0,
+                regulatory_snapshot: chargeable,
+                reply_tx: None,
+            })
+            .expect("the engine is holding the other end");
+            hl.poll_control_commands();
+        }
+
+        let instrument = hl.context.market.instrument_by_con_id(756733)
+            .expect("the contract holds a slot");
+        let asked: Vec<u32> = hl.farm.instrument_md_reqs.iter()
+            .find(|(id, _)| *id == instrument)
+            .expect("the contract has requests standing on it")
+            .1
+            .entries.iter().map(|e| e.request_type).collect();
+        // 624 is the venue's request type for the chargeable snapshot.
+        assert!(
+            asked.contains(&624),
+            "the snapshot is asked for under its own request rather than riding \
+             the stream: {asked:?}",
         );
     }
 }

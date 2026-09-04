@@ -502,13 +502,22 @@ impl EClient {
         // strategy asking what it already has on, at the moment it starts, is
         // exactly who asks this first, and telling it "nothing" is how the same
         // order gets placed twice.
-        if !self.shared.orders.wait_for_replay() {
-            // An incomplete replay is reported: what follows is what has arrived,
-            // which is otherwise indistinguishable from an account with nothing
-            // working.
-            log::warn!(
+        // Only where the venue had begun naming and not finished. An account
+        // working nothing is named with nothing, and the record that ends the
+        // naming cannot be told from the one that precedes it, so an empty
+        // account never sees it finish — reporting there would cry wolf on
+        // every reading of an idle account.
+        if !self.shared.orders.wait_for_replay() && self.shared.orders.naming_began() {
+            // Said to the caller rather than only to the log, and said ahead of
+            // the orders: what follows is what had arrived, which is otherwise
+            // indistinguishable from an account with nothing working, and a
+            // caller reading it as the whole set places what it already has on.
+            wrapper.error(
+                super::dispatch::NO_REQUEST,
+                Refusal::NO_ANSWER as i64,
                 "the venue had not finished naming this account's working orders within \
                  the wait, so what follows is what had arrived rather than what is working",
+                "",
             );
         }
         for (order_id, tracked) in self.core.collect_open_orders(&self.shared) {

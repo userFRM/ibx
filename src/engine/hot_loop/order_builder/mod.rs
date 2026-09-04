@@ -739,6 +739,11 @@ pub(crate) fn refuse_what_is_left(
         return;
     }
     log::warn!("{} instruction(s) were still waiting when {why}", left.len());
+    // How many withdrawals of the whole account were among them. Counted
+    // rather than reported one by one: a caller asking for everything back
+    // queues one of these per instrument the engine holds, and a refusal per
+    // instrument would say the same thing fifty times.
+    let mut whole_account = 0usize;
     for req in left {
         // What is said depends on what was asked for, because these do not
         // all name an order of their own. A cancel and a modify name the order
@@ -761,11 +766,10 @@ pub(crate) fn refuse_what_is_left(
                 ),
             ),
             OrderRequest::CancelAll { .. } => {
-                // Names no order at all, so there is nobody to tell but the log.
-                log::warn!(
-                    "a request to cancel every order was still waiting when {why}, \
-                     and did not reach the venue: whatever was working still is",
-                );
+                // Names no order at all, so there is no order to report it
+                // against. Said below under no request, which is how both
+                // surfaces deliver what belongs to none of a caller's own.
+                whole_account += 1;
                 continue;
             }
             // A bracket is three orders under one request, and all three
@@ -791,6 +795,20 @@ pub(crate) fn refuse_what_is_left(
                 what.clone(),
             );
         }
+    }
+    if whole_account > 0 {
+        log::warn!(
+            "{whole_account} request(s) to cancel every order were still waiting when \
+             {why}, and did not reach the venue: whatever was working still is",
+        );
+        shared.reference.push_historical_error(
+            crate::bridge::ReferenceState::NO_REQUEST,
+            crate::error_codes::Refusal::NOT_CONNECTED,
+            format!(
+                "{why} before the withdrawal of every order reached the venue, so \
+                 whatever the account was working still is",
+            ),
+        );
     }
 }
 
