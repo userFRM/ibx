@@ -2,6 +2,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use num_bigint::BigUint;
@@ -255,7 +256,7 @@ pub fn recv_secure<R: Read>(
                 "no secure message before the auth timeout, with the venue still speaking",
             ));
         }
-        let (payload, _) = ns::ns_recv(stream)?;
+        let (payload, _) = ns::ns_recv(stream, secure_deadline)?;
         let text = String::from_utf8_lossy(&payload);
         let parts: Vec<&str> = text.split(';').collect();
 
@@ -306,6 +307,13 @@ pub fn recv_secure<R: Read>(
 
 /// The field the server states its own proof on.
 const SRP_SERVER_PROOF_FIELD: usize = 8;
+
+/// The clock one wait of this handshake runs under, matching the one the
+/// auth socket is given.
+fn srp_wait_deadline() -> std::time::Instant {
+    std::time::Instant::now()
+        + std::time::Duration::from_secs(crate::config::TIMEOUT_SSL_AUTH)
+}
 
 /// Check the server's proof before its verdict is believed.
 ///
@@ -376,7 +384,7 @@ fn srp_result_fields<R: Read>(stream: &mut R) -> io::Result<Vec<String>> {
                 "no SRP result before the auth timeout, with the venue still speaking",
             ));
         }
-        match recv_msg(stream)? {
+        match recv_msg(stream, deadline)? {
             RecvMsg::Xyz { state, fields, .. } if state == SRP_AUTH_RESULT => {
                 return Ok(fields);
             }
@@ -394,8 +402,12 @@ fn srp_result_fields<R: Read>(stream: &mut R) -> io::Result<Vec<String>> {
 }
 
 /// Receive a framed message and classify as text or binary.
-pub fn recv_msg<R: Read>(stream: &mut R) -> io::Result<RecvMsg> {
-    let (payload, _) = ns::ns_recv(stream)?;
+///
+/// Bounded by the caller's deadline: the socket's own timeout ends a quiet
+/// peer one read at a time, but a peer that keeps trickling bytes holds a
+/// frame open past every deadline checked between frames.
+pub fn recv_msg<R: Read>(stream: &mut R, deadline: std::time::Instant) -> io::Result<RecvMsg> {
+    let (payload, _) = ns::ns_recv(stream, deadline)?;
 
     // Try NS text first
     if ns::is_ns_text(&payload)
@@ -509,7 +521,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     stream.write_all(&xyz::xyz_wrap(&msg1))?;
 
     // State 2: Receive AUTH_PARAMS
-    let recv2 = recv_msg(stream)?;
+    let recv2 = recv_msg(stream, srp_wait_deadline())?;
     let fields2 = match recv2 {
         RecvMsg::Xyz { state, fields, .. } => {
             if state != 2 {
@@ -544,7 +556,7 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
     stream.write_all(&xyz::xyz_wrap(&msg3))?;
 
     // State 4: Receive SERVER_PARAMS (salt, B)
-    let recv4 = recv_msg(stream)?;
+    let recv4 = recv_msg(stream, srp_wait_deadline())?;
     let (state4, fields4) = match recv4 {
         RecvMsg::Xyz { state, fields, .. } => (state, fields),
         _ => {
@@ -859,6 +871,36 @@ fn provider_panicked() -> io::Error {
     )
 }
 
+/// Put a code the provider has finished on the wire, where one is waiting.
+///
+/// A code is single use, and one spent on a login the deadline is about to
+/// abandon is gone for nothing, so a code that outlives the deadline is
+/// dropped rather than sent.
+fn send_a_waiting_code<S: Write>(
+    stream: &mut S,
+    pending_code: &mut Option<std::sync::mpsc::Receiver<io::Result<String>>>,
+    code_submitted: &mut bool,
+    deadline: std::time::Instant,
+) -> io::Result<()> {
+    let Some(rx) = pending_code.as_ref() else {
+        return Ok(());
+    };
+    match rx.try_recv() {
+        Ok(result) => {
+            *pending_code = None;
+            if std::time::Instant::now() < deadline {
+                submit_swcr_code(stream, &result?)?;
+                *code_submitted = true;
+            }
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            return Err(provider_panicked());
+        }
+    }
+    Ok(())
+}
+
 /// Default deadline for the second-factor gate, matching the server-side
 /// timeout measured on a recorded session (~18 min).
 pub const IB_KEY_DEFAULT_TIMEOUT_SECS: u64 = 1080;
@@ -994,6 +1036,7 @@ pub fn do_security_code_2fa<S: Read + Write>(
     stream: &mut S,
     deadline: std::time::Instant,
     code_provider: Option<&CodeProvider>,
+    cancel: Option<&AtomicBool>,
 ) -> io::Result<IbKeyOutcome> {
     use std::time::Instant;
 
@@ -1025,6 +1068,15 @@ pub fn do_security_code_2fa<S: Read + Write>(
     let mut reader = GateReader::default();
 
     loop {
+        // The client that asked for this wait can take it back. Ended as
+        // something the retry ladder reads as the client's own doing, not an
+        // answer from the venue.
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(ib_key_err(
+                io::ErrorKind::Interrupted,
+                "security-code wait cancelled by the client",
+            ));
+        }
         if Instant::now() >= deadline {
             return Err(ib_key_err(
                 io::ErrorKind::TimedOut,
@@ -1220,6 +1272,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
     token_sub_type: &str,
     deadline: std::time::Instant,
     code_provider: Option<&CodeProvider>,
+    cancel: Option<&AtomicBool>,
 ) -> io::Result<IbKeyOutcome> {
     use std::time::Instant;
 
@@ -1249,6 +1302,15 @@ pub fn do_ib_key_2fa<S: Read + Write>(
     let mut reader = GateReader::default();
 
     loop {
+        // The client that asked for this wait can take it back. Ended as
+        // something the retry ladder reads as the client's own doing, not an
+        // answer from the venue.
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(ib_key_err(
+                io::ErrorKind::Interrupted,
+                "second-factor wait cancelled by the client",
+            ));
+        }
         if Instant::now() >= deadline {
             return Err(ib_key_err(
                 io::ErrorKind::TimedOut,
@@ -1287,7 +1349,13 @@ pub fn do_ib_key_2fa<S: Read + Write>(
         // ends the login while the operator is still deciding, and, without a
         // timeout on the socket at all, leaves the deadline unreachable while
         // a server that has stopped talking holds the wait open for ever.
-        let Some((recv, _)) = recv else { continue };
+        let Some((recv, _)) = recv else {
+            // The operator's code can arrive in that silence, and reading it
+            // only when the venue next spoke left it sitting — on a socket
+            // the venue keeps quiet, until this wait's own deadline.
+            send_a_waiting_code(stream, &mut pending_code, &mut code_submitted, deadline)?;
+            continue;
+        };
 
         match recv {
             RecvMsg::Xyz { msg_id, state, fields, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN && state == 2 => {
@@ -1450,28 +1518,8 @@ pub fn do_ib_key_2fa<S: Read + Write>(
             }
         }
 
-        // A provider that outlived the grace period yields here instead. Polling
-        // on inbound traffic keeps the socket single-threaded, at the cost of
-        // trailing the operator's entry by up to one probe interval (~20 s); if
-        // that ever matters, give the stream a read timeout and select on both.
-        if let Some(rx) = pending_code.as_ref() {
-            match rx.try_recv() {
-                Ok(result) => {
-                    pending_code = None;
-                    // A single-use code is not spent on a login about to be
-                    // abandoned: the deadline check at the top of the loop would
-                    // fire before the server's answer could be read.
-                    if Instant::now() < deadline {
-                        submit_swcr_code(stream, &result?)?;
-                        code_submitted = true;
-                    }
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    return Err(provider_panicked());
-                }
-            }
-        }
+        // A provider that outlived the grace period yields here instead.
+        send_a_waiting_code(stream, &mut pending_code, &mut code_submitted, deadline)?;
     }
 }
 

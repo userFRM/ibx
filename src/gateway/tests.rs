@@ -1057,6 +1057,10 @@ mod init_burst_drain_tests {
     const POLL: Duration = Duration::from_millis(250);
     const GAP: Duration = Duration::from_secs(1);
 
+    fn far_enough() -> std::time::Instant {
+        std::time::Instant::now() + std::time::Duration::from_secs(60)
+    }
+
     #[test]
     fn a_gap_in_the_burst_does_not_end_the_drain() {
         // Two chunks with a quiet read between them — a gap inside the
@@ -1074,7 +1078,7 @@ mod init_burst_drain_tests {
                 quiet(),
             ],
         };
-        let drained = super::super::drain_init_burst(&mut reader, Vec::new(), POLL, GAP)
+        let drained = super::super::drain_init_burst(&mut reader, Vec::new(), POLL, GAP, far_enough())
             .expect("the drain ends on the quiet stretch, not the gap");
         assert_eq!(
             drained,
@@ -1088,7 +1092,7 @@ mod init_burst_drain_tests {
         let mut reader = BurstReader {
             script: vec![chunk(b"6145=usfarm;"), Ok(Vec::new())],
         };
-        let err = super::super::drain_init_burst(&mut reader, Vec::new(), POLL, GAP)
+        let err = super::super::drain_init_burst(&mut reader, Vec::new(), POLL, GAP, far_enough())
             .expect_err("a closed socket is not a burst that finished");
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset, "{err}");
     }
@@ -1100,8 +1104,157 @@ mod init_burst_drain_tests {
         let mut reader = BurstReader {
             script: vec![chunk(b"late;"), quiet(), quiet(), quiet(), quiet()],
         };
-        let drained = super::super::drain_init_burst(&mut reader, b"carry;".to_vec(), POLL, GAP)
+        let drained = super::super::drain_init_burst(&mut reader, b"carry;".to_vec(), POLL, GAP, far_enough())
             .expect("the drain ends on the quiet stretch");
         assert_eq!(drained, b"carry;late;");
+    }
+}
+
+/// The routing answer is optional: an idle timeout on a still-open socket is
+/// the shape its absence takes. A socket that closes while it is awaited is
+/// not that — read as one, the close came back later as a successful
+/// connection on a socket already gone.
+mod routing_response_tests {
+    use std::io::{self, Read};
+    use std::time::{Duration, Instant};
+
+    /// A socket scripted for one read sequence; once exhausted it keeps
+    /// answering the way an open, idle socket does — with a poll timeout.
+    struct RoutingReader { script: Vec<io::Result<Vec<u8>>> }
+
+    impl Read for RoutingReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.script.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "quiet"));
+            }
+            match self.script.remove(0) {
+                Ok(bytes) => {
+                    let n = bytes.len().min(buf.len());
+                    buf[..n].copy_from_slice(&bytes[..n]);
+                    Ok(n)
+                }
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    fn chunk(bytes: &[u8]) -> io::Result<Vec<u8>> {
+        Ok(bytes.to_vec())
+    }
+
+    #[test]
+    fn a_closed_socket_is_not_a_routing_response_that_never_came() {
+        // A close while the answer is still arriving is stated as one,
+        // whatever has arrived so far.
+        let mut closing = RoutingReader {
+            script: vec![chunk(b"8=O"), Ok(Vec::new())],
+        };
+        let err = super::super::read_routing_response(
+            &mut closing,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .expect_err("a socket that closed is not a response that is absent");
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset, "{err}");
+
+        // An open, silent socket past the deadline is the absent optional
+        // response.
+        let mut silent = RoutingReader { script: Vec::new() };
+        let none = super::super::read_routing_response(&mut silent, Instant::now())
+            .expect("silence past the deadline is an absent response, not an error");
+        assert!(none.is_empty());
+
+        // And a complete frame ends the read the moment it is held.
+        let frame = b"8=O\x019=5\x01hello";
+        let mut answering = RoutingReader {
+            script: vec![chunk(frame), Ok(Vec::new())],
+        };
+        let got = super::super::read_routing_response(
+            &mut answering,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .expect("a complete frame is the response");
+        assert_eq!(got, frame);
+    }
+}
+
+/// A redirect or a refusal can arrive after the reconnect's authentication
+/// as well as before it. Waited out, the attempt simply repeats: one sent
+/// elsewhere knocks again at the door that sent it on, and one refused
+/// re-asks a question the venue has already answered — so both are acted on.
+mod reconnect_post_auth_tests {
+    use crate::auth::dh::SecureChannel;
+    use crate::config::NS_VERSION;
+    use crate::protocol::ns;
+    use std::io::{self, Read, Write};
+    use std::time::{Duration, Instant};
+
+    /// Serves one frame per read; once exhausted, answers the way an open,
+    /// idle socket does — with a poll timeout.
+    struct FramedScript { frames: Vec<Vec<u8>>, pos: usize }
+
+    impl Read for FramedScript {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.frames.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "quiet"));
+            }
+            let frame = &self.frames[0];
+            let n = (frame.len() - self.pos).min(buf.len());
+            buf[..n].copy_from_slice(&frame[self.pos..self.pos + n]);
+            self.pos += n;
+            if self.pos == frame.len() {
+                self.frames.remove(0);
+                self.pos = 0;
+            }
+            Ok(n)
+        }
+    }
+
+    impl Write for FramedScript {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    }
+
+    fn deadline() -> Instant {
+        Instant::now() + Duration::from_secs(2)
+    }
+
+    #[test]
+    fn a_redirect_or_a_refusal_after_auth_is_acted_on_not_waited_out() {
+        // A redirect names where the attempt goes next.
+        let redirect = ns::ns_build(NS_VERSION, ns::NS_REDIRECT, &["cdc1.example:4000"], "");
+        let mut stream = FramedScript { pos: 0, frames: vec![redirect] };
+        match super::super::wait_for_fix_start(
+            &mut stream, &mut SecureChannel::new(), "", deadline(), None,
+        ) {
+            Ok(super::super::ReconnectPostAuth::Redirect(host)) => {
+                assert_eq!(host, "cdc1.example", "the port it names is the record, not the target");
+            }
+            Ok(_) => panic!("the redirect was waited out, not followed"),
+            Err(e) => panic!("the redirect was refused: {e}"),
+        }
+
+        // A secure error is the venue refusing, and reads as one.
+        let refusal = ns::ns_build(NS_VERSION, ns::NS_SECURE_ERROR, &["stale session"], "");
+        let mut stream = FramedScript { pos: 0, frames: vec![refusal] };
+        let err = match super::super::wait_for_fix_start(
+            &mut stream, &mut SecureChannel::new(), "", deadline(), None,
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("a secure error after auth was waited out, not refused"),
+        };
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+
+        // And the data start still arrives as one, so the two new arms are
+        // not paid for with the ordinary path.
+        let start = ns::ns_build(NS_VERSION, ns::NS_FIX_START, &[], "");
+        let mut stream = FramedScript { pos: 0, frames: vec![start] };
+        match super::super::wait_for_fix_start(
+            &mut stream, &mut SecureChannel::new(), "", deadline(), None,
+        ) {
+            Ok(super::super::ReconnectPostAuth::Ready(none)) => assert!(none.is_none()),
+            _ => panic!("the data start was not read as the data start"),
+        }
     }
 }

@@ -23,7 +23,7 @@ impl Default for ReplayPacing {
 }
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 use std::io;
 
@@ -167,6 +167,15 @@ pub struct HotLoop {
     /// Earliest instant the next HMDS reconnect attempt may spawn. `None`
     /// while HMDS is healthy.
     hmds_next_attempt_at: Option<Instant>,
+    /// The reconnects this loop has in flight, and the flag that takes them
+    /// back. A stop or a spent budget sets the flag; the workers check it
+    /// between the phases of a handshake, so neither opens a session at the
+    /// venue after the client stopped asking for one.
+    reconnect_cancel: Arc<AtomicBool>,
+    /// Held so the loop can say its workers have finished before it returns:
+    /// a reconnect spawned detached kept dialling and authenticating after
+    /// the shutdown that orphaned it.
+    reconnect_workers: Vec<std::thread::JoinHandle<()>>,
 }
 
 /// Consecutive HMDS reconnect failures before the loss is logged as an error. Retries
@@ -396,6 +405,8 @@ impl HotLoop {
             secdef_next_attempt_at: None,
             pending_secdef_reconnect: None,
             hmds_next_attempt_at: None,
+            reconnect_cancel: Arc::new(AtomicBool::new(false)),
+            reconnect_workers: Vec::new(),
         }
     }
 
@@ -656,6 +667,8 @@ impl HotLoop {
         }
 
         self.running = true;
+        // A loop that starts again starts with no recovery in flight.
+        self.reconnect_cancel.store(false, Ordering::Relaxed);
 
         while self.running {
             self.context.loop_iterations += 1;
@@ -812,6 +825,14 @@ impl HotLoop {
             if self.farm.disconnected && self.ccp.disconnected && no_historical_socket {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
+        }
+
+        // The loop has stopped. Take back whatever recovery is still in
+        // flight and wait it out, so nothing this loop started keeps opening
+        // sessions at the venue on its behalf.
+        self.reconnect_cancel.store(true, Ordering::Relaxed);
+        for worker in self.reconnect_workers.drain(..) {
+            let _ = worker.join();
         }
     }
 
@@ -1932,6 +1953,9 @@ impl HotLoop {
     /// Say once that recovery has stopped, so a caller waiting on a connection
     /// that is never coming back is told rather than left waiting.
     fn report_recovery_exhausted(&mut self, which: &str) {
+        // An attempt already in flight is recovery too, and the budget that
+        // just ran out was spent on it as well — so it is taken back.
+        self.reconnect_cancel.store(true, Ordering::Relaxed);
         if self.reconnect_halted.is_some() {
             return;
         }
@@ -2119,7 +2143,8 @@ impl HotLoop {
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
+        let cancel = Arc::clone(&self.reconnect_cancel);
+        let worker = std::thread::Builder::new()
             .name(format!("farm-reconnect-{attempt}"))
             .spawn(move || {
                 let (farm_host, farm_name) =
@@ -2129,10 +2154,14 @@ impl HotLoop {
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
                     &auth.hw_info, &auth.encoded, Farm::MarketData, auth.trading_port,
+                    Some(&cancel),
                 );
                 let _ = tx.send(result);
             })
             .ok();
+        if let Some(handle) = worker {
+            self.reconnect_workers.push(handle);
+        }
         self.pending_farm_reconnect = Some(rx);
     }
 
@@ -2230,12 +2259,16 @@ impl HotLoop {
         log::info!("CCP auto-reconnect attempt {} starting (host={})", attempt, auth.host);
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
+        let cancel = Arc::clone(&self.reconnect_cancel);
+        let worker = std::thread::Builder::new()
             .name(format!("ccp-reconnect-{attempt}"))
             .spawn(move || {
-                let _ = tx.send(reconnect_ccp(&auth));
+                let _ = tx.send(reconnect_ccp(&auth, &cancel));
             })
             .ok();
+        if let Some(handle) = worker {
+            self.reconnect_workers.push(handle);
+        }
         self.pending_ccp_reconnect = Some(rx);
     }
 
@@ -2319,7 +2352,12 @@ impl HotLoop {
         // Not reported here: what this rebuilds is historical data and
         // contract definitions, and a session can trade without either, so
         // losing them is not the end of one.
-        if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) { return; }
+        if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) {
+            // The budget covers the attempt already in flight as well as the
+            // one this declines to start, so what is running is taken back.
+            self.reconnect_cancel.store(true, Ordering::Relaxed);
+            return;
+        }
         let auth = match self.reconnect_auth.as_ref() {
             Some(a) if !a.host.is_empty() && !a.hmds_host.is_empty() => a,
             _ => return,
@@ -2350,7 +2388,8 @@ impl HotLoop {
             attempt, auth.hmds_host, auth.hmds_farm,
         );
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
+        let cancel = Arc::clone(&self.reconnect_cancel);
+        let worker = std::thread::Builder::new()
             .name(format!("hmds-reconnect-{attempt}"))
             .spawn(move || {
                 let result = connect_farm(
@@ -2358,10 +2397,14 @@ impl HotLoop {
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
                     &auth.hw_info, &auth.encoded, Farm::Historical, auth.hmds_port,
+                    Some(&cancel),
                 );
                 let _ = tx.send(result);
             })
             .ok();
+        if let Some(handle) = worker {
+            self.reconnect_workers.push(handle);
+        }
         self.pending_hmds_reconnect = Some(rx);
     }
 
@@ -2381,7 +2424,12 @@ impl HotLoop {
         // Not reported here: what this rebuilds is historical data and
         // contract definitions, and a session can trade without either, so
         // losing them is not the end of one.
-        if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) { return; }
+        if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) {
+            // The budget covers the attempt already in flight as well as the
+            // one this declines to start, so what is running is taken back.
+            self.reconnect_cancel.store(true, Ordering::Relaxed);
+            return;
+        }
         let auth = match self.reconnect_auth.as_ref() {
             Some(a) if !a.secdef_host.is_empty() && !a.secdef_farm.is_empty() => a,
             // A session the venue named no such farm for has none to rebuild.
@@ -2412,7 +2460,8 @@ impl HotLoop {
             attempt, auth.secdef_host, auth.secdef_farm,
         );
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
+        let cancel = Arc::clone(&self.reconnect_cancel);
+        let worker = std::thread::Builder::new()
             .name(format!("secdef-reconnect-{attempt}"))
             .spawn(move || {
                 let result = connect_farm(
@@ -2420,10 +2469,14 @@ impl HotLoop {
                     &auth.username, &auth.password, auth.paper,
                     &auth.server_session_id, &auth.session_key,
                     &auth.hw_info, &auth.encoded, Farm::SecurityDefinition, auth.secdef_port,
+                    Some(&cancel),
                 );
                 let _ = tx.send(result);
             })
             .ok();
+        if let Some(handle) = worker {
+            self.reconnect_workers.push(handle);
+        }
         self.pending_secdef_reconnect = Some(rx);
     }
 

@@ -198,7 +198,7 @@ fn read_server_hello(tls: &mut impl std::io::Read, what: &str) -> io::Result<Vec
                 ),
             ));
         }
-        let (payload, _) = ns::ns_recv(tls)?;
+        let (payload, _) = ns::ns_recv(tls, deadline)?;
         let text = String::from_utf8_lossy(&payload);
         let parts: Vec<&str> = text.split(';').collect();
         let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -223,6 +223,16 @@ fn read_server_hello(tls: &mut impl std::io::Read, what: &str) -> io::Result<Vec
             "{what}: received msg id {msg_type} while awaiting the key exchange; read past"
         );
     }
+}
+
+/// The error a reconnect ends with when the client took it back — a stop or
+/// a spent recovery budget. Stated as the client's own doing: read as an
+/// answer from the venue, the retry ladder would try it again.
+fn cancelled_by_the_client(what: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Interrupted,
+        format!("{what} cancelled by the client"),
+    )
 }
 
 /// Whether a failed connect means nothing was reached, rather than something
@@ -405,7 +415,14 @@ pub fn connect_farm(
     encoded: &str,
     farm: Farm,
     stated_port: Option<u16>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> io::Result<Connection> {
+    let cancelled = || {
+        cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    if cancelled() {
+        return Err(cancelled_by_the_client(&format!("{farm_id} reconnect")));
+    }
     // What the venue said to reach this farm on. The configured port applies
     // only where it said nothing.
     let port = stated_port.unwrap_or(settings.port);
@@ -436,7 +453,10 @@ pub fn connect_farm(
     let mut stream = farm_tcp;
     stream.write_all(&dh_msg)?;
 
-    let (payload, _) = ns::ns_recv(&mut stream)?;
+    let (payload, _) = ns::ns_recv(
+        &mut stream,
+        std::time::Instant::now() + Duration::from_secs(TIMEOUT_FARM_CONNECT),
+    )?;
     let text = String::from_utf8_lossy(&payload);
     let parts: Vec<&str> = text.split(';').collect();
     let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -448,6 +468,13 @@ pub fn connect_farm(
     }
     channel.process_server_hello(parts.get(2..).unwrap_or(&[]))?;
     log::info!("{farm_id} key exchange complete");
+
+    // Checked again before the logon goes out: past this point the venue
+    // holds an authenticated connection, and one the client has stopped
+    // asking for must not be opened.
+    if cancelled() {
+        return Err(cancelled_by_the_client(&format!("{farm_id} reconnect")));
+    }
 
     // Encrypted logon
     let farm_session_id = if server_session_id.is_empty() {
@@ -492,28 +519,14 @@ pub fn connect_farm(
     log::info!("{farm_id} sent routing request (6556={channel_id})");
 
     // Read routing response. Frame-based termination: poll with a short
-    // timeout, break as soon as one complete FIXCOMP frame is held
-    // buffered. The 5-s read timeout remains as the worst-case fallback.
+    // timeout, return as soon as one complete frame is held buffered. The
+    // deadline remains as the worst-case fallback for an answer that is not
+    // coming.
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
-    let mut resp_buf = Vec::new();
-    let routing_deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let mut tmp = [0u8; 8192];
-        match stream.read(&mut tmp) {
-            Ok(0) => break,
-            Ok(n) => {
-                resp_buf.extend_from_slice(&tmp[..n]);
-                if has_complete_response_frame(&resp_buf) { break; }
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock
-                || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                if has_complete_response_frame(&resp_buf) { break; }
-                if std::time::Instant::now() >= routing_deadline { break; }
-            }
-            Err(e) => return Err(e),
-        }
-    }
+    let resp_buf = read_routing_response(
+        &mut stream,
+        std::time::Instant::now() + Duration::from_secs(5),
+    )?;
     log::info!("{} routing response: {} bytes", farm_id, resp_buf.len());
 
     // Create Connection (switches to non-blocking), inject routing bytes
@@ -627,12 +640,20 @@ fn alternates_to(seen: &[String], current: &str) -> Vec<String> {
 /// If the server signals at AUTH_START that it requires full SRP, transparently
 /// falls back to a fresh SRP handshake using the cached `username`/`password`
 /// in `ReconnectAuth` (the same path used by `Gateway::connect`).
-pub fn reconnect_ccp(auth: &ReconnectAuth) -> io::Result<Connection> {
+///
+/// `cancel` is the engine taking the attempt back — a stop, or a recovery
+/// budget that is spent. Checked between the phases of the handshake: a
+/// reconnect is what the engine schedules, and one it has stopped scheduling
+/// must not go on opening a session at the venue.
+pub fn reconnect_ccp(
+    auth: &ReconnectAuth,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> io::Result<Connection> {
     let token_hash = token_short_hash(&auth.session_token);
-    let first = reconnect_ccp_attempt(auth, &token_hash, &auth.host, 0);
+    let first = reconnect_ccp_attempt(auth, &token_hash, &auth.host, 0, cancel);
     let Err(why) = first else { return first };
     failover(&auth.host, why, &auth.alternate_hosts, |host| {
-        reconnect_ccp_attempt(auth, &token_hash, host, 0)
+        reconnect_ccp_attempt(auth, &token_hash, host, 0, cancel)
     })
 }
 
@@ -690,16 +711,27 @@ fn failover(
 /// A socket that closes while the burst is still arriving is stated as one:
 /// read as a quiet end, the close comes back later as a venue that named no
 /// route.
+///
+/// Silence ends the drain, and so does the deadline: a peer that keeps
+/// stating something, one byte at a time, never lets the quiet stretch begin,
+/// and would otherwise hold the connect open for as long as it kept talking.
 fn drain_init_burst<R: Read>(
     reader: &mut R,
     mut data: Vec<u8>,
     poll: Duration,
     gap: Duration,
+    deadline: std::time::Instant,
 ) -> io::Result<Vec<u8>> {
     let quiet_reads_at_the_end = gap.as_millis().div_ceil(poll.as_millis());
     let mut quiet = 0u128;
     let mut tmp = [0u8; 65536];
     loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the init burst was still arriving when the deadline passed",
+            ));
+        }
         match reader.read(&mut tmp) {
             Ok(0) => {
                 return Err(io::Error::new(
@@ -726,9 +758,147 @@ fn drain_init_burst<R: Read>(
     Ok(data)
 }
 
-fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, depth: u32) -> io::Result<Connection> {
+/// What the venue says between authentication and the data start, on a
+/// reconnect. The same two shapes the first connect's wait answers: the
+/// venue can send the session somewhere else after authenticating it, or
+/// say no.
+enum ReconnectPostAuth {
+    /// The data start arrived, and with it whoever the venue said was on
+    /// the account when this reconnect got here — where it said so.
+    Ready(Option<CompetingSession>),
+    /// The venue sent this session somewhere else before it got that far.
+    Redirect(String),
+}
+
+/// Wait for the data start after a reconnect's authentication, answering
+/// what the venue asks for on the way.
+///
+/// Acts on what the first connect's wait acts on, for the same reasons: a
+/// secure error is a refusal and ends the attempt as one, and a redirect is
+/// followed. Read past, either is waited out against a host that has
+/// already answered, and the attempt repeats exactly as it was — one that
+/// was sent elsewhere knocks again at the door that sent it, and one that
+/// was refused asks the same question again with the same credentials.
+fn wait_for_fix_start<S: Read + Write>(
+    stream: &mut S,
+    channel: &mut SecureChannel,
+    our_logged_in_at: &str,
+    deadline: std::time::Instant,
+    mut unread: Option<Vec<u8>>,
+) -> io::Result<ReconnectPostAuth> {
+    let mut competing: Option<CompetingSession> = None;
+    while std::time::Instant::now() < deadline {
+        // As on the first login: what the gate read past its own answer is the
+        // first message here, not something to wait for again.
+        let payload = if let Some(carried) = unread.take() {
+            carried
+        } else {
+            match ns::ns_recv(stream, deadline) {
+                Ok((payload, _)) => payload,
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut
+                        || e.kind() == io::ErrorKind::Interrupted =>
+                {
+                    log::warn!("CCP reconnect post-auth recv timeout, retrying until deadline: {e}");
+                    continue;
+                }
+                Err(e) => {
+                    log::warn!("CCP reconnect post-auth recv: {e}");
+                    break;
+                }
+            }
+        };
+        let text = String::from_utf8_lossy(&payload);
+        let parts: Vec<&str> = text.split(';').collect();
+        let raw_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+        let inner = if raw_type == ns::NS_SECURE_MESSAGE {
+            // A secure message states three fields and the frame header
+            // establishes none of them. Read rather than indexed: a short
+            // frame is a thing to report, where indexing it takes the thread
+            // down — and on the reconnect path that is the thread every
+            // recovery depends on.
+            let body = parts.get(2).copied().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "secure message carries no body")
+            })?;
+            let ct = B64.decode(body)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            channel.decrypt(&ct)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+        } else if raw_type == ns::NS_SECURE_ERROR {
+            return Err(ns::refused_by_the_venue(
+                "CCP reconnect post-auth secure error",
+                parts[2..].join(";"),
+            ));
+        } else if raw_type == ns::NS_REDIRECT {
+            // The host alone: a reconnect dials the auth port whatever port
+            // the redirect names, as the one before authentication does.
+            let target = parts.get(2).unwrap_or(&"");
+            let redirect_host = target.split(':').next().unwrap_or(target).to_string();
+            log::info!("CCP reconnect redirected to {redirect_host} after auth");
+            return Ok(ReconnectPostAuth::Redirect(redirect_host));
+        } else {
+            payload
+        };
+
+        let inner_text = String::from_utf8_lossy(&inner);
+        let inner_parts: Vec<&str> = inner_text.split(';').collect();
+        let msg_type: u32 = inner_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+        if msg_type == ns::NS_CONNECT_RESPONSE {
+            if let Some(other) = parse_competing_session(&inner_text) {
+                // Whose session it is, decided by the one fact that separates
+                // them: when it logged in. A session older than this one's own
+                // last logon is this one's own, still being reaped by the
+                // venue, and reconnecting over it finishes the reconnect. A
+                // session younger than that logged in while this one was away —
+                // it is another client, it took the account fairly, and taking
+                // it back starts a fight that was watched happen: both sides
+                // reconnecting onto each other every twenty-odd seconds, each
+                // seeing only its own data stop.
+                if is_another_client(&other.since, our_logged_in_at) {
+                    return Err(io::Error::other(format!(
+                        "{TOOK_THE_ACCOUNT} another client holds this account, \
+                         from {} since {}, after this session logged in at {}",
+                        other.ip, other.since, our_logged_in_at,
+                    )));
+                }
+                log::warn!(
+                    "reconnected over this session's own earlier logon, from {} at {}{}",
+                    other.ip, other.since,
+                    if other.read_only { ", and this one may not trade" } else { "" },
+                );
+                // Carried out with the connection so the engine can say so.
+                competing = Some(other);
+            }
+            let newcomm = format!("{};{};0;;2;0;", NS_VERSION_MIN, ns::NS_NEWCOMMPORTTYPE);
+            session::send_secure(stream, channel, newcomm.as_bytes())?;
+        } else if msg_type == ns::NS_FIX_START {
+            return Ok(ReconnectPostAuth::Ready(competing));
+        } else if msg_type == ns::NS_ERROR_RESPONSE {
+            return Err(ns::refused_by_the_venue(
+                "CCP reconnect post-auth error",
+                inner_parts[2..].join(";"),
+            ));
+        }
+        // Ignore 530 keepalives and other types
+    }
+    Err(io::Error::other("CCP reconnect: no FIX_START after auth"))
+}
+
+fn reconnect_ccp_attempt(
+    auth: &ReconnectAuth,
+    token_hash: &str,
+    host: &str,
+    depth: u32,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> io::Result<Connection> {
     if depth > 5 {
         return Err(io::Error::other("CCP reconnect: too many redirects"));
+    }
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(cancelled_by_the_client("CCP reconnect"));
     }
     log::info!("CCP reconnect to {}:{} (attempt {})", host, AUTH_PORT, depth + 1);
     // When the venue says this logon happened, filled in from its answer
@@ -807,7 +977,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
             // reconnect thread, and an instant re-dial chain risks the same
             // rate limiting the backoff ladder exists for.
             std::thread::sleep(Duration::from_secs(2));
-            return reconnect_ccp_attempt(auth, token_hash, &redirect_host, depth + 1);
+            return reconnect_ccp_attempt(auth, token_hash, &redirect_host, depth + 1, cancel);
         }
         Err(e) => return Err(e),
     };
@@ -850,6 +1020,7 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
             code_provider: auth.code_provider.as_ref(),
             timeout_secs: auth.ib_key_timeout_secs,
             default_sub_type: &auth.ib_key_token_sub_type,
+            cancel: Some(cancel),
         })?.unread;
     }
 
@@ -863,100 +1034,28 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
     // mirroring this path, which never did it.
     let fix_deadline = std::time::Instant::now()
         + std::time::Duration::from_secs_f64(TIMEOUT_FIX_LOGON * 2.0);
-    let mut fix_ready = false;
+    let mut stated_heartbeat: Option<u64> = None;
     // Whoever held the account when this reconnect arrived, if the venue said,
     // and the interval it holds this connection to.
-    let mut took_from: Option<(String, String, bool)> = None;
-    let mut stated_heartbeat: Option<u64> = None;
-    while std::time::Instant::now() < fix_deadline {
-        // As on the first login: what the gate read past its own answer is the
-        // first message here, not something to wait for again.
-        let payload = if let Some(carried) = post_auth_unread.take() {
-            carried
-        } else {
-            match ns::ns_recv(&mut tls) {
-            Ok((payload, _)) => payload,
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut
-                    || e.kind() == io::ErrorKind::Interrupted =>
-            {
-                log::warn!("CCP reconnect post-auth recv timeout, retrying until deadline: {e}");
-                continue;
-            }
-            Err(e) => {
-                log::warn!("CCP reconnect post-auth recv: {e}");
-                break;
-            }
-            }
-        };
-        let text = String::from_utf8_lossy(&payload);
-        let parts: Vec<&str> = text.split(';').collect();
-        let raw_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-        let inner = if raw_type == ns::NS_SECURE_MESSAGE {
-            // A secure message states three fields and the frame header
-            // establishes none of them. Read rather than indexed: a short
-            // frame is a thing to report, where indexing it takes the thread
-            // down — and on the reconnect path that is the thread every
-            // recovery depends on.
-            let body = parts.get(2).copied().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "secure message carries no body")
-            })?;
-            let ct = B64.decode(body)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-            channel.decrypt(&ct)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-        } else {
-            payload
-        };
-
-        let inner_text = String::from_utf8_lossy(&inner);
-        let inner_parts: Vec<&str> = inner_text.split(';').collect();
-        let msg_type: u32 = inner_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-        if msg_type == ns::NS_CONNECT_RESPONSE {
-            if let Some(other) = parse_competing_session(&inner_text) {
-                // Whose session it is, decided by the one fact that separates
-                // them: when it logged in. A session older than this one's own
-                // last logon is this one's own, still being reaped by the
-                // venue, and reconnecting over it finishes the reconnect. A
-                // session younger than that logged in while this one was away —
-                // it is another client, it took the account fairly, and taking
-                // it back starts a fight that was watched happen: both sides
-                // reconnecting onto each other every twenty-odd seconds, each
-                // seeing only its own data stop.
-                if is_another_client(&other.since, &auth.logged_in_at) {
-                    return Err(io::Error::other(format!(
-                        "{TOOK_THE_ACCOUNT} another client holds this account, \
-                         from {} since {}, after this session logged in at {}",
-                        other.ip, other.since, auth.logged_in_at,
-                    )));
-                }
-                log::warn!(
-                    "reconnected over this session's own earlier logon, from {} at {}{}",
-                    other.ip, other.since,
-                    if other.read_only { ", and this one may not trade" } else { "" },
-                );
-                // Carried out with the connection so the engine can say so.
-                took_from = Some((other.ip.clone(), other.since.clone(), other.read_only));
-            }
-            let newcomm = format!("{};{};0;;2;0;", NS_VERSION_MIN, ns::NS_NEWCOMMPORTTYPE);
-            session::send_secure(&mut tls, &mut channel, newcomm.as_bytes())?;
-        } else if msg_type == ns::NS_FIX_START {
-            fix_ready = true;
-            break;
-        } else if msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(ns::refused_by_the_venue(
-                "CCP reconnect post-auth error",
-                inner_parts[2..].join(";"),
-            ));
+    let took_from = match wait_for_fix_start(
+        &mut tls, &mut channel, &auth.logged_in_at, fix_deadline, post_auth_unread.take(),
+    )? {
+        ReconnectPostAuth::Ready(other) => other.map(|o| (o.ip, o.since, o.read_only)),
+        ReconnectPostAuth::Redirect(redirect_host) => {
+            drop(tls);
+            // The same floor the redirect before authentication has: this
+            // runs on the background reconnect thread, and an instant
+            // re-dial chain risks the rate limiting the backoff ladder
+            // exists for.
+            std::thread::sleep(Duration::from_secs(2));
+            return reconnect_ccp_attempt(auth, token_hash, &redirect_host, depth + 1, cancel);
         }
-        // Ignore 530 keepalives and other types
-    }
+    };
     tls.get_ref().set_read_timeout(None)?;
-    if !fix_ready {
-        return Err(io::Error::other("CCP reconnect: no FIX_START after auth"));
+    // Checked again at the threshold: past it, a session is open at the
+    // venue, and one the client has stopped asking for must not be opened.
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(cancelled_by_the_client("CCP reconnect"));
     }
 
     // FIX Logon
@@ -1151,6 +1250,10 @@ pub(crate) struct SecondFactor<'a> {
     pub code_provider: Option<&'a session::CodeProvider>,
     pub timeout_secs: u64,
     pub default_sub_type: &'a str,
+    /// Set when the client can take the wait back — a reconnect that was
+    /// stopped or whose recovery budget is spent. The gate checks it between
+    /// polls; the first login has nobody to cancel it and states none.
+    pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
 }
 
 /// What the venue says between authentication and the data start.
@@ -1197,7 +1300,7 @@ fn wait_for_data_start(
         let payload = if let Some(carried) = unread.take() {
             carried
         } else {
-            match ns::ns_recv(&mut *tls) {
+            match ns::ns_recv(&mut *tls, fix_deadline) {
                 Ok((payload, _)) => payload,
                 Err(e)
                     if e.kind() == io::ErrorKind::WouldBlock
@@ -1287,6 +1390,49 @@ fn wait_for_data_start(
     Ok(PostAuth::Ready(competing))
 }
 
+/// Read the routing table's answer, which is optional.
+///
+/// The answer ends the read the moment one complete frame is held, and its
+/// absence ends it at the deadline: the venue owes no routing response, and
+/// an idle timeout on a still-open socket is the only thing that may stand
+/// for one that is not coming. A socket that closes while the answer is still
+/// awaited is stated as one — read as an absent answer, the close comes back
+/// later as a connection that was never open.
+fn read_routing_response<R: Read>(
+    reader: &mut R,
+    deadline: std::time::Instant,
+) -> io::Result<Vec<u8>> {
+    let mut resp_buf = Vec::new();
+    let mut tmp = [0u8; 8192];
+    loop {
+        match reader.read(&mut tmp) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "the socket closed while the routing response was still arriving",
+                ));
+            }
+            Ok(n) => {
+                resp_buf.extend_from_slice(&tmp[..n]);
+                if has_complete_response_frame(&resp_buf) {
+                    return Ok(resp_buf);
+                }
+            }
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                if has_complete_response_frame(&resp_buf)
+                    || std::time::Instant::now() >= deadline
+                {
+                    return Ok(resp_buf);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Dial the auth server and agree a key with it.
 ///
 /// Returns the stream and the channel every message after this is encrypted
@@ -1373,16 +1519,16 @@ fn connect_farms(
         let settings = config.settings.as_ref();
         let trading_handle = scope.spawn(move || {
             connect_farm(settings, trading.0, trading.1, username, password,
-                paper, session_id, token, hw_info, encoded, Farm::MarketData, trading.2)
+                paper, session_id, token, hw_info, encoded, Farm::MarketData, trading.2, None)
         });
         let mktdata_handle = scope.spawn(move || {
             connect_farm(settings, mktdata.0, mktdata.1, username, password,
-                paper, session_id, token, hw_info, encoded, Farm::Historical, mktdata.2)
+                paper, session_id, token, hw_info, encoded, Farm::Historical, mktdata.2, None)
         });
         let secdef_handle = secdef.map(|(host, farm, port)| {
             scope.spawn(move || {
                 connect_farm(settings, host, farm, username, password,
-                    paper, session_id, token, hw_info, encoded, Farm::SecurityDefinition, port)
+                    paper, session_id, token, hw_info, encoded, Farm::SecurityDefinition, port, None)
             })
         });
         let trading = trading_handle.join().expect("trading farm thread panicked");
@@ -1483,6 +1629,7 @@ fn authenticate(
                 code_provider: config.code_provider.as_ref(),
                 timeout_secs: config.ib_key_timeout_secs,
                 default_sub_type: &config.ib_key_token_sub_type,
+                cancel: None,
             })?;
             (session_key, gate.soft_token, gate.unread)
         }
@@ -1711,6 +1858,7 @@ impl Gateway {
         let init_data = drain_init_burst(
             &mut tls, carry,
             Duration::from_millis(FARM_LOGON_POLL_MS), Duration::from_secs(1),
+            read_start + Duration::from_secs_f64(TIMEOUT_FARM_LOGON),
         )?;
         log::info!(
             "Init response: {} bytes in {:?}",

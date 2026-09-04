@@ -14,6 +14,12 @@ use sha1::{Digest, Sha1};
 
 use super::*;
 
+/// The clock one wait of these exchanges runs under, matching the one the
+/// auth socket is given.
+fn wait_deadline() -> std::time::Instant {
+    std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SSL_AUTH)
+}
+
 /// SOFT_TOKEN challenge-response over the TLS/NS channel (for CCP reconnect).
 pub(super) fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &BigUint) -> io::Result<()> {
     use crate::protocol::xyz;
@@ -23,7 +29,7 @@ pub(super) fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &B
     stream.write_all(&xyz::xyz_wrap(&msg1))?;
 
     // State 2: Receive challenge
-    let recv2 = session::recv_msg(stream)?;
+    let recv2 = session::recv_msg(stream, wait_deadline())?;
     let challenge_hex = match recv2 {
         session::RecvMsg::Xyz { state: 2, fields, .. } => {
             fields.get(1).filter(|s| !s.is_empty()).cloned()
@@ -50,7 +56,7 @@ pub(super) fn do_ccp_soft_token<S: Read + Write>(stream: &mut S, session_key: &B
     stream.write_all(&xyz::xyz_wrap(&msg3))?;
 
     // State 4: Receive result
-    let recv4 = session::recv_msg(stream)?;
+    let recv4 = session::recv_msg(stream, wait_deadline())?;
     let result = match recv4 {
         // The state is checked as well as the shape. Taken from any XYZ
         // frame, an unrelated message ending in the right word reads as the
@@ -197,7 +203,7 @@ pub(super) fn run_second_factor(
         // most of it. Restored afterwards.
         tls.get_ref().set_read_timeout(Some(Duration::from_millis(500)))?;
         let gate = session::do_security_code_2fa(
-            tls, deadline, sf.code_provider,
+            tls, deadline, sf.code_provider, sf.cancel,
         );
         let restore = tls.get_ref().set_read_timeout(None);
         if let session::IbKeyOutcome::Skipped { unread: carried } = gate? {
@@ -257,6 +263,7 @@ pub(super) fn run_second_factor(
             token_sub_type,
             deadline,
             sf.code_provider,
+            sf.cancel,
         );
         tls.get_ref().set_read_timeout(None)?;
         match gate? {
@@ -344,7 +351,7 @@ pub(super) fn second_factor_route(paper: bool, token_type: &str) -> SecondFactor
 pub(super) fn expect_auth_finish<S: Read>(stream: &mut S, whose: &str) -> io::Result<Option<Vec<u8>>> {
     use crate::protocol::xyz::XYZ_MSG_TOKEN_AUTH;
 
-    match session::recv_msg(stream) {
+    match session::recv_msg(stream, wait_deadline()) {
         Ok(session::RecvMsg::Xyz { msg_id, state, fields, .. }) => {
             let passed = fields.iter().any(|f| f == "PASSED");
             if msg_id == XYZ_MSG_TOKEN_AUTH && matches!(state, 3 | 5) && passed {

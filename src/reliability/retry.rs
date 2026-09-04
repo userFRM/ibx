@@ -80,6 +80,12 @@ impl DisconnectReason {
         {
             return Self::NotReady;
         }
+        // The client took the attempt back — a stop, or a recovery budget
+        // that is spent. Nothing about the venue changed, and nothing a
+        // retry carries is different.
+        if text.contains("cancelled") {
+            return Self::ByDesign;
+        }
         match e.kind() {
             // A rejection naming none of the above. The credentials, the
             // account or the entitlement is wrong, and the next attempt carries

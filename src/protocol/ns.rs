@@ -3,6 +3,7 @@
 //! Used for initial connection handshake before upgrading to FIX messaging.
 
 use std::io::{self, Read};
+use std::time::Instant;
 
 /// NS framing magic bytes.
 pub const NS_MAGIC: &[u8; 4] = b"#%#%";
@@ -139,10 +140,52 @@ pub fn parse_test_request_timestamp(payload: &[u8]) -> Option<String> {
     (!first.is_empty()).then_some(first)
 }
 
+/// Ceiling on a frame on this wire, where the traffic is handshakes,
+/// verdicts and keepalives — none of which reach a fraction of this.
+pub const MAX_NS_FRAME: usize = 64 * 1024;
+
+/// Fill `buf` one read at a time, bounded by the clock.
+///
+/// `read_exact` retries a transient `Interrupted` but nothing else, and has
+/// no notion of the deadline the caller is reading under, so a peer that
+/// states a length and then keeps talking slowly holds it for as long as the
+/// bytes keep trickling.
+fn read_bounded<R: Read>(reader: &mut R, buf: &mut [u8], deadline: Instant) -> io::Result<()> {
+    let mut got = 0;
+    while got < buf.len() {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the frame did not finish before the deadline",
+            ));
+        }
+        match reader.read(&mut buf[got..]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "the connection ended before the frame did",
+                ))
+            }
+            Ok(n) => got += n,
+            // `read_exact` retries this for every other reader in this file;
+            // the raw read must too rather than die on a signal.
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 /// Receive one `#%#%` framed message. Returns (payload_bytes, total_len).
-pub fn ns_recv<R: Read>(reader: &mut R) -> io::Result<(Vec<u8>, usize)> {
+///
+/// A frame is at most [`MAX_NS_FRAME`] bytes and has to be done by
+/// `deadline`. A peer that states a length and then talks slowly for ever
+/// would otherwise hold the reader for as long as it kept saying something —
+/// and the deadlines the callers keep run between frames, so one that never
+/// ends outruns every one of them.
+pub fn ns_recv<R: Read>(reader: &mut R, deadline: Instant) -> io::Result<(Vec<u8>, usize)> {
     let mut header = [0u8; 8];
-    reader.read_exact(&mut header)?;
+    read_bounded(reader, &mut header, deadline)?;
     if &header[..4] != NS_MAGIC {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -150,16 +193,21 @@ pub fn ns_recv<R: Read>(reader: &mut R) -> io::Result<(Vec<u8>, usize)> {
         ));
     }
     let payload_len = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
-    // Read in bounded chunks rather than allocating what the header claims.
-    // A length nobody backs with bytes then costs nothing. Reserving it up
-    // front makes a four-byte field an instruction to allocate four
-    // gigabytes.
-    const CHUNK: usize = 64 * 1024;
-    let mut payload = Vec::with_capacity(payload_len.min(CHUNK));
-    let mut buf = [0u8; CHUNK];
+    // Stated lengths are instructions, and this is the wire's ceiling on one.
+    // Reserving a length nobody backs with bytes made a four-byte field an
+    // instruction to allocate four gigabytes; reading toward one with no
+    // bound made it an instruction to read for ever.
+    if payload_len > MAX_NS_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("NS frame claims {payload_len} bytes; the wire's ceiling is {MAX_NS_FRAME}"),
+        ));
+    }
+    let mut payload = Vec::with_capacity(payload_len);
+    let mut buf = [0u8; 8192];
     while payload.len() < payload_len {
-        let want = (payload_len - payload.len()).min(CHUNK);
-        reader.read_exact(&mut buf[..want])?;
+        let want = (payload_len - payload.len()).min(buf.len());
+        read_bounded(reader, &mut buf[..want], deadline)?;
         payload.extend_from_slice(&buf[..want]);
     }
     Ok((payload, payload_len + 8))
@@ -264,11 +312,15 @@ mod tests {
         assert_eq!(parse_test_request_timestamp(payload), None);
     }
 
+    fn far_enough() -> std::time::Instant {
+        std::time::Instant::now() + std::time::Duration::from_secs(60)
+    }
+
     #[test]
     fn recv_roundtrip() {
         let msg = ns_build(50, 534, &["data"], "");
         let mut cursor = std::io::Cursor::new(&msg);
-        let (payload, total) = ns_recv(&mut cursor).unwrap();
+        let (payload, total) = ns_recv(&mut cursor, far_enough()).unwrap();
         assert_eq!(total, msg.len());
         let (version, msg_type, _) = ns_parse(&payload).unwrap();
         assert_eq!(version, 50);
@@ -332,7 +384,7 @@ mod tests {
     fn recv_bad_magic_returns_error() {
         let bad = b"AAAA\x00\x00\x00\x02ok";
         let mut cursor = std::io::Cursor::new(&bad[..]);
-        let result = ns_recv(&mut cursor);
+        let result = ns_recv(&mut cursor, far_enough());
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -345,7 +397,7 @@ mod tests {
         msg.extend_from_slice(NS_MAGIC);
         msg.extend_from_slice(&0u32.to_be_bytes());
         let mut cursor = std::io::Cursor::new(&msg);
-        let (payload, total) = ns_recv(&mut cursor).unwrap();
+        let (payload, total) = ns_recv(&mut cursor, far_enough()).unwrap();
         assert!(payload.is_empty());
         assert_eq!(total, 8);
     }
@@ -503,12 +555,40 @@ mod tests {
         framed.extend_from_slice(b"only these bytes actually follow");
 
         let started = std::time::Instant::now();
-        let result = ns_recv(&mut framed.as_slice());
+        let result = ns_recv(&mut framed.as_slice(), far_enough());
 
         assert!(result.is_err(), "the payload the header promised never arrived");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(2),
             "and finding that out did not mean reserving four gigabytes first",
+        );
+    }
+
+    /// A peer that states a frame and then keeps talking slowly holds a
+    /// reader that believes the stated length for ever: the deadlines the
+    /// callers keep run between frames, and a frame that never ends outruns
+    /// every one of them. The frame is bounded by the wire's ceiling and by
+    /// the caller's clock, and a deadline already passed ends it at once.
+    #[test]
+    fn a_frame_is_bounded_by_the_ceiling_and_by_the_clock() {
+        // The ceiling refuses a frame outright, even one backed with bytes.
+        let mut backed = NS_MAGIC.to_vec();
+        backed.extend_from_slice(&((MAX_NS_FRAME + 1) as u32).to_be_bytes());
+        backed.extend(std::iter::repeat_n(b'x', MAX_NS_FRAME + 1));
+        let started = std::time::Instant::now();
+        let result = ns_recv(&mut backed.as_slice(), far_enough());
+        assert!(
+            matches!(&result, Err(e) if e.kind() == std::io::ErrorKind::InvalidData),
+            "a frame above the wire's ceiling is refused: {result:?}",
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+
+        // A deadline already passed ends the read before it starts.
+        let msg = ns_build(50, 521, &["user"], "");
+        let result = ns_recv(&mut msg.as_slice(), std::time::Instant::now());
+        assert!(
+            matches!(&result, Err(e) if e.kind() == std::io::ErrorKind::TimedOut),
+            "a read under a passed deadline is a timeout: {result:?}",
         );
     }
 
