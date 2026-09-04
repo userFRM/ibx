@@ -42,6 +42,8 @@ pub(super) fn open_farm(kind: ibx::gateway::Farm) -> std::io::Result<Connection>
         &auth.username, &auth.password, auth.paper,
         &auth.server_session_id, &auth.session_key,
         &auth.hw_info, &auth.encoded, kind, port,
+        // Nothing cancels a connect here: the suite is the whole of what runs.
+        None,
     )
 }
 

@@ -124,6 +124,8 @@ pub(super) fn phase_extra_farms(
             &config.username, &config.password, config.paper,
             &gw.server_session_id, &gw.session_token,
             &gw.hw_info, &gw.encoded, kind, None,
+            // Nothing cancels a connect here: the suite is the whole of what runs.
+            None,
         ) {
             Ok(_conn) => {
                 connected += 1;

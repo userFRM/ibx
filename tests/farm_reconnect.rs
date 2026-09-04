@@ -76,7 +76,7 @@ fn farm_reconnect_with_cached_credentials() {
     let new_farm = connect_farm(&Default::default(), 
         &cfg.host, "usfarm",
         &cfg.username, &cfg.password, cfg.paper,
-        &server_session_id, &session_key, &hw_info, &encoded, ibx::gateway::Farm::MarketData, None
+        &server_session_id, &session_key, &hw_info, &encoded, ibx::gateway::Farm::MarketData, None, None
     ).expect("Farm reconnect with cached credentials FAILED");
     let reconnect_ms = t1.elapsed().as_millis();
 
@@ -197,7 +197,9 @@ fn ccp_reconnect_with_cached_credentials() {
 
     // Reconnect using cached credentials (SOFT_TOKEN, no SRP)
     let t1 = Instant::now();
-    let result = reconnect_ccp(&auth);
+    // Nothing cancels this reconnect: the test is the whole of what is running.
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let result = reconnect_ccp(&auth, &never);
     let reconnect_ms = t1.elapsed().as_millis();
 
     // Required, not reported. Reconnecting on the cached session is how every

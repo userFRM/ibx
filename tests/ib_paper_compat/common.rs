@@ -1,5 +1,8 @@
 //! Shared types and helpers for compatibility tests.
 
+/// Nothing here cancels a connect: the suite is the whole of what runs.
+static NEVER_CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 use std::env;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -378,7 +381,7 @@ pub(super) fn rebuild_ccp(mut conns: Conns) -> Conns {
     // The previous connection is dropped whatever state it is in.
     let _taking_it_away = TakingTheSessionAway::begin();
     let Some(auth) = RECOVERY_AUTH.get() else { return conns };
-    match gateway::reconnect_ccp(auth) {
+    match gateway::reconnect_ccp(auth, &NEVER_CANCELLED) {
         Ok(ccp) => {
             // The reconnect sends the same opening sequence a first logon does.
             // Repeating it here would request the same subscriptions twice.
@@ -419,7 +422,7 @@ pub(super) fn sweep_working_orders(conns: Conns) -> Conns {
              reconnect credentials were never remembered"
         );
     };
-    let ccp = match gateway::reconnect_ccp(auth) {
+    let ccp = match gateway::reconnect_ccp(auth, &NEVER_CANCELLED) {
         Ok(ccp) => ccp,
         Err(e) => panic!(
             "the sweep could not open a trading connection: {e} — the account \
@@ -581,7 +584,7 @@ pub(super) fn ensure_ccp_alive(
     // loss in the run becomes unattributable — the suite could no longer tell
     // the venue dropping this session from the suite having replaced it.
     if let Some(auth) = RECOVERY_AUTH.get() {
-        match gateway::reconnect_ccp(auth) {
+        match gateway::reconnect_ccp(auth, &NEVER_CANCELLED) {
             Ok(ccp) => {
                 conns.ccp = ccp;
                 println!("  [reconnect] CCP rebuilt on the same session");
