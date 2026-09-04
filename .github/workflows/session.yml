@@ -94,6 +94,18 @@ jobs:
           IB_USERNAME: ${{ secrets.IB_USERNAME }}
           IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
         run: cargo test --test ib_paper_compat -- --ignored --test-threads=1
+      # Three suites of their own, in no workflow and in no gate: a reconnect
+      # on a cached session, a contract listed outside the United States, and
+      # the Rust surface against captured answers. Run nowhere, they proved
+      # nothing either.
+      - name: reconnect, non-US listings, and the surface against captures
+        env:
+          IB_USERNAME: ${{ secrets.IB_USERNAME }}
+          IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
+        run: |
+          cargo test --test farm_reconnect -- --test-threads=1
+          cargo test --test non_us_live -- --ignored --test-threads=1
+          cargo test --test rust_api_gt -- --test-threads=1
 
   live_python:
     name: the Python suites that need a session
