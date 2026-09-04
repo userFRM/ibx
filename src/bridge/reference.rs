@@ -614,6 +614,21 @@ impl ReferenceState {
         self.scanner_data.lock().unwrap().drain(..).collect()
     }
 
+    /// The scan results arrived under one request, leaving the rest.
+    pub fn take_scanner_data_for(&self, req_id: u32) -> Vec<ScannerResult> {
+        let mut held = self.scanner_data.lock().unwrap();
+        let drained: Vec<(u32, ScannerResult)> = held.drain(..).collect();
+        let mut taken = Vec::new();
+        for (id, result) in drained {
+            if id == req_id {
+                taken.push(result);
+            } else {
+                held.push((id, result));
+            }
+        }
+        taken
+    }
+
     /// Take every historical news waiting, leaving none.
     pub fn drain_historical_news(&self) -> Vec<(u32, Vec<NewsHeadline>, bool)> {
         self.historical_news.lock().unwrap().drain(..).collect()

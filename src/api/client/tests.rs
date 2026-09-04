@@ -2618,6 +2618,32 @@ fn cancel_order_sends_cancel_command() {
     }
 }
 
+/// The note a stated cancel time leaves is recorded against the order named,
+/// and nothing is recorded for a number that is not an order: parked against
+/// zero, it fired as an error on an order that does not exist.
+#[test]
+fn a_cancel_time_note_names_the_order_it_belongs_to() {
+    let (client, _rx, shared) = test_client();
+    assert!(
+        client.cancel_order(0, "20260904 12:00:00").is_err(),
+        "zero is not an order number",
+    );
+    assert!(
+        shared.orders.drain_order_inactive().is_empty(),
+        "nothing may be recorded against an order that does not exist",
+    );
+
+    let (client, rx, shared) = test_client();
+    client.cancel_order(17, "20260904 12:00:00").unwrap();
+    let notes = shared.orders.drain_order_inactive();
+    assert_eq!(notes.len(), 1, "the note is recorded once");
+    assert_eq!(notes[0].0, 17, "against the order named");
+    match rx.try_recv().expect("the cancel is sent anyway") {
+        ControlCommand::Order(OrderRequest::Cancel { order_id }) => assert_eq!(order_id, 17),
+        other => panic!("expected a cancel, got {other:?}"),
+    }
+}
+
 /// The executions mutex is not held while user callbacks run. A wrapper that
 /// re-enters a path locking `executions` is an ordinary ibapi pattern —
 /// re-requesting from `exec_details` — and holding the lock across it
@@ -3765,6 +3791,78 @@ fn a_holding_that_moves_after_the_request_is_reported() {
     shared.portfolio.set_position_info(held(175.0));
     client.process_msgs(&mut w);
     assert_eq!(reported(&w), 2, "a withdrawn ask is not answered further");
+}
+
+/// Moves from before the request are answered by the request itself, which
+/// states what the holdings are now. Fired again as change events they replay
+/// history, and a caller acting on the feed re-acts on what it was just told.
+#[test]
+fn moves_from_before_the_request_are_not_refired_as_changes() {
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.set_account_download_complete();
+    // Two holdings arrive before anything asks, so both moves queue.
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 265598, position: 100.0, symbol: "AAPL".into(),
+        sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+    });
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 756733, position: -50.0, symbol: "SPY".into(),
+        sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+    });
+
+    let mut w = RecordingWrapper::default();
+    client.req_positions(&mut w);
+
+    // Afterwards, one of them moves.
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 756733, position: -75.0, symbol: "SPY".into(),
+        sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+    });
+    client.process_msgs(&mut w);
+
+    let aapl: Vec<_> = w.events.iter()
+        .filter(|e| e.starts_with("position:") && e.contains(":265598:")).collect();
+    let spy: Vec<_> = w.events.iter()
+        .filter(|e| e.starts_with("position:") && e.contains(":756733:")).collect();
+    assert_eq!(
+        aapl.len(), 1,
+        "a pre-request move is answered once, in the request itself: {aapl:?}",
+    );
+    assert_eq!(spy.len(), 2, "the request, and the move after it: {spy:?}");
+    assert!(
+        spy.last().unwrap().contains(":-75"),
+        "the change states what is held now: {spy:?}",
+    );
+}
+
+/// The same replay, on the per-request feed.
+#[test]
+fn moves_from_before_the_request_are_not_refired_on_the_per_request_feed() {
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 265598, position: 100.0, symbol: "AAPL".into(), ..Default::default()
+    });
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 756733, position: -50.0, symbol: "SPY".into(), ..Default::default()
+    });
+
+    let mut w = RecordingWrapper::default();
+    client.req_positions_multi(9, "", "", &mut w);
+
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 756733, position: -75.0, symbol: "SPY".into(), ..Default::default()
+    });
+    client.process_msgs(&mut w);
+
+    let aapl: Vec<_> = w.events.iter()
+        .filter(|e| e.starts_with("position_multi:9:") && e.contains(":AAPL:")).collect();
+    let spy: Vec<_> = w.events.iter()
+        .filter(|e| e.starts_with("position_multi:9:") && e.contains(":SPY:")).collect();
+    assert_eq!(
+        aapl.len(), 1,
+        "a pre-request move is answered once, in the request itself: {aapl:?}",
+    );
+    assert_eq!(spy.len(), 2, "the request, and the move after it: {spy:?}");
 }
 
 #[test]

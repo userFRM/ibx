@@ -292,9 +292,19 @@ impl EClient {
     pub fn cancel_order(&self, order_id: i64, manual_order_cancel_time: &str) -> Result<(), Refusal> {
         self.refuse_if_trading_is_over("a withdrawal")?;
         self.core.refuse_if_readonly("a cancel").map_err(Refusal::validation)?;
+        // Tag 11 order ids start at 1. A negative id cast unchecked becomes a
+        // large unsigned one, which the venue answers "no such order".
+        let order_id = u64::try_from(order_id).ok().filter(|id| *id > 0).ok_or_else(|| {
+            Refusal::validation(format!(
+                "order_id {order_id} is not an order number: they start at one",
+            ))
+        })?;
         if !manual_order_cancel_time.is_empty() {
+            // Recorded against the order named, which is known to be one by
+            // now: parked against an id that names no order, the note fired
+            // as an error on nothing.
             self.shared.orders.push_order_inactive(
-                u64::try_from(order_id).unwrap_or_default(),
+                order_id,
                 Refusal::VALIDATION,
                 format!(
                     "a withdrawal states a time, and this protocol carries no field for \
@@ -304,13 +314,6 @@ impl EClient {
                 ),
             );
         }
-        // Tag 11 order ids start at 1. A negative id cast unchecked becomes a
-        // large unsigned one, which the venue answers "no such order".
-        let order_id = u64::try_from(order_id).ok().filter(|id| *id > 0).ok_or_else(|| {
-            Refusal::validation(format!(
-                "order_id {order_id} is not an order number: they start at one",
-            ))
-        })?;
         // An order still held never reached the venue, so withdrawing it is
         // forgetting a command rather than sending one. Sent, the venue
         // answers that it knows no such order and the command stays queued to

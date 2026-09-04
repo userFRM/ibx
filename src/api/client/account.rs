@@ -12,6 +12,24 @@ use super::{Contract, EClient};
 impl EClient {
     // ── Positions ──
 
+    /// Drop the moves recorded while nothing was watching.
+    ///
+    /// The venue keeps the account current whether or not anyone is listening,
+    /// so moves queue from the moment the session opens. A request answers
+    /// with what the account holds now, which already says what those moves
+    /// came to; fired again as change events they would have a caller act
+    /// again on what it was just told. The first ask drops them. Where a
+    /// watch already stands the queue is on its way to that watcher and is
+    /// left alone.
+    fn drop_unwatched_position_moves(&self) {
+        if self.positions_requested.load(Ordering::Acquire)
+            || !self.positions_multi_requested.lock().unwrap().is_empty()
+        {
+            return;
+        }
+        self.shared.portfolio.drain_position_changes();
+    }
+
     /// The contract a holding is in, named as fully as this client can.
     ///
     /// Preferred from the definition cache, which carries the exchange,
@@ -55,6 +73,10 @@ impl EClient {
             log::warn!("{why}");
             wrapper.error(NO_REQUEST, Refusal::VALIDATION as i64, why, "");
         }
+        // What moved before this asked is answered by the read below, which
+        // states what the holdings are now; fired as change events as well it
+        // would arrive twice.
+        self.drop_unwatched_position_moves();
         // A holding arrives as a contract id and a quantity, and its definition
         // is fetched separately. Delivering before that lands names no
         // instrument at all, so give it a moment to arrive rather than handing
@@ -78,11 +100,7 @@ impl EClient {
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             wrapper.position(&self.account_id, &c, pi.position, avg_cost);
         }
-        // Reported from here, on the next holding to move. What was already
-        // recorded is left standing rather than dropped: the record is kept by
-        // contract and states what the holding is now, so at worst the caller
-        // is told once more what the answer above already said — and dropping
-        // it would lose a holding that moved while the answer was assembled.
+        // Reported from here, on the next holding to move.
         self.positions_requested.store(true, Ordering::Release);
         wrapper.position_end();
     }
@@ -267,6 +285,10 @@ impl EClient {
         &self, req_id: i64, account: &str, model_code: &str,
         wrapper: &mut impl Wrapper,
     ) {
+        // As for `req_positions`: what moved before this asked is in the
+        // answer that follows, and fired as change events as well it would
+        // arrive twice.
+        self.drop_unwatched_position_moves();
         let held: Vec<_> = self.shared.portfolio.position_infos()
             .into_iter()
             .filter(|pi| pi.position != 0.0)

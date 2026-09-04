@@ -103,6 +103,8 @@ pub const NO_COUNTERPART: &[(&str, &str)] = &[
     ("verify_message", "part of a handshake between a client and a local process, and there is no local process"),
     ("verify_request", "part of a handshake between a client and a local process, and there is no local process"),
     ("cancel_contract_details", "a contract lookup answers here rather than streaming, so there is nothing to withdraw"),
+    ("pnl", "the figures arrive on a callback as they change, and this shape keeps only what a synchronous answer hands it — ask through inner() and drive process_msgs with a wrapper of your own"),
+    ("pnl_single", "the figures arrive on a callback as they change, and this shape keeps only what a synchronous answer hands it — ask through inner() and drive process_msgs with a wrapper of your own"),
 ];
 
 impl Client {
@@ -164,26 +166,20 @@ impl Client {
     /// called there is nothing left running. It reports that rather than
     /// pretending to stop something.
     pub fn cancel_contract_details(&self, _req_id: i64) -> Result<(), Refusal> {
-        Err(Refusal::validation(
-            NO_COUNTERPART
-                .iter()
-                .find(|(name, _)| *name == "cancel_contract_details")
-                .map(|(_, why)| (*why).to_string())
-                .unwrap_or_default(),
-        ))
+        Err(Self::no_counterpart("cancel_contract_details"))
     }
 
     /// Begin the handshake a third-party program makes with a local process.
     pub fn verify_request(&self, _api_name: &str, _api_version: &str) -> Result<(), Refusal> {
-        Err(Self::no_local_process("verify_request"))
+        Err(Self::no_counterpart("verify_request"))
     }
 
     /// Continue that handshake.
     pub fn verify_message(&self, _api_data: &str) -> Result<(), Refusal> {
-        Err(Self::no_local_process("verify_message"))
+        Err(Self::no_counterpart("verify_message"))
     }
 
-    fn no_local_process(call: &str) -> Refusal {
+    fn no_counterpart(call: &str) -> Refusal {
         Refusal::validation(
             NO_COUNTERPART
                 .iter()
@@ -536,13 +532,20 @@ impl Client {
     }
 
     /// An account's running profit.
-    pub fn pnl(&self, account: &str, model_code: &str) {
-        self.inner.req_pnl(self.stream_id(), account, model_code);
+    ///
+    /// Refused rather than subscribed in silence: the figures arrive on a
+    /// callback as they change, and nothing this shape owns pumps callbacks —
+    /// it keeps what a synchronous answer hands it and reads what the streams
+    /// queue. Subscribed here, the answer went nowhere while the state the
+    /// subscription opened stood forever. Ask through [`Self::inner`] and
+    /// drive `process_msgs` with a wrapper of your own.
+    pub fn pnl(&self, _account: &str, _model_code: &str) -> Result<(), Refusal> {
+        Err(Self::no_counterpart("pnl"))
     }
 
-    /// The same for one position.
-    pub fn pnl_single(&self, account: &str, model_code: &str, con_id: i64) {
-        self.inner.req_pnl_single(self.stream_id(), account, model_code, con_id);
+    /// The same for one position, and refused for the same reason.
+    pub fn pnl_single(&self, _account: &str, _model_code: &str, _con_id: i64) -> Result<(), Refusal> {
+        Err(Self::no_counterpart("pnl_single"))
     }
 
 
@@ -597,7 +600,11 @@ impl Client {
         self.inner.req_news_article(self.stream_id(), provider_code, article_id)
     }
 
-    /// A scan the venue runs and keeps running until it is withdrawn.
+    /// A scan the venue runs and keeps running until the stream is dropped.
+    ///
+    /// Dropping withdraws it. A scan is answered repeatedly for as long as it
+    /// runs, so rows arriving for one nobody reads would simply accumulate;
+    /// read through the stream, and withdrawn with it, they cannot.
     pub fn scanner_subscription(
         &self,
         instrument: &str,
@@ -605,12 +612,20 @@ impl Client {
         scan_code: &str,
         max_items: u32,
         filters: &[crate::types::model::TagValue],
-    ) -> Result<i64, Refusal> {
+    ) -> Result<Subscription<crate::control::scanner::ScannerResult>, Refusal> {
         let req_id = self.stream_id();
         self.inner.req_scanner_subscription(
             req_id, instrument, location_code, scan_code, max_items, filters,
         )?;
-        Ok(req_id)
+        let tx = self.inner.control_tx.clone();
+        Ok(Subscription::new(
+            req_id,
+            Arc::clone(&self.inner.shared),
+            |sh, id| sh.reference.take_scanner_data_for(id as u32),
+            move |id| {
+                let _ = tx.send(ControlCommand::CancelScanner { req_id: id as u32 });
+            },
+        ))
     }
 
     /// Stop a scan.
@@ -729,8 +744,12 @@ impl Client {
     }
 
     /// The id the next request will be sent under.
+    ///
+    /// Stated without being spent: an id is consumed by the request that goes
+    /// out under it, and consuming it here left the next request going out
+    /// under the number after the one reported.
     pub fn next_request_id(&self) -> i64 {
-        self.stream_id()
+        self.next_stream_id.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The next order id the venue has given this session.
@@ -870,6 +889,26 @@ impl Client {
 mod tests {
     use super::*;
 
+    /// A session in pieces: the shape of the calls can be tried without a
+    /// venue on the other end.
+    fn test_direct_client() -> (
+        Client,
+        std::sync::mpsc::Receiver<ControlCommand>,
+        Arc<SharedState>,
+    ) {
+        let shared = Arc::new(SharedState::new());
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let handle = std::thread::spawn(|| {});
+        let inner = EClient::from_parts(Arc::clone(&shared), tx, handle, "DU123".into());
+        let client = Client {
+            inner,
+            recorded: Arc::new(Mutex::new(Recorded::default())),
+            next_stream_id: std::sync::atomic::AtomicI64::new(STREAM_ID_BASE),
+            connected_at: 0,
+        };
+        (client, rx, shared)
+    }
+
     /// The recorder keeps what the sending calls produce, because a caller of
     /// this shape has no callback to hand it to.
     #[test]
@@ -968,5 +1007,99 @@ mod tests {
             stated > 176,
             "a program gating on a protocol version would find features missing",
         );
+    }
+
+    /// The next request id is stated without being spent: it is consumed by
+    /// the request that goes out under it, and stating it consumed the number
+    /// the next request then could not use.
+    #[test]
+    fn next_request_id_states_the_number_the_next_request_uses() {
+        let (client, _rx, _shared) = test_direct_client();
+        let stated = client.next_request_id();
+        assert_eq!(
+            client.next_request_id(), stated,
+            "asking twice names the same number",
+        );
+        assert_eq!(
+            client.stream_id(), stated,
+            "the next request goes out under the number stated",
+        );
+    }
+
+    /// The profit subscriptions open nothing: their figures arrive on a
+    /// callback, and nothing this shape owns pumps callbacks, so a
+    /// subscription opened here would be answered to nothing while the state
+    /// it opened stood forever.
+    #[test]
+    fn profit_subscriptions_open_nothing_that_nothing_would_read() {
+        let (client, _rx, shared) = test_direct_client();
+        let _ = client.pnl("DU123", "");
+        let _ = client.pnl_single("DU123", "", 756733);
+        assert!(
+            client.inner.core.poll_pnl(&shared).is_none(),
+            "a profit subscription was opened for a reader that does not exist",
+        );
+    }
+
+    /// And they say so, naming where the figures can be read.
+    #[test]
+    fn a_refused_profit_subscription_says_where_the_figures_can_be_read() {
+        let (client, _rx, _shared) = test_direct_client();
+        let pnl = client.pnl("DU123", "");
+        let single = client.pnl_single("DU123", "", 756733);
+        assert!(
+            pnl.is_err(),
+            "a subscription whose answer goes nowhere must say so",
+        );
+        assert!(single.is_err(), "likewise for one position");
+        assert!(
+            pnl.unwrap_err().to_string().contains("process_msgs"),
+            "the refusal says where the figures can be read",
+        );
+    }
+
+    /// A scan is read through its stream and withdrawn with it. A scan keeps
+    /// answering for as long as it runs, so rows arriving for a reader that
+    /// never reads would simply accumulate; handed over and withdrawn with the
+    /// stream, they cannot.
+    #[test]
+    fn a_scan_is_read_through_its_stream_and_withdrawn_with_it() {
+        use crate::control::scanner::{ScannerEntry, ScannerResult};
+
+        let (client, rx, shared) = test_direct_client();
+        let mut scan = client
+            .scanner_subscription("STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 10, &[])
+            .expect("the scan is opened")
+            .with_timeout(Duration::from_millis(50));
+
+        match rx.try_recv().expect("the subscription is sent") {
+            ControlCommand::SubscribeScanner { req_id, .. } => {
+                assert_eq!(req_id as i64, scan.req_id(), "sent under the stream's number");
+            }
+            other => panic!("expected a scanner subscription, got {other:?}"),
+        }
+
+        let arrived = ScannerResult {
+            con_ids: vec![756733],
+            entries: vec![ScannerEntry { con_id: 756733 }],
+            scan_time: "20260904".into(),
+            error_text: String::new(),
+        };
+        shared.reference.push_scanner_data(scan.req_id() as u32, arrived);
+        let got = scan.next_item().expect("what arrives under the scan is handed over");
+        assert_eq!(got.entries.len(), 1);
+        assert!(
+            shared.reference.take_scanner_data_for(scan.req_id() as u32).is_empty(),
+            "the stream took its rows; nothing accumulates",
+        );
+
+        let req_id = scan.req_id();
+        drop(scan);
+        match rx.try_recv().expect("the withdrawal is sent on the drop") {
+            ControlCommand::CancelScanner { req_id: cancelled } => {
+                assert_eq!(cancelled as i64, req_id, "the scan that was opened");
+            }
+            other => panic!("expected a scanner cancel, got {other:?}"),
+        }
     }
 }
