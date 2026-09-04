@@ -2095,13 +2095,31 @@ impl ClientCore {
     /// refuses it, and the submit that was held stays queued to go out behind
     /// the next thing that transmits — under the terms the caller had just
     /// replaced.
+    ///
+    /// What decides it is a held submission, not a hold of any kind: a live
+    /// order can have a revision of its own waiting to be transmitted, and that
+    /// order is still one the venue is working.
     pub fn is_working_at_the_venue(&self, order_id: u64) -> bool {
-        self.is_order_tracked(order_id) && !self.is_held(order_id)
+        self.is_order_tracked(order_id) && !self.holds_a_submission(order_id)
     }
 
     /// Whether this id names an order built and kept rather than sent.
     pub fn is_held(&self, order_id: u64) -> bool {
         self.held_orders.lock().unwrap().iter().any(|h| h.order_id == order_id)
+    }
+
+    /// Whether what is held under this id would place the order, rather than
+    /// revise one the venue is already working.
+    pub fn holds_a_submission(&self, order_id: u64) -> bool {
+        self.held_orders.lock().unwrap().iter().any(|h| {
+            h.order_id == order_id
+                && matches!(
+                    h.command,
+                    ControlCommand::Order(
+                        OrderRequest::SubmitEx { .. } | OrderRequest::SubmitBracket { .. },
+                    ),
+                )
+        })
     }
 
     /// The order a tracked id was submitted with, if it is tracked.

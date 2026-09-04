@@ -340,7 +340,13 @@ impl EClient {
         // the command: left standing, the id reads as a working order's, and
         // placing under it again becomes a modify of an order nothing has
         // ever submitted.
-        if self.core.withdraw_held(order_id) {
+        // Only where what is held would have placed the order. A revision of
+        // an order the venue is already working can also be waiting to be
+        // transmitted, and forgetting that and returning left the live order
+        // working while the caller had been told it was withdrawn: the staged
+        // revision goes, and the cancel still travels.
+        let staged_submission = self.core.holds_a_submission(order_id);
+        if self.core.withdraw_held(order_id) && staged_submission {
             self.core.untrack_order(order_id);
             return Ok(());
         }

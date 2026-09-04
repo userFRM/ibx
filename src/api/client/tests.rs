@@ -2672,6 +2672,46 @@ fn place_order_invalid_action_returns_error() {
     assert!(result.is_err());
 }
 
+/// A revision waiting to be transmitted does not make a live order held.
+///
+/// The venue is working the order; what is kept here is a change to it. Read as
+/// a held order, cancelling forgot the change and returned, leaving the order
+/// working at the venue while the caller had been told it was withdrawn — and
+/// placing again under the id built a fresh submission for an order already on
+/// the market.
+#[test]
+fn a_staged_revision_does_not_hide_the_order_the_venue_is_working() {
+    let (client, rx, _shared) = test_client();
+    let order = |transmit: bool, price: f64| Order {
+        order_id: 88,
+        action: "BUY".into(),
+        total_quantity: 100.0,
+        order_type: "LMT".into(),
+        lmt_price: price,
+        tif: "DAY".into(),
+        transmit,
+        ..Default::default()
+    };
+    client.place_order(88, &spy(), &order(true, 100.0)).expect("placed and sent");
+    assert!(matches!(
+        rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::SubmitEx { .. })),
+    ));
+    // A revision of it, kept rather than sent.
+    client.place_order(88, &spy(), &order(false, 101.0)).expect("the change is kept");
+    assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
+    assert!(
+        client.core.is_working_at_the_venue(88),
+        "the order is still one the venue is working",
+    );
+
+    client.cancel_order(88, "").expect("withdrawn");
+    match rx.try_recv().expect("the cancel travels") {
+        ControlCommand::Order(OrderRequest::Cancel { order_id }) => assert_eq!(order_id, 88),
+        other => panic!("expected a cancel, got {other:?}"),
+    }
+    assert!(!client.core.is_held(88), "and the change that was kept goes with it");
+}
+
 /// A replace states new terms for an order the venue is working; it does not
 /// place a new one.
 ///

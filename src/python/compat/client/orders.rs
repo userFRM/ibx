@@ -434,7 +434,13 @@ impl EClient {
         // a caller that cancelled a parent and then sent its stop-loss had the
         // parent it had cancelled placed for it. The record goes with the
         // command, so the id stops reading as a working order's.
-        if self.core.withdraw_held(oid) {
+        // Only where what is held would have placed the order. A revision of
+        // an order the venue is already working can also be waiting to be
+        // transmitted, and forgetting that and returning left the live order
+        // working while the caller had been told it was withdrawn: the staged
+        // revision goes, and the cancel still travels.
+        let staged_submission = self.core.holds_a_submission(oid);
+        if self.core.withdraw_held(oid) && staged_submission {
             self.core.untrack_order(oid);
             return Ok(());
         }
