@@ -36,7 +36,11 @@ def test_a_handler_that_disconnects_on_snapshot_end_hears_no_504():
     # Somebody already holds the contract, so the snapshot follows that
     # subscription and needs no engine to answer the registration.
     client._test_map_instrument(5, 0)
-    client.reqMktData(1, Contract(conId=756733), "", True, False, [])
+    # Stated in full: a contract carrying an id and nothing else is one this
+    # client asks the venue to name, and the naming is not what is under test.
+    client.reqMktData(
+        1, Contract(conId=756733, secType="STK", exchange="SMART"), "", True, False, [],
+    )
     # Every kind a snapshot is made of: bid, ask, last, open and close.
     client._test_push_quote(
         0, bid=10.0, ask=10.5, last=10.2, bid_size=1, ask_size=1, last_size=1,

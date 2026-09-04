@@ -807,6 +807,11 @@ impl EClient {
         if contract.con_id != 0
             && (contract.sec_type.is_empty() || contract.exchange.is_empty())
         {
+            // An id the request cannot carry names no contract the venue will
+            // find, so asking it to name one spends the whole lookup deadline
+            // to arrive at the refusal this states now. Stated the way every
+            // request that carries the id states it.
+            super::wire_u32("con_id", contract.con_id)?;
             return match self.qualify_contract_stated(py, contract) {
                 Ok(named) => Ok(Some(std::borrow::Cow::Owned(named))),
                 // Reported under the code for the cause, as the other lookups
