@@ -72,6 +72,6 @@ def test_a_contract_id_below_zero_does_not_wrap():
         try:
             call()
         except RuntimeError as why:
-            assert "outside the range" in str(why), why
+            assert "-1 is not one" in str(why) or "outside the range" in str(why), why
         else:
             raise AssertionError("a contract id below zero must be refused")

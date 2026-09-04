@@ -19,7 +19,8 @@ const MARKET_RULE_NOT_KNOWN: i64 = 321;
 pub(crate) fn wire_con_id(con_id: i64, what: &str) -> Result<u32, Refusal> {
     u32::try_from(con_id).ok().filter(|id| *id > 0).ok_or_else(|| {
         Refusal::validation(format!(
-            "{what} names its contract by its venue id, and {con_id} is not one:              qualify the contract first and pass what comes back",
+            "{what} names its contract by its venue id, and {con_id} is not one: \
+             qualify the contract first and pass what comes back",
         ))
     })
 }
