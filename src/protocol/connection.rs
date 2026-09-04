@@ -311,7 +311,7 @@ impl Connection {
                 // buffered, and the reconnect path takes the connection.
                 if self.buf.len() + n > MAX_BUFFERED {
                     return Err(io::Error::new(
-                        io::ErrorKind::Other,
+                        io::ErrorKind::InvalidData,
                         format!(
                             "a frame states a length that is not completing; \
                              refusing to buffer beyond {MAX_BUFFERED} bytes",
