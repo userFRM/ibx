@@ -25,7 +25,7 @@ pub(super) use std::time::{Duration, Instant};
 pub(super) use ibx::api::client::EClient;
 pub(super) use ibx::api::types::{Contract as ApiContract, Order as ApiOrder};
 pub(super) use ibx::api::wrapper::tests::RecordingWrapper;
-pub(super) use ibx::bridge::{Event, SharedState};
+pub(super) use ibx::bridge::{Event, RichOrderInfo, SharedState};
 pub(super) use ibx::engine::hot_loop::HotLoop;
 pub(super) use ibx::gateway::{self, GatewayConfig};
 pub(super) use ibx::protocol::connection::{Connection, Frame};
@@ -388,6 +388,140 @@ pub(super) fn rebuild_ccp(mut conns: Conns) -> Conns {
         Err(e) => println!("  [reconnect] could not rebuild after the idle phases: {e}\n"),
     }
     conns
+}
+
+/// Withdraw everything the account is working, and wait for the venue to
+/// confirm none of it is left.
+///
+/// Runs before the first phase and after the last, so a run starts from a
+/// known state and leaves one behind. The venue caps how many orders may rest
+/// at once on one side of one contract, and an account that has accumulated
+/// past that cap refuses the run's orders on it — every phase that places
+/// then reads the account talking rather than verifying anything.
+///
+/// The venue names what is working once per trading connection, when the
+/// connection opens, so the sweep opens a connection of its own and is named
+/// whatever earlier runs left behind, whichever phase put it there and however
+/// that phase ended. What it finds is said before anything is withdrawn, so an
+/// order left by an earlier run is never read as one this run placed.
+///
+/// Runs only where the suite itself runs — the credentials in the environment
+/// that already gate it, on the paper account they are for — and sends
+/// withdrawals only: closing a position is a different thing and is not done
+/// here.
+pub(super) fn sweep_working_orders(conns: Conns) -> Conns {
+    phase!("--- Account sweep: withdrawing whatever the account is working ---");
+
+    let account_id = conns.account_id.clone();
+    let Some(auth) = RECOVERY_AUTH.get() else {
+        panic!(
+            "the sweep cannot open a trading connection: the session's \
+             reconnect credentials were never remembered"
+        );
+    };
+    let ccp = match gateway::reconnect_ccp(auth) {
+        Ok(ccp) => ccp,
+        Err(e) => panic!(
+            "the sweep could not open a trading connection: {e} — the account \
+             cannot be confirmed clear, so the run stops rather than guessing"
+        ),
+    };
+    let conns = Conns { ccp, ..conns };
+
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let join = run_hot_loop(hot_loop);
+
+    // The wait for the naming, anchored at the connection opened above.
+    let named = shared.orders.wait_for_replay();
+    let found = shared.orders.drain_open_orders();
+    let outstanding = still_outstanding(&found);
+
+    if outstanding.is_empty() {
+        println!("  nothing found working");
+    } else {
+        println!(
+            "  found {} order(s) working, left by an earlier run: {outstanding:?} \
+             — withdrawing them",
+            outstanding.len(),
+        );
+        // The same composition the client's own withdraw-everything call
+        // makes: one withdrawal per contract named.
+        for instrument in 0..shared.market.instrument_count() {
+            control_tx
+                .send(ControlCommand::Order(OrderRequest::CancelAll { instrument }))
+                .expect("the sweep could not send its withdrawals");
+        }
+    }
+
+    // Wait for the venue to say each one is gone. A fill finishes an order
+    // too, and a refusal finishes one the venue will not work.
+    let mut remaining: std::collections::HashSet<u64> =
+        outstanding.iter().copied().collect();
+    let mut refused: Vec<(u64, i32)> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !remaining.is_empty() && Instant::now() < deadline {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::OrderUpdate(u)) if remaining.contains(&u.order_id) => {
+                if matches!(
+                    u.status,
+                    OrderStatus::Cancelled | OrderStatus::Filled | OrderStatus::Rejected
+                ) {
+                    remaining.remove(&u.order_id);
+                }
+            }
+            Ok(Event::CancelReject(r)) if remaining.contains(&r.order_id) => {
+                refused.push((r.order_id, r.reason_code));
+            }
+            _ => {}
+        }
+    }
+
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    // A naming begun and not finished covers only what it got through: what
+    // it did not name may still be working, and the sweep exists to rule
+    // that out.
+    if !named && shared.orders.naming_began() {
+        panic!(
+            "the venue had not finished naming what the account is working, \
+             so the sweep cannot say the account is clear: {} order(s) were \
+             withdrawn and whatever had not been named may still be working",
+            outstanding.len(),
+        );
+    }
+    assert!(
+        remaining.is_empty(),
+        "the account is still working {} order(s) after the sweep: \
+         {remaining:?}{} The run stops rather than proceeding against an \
+         account it could not clear.",
+        remaining.len(),
+        if refused.is_empty() {
+            String::new()
+        } else {
+            format!(" — the venue refused to withdraw: {refused:?}")
+        },
+    );
+    println!("  PASS — the account is working nothing\n");
+    conns
+}
+
+/// Which of the orders the venue named are still to be withdrawn: any the
+/// venue has not said is filled or cancelled. A parked order is among them —
+/// it is still held, and a sweep that walked past it would leave it held.
+fn still_outstanding(found: &[(u64, RichOrderInfo)]) -> Vec<u64> {
+    found
+        .iter()
+        .filter(|(_, info)| {
+            !matches!(info.order_state.status.as_str(), "Filled" | "Cancelled")
+        })
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 /// Read a socket until it has nothing more to say, and report whether it is
@@ -1414,5 +1548,35 @@ mod tests {
         assert!(states_a_skip("  SKIP: no sterling listing came back"));
         assert!(!states_a_skip("--- Phase 2: Market Data Ticks (AAPL) ---"));
         assert!(!states_a_skip("--- Phase 123: Global Cancel (3 orders) ---"));
+    }
+
+    /// What the sweep withdraws: everything the venue has not said is filled
+    /// or cancelled. Those two are done; whatever else the venue holds is
+    /// still the account's, and a run that started from it would start from
+    /// the residue of the last one. A parked order counts — held is held.
+    #[test]
+    fn the_sweep_withdraws_what_the_venue_still_holds() {
+        let named = |id: u64, status: &str| {
+            (
+                id,
+                super::RichOrderInfo {
+                    contract: Default::default(),
+                    order: Default::default(),
+                    order_state: ibx::types::model::OrderState {
+                        status: status.to_string(),
+                        ..Default::default()
+                    },
+                    last_exec: Default::default(),
+                },
+            )
+        };
+        let found = vec![
+            named(11, "Submitted"),
+            named(12, "PreSubmitted"),
+            named(13, "Inactive"),
+            named(14, "Filled"),
+            named(15, "Cancelled"),
+        ];
+        assert_eq!(super::still_outstanding(&found), vec![11, 12, 13]);
     }
 }

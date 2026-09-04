@@ -434,12 +434,18 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut cancel_sent = false;
     let mut terminal = false;
+    // Told apart from a withdrawal: only one of them leaves this phase
+    // something to read back.
+    let mut refused = false;
 
     while Instant::now() < deadline && !terminal {
         if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
             if matches!(update.status, OrderStatus::Submitted | OrderStatus::PreSubmitted) && !cancel_sent {
                 control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                 cancel_sent = true;
+            }
+            if update.status == OrderStatus::Rejected {
+                refused = true;
             }
             if matches!(update.status, OrderStatus::Cancelled | OrderStatus::Rejected | OrderStatus::Filled) {
                 terminal = true;
@@ -509,6 +515,20 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
 
     if !terminal {
         skipped!("  SKIP: Order never reached terminal state\n");
+        return conns;
+    }
+
+    // This phase is about what a withdrawn order reads back as, so it needs the
+    // venue to have withdrawn one. Outside regular hours, and on an account the
+    // lot is too large for, the venue refuses the order instead: it never
+    // becomes cancelled, it carries no quantity, and the comparison below is
+    // against an outcome that was never on offer. `reject_reason` fails the
+    // phase where the refusal was about the order this client built rather than
+    // about the market or the account, so this cannot hide a malformed order.
+    if refused {
+        let reason = reject_reason(&shared, order_id);
+        skipped!("  SKIP: the venue refused the order rather than working it, so there \
+                  was nothing to withdraw — {reason}\n");
         return conns;
     }
 

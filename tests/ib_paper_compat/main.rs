@@ -14,22 +14,23 @@
 //! Every phase builds a fresh HotLoop, runs it, then reclaims the connections
 //! for the next, so the run holds one session throughout.
 //!
-//! # The account needs clearing between runs
+//! # The account is cleared at both ends of a run
 //!
-//! Phases place orders that rest by design, and a run leaves roughly three
-//! dozen of them working. The venue caps how many may rest at once on one side
-//! of one contract, so an account that has run this a few times reaches that
-//! cap and refuses the next run's orders on it. The phases read that refusal as
-//! the account talking, which it is, and skip rather than failing — but they
-//! verify nothing while it stands.
+//! Phases place orders that rest by design, and a phase that fails, panics,
+//! times out or skips early leaves whatever it placed working at the venue.
+//! The venue caps how many may rest at once on one side of one contract, so
+//! residue that accumulates across runs reaches that cap and every later run
+//! is refused on it — the phases read that refusal as the account talking,
+//! which it is, and skip rather than failing, verifying nothing while it
+//! stands.
 //!
-//! The suite cannot clear them itself. A cancel states the contract and the
-//! quantity as well as the order id, so it can only be built for an order the
-//! engine is tracking, and the venue names what is already working exactly once
-//! as the session opens — inside the logon exchange, before any engine of this
-//! suite's exists. Nothing this suite runs ever sees those orders.
-//!
-//! Clear them from a separate session before a run that has to be trusted.
+//! So the run itself clears the account: before the first phase it withdraws
+//! everything the venue names as working — saying what it found, so an order
+//! left by an earlier run is never read as one this run placed — and it
+//! sweeps again after the last phase. A phase that fails hard still leaves
+//! what it placed and takes the run down with it; the next run's opening
+//! sweep withdraws those. If a sweep cannot confirm the account clear, it
+//! stops the run rather than proceeding against a dirty account.
 //!
 //! Prices here are written scaled, grouped as dollars and cents:
 //! `1_00_000_000` is $1.00 at `PRICE_SCALE`. The grouping is the unit, which
@@ -132,6 +133,10 @@ fn compat_suite() {
         hmds: hmds_conn,
         account_id: gw.account_id.clone(),
     };
+
+    // A run starts from a known state: whatever an earlier run left working
+    // is withdrawn before the first phase places anything.
+    conns = sweep_working_orders(conns);
 
     if needs_ticks {
         phase!("--- RAW SUBSCRIBE TEST ---");
@@ -495,7 +500,11 @@ fn compat_suite() {
     // phases behind it down with the suite.
     conns = heartbeat::phase_heartbeat_timeout_detection(conns);
 
-    let _conns = connection::phase_graceful_shutdown(conns);
+    let conns = connection::phase_graceful_shutdown(conns);
+
+    // And a run leaves one behind: whatever a phase placed and did not take
+    // back — because it failed, or skipped out early — is withdrawn here.
+    let _conns = sweep_working_orders(conns);
 
     // Counted, not worked out: a total less a list of expected skips states
     // that every phase ran whatever each one did.
