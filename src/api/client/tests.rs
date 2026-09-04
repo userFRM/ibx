@@ -2881,6 +2881,46 @@ fn naming_a_contract_keeps_the_hedge_and_the_legs_the_caller_stated() {
     );
 }
 
+/// A replacement the venue refuses does not leave its terms in the record.
+///
+/// The record takes the attempt ahead of the venue's answer, because every
+/// later cancel and replace restates from it. Where the answer is a refusal
+/// and only the status was put back, the record went on stating a price the
+/// venue had said no to — and the next thing sent for that order carried it.
+#[test]
+fn a_refused_replacement_leaves_the_terms_the_venue_holds() {
+    let (client, rx, shared) = test_client();
+    let order = |qty: f64, price: f64| Order {
+        order_id: 66, action: "BUY".into(), total_quantity: qty,
+        order_type: "LMT".into(), lmt_price: price, tif: "DAY".into(),
+        transmit: true, ..Default::default()
+    };
+    client.place_order(66, &spy(), &order(100.0, 100.0)).expect("placed");
+    let _ = rx.try_recv();
+    client.core.update_order_status(
+        &shared, 66, crate::types::OrderStatus::Submitted, 0.0, 100.0,
+    );
+    // A replacement goes out, and the record takes it.
+    client.place_order(66, &spy(), &order(200.0, 105.0)).expect("replaced");
+    assert_eq!(
+        client.core.open_orders.lock().unwrap().get(&66).map(|o| o.order.lmt_price),
+        Some(105.0),
+        "the attempt stands while the venue has not answered",
+    );
+
+    // The venue refuses it, and says the order still stands.
+    shared.orders.push_cancel_reject(CancelReject {
+        order_id: 66, instrument: 0, reject_type: 2, reason_code: 0,
+        still_working: Some(crate::types::OrderStatus::Submitted), timestamp_ns: 0,
+    });
+    client.process_msgs(&mut RecordingWrapper::default());
+
+    let held = client.core.open_orders.lock().unwrap();
+    let tracked = held.get(&66).expect("the order still stands");
+    assert_eq!(tracked.order.lmt_price, 100.0, "the price the venue holds");
+    assert_eq!(tracked.order.total_quantity, 100.0, "and the quantity it holds");
+}
+
 /// A replace states new terms for an order the venue is working; it does not
 /// place a new one.
 ///

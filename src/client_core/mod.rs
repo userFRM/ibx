@@ -558,6 +558,14 @@ pub struct TrackedOrder {
     pub remaining: f64,
     /// The engine's own slot for the contract.
     pub instrument: InstrumentId,
+    /// The terms the venue is known to hold, kept while a replacement of them
+    /// is outstanding.
+    ///
+    /// The record takes the attempt ahead of the venue's answer, because every
+    /// later action restates from it. Where the answer is a refusal the attempt
+    /// must not stand: without this the record kept terms the venue had said no
+    /// to, and the next cancel or replace went out restating them.
+    pub before_the_replace: Option<Box<ApiOrder>>,
     /// True once this order's last transition was a genuine Rejected (FIX
     /// 39=8). Rejected and Inactive both stringify to `status == "Inactive"`
     /// (ibapi has no Rejected string), so that string alone cannot tell a
@@ -2275,6 +2283,13 @@ impl ClientCore {
         let mut orders = self.open_orders.lock().unwrap();
         match orders.get_mut(&order_id) {
             Some(tracked) => {
+                // Kept against a refusal. Only the first of a run of
+                // replacements records it: the second states terms the venue
+                // has not answered for either, and falling back to those would
+                // put back an attempt rather than what the venue holds.
+                if tracked.before_the_replace.is_none() {
+                    tracked.before_the_replace = Some(Box::new(tracked.order.clone()));
+                }
                 tracked.remaining = (order.total_quantity - tracked.filled).max(0.0);
                 tracked.contract = contract;
                 tracked.order = order;
@@ -2283,8 +2298,7 @@ impl ClientCore {
                 let remaining = order.total_quantity;
                 orders.insert(order_id, TrackedOrder {
                     contract, order, status: "PendingSubmit".into(), filled: 0.0, remaining,
-                    instrument: 0, rejected: false,
-                });
+                    instrument: 0, rejected: false, before_the_replace: None,});
             }
         }
     }
@@ -2294,8 +2308,7 @@ impl ClientCore {
         let remaining = order.total_quantity;
         self.open_orders.lock().unwrap().insert(order_id, TrackedOrder {
             contract, order, status: "PendingSubmit".into(), filled: 0.0, remaining, instrument,
-            rejected: false,
-        });
+            rejected: false, before_the_replace: None,});
     }
 
     /// Update a tracked order after a fill. Removes the order if fully filled.
@@ -2390,6 +2403,15 @@ impl ClientCore {
             let mut orders = self.open_orders.lock().unwrap();
             if let Some(tracked) = orders.get_mut(&reject.order_id) {
                 tracked.status = crate::types::order_status::order_status_str(status).into();
+                // And the terms with it. The record took the attempt ahead of
+                // the answer, so a refusal that put back only the status left
+                // it stating a price the venue had said no to — and every
+                // later cancel and replace restates from the record.
+                if let Some(held) = tracked.before_the_replace.take() {
+                    tracked.order = *held;
+                    tracked.remaining =
+                        (tracked.order.total_quantity - tracked.filled).max(0.0);
+                }
             }
         }
         // 10147 is the order the venue could not find; 10148 is the order it
@@ -2419,12 +2441,21 @@ impl ClientCore {
     /// cache `collect_open_orders` reads, rather than leaving them blank.
     pub fn update_order_status(&self, shared: &SharedState, order_id: u64, status: OrderStatus, filled: f64, remaining: f64) {
         let mut orders = self.open_orders.lock().unwrap();
+        // A status the venue states for an order that is working again is the
+        // answer to whatever was outstanding on it, so what was kept against a
+        // refusal is spent: kept past that, a later refusal of something else
+        // would put back terms from before a replacement the venue took.
+        if matches!(status, OrderStatus::Submitted | OrderStatus::PartiallyFilled | OrderStatus::Filled)
+            && let Some(tracked) = orders.get_mut(&order_id)
+        {
+            tracked.before_the_replace = None;
+        }
         let o = orders.entry(order_id).or_insert_with(|| {
             let (contract, order) = match shared.orders.get_order_info(order_id) {
                 Some(info) => (info.contract, info.order),
                 None => (ApiContract::default(), ApiOrder::default()),
             };
-            TrackedOrder { contract, order, status: String::new(), rejected: false, filled: 0.0, remaining: 0.0, instrument: 0 }
+            TrackedOrder { contract, order, status: String::new(), rejected: false, filled: 0.0, remaining: 0.0, instrument: 0, before_the_replace: None,}
         });
         o.status = order_status_str(status).into();
         o.rejected = status == OrderStatus::Rejected;
@@ -2506,8 +2537,7 @@ impl ClientCore {
                         filled: o.filled,
                         remaining: o.remaining,
                         instrument: o.instrument,
-                        rejected: o.rejected,
-                    }));
+                        rejected: o.rejected, before_the_replace: None,}));
                 }
             }
         }
@@ -2538,8 +2568,7 @@ impl ClientCore {
                     filled,
                     remaining,
                     instrument: 0,
-                    rejected: false,
-                }));
+                    rejected: false, before_the_replace: None,}));
             }
         }
 
