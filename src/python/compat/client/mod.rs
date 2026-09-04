@@ -1237,7 +1237,13 @@ impl EClient {
         let floor = self.shared.lock().unwrap().as_ref()
             .map(|shared| shared.orders.working_id_watermark().saturating_add(1))
             .unwrap_or(1);
-        let id = self.next_order_id.load(Ordering::Acquire).max(floor);
+        // Held under the end of the range the venue's reports can name back.
+        // An id past it names an order this client could never reconcile
+        // against the answers to it, and the counter that carried it handed
+        // every caller behind it a number that reads as negative.
+        let id = self.next_order_id.load(Ordering::Acquire)
+            .max(floor)
+            .min(crate::bridge::MAX_ORDER_ID);
         crate::bridge::say_if_past_a_request_id(id);
         id
     }
@@ -1255,6 +1261,21 @@ impl EClient {
         let mut held = self.next_order_id.load(Ordering::Acquire);
         loop {
             let id = held.max(floor);
+            // Zero where the account has no id left the venue's reports can
+            // name back, which every placement path refuses: an id carries no
+            // reason with it, so the reason is logged and the number says
+            // there is none. Taken unchecked, the counter went past the end of
+            // the signed range and the ids behind it read as negative — which
+            // the paths that carry one unsigned turned into an order number
+            // above nine quintillion.
+            if id > crate::bridge::MAX_ORDER_ID {
+                log::error!(
+                    "this account has no order id left: the ids in use reach {id}, and an \
+                     order above {} cannot be named back by the venue's own reports",
+                    crate::bridge::MAX_ORDER_ID,
+                );
+                return 0;
+            }
             match self.next_order_id.compare_exchange_weak(
                 held, id + 1, Ordering::AcqRel, Ordering::Acquire,
             ) {

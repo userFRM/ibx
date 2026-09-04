@@ -223,33 +223,48 @@ impl EClient {
         } else {
             ClientCore::build_order_request(order, oid, instrument, Some(contract))?
         };
-        // An order that does not transmit is built and kept, not sent and not
-        // refused. One that does sends whatever of its family was kept, in the
-        // order it was placed, and then itself.
-        if order.transmit {
-            let tx = self.control_tx.clone();
-            if let Err(why) = self.core.transmit_family(oid, order.parent_id, cmd, |c| {
-                tx.send(c).is_ok()
-            }) {
-                return Err(Refusal::not_connected(why));
-            }
-        } else {
-            self.core.hold_until_transmitted(oid, order.parent_id, cmd);
-        }
         self.core.cache_contract(contract.con_id, contract.clone());
         // The record carries the number the order went out under. Cached from
         // the caller's object unchanged, an order placed without one read back
         // from `open_order` naming no order at all.
         let mut placed = order.clone();
         placed.order_id = oid as i64;
+        // An order that does not transmit is built and kept, not sent and not
+        // refused. One that does sends whatever of its family was kept, in the
+        // order it was placed, and then itself.
+        //
+        // The record of a placement goes down before either. Written
+        // afterwards, the engine could acknowledge the order — or refuse and
+        // retire it — while there was nothing here to record it against, and
+        // the insertion behind that put a fresh PendingSubmit over the venue's
+        // own word, or brought back an order the refusal had already taken
+        // out. A held placement takes its record in the same step as the hold:
+        // the two apart were read between, and a withdrawal that found the
+        // hold, took it and found no record reported the order gone while the
+        // record was written behind it.
+        if order.transmit {
+            if !replacing {
+                self.core.track_order(oid, contract.clone(), placed.clone(), instrument);
+            }
+            let tx = self.control_tx.clone();
+            if let Err(why) = self.core.transmit_family(oid, order.parent_id, cmd, |c| {
+                tx.send(c).is_ok()
+            }) {
+                return Err(Refusal::not_connected(why));
+            }
+        } else if replacing {
+            self.core.hold_until_transmitted(oid, order.parent_id, cmd);
+        } else {
+            self.core.hold_and_track(
+                oid, order.parent_id, cmd, contract.clone(), placed.clone(), instrument,
+            );
+        }
         // A replace restates an order the venue is already working, so it
         // states new terms and not a new order: recorded as one, a partly
         // filled order came back as pending with nothing filled and its whole
         // quantity outstanding, and a refused replace left it reading that way.
         if replacing {
             self.core.restate_order(oid, contract.clone(), placed);
-        } else {
-            self.core.track_order(oid, contract.clone(), placed, instrument);
         }
         Ok(())
     }
@@ -296,7 +311,7 @@ impl EClient {
             req_id as u64
         } else {
             // Written down, as on `place_order` above.
-            self.reserve_order_ids(1) as u64
+            self.reserve_order_ids(1)? as u64
         };
         let instrument = self.core.find_or_register_instrument(
             &self.control_tx,
@@ -356,9 +371,7 @@ impl EClient {
         // transmitted, and forgetting that and returning left the live order
         // working while the caller had been told it was withdrawn: the staged
         // revision goes, and the cancel still travels.
-        let staged_submission = self.core.holds_a_submission(order_id);
-        if self.core.withdraw_held(order_id) && staged_submission {
-            self.core.untrack_order(order_id);
+        if self.core.withdraw_held_placement(order_id) {
             return Ok(());
         }
         self.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
@@ -456,7 +469,12 @@ impl EClient {
     pub fn req_ids(&self, wrapper: &mut impl Wrapper) {
         // Stated without being taken, as the reference client states it: the
         // caller places under it, and the reservation happens then.
-        let stated = self.next_order_id.load(Ordering::Acquire).max(self.next_id_base());
+        // Held under the end of the range the venue's reports can name back,
+        // as the reservation is: an id past it names an order this client
+        // could never reconcile against the answers to it.
+        let stated = self.next_order_id.load(Ordering::Acquire)
+            .max(self.next_id_base())
+            .min(crate::bridge::MAX_ORDER_ID);
         crate::bridge::say_if_past_a_request_id(stated);
         wrapper.next_valid_id(stated as i64);
     }
@@ -470,17 +488,39 @@ impl EClient {
     /// not just this one — and not every id the account has ever used.
     ///
     /// Read on each reservation rather than settled once, so an order the
-    /// venue names later still raises the floor. Nothing is waited for: an
-    /// account with nothing working counts from one, and the wait that would
-    /// tell that apart from a naming still in flight costs every such account
-    /// its first order.
+    /// venue names later still raises the floor.
+    ///
+    /// The naming is waited for, as the other surface waits for it. The venue
+    /// names what it is working after the connect returns, and an id asked for
+    /// in the same breath was floored at nothing: a caller that connected and
+    /// asked at once was handed one, and the venue refused the order under it
+    /// as a duplicate of one it is still working. An account with nothing
+    /// working is named with nothing and the wait is over as soon as the venue
+    /// says so, so counting from one costs it nothing.
     fn next_id_base(&self) -> u64 {
+        if !self.shared.orders.wait_for_replay() && self.shared.orders.naming_began() {
+            // No error travels with an id, so this is said where it can be
+            // said. The floor is whatever had been named by now, which is not
+            // the whole of what the account is working.
+            log::warn!(
+                "the venue had not finished naming this account's working orders within \
+                 the wait, so the next order id is counted from what it had named and the \
+                 venue may refuse an order under it as one it is already working",
+            );
+        }
         self.shared.orders.working_id_watermark().saturating_add(1)
     }
 
     /// Get the next order ID (local counter).
+    ///
+    /// Zero where the account has no id left that the venue's reports can name
+    /// back, which every placement path refuses: an id carries no reason with
+    /// it, so the reason is logged and the number says there is none.
     pub fn next_order_id(&self) -> i64 {
-        self.reserve_order_ids(1)
+        self.reserve_order_ids(1).unwrap_or_else(|why| {
+            log::error!("{}", why.message);
+            0
+        })
     }
 
     /// Take `n` consecutive ids in one step.
@@ -488,13 +528,30 @@ impl EClient {
     /// A bracket occupies three consecutive ids: parent, parent+1, parent+2.
     /// Reserving them in one step keeps a concurrent placement from taking a
     /// child's id or moving the counter back over ids already handed out.
-    fn reserve_order_ids(&self, n: u64) -> i64 {
+    ///
+    /// The whole run has to fit under [`crate::bridge::MAX_ORDER_ID`],
+    /// children included. Handed out unchecked, the run crossed the end of the
+    /// range the venue's reports can name back: the id itself could never be
+    /// reconciled, a bracket's children were an addition past the end of the
+    /// signed range, and the counter left behind gave every caller after it a
+    /// negative id — which the paths that carry one unsigned turned into an
+    /// order number above nine quintillion.
+    fn reserve_order_ids(&self, n: u64) -> Result<i64, Refusal> {
         let floor = self.next_id_base();
         let mut held = self.next_order_id.load(Ordering::Acquire);
         loop {
             let first = held.max(floor);
+            let last = first
+                .checked_add(n - 1)
+                .filter(|last| *last <= crate::bridge::MAX_ORDER_ID)
+                .ok_or_else(|| Refusal::validation(format!(
+                    "this account has no run of {n} order ids left: the ids in use reach \
+                     {first}, and an order above {} cannot be named back by the venue's \
+                     own reports",
+                    crate::bridge::MAX_ORDER_ID,
+                )))?;
             match self.next_order_id.compare_exchange_weak(
-                held, first + n, Ordering::AcqRel, Ordering::Acquire,
+                held, last + 1, Ordering::AcqRel, Ordering::Acquire,
             ) {
                 Ok(_) => {
                     // Said where the ids are handed out rather than only where
@@ -502,8 +559,8 @@ impl EClient {
                     // one is still hears it — and against the widest of the
                     // run, because a bracket's children are the first plus one
                     // and two, and the run can cross the line between them.
-                    crate::bridge::say_if_past_a_request_id(first + n - 1);
-                    return first as i64;
+                    crate::bridge::say_if_past_a_request_id(last);
+                    return Ok(first as i64);
                 }
                 Err(seen) => held = seen,
             }
@@ -727,7 +784,7 @@ impl EClient {
         // Consecutive, because the venue reads the children's numbers as the
         // parent's plus one and two. Taken apart, a bracket links to whatever
         // happened to be placed in between.
-        let parent_id = self.reserve_order_ids(3);
+        let parent_id = self.reserve_order_ids(3)?;
         let (tp_id, sl_id) = (parent_id + 1, parent_id + 2);
 
         let scaled = |price: f64| crate::types::price_from_f64(price);

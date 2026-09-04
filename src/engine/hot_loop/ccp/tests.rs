@@ -5087,6 +5087,66 @@ fn a_report_for_an_earlier_revision_does_not_take_back_the_name() {
     );
 }
 
+/// The venue's naming at connect settles where an order's revisions stand.
+///
+/// An order the venue names carries the revision it reached in an earlier
+/// session. Counted from zero beside it, the next replace named a revision the
+/// venue had already been given, and the cancel behind it named one the venue
+/// had superseded — answered that no such order exists, which retires the
+/// record here while the order goes on working there. The forward-only rule
+/// does not hold against that naming either: it is the venue's account of what
+/// it holds, not an answer that can arrive out of turn.
+#[test]
+fn the_naming_at_connect_settles_where_an_orders_revisions_stand() {
+    let mut context = Context::new();
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+
+    // An order this session never placed, named on its fifth revision.
+    let named = exec_report_frame(&[
+        (11, "42.5"), (150, "0"), (39, "0"), (54, "1"), (38, "1"),
+        (44, "100.00"), (6008, "756733"), (55, "SPY"),
+    ]);
+    ccp.handle_exec_report(&named, b"", &mut context, &shared, &None, "");
+
+    assert_eq!(
+        context.last_clord.get(&42).map(String::as_str),
+        Some("42.5"),
+        "a cancel names as the original what the venue stated",
+    );
+    assert_eq!(
+        context.modify_versions.get(&42),
+        Some(&5),
+        "and the next replace names the revision past it, not one the venue holds",
+    );
+
+    // A revision this client sent and never had answered — its name written
+    // into the record ahead of the answer the dropped connection took with it
+    // — and the naming at the next connect saying the earlier revision is
+    // what the venue is working.
+    let attempt = *context.order(42).expect("the order was recovered");
+    context.last_clord.insert(42, "42.6".to_string());
+    context.pre_replace.insert((42, 6), (attempt, "42.5".to_string()));
+    context.modify_versions.insert(42, 6);
+    context.mark_orders_uncertain();
+    ccp.handle_exec_report(&named, b"", &mut context, &shared, &None, "");
+
+    assert_eq!(
+        context.last_clord.get(&42).map(String::as_str),
+        Some("42.5"),
+        "the venue's account of the order puts the unanswered name back",
+    );
+    assert_eq!(
+        context.modify_versions.get(&42),
+        Some(&6),
+        "while the counter keeps the highest revision this client has issued",
+    );
+    assert!(
+        !context.replace_is_outstanding(42),
+        "and the fallback that name was written beside goes with it",
+    );
+}
+
 /// A refused revision puts back what the venue held before that revision, not
 /// the terms of an attempt the venue itself refused.
 ///

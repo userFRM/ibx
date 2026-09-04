@@ -1408,3 +1408,57 @@ fn an_execution_is_stored_once_under_its_id() {
     let ids: Vec<&str> = stored.iter().map(|s| s.execution.exec_id.as_str()).collect();
     assert_eq!(ids, ["0001f4e8.1", "0001f4e8.2"], "each execution once, by id");
 }
+
+/// A family send that stops partway does not leave what it never sent reading
+/// as an order the venue is working.
+///
+/// An order reads as working here by being tracked with no placement held for
+/// it. What did not reach the engine comes out of the hold, so it cannot go out
+/// behind the next thing that transmits after the caller was told it did not
+/// go — and its record has to come out with it. Left standing, an id nothing
+/// ever sent was listed among the open orders and placing under it again
+/// revised an order the venue has never been given, beside a parent that did
+/// go and is resting there with nothing protecting it.
+#[test]
+fn a_family_send_that_stops_partway_forgets_what_it_did_not_send() {
+    let core = ClientCore::new();
+    let leg = |order_id: u64, parent_id: i64| {
+        let order = ApiOrder {
+            order_id: order_id as i64, action: "BUY".into(), total_quantity: 1.0,
+            order_type: "LMT".into(), lmt_price: 100.0, tif: "DAY".into(),
+            parent_id, transmit: false, ..Default::default()
+        };
+        let command = ClientCore::build_order_request(&order, order_id, 0, None)
+            .expect("a plain limit order is built");
+        (command, order)
+    };
+    // A parent and two children, each built and kept.
+    for (order_id, parent_id) in [(80u64, 0i64), (81, 80), (82, 80)] {
+        let (command, order) = leg(order_id, parent_id);
+        core.hold_until_transmitted(order_id, parent_id, command);
+        core.track_order(order_id, ApiContract::default(), order, 0);
+    }
+
+    // The parent goes; the engine is gone by the time the sibling behind it is
+    // offered, so neither it nor the order that asked to transmit went.
+    let (own, _) = leg(81, 80);
+    let mut offered = 0;
+    let sent = core.transmit_family(81, 80, own, |_| {
+        offered += 1;
+        offered == 1
+    });
+
+    assert!(sent.is_err(), "the caller is told the family did not all go");
+    assert!(
+        core.is_working_at_the_venue(80),
+        "the parent reached the engine and may be live at the venue",
+    );
+    assert!(
+        !core.is_working_at_the_venue(81),
+        "the order that asked to transmit did not reach the engine",
+    );
+    assert!(
+        !core.is_working_at_the_venue(82),
+        "nor did the sibling behind it, so neither is an order to withdraw or revise",
+    );
+}

@@ -606,13 +606,37 @@ impl HeldOrder {
     /// whole of it, because the venue was never given the order; forgetting a
     /// revision leaves the order it was a revision to live at the venue.
     fn places_the_order(&self) -> bool {
-        matches!(
-            self.command,
-            ControlCommand::Order(
-                OrderRequest::SubmitEx { .. } | OrderRequest::SubmitBracket { .. },
-            ),
-        )
+        places_the_order(&self.command)
     }
+}
+
+/// The record of an order as this client has just placed it.
+///
+/// Written by more than one path — held back, or sent — so the shape of a
+/// freshly placed order is stated once.
+fn tracked_as_placed(
+    contract: ApiContract, order: ApiOrder, instrument: InstrumentId,
+) -> TrackedOrder {
+    let remaining = order.total_quantity;
+    TrackedOrder {
+        contract, order, status: "PendingSubmit".into(), filled: 0.0, remaining, instrument,
+        rejected: false, before_the_replace: None,
+    }
+}
+
+/// Whether a command would place an order, rather than revise one the venue is
+/// already working.
+///
+/// Asked of the command rather than of the hold, because the order that
+/// transmits is sent from the caller's hand and is never in the hold by the
+/// time its send is accounted for.
+fn places_the_order(command: &ControlCommand) -> bool {
+    matches!(
+        command,
+        ControlCommand::Order(
+            OrderRequest::SubmitEx { .. } | OrderRequest::SubmitBracket { .. },
+        ),
+    )
 }
 
 /// What one historical request asked for.
@@ -960,6 +984,56 @@ impl ClientCore {
         held.push(HeldOrder { order_id, parent_id, command });
     }
 
+    /// Hold an order back and record it, as one step.
+    ///
+    /// The hold and the record together are what say an order exists here and
+    /// has not been sent, and taken one after the other they were read
+    /// between: a withdrawal running in the gap found the hold, took it, found
+    /// no record to remove and reported the order withdrawn — and the record
+    /// was written behind it, leaving an id that reads as an order the venue
+    /// is working while nothing was ever sent. Placing under that id again
+    /// then revises an order the venue has never been given.
+    pub fn hold_and_track(
+        &self,
+        order_id: u64,
+        parent_id: i64,
+        command: ControlCommand,
+        contract: ApiContract,
+        order: ApiOrder,
+        instrument: InstrumentId,
+    ) {
+        let mut held = self.held_orders.lock().unwrap();
+        let mut orders = self.open_orders.lock().unwrap();
+        held.retain(|other| other.order_id != order_id);
+        held.push(HeldOrder { order_id, parent_id, command });
+        orders.insert(order_id, tracked_as_placed(contract, order, instrument));
+    }
+
+    /// Forget a placement that was never sent, its record with it, as one
+    /// step, and say whether the order is now gone entirely.
+    ///
+    /// `false` where the id names something else — a revision waiting to be
+    /// transmitted, or nothing at all — and the caller still has a cancel to
+    /// send. The revision is taken out either way: the order it revises is
+    /// live, and the cancel composed for it has an answer coming.
+    ///
+    /// One step for the reason `hold_and_track` is: the two taken apart let a
+    /// placement running between them leave a record behind the withdrawal
+    /// that had just reported the order gone.
+    pub fn withdraw_held_placement(&self, order_id: u64) -> bool {
+        let mut held = self.held_orders.lock().unwrap();
+        let mut orders = self.open_orders.lock().unwrap();
+        let placement = held.iter()
+            .any(|h| h.order_id == order_id && h.places_the_order());
+        let before = held.len();
+        held.retain(|other| other.order_id != order_id);
+        let withdrew = held.len() != before;
+        if withdrew && placement {
+            orders.remove(&order_id);
+        }
+        withdrew && placement
+    }
+
     /// Take back an order that never went, and say whether it was held.
     ///
     /// A held order is one the venue was never given, so withdrawing it is not
@@ -1081,6 +1155,7 @@ impl ClientCore {
             reached.push(member.order_id);
         }
         let all_before_went = reached.len() == family.len();
+        let own_places = places_the_order(&own);
         let own_went = all_before_went && send(own);
         if all_before_went && own_went {
             for member in &family {
@@ -1088,6 +1163,14 @@ impl ClientCore {
             }
             return Ok(());
         }
+        // A placement out of the hold that did not reach the engine is not an
+        // order the venue is working, and its record goes with the hold. An
+        // order is read as live here by being tracked with no placement held
+        // for it, so a record left behind put an id that was never sent among
+        // the open orders — and placing under it again revised an order the
+        // venue has never been given, beside a parent that may be resting
+        // there with nothing protecting it.
+        let mut forgotten: Vec<u64> = Vec::new();
         // What did not reach the engine comes out of the hold, as what did:
         // left queued, it would go out behind the next thing that transmits,
         // after the caller had been told it did not go. Left held where
@@ -1096,7 +1179,18 @@ impl ClientCore {
         if !reached.is_empty() {
             for member in &family {
                 self.withdraw_held(member.order_id);
+                if !reached.contains(&member.order_id) && places_the_order(&member.command) {
+                    forgotten.push(member.order_id);
+                }
             }
+        }
+        // The transmitting order left the hold at the top whatever happened,
+        // so its own record goes here where it did not reach the engine.
+        if !own_went && own_places {
+            forgotten.push(order_id);
+        }
+        for id in forgotten {
+            self.untrack_order(id);
         }
         let name = |ids: &[u64]| {
             let list = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
@@ -2243,6 +2337,57 @@ impl ClientCore {
         Some(format!("a {ty} order"))
     }
 
+    /// The defining number a replace cannot carry, where the replacement names
+    /// a different one.
+    ///
+    /// These types hold their defining price in the shape the submit sent — a
+    /// trail, a peg offset, a midpoint cap — and a replace restates that shape
+    /// from the record of the order as it was placed. What the replace itself
+    /// states is the limit price, the trigger and the quantity; a new value for
+    /// anything else has nowhere to go on it. Sent anyway, the venue went on
+    /// working the number the order was placed with while this client recorded
+    /// the new one and answered that the replacement had been submitted.
+    ///
+    /// The plain trailing stop's amount is the exception: it rides the trigger
+    /// tag, and a session was seen to accept a replace that moved it. Which of
+    /// a peg's two numbers a replace would name has not been established, and
+    /// a number this client cannot state is refused rather than guessed.
+    ///
+    /// A replacement that names none of them still goes: a zero and an unset
+    /// value both leave the placed number in force, which is how a caller
+    /// moves the quantity alone.
+    fn replace_cannot_state(tracked: &ApiOrder, incoming: &ApiOrder) -> Option<&'static str> {
+        let named = |v: f64| v != 0.0 && v != f64::MAX;
+        // Where a trailing stop with a limit holds its limit-versus-trail
+        // offset, which is the field the submit reads it off.
+        let limit_offset = |o: &ApiOrder| {
+            if o.lmt_price_offset != f64::MAX { o.lmt_price_offset } else { o.lmt_price }
+        };
+        let moved = |placed: f64, asked: f64| named(asked) && asked != placed;
+        let by_percent = named(tracked.trailing_percent);
+        Some(match tracked.order_type.to_uppercase().as_str() {
+            "TRAIL" if moved(tracked.trailing_percent, incoming.trailing_percent) => {
+                "the trailing percent"
+            }
+            "TRAIL" if by_percent && moved(tracked.aux_price, incoming.aux_price) => {
+                "the trail amount"
+            }
+            "TRAIL LIMIT" if moved(tracked.aux_price, incoming.aux_price) => "the trail amount",
+            "TRAIL LIMIT" if moved(limit_offset(tracked), limit_offset(incoming)) => {
+                "the limit offset"
+            }
+            "PEG MID" | "PEG MIDPT" if moved(tracked.aux_price, incoming.aux_price) => {
+                "the peg offset"
+            }
+            "PEG MID" | "PEG MIDPT" | "MIDPX" | "MIDPRICE"
+                if moved(tracked.lmt_price, incoming.lmt_price) => "the price cap",
+            "SNAP MID" | "SNAP MIDPT" if moved(tracked.aux_price, incoming.aux_price) => {
+                "the snap offset"
+            }
+            _ => return None,
+        })
+    }
+
     /// Why a modify of `order_id` cannot be sent, if it cannot.
     ///
     /// Both sides are checked. The resting order is the one the replace has to
@@ -2259,6 +2404,20 @@ impl ClientCore {
         let restating_itself = tracked
             .as_ref()
             .is_some_and(|t| t.order_type.eq_ignore_ascii_case(&incoming.order_type));
+        // A type the replace can restate can still be asked for a number the
+        // replace does not carry. Answered as sent, the venue went on working
+        // the number the order was placed with while the record here held the
+        // one the caller asked for, and every later action restated from it.
+        if restating_itself
+            && let Some(tracked) = tracked.as_ref()
+            && let Some(field) = Self::replace_cannot_state(tracked, incoming)
+        {
+            return Some(format!(
+                "{field} of a {} order cannot be modified: the replace does not carry it, \
+                 and the venue would go on working the order as it was placed",
+                tracked.order_type,
+            ));
+        }
         let why = tracked
             .and_then(|tracked| Self::replace_cannot_restate(&tracked, restating_itself))
             .or_else(|| Self::replace_cannot_restate(incoming, restating_itself))?;
@@ -2305,10 +2464,8 @@ impl ClientCore {
 
     /// Track a newly placed order.
     pub fn track_order(&self, order_id: u64, contract: ApiContract, order: ApiOrder, instrument: InstrumentId) {
-        let remaining = order.total_quantity;
-        self.open_orders.lock().unwrap().insert(order_id, TrackedOrder {
-            contract, order, status: "PendingSubmit".into(), filled: 0.0, remaining, instrument,
-            rejected: false, before_the_replace: None,});
+        self.open_orders.lock().unwrap()
+            .insert(order_id, tracked_as_placed(contract, order, instrument));
     }
 
     /// Update a tracked order after a fill. Removes the order if fully filled.

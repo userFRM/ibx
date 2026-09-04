@@ -240,6 +240,13 @@ fn a_held_order_that_is_withdrawn_does_not_go_out_later() {
     assert_eq!(sent.len(), 1, "only the order that transmitted: {sent:?}");
 }
 
+/// A placement is recorded before its command can be taken.
+///
+/// The engine answers on its own thread. Recorded after the command went out,
+/// an acknowledgement — or a refusal, which retires the order — could arrive
+/// while there was nothing here to record it against, and the insertion behind
+/// it put a fresh PendingSubmit over the venue's own word or brought back an
+
 /// Withdrawing a held order frees the id it was placed under.
 ///
 /// The venue was never given the order, so the id is not spent there — but
@@ -7870,7 +7877,7 @@ fn a_run_of_ids_is_measured_by_its_widest() {
     ).expect("the order surface is there to read");
     let body = body_of(&orders, "fn reserve_order_ids(").expect("ids are reserved in one place");
     assert!(
-        body.contains("say_if_past_a_request_id(first + n - 1)"),
+        body.contains("checked_add(n - 1)") && body.contains("say_if_past_a_request_id(last)"),
         "a run is measured by its first id, so a bracket whose children cross the line \
          hands them out in silence",
     );

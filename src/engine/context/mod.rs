@@ -535,6 +535,27 @@ impl Context {
         self.pre_replace.retain(|(id, _), _| *id != order_id);
     }
 
+    /// Take the venue's own account of where an order's naming stands.
+    ///
+    /// `modify_versions` counts the revisions this client has issued, and the
+    /// next replace names one past it. An order the venue names at connect
+    /// carries the revision it reached in an earlier session, and a counter
+    /// starting at zero beside it named revisions the venue had already been
+    /// given: the replace went out under a name the venue held, and the cancel
+    /// behind it named a revision the venue had superseded and was answered
+    /// that no such order exists — which retires the record here while the
+    /// order goes on working there.
+    ///
+    /// What was kept against a refusal goes too. It was written ahead of an
+    /// answer that is now moot, and the venue has just said what it holds;
+    /// left behind, a later refusal would put the superseded terms and the
+    /// superseded name back over the venue's own word.
+    pub fn reconcile_recovered_revision(&mut self, order_id: OrderId, revision: u32) {
+        let issued = self.modify_versions.entry(order_id).or_insert(0);
+        *issued = (*issued).max(revision);
+        self.pre_replace.retain(|(id, _), _| *id != order_id);
+    }
+
     /// Whether the venue still owes an answer to a revision of this order.
     pub fn replace_is_outstanding(&self, order_id: OrderId) -> bool {
         self.pre_replace.keys().any(|(id, _)| *id == order_id)

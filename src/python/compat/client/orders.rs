@@ -290,17 +290,6 @@ impl EClient {
         // call had failed. What reached the engine and what did not is said
         // on the error callback, under the number a lost session is reported
         // under, and the call returns.
-        if api_order.transmit {
-            let sent = self.core.transmit_family(oid, api_order.parent_id, cmd, |c| {
-                Self::send_control(py, &tx, c).is_ok()
-            });
-            if let Err(why) = sent {
-                return self.report_refusal(py, order_id, Refusal::not_connected(why));
-            }
-        } else {
-            self.core.hold_until_transmitted(oid, api_order.parent_id, cmd);
-        }
-
         // Track order in shared core. The record is the contract as the venue
         // was told it: the description, and the legs and the hedge read off
         // the caller's objects above. Converted afresh, the record held a BAG
@@ -317,14 +306,41 @@ impl EClient {
         // restating one as the other collides with whatever is held there.
         tracked_order.client_id = self.client_id.load(Ordering::Acquire);
         self.core.cache_contract(contract.con_id, api_contract.clone());
+        // The record of a placement goes down before the command, as on the
+        // other surface. Written afterwards, the engine could acknowledge the
+        // order — or refuse and retire it — while there was nothing here to
+        // record it against, and the insertion behind that put a fresh
+        // PendingSubmit over the venue's own word, or brought back an order
+        // the refusal had already taken out. A held placement takes its record
+        // in the same step as the hold: the two apart were read between, and a
+        // withdrawal that found the hold, took it and found no record reported
+        // the order gone while the record was written behind it.
+        if api_order.transmit {
+            if !replacing {
+                self.core.track_order(
+                    oid, api_contract.clone(), tracked_order.clone(), instrument,
+                );
+            }
+            let sent = self.core.transmit_family(oid, api_order.parent_id, cmd, |c| {
+                Self::send_control(py, &tx, c).is_ok()
+            });
+            if let Err(why) = sent {
+                return self.report_refusal(py, order_id, Refusal::not_connected(why));
+            }
+        } else if replacing {
+            self.core.hold_until_transmitted(oid, api_order.parent_id, cmd);
+        } else {
+            self.core.hold_and_track(
+                oid, api_order.parent_id, cmd,
+                api_contract.clone(), tracked_order.clone(), instrument,
+            );
+        }
         // A replace restates an order the venue is already working, so it
         // states new terms and not a new order: recorded as one, a partly
         // filled order came back as pending with nothing filled and its whole
         // quantity outstanding.
         if replacing {
             self.core.restate_order(oid, api_contract, tracked_order);
-        } else {
-            self.core.track_order(oid, api_contract, tracked_order, instrument);
         }
 
         Ok(())
@@ -443,9 +459,7 @@ impl EClient {
         // transmitted, and forgetting that and returning left the live order
         // working while the caller had been told it was withdrawn: the staged
         // revision goes, and the cancel still travels.
-        let staged_submission = self.core.holds_a_submission(oid);
-        if self.core.withdraw_held(oid) && staged_submission {
-            self.core.untrack_order(oid);
+        if self.core.withdraw_held_placement(oid) {
             return Ok(());
         }
         Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: oid }))

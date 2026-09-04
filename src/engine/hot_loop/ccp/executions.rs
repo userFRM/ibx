@@ -115,7 +115,7 @@ pub(crate) fn stated_reason(parsed: &std::collections::HashMap<u32, String>) -> 
 /// next id to hand out at zero, which the venue refuses as one it has used.
 fn stated_order_id(field: &str) -> Option<u64> {
     let id = field.parse::<u64>().ok()?;
-    if id >= i64::MAX as u64 {
+    if id > crate::bridge::MAX_ORDER_ID {
         log::warn!("a report names order {id}, which is past the highest id this client carries");
         return None;
     }
@@ -824,10 +824,13 @@ impl CcpState {
         // the order finished — so its absence reads as "never seen" and the
         // echo would insert it as live, with none of the fill on it.
         let already_finished = shared.orders.recently_completed(clord_id);
-        if is_new_ack && !status.is_terminal() && !marked_resend
+        // The venue naming an order it holds, rather than answering something
+        // this session sent. Kept, because the name it states is the
+        // authority the recorded one is reconciled against below.
+        let recovering = is_new_ack && !status.is_terminal() && !marked_resend
             && clord_id != 0 && !already_finished
-            && (context.order(clord_id).is_none() || unknown)
-        {
+            && (context.order(clord_id).is_none() || unknown);
+        if recovering {
             self.recover_order(parsed, clord_id, prior, context, shared);
         }
 
@@ -884,15 +887,31 @@ impl CcpState {
         // a later one moved this back to a name the venue had already
         // superseded — so the next cancel named that superseded revision as
         // the original, and the venue answered that it knew no such order.
+        //
+        // Except where the venue is naming what it holds. That report is not
+        // an answer that can arrive out of turn: it is the venue's account of
+        // the order, and it stands whichever revision it names. A replace
+        // whose answer the dropped connection took with it left the attempt's
+        // own name recorded, the naming at the next connect said the earlier
+        // revision was still working, and the forward-only rule refused to put
+        // it back — so every later cancel named a revision the venue does not
+        // know and the order went on working out of reach of a withdrawal.
         if let Some(raw_clord) = parsed.get(&11)
             && !raw_clord.starts_with('C')
             && !raw_clord.starts_with('L')
             && raw_clord != "*"
-            && context.last_clord.get(&clord_id).is_none_or(|held| {
-                revision_of(raw_clord) >= revision_of(held)
-            })
         {
-            context.last_clord.insert(clord_id, raw_clord.clone());
+            let reported = revision_of(raw_clord);
+            if recovering
+                || context.last_clord.get(&clord_id).is_none_or(|held| {
+                    reported >= revision_of(held)
+                })
+            {
+                context.last_clord.insert(clord_id, raw_clord.clone());
+            }
+            if recovering {
+                context.reconcile_recovered_revision(clord_id, reported);
+            }
         }
 
         // What-If response: tag 6091=1 with margin data (tag 6092+).

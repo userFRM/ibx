@@ -106,6 +106,15 @@ pub struct OrderState {
     order_inactive: Mutex<Vec<(u64, i32, String)>>,
 }
 
+/// The highest id an order can be given.
+///
+/// One below the widest signed value, because that is where the reader of the
+/// venue's reports stops: an id past it does not parse, so an order placed
+/// under one could never be matched to the report that acknowledges, fills or
+/// withdraws it. Stated once, so the allocator and the reader cannot disagree
+/// about where the range ends.
+pub const MAX_ORDER_ID: u64 = i64::MAX as u64 - 1;
+
 /// Say, once, that this account's order ids have outgrown a request id.
 ///
 /// A program written against the reference client numbers its orders and its
