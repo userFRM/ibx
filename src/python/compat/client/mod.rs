@@ -2100,8 +2100,12 @@ w = W()",
         Python::initialize();
         Python::attach(|py| {
             let (client, rx, _shared, _w) = wired_client(py);
+            // Stated in full, so the call subscribes rather than asking the
+            // venue to name a contract that carries neither type nor exchange.
             let contract = Py::new(py, Contract {
-                con_id: 756733, symbol: "SPY".into(), ..Default::default()
+                con_id: 756733, symbol: "SPY".into(),
+                sec_type: "STK".into(), exchange: "SMART".into(),
+                ..Default::default()
             }).unwrap();
             // The registration reply comes from an engine no test has, so the
             // call itself fails; the commands are on the channel either way.
@@ -2193,6 +2197,190 @@ w = W()",
                 Some(&g), None,
             ).unwrap().extract().unwrap();
             assert_eq!(ended, 1, "the request ends once");
+        });
+    }
+    /// The engine records which way the connection last went in flags it
+    /// always writes, and announces it on a channel that drops what it cannot
+    /// hold. A client that reads only the notice is told nothing by an outage
+    /// it fell behind on: it goes on reporting a connection that is gone, and
+    /// goes on reporting one that came back as gone.
+    #[test]
+    fn a_connection_that_went_and_came_back_is_read_without_the_notice() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, _w) = wired_client(py);
+            let client = client.borrow(py);
+
+            // Nothing is queued in either case: this is the notice dropped.
+            shared.set_connection_lost();
+            client.dispatch_once(py, &shared).unwrap();
+            assert!(
+                !client.connected.load(Ordering::Relaxed),
+                "an outage nobody was told of still reads as connected",
+            );
+
+            shared.set_connection_restored();
+            client.dispatch_once(py, &shared).unwrap();
+            assert!(
+                client.connected.load(Ordering::Relaxed),
+                "a session that came back still reads as disconnected",
+            );
+        });
+    }
+
+    /// A stream numbered past what the request carries is refused rather than
+    /// narrowed. Narrowed, the venue's refusal of it came back under a number
+    /// another request was using, and this one stayed open with nothing to
+    /// withdraw it by.
+    #[test]
+    fn a_tick_by_tick_stream_is_refused_a_req_id_the_request_cannot_carry() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, _shared, _w) = wired_client(py);
+            let contract = Py::new(py, Contract {
+                con_id: 756733, sec_type: "STK".into(), exchange: "SMART".into(),
+                ..Default::default()
+            }).unwrap();
+            let err = client
+                .call_method1(
+                    py, "req_tick_by_tick_data",
+                    (u32::MAX as i64 + 1, &contract, "Last", 0i32, false),
+                )
+                .unwrap_err();
+            assert!(err.to_string().contains("outside the range"), "got {err}");
+            assert!(rx.try_recv().is_err(), "a refused req_id must reach no engine command");
+        });
+    }
+
+    /// A subscription states the contract's security type, and a caller that
+    /// gave an id alone stated none. Sent as it stands, the engine takes the
+    /// request, finds no type for it, and gives it up — so the caller reads no
+    /// quotes and is told nothing under its own request id.
+    #[test]
+    fn a_quote_request_names_a_contract_given_by_id_alone() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, shared, _w) = wired_client(py);
+            let venue = naming_the_contract(rx, shared, a_future_on_cme());
+            let contract = Py::new(py, Contract { con_id: 756733, ..Default::default() }).unwrap();
+
+            client
+                .call_method1(py, "req_mkt_data", (1i64, &contract, "", false, false))
+                .unwrap();
+
+            let (asked, rx) = venue.join().unwrap();
+            assert!(
+                matches!(asked.last(), Some(ControlCommand::FetchContractDetails { .. })),
+                "the venue was never asked to name the contract: {asked:?}",
+            );
+            let subscribed = std::iter::from_fn(|| rx.try_recv().ok())
+                .find_map(|cmd| match cmd {
+                    ControlCommand::Subscribe { contract, .. } => Some(contract),
+                    _ => None,
+                })
+                .expect("the quotes were never asked for");
+            assert_eq!(subscribed.sec_type, "FUT", "the subscription went out untyped");
+            assert_eq!(subscribed.exchange, "CME");
+        });
+    }
+
+    /// The same for a historical request, which states the type too. An empty
+    /// one is asked as a US stock, so a future named by id alone was answered
+    /// with some share's bars.
+    #[test]
+    fn a_historical_request_names_a_contract_given_by_id_alone() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, shared, _w) = wired_client(py);
+            let venue = naming_the_contract(rx, shared, a_future_on_cme());
+            let contract = Py::new(py, Contract { con_id: 756733, ..Default::default() }).unwrap();
+
+            client
+                .call_method1(
+                    py, "req_historical_data",
+                    (1i64, &contract, "", "1 D", "1 hour", "TRADES", 1i32),
+                )
+                .unwrap();
+
+            let (asked, rx) = venue.join().unwrap();
+            assert!(
+                matches!(asked.last(), Some(ControlCommand::FetchContractDetails { .. })),
+                "the venue was never asked to name the contract: {asked:?}",
+            );
+            let ControlCommand::FetchHistorical { contract, .. } =
+                rx.try_recv().expect("the bars were never asked for")
+            else {
+                panic!("a historical request sent something else");
+            };
+            assert_eq!(contract.sec_type, "FUT", "the query went out as a US stock");
+            assert_eq!(contract.exchange, "CME");
+        });
+    }
+
+    /// The contract a caller names by id alone, as the venue names it back.
+    fn a_future_on_cme() -> crate::control::contracts::ContractDefinition {
+        crate::control::contracts::ContractDefinition {
+            con_id: 756733,
+            sec_type: crate::control::contracts::SecurityType::Future,
+            exchange: "CME".into(),
+            ..Default::default()
+        }
+    }
+
+    /// Stand in for the venue's contract lookup: answer the first one that
+    /// reaches the engine with `def`, and hand back what was sent and the
+    /// channel, so the caller can read whatever followed the lookup.
+    fn naming_the_contract(
+        rx: std::sync::mpsc::Receiver<ControlCommand>,
+        shared: Arc<SharedState>,
+        def: crate::control::contracts::ContractDefinition,
+    ) -> thread::JoinHandle<(Vec<ControlCommand>, std::sync::mpsc::Receiver<ControlCommand>)> {
+        thread::spawn(move || {
+            let mut sent = Vec::new();
+            while let Ok(cmd) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                let lookup = matches!(cmd, ControlCommand::FetchContractDetails { .. });
+                if let ControlCommand::FetchContractDetails { req_id, .. } = &cmd {
+                    shared.reference.push_contract_details(*req_id, def.clone());
+                    shared.reference.push_contract_details_end(*req_id);
+                }
+                sent.push(cmd);
+                if lookup { break; }
+            }
+            (sent, rx)
+        })
+    }
+
+    /// `all_msgs=False` asks for the bulletins still to come, and the ones the
+    /// session collected before the call are not those. Kept, the first poll
+    /// after subscribing opened with a notice published before anyone had
+    /// asked for any.
+    #[test]
+    fn asking_only_for_the_bulletins_to_come_drops_the_ones_already_here() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            let bulletin = |msg_id, message: &str| NewsBulletin {
+                msg_id, msg_type: 1, message: message.into(), exchange: "NYSE".into(),
+            };
+            shared.market.push_news_bulletin(bulletin(1, "published before anyone asked"));
+
+            client.call_method1(py, "req_news_bulletins", (false,)).unwrap();
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let heard = || -> usize {
+                py.eval(
+                    c"len([c for c in w.calls if c[0] in ('update_news_bulletin', 'updateNewsBulletin')])",
+                    Some(&g), None,
+                ).unwrap().extract().unwrap()
+            };
+            assert_eq!(heard(), 0, "a bulletin from before the call was handed over");
+
+            // And what the venue broadcasts after it still reaches the caller.
+            shared.market.push_news_bulletin(bulletin(2, "published after"));
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
+            assert_eq!(heard(), 1, "the subscription answered nothing");
         });
     }
 }

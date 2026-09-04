@@ -61,6 +61,11 @@ impl EClient {
                  it: qualify the contract first and pass what comes back".to_string(),
             ));
         }
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
+        let contract = &*by_venue;
         if what_to_show.eq_ignore_ascii_case("SCHEDULE") {
             Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
                 contract: contract.into(),
@@ -109,6 +114,11 @@ impl EClient {
         format_date: i32,
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
+        let contract = &*by_venue;
         Self::send_control(py, &tx, ControlCommand::FetchHeadTimestamp {
             contract: contract.into(),
             req_id: wire_req_id(req_id)?,
@@ -428,6 +438,11 @@ impl EClient {
         {
             return self.report_refusal(py, req_id, why.into());
         }
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
+        let contract = &*by_venue;
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalTicks {
             contract: contract.into(),
             req_id: wire_req_id(req_id)?,
@@ -481,6 +496,11 @@ impl EClient {
     #[pyo3(signature = (req_id, contract, use_rth, time_period))]
     pub(crate) fn req_histogram_data(&self, py: Python<'_>, req_id: i64, contract: &Contract, use_rth: bool, time_period: &str) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
+        let contract = &*by_venue;
         Self::send_control(py, &tx, ControlCommand::FetchHistogramData {
             req_id: wire_req_id(req_id)?,
             con_id: super::wire_u32("con_id", contract.con_id)?,
@@ -506,6 +526,11 @@ impl EClient {
         end_date_time: &str, duration_str: &str, use_rth: bool,
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
+        // Named by the venue where the caller named it by id alone: a
+        // request states the contract's type and its exchange, and both
+        // are the venue's to say.
+        let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
+        let contract = &*by_venue;
         Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
             contract: contract.into(),
             req_id: wire_req_id(req_id)?,

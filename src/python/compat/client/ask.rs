@@ -786,4 +786,34 @@ impl EClient {
             ))),
         }
     }
+
+    /// The contract as the venue names it, where the caller named it by id
+    /// alone, with a refusal reported to the caller rather than raised.
+    ///
+    /// A request states the contract's security type and its exchange, and the
+    /// venue routes on both. A caller that gave neither has stated neither, and
+    /// both are the venue's to say: asked for by id, it answers with them. Sent
+    /// as it stands, the engine takes the request, finds no security type for
+    /// it afterwards, and abandons it — so the caller is answered by a failure
+    /// that arrives later under no request of theirs, and nothing is sent.
+    ///
+    /// `None` once the refusal has been handed over, the way `tx_or_report`
+    /// answers a request made before connecting.
+    ///
+    /// Costs a round trip, so it happens only where the caller left them out.
+    pub(crate) fn named_or_report<'a>(
+        &self, py: Python<'_>, req_id: i64, contract: &'a Contract,
+    ) -> PyResult<Option<std::borrow::Cow<'a, Contract>>> {
+        if contract.con_id != 0
+            && (contract.sec_type.is_empty() || contract.exchange.is_empty())
+        {
+            return match self.qualify_contract_stated(py, contract) {
+                Ok(named) => Ok(Some(std::borrow::Cow::Owned(named))),
+                // Reported under the code for the cause, as the other lookups
+                // on this surface report theirs.
+                Err(why) => self.report_refusal(py, req_id, why).map(|()| None),
+            };
+        }
+        Ok(Some(std::borrow::Cow::Borrowed(contract)))
+    }
 }

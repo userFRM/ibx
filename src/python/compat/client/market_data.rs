@@ -80,6 +80,7 @@ impl EClient {
         // wait on the caller's thread, while the core subscribes to no news.
         let wants_news = generic_tick_list.split(',').any(|t| t.trim() == "292");
         let named;
+        let by_venue;
         let contract = if wants_news && contract.con_id == 0 && !contract.symbol.is_empty() {
             match self.qualify_contract_stated(py, contract) {
                 Ok(found) => { named = found; &named }
@@ -89,7 +90,13 @@ impl EClient {
                 Err(why) => return self.report_refusal(py, req_id, why),
             }
         } else {
-            contract
+            // Named by the venue where the caller named it by id alone, as the
+            // request surface names it. Sent as it stands, the engine took the
+            // subscription, found no security type for it afterwards and gave
+            // it up, so the caller was told nothing and read no quotes.
+            let Some(found) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
+            by_venue = found;
+            &*by_venue
         };
 
         let shared = self.shared_state()?;
@@ -164,6 +171,12 @@ impl EClient {
         number_of_ticks: i32,
         ignore_size: bool,
     ) -> PyResult<()> {
+        // The number this request will answer under, checked before anything
+        // reaches the venue. Unchecked, it was narrowed further down instead,
+        // so a caller numbering its requests from the order counter — which the
+        // venue lets run past what a request id can hold — had this stream's
+        // refusals reported against somebody else's request.
+        wire_req_id(req_id)?;
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
 
         let tbt_type = match TbtType::named(tick_type) {
@@ -172,6 +185,11 @@ impl EClient {
             // send, which is what validation means.
             Err(why) => return self.report_refusal(py, req_id, Refusal::validation(why)),
         };
+
+        // Named by the venue where the caller named it by id alone, as the
+        // request surface names it.
+        let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
+        let contract = &*by_venue;
 
         // A stream is asked for by venue contract id. Sent
         // with none, the venue answers "Unknown contract" against a query this

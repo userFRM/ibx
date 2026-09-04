@@ -127,7 +127,7 @@ pub fn events_lost(&self) -> u64
 
 #### `is_connected`
 
-False after `disconnect()`, and after a `process_msgs()` call that observed the engine stopping.
+False after `disconnect()`, after the engine has ended the session, and after a `process_msgs()` call that observed the engine stopping. The engine records an ended session itself. A shape that never pumps `process_msgs` hears of it nowhere else, and kept saying connected after the session underneath it was over.
 
 ```rust
 pub fn is_connected(&self) -> bool

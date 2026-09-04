@@ -94,6 +94,23 @@ impl EClient {
             let guard = self.event_rx.lock().unwrap();
             guard.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default()
         };
+        // Which way the connection last went, as the engine wrote it down
+        // rather than as it tried to announce it. Both transitions are
+        // recorded in flags that are always set, while the channel above is
+        // bounded and drops what it cannot hold — so a program far enough
+        // behind lost the transition itself and then read the session as
+        // connected right through an outage, or as disconnected after it had
+        // come back. The request surface reads these same two flags. Read
+        // before any callback runs, because a handler that answers the loss by
+        // connecting again leaves a session whose state is not this one's.
+        // The events stay the announcement: a loss the caller asked for sets
+        // the flag too, and is not something to report as connectivity gone.
+        if shared.take_connection_lost() {
+            self.connected.store(false, Ordering::Release);
+        }
+        if shared.take_connection_restored() {
+            self.connected.store(true, Ordering::Release);
+        }
         // One batch is one session — the channel is replaced on reconnect — so
         // several `Disconnected` events in it are one loss, and a network cut
         // that takes both the farm and CCP down emits more than one. Firing per
