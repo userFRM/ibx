@@ -174,7 +174,10 @@ impl<T> Subscription<T> {
             return None;
         }
 
-        let deadline = self.idle.map(|idle| Instant::now() + idle);
+        // Added checkedly: a caller stating a period this machine's clock
+        // cannot reach has stated no deadline, and adding it took the process
+        // down rather than waiting.
+        let deadline = self.idle.and_then(|idle| Instant::now().checked_add(idle));
         loop {
             for item in (self.take)(&self.shared, self.req_id) {
                 self.buffered.push_back(item);
@@ -268,6 +271,21 @@ mod tests {
 
     fn state() -> Arc<SharedState> {
         Arc::new(SharedState::new())
+    }
+
+    /// A period this machine's clock cannot reach is no deadline, not a panic.
+    ///
+    /// The wait was worked out by adding the period to now, which a caller
+    /// stating the largest one there is took past what an instant can hold.
+    /// The process went down where the stream should simply have waited.
+    #[test]
+    fn a_period_beyond_this_clock_is_no_deadline() {
+        let shared = state();
+        let mut sub: Subscription<i64> = Subscription::new(
+            7, RecordKind::Bars, Arc::clone(&shared), |_, _| vec![11], |_| {},
+        );
+        sub.idle = Some(Duration::MAX);
+        assert_eq!(sub.next_item(), Some(11), "the stream answers rather than falling over");
     }
 
     /// The idle period ending withdraws the request rather than dropping it.

@@ -4382,6 +4382,51 @@ fn a_move_is_kept_while_no_request_stands() {
 /// the two is in neither: not in the answer, which was read before it moved,
 /// and not in the moves, which the dispatch pass took while this watcher was
 /// still being registered. Nothing repeats it, so that watcher never hears of
+/// A watcher is watching before its first answer is read.
+///
+/// The queue of moves is drained once and given to everyone watching, so a
+/// watcher that already exists lets a dispatch pass empty it. Registered after
+/// its answer was read, a joining watcher lost every move that landed in
+/// between: not in the answer, which was read before, and not in the moves,
+/// which the pass took while it was still being registered. The callback is
+/// where the answer is handed over, so the registration has to be visible by
+/// then.
+#[test]
+fn a_joining_watcher_is_watching_before_its_answer_is_read() {
+    /// Reads whether the request is already registered at the moment the
+    /// answer reaches the caller.
+    struct WatchingYet<'a> {
+        watchers: &'a std::sync::Mutex<std::collections::HashSet<i64>>,
+        registered_when_answered: Option<bool>,
+    }
+    impl crate::api::wrapper::Wrapper for WatchingYet<'_> {
+        fn position_multi(
+            &mut self, req_id: i64, _account: &str, _model: &str,
+            _contract: &Contract, _position: f64, _avg_cost: f64,
+        ) {
+            self.registered_when_answered =
+                Some(self.watchers.lock().unwrap().contains(&req_id));
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 265598, position: 100.0, symbol: "AAPL".into(),
+        sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+    });
+
+    let mut watching = WatchingYet {
+        watchers: &client.positions_multi_requested,
+        registered_when_answered: None,
+    };
+    client.req_positions_multi(9, "", "", &mut watching);
+
+    assert_eq!(
+        watching.registered_when_answered, Some(true),
+        "the request is watching by the time its own answer is handed over",
+    );
+}
+
 /// that holding again until it moves once more.
 #[test]
 fn a_watchers_first_answer_and_its_registration_are_one_moment() {

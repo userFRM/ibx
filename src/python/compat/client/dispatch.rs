@@ -105,12 +105,18 @@ impl EClient {
         // connecting again leaves a session whose state is not this one's.
         // The events stay the announcement: a loss the caller asked for sets
         // the flag too, and is not something to report as connectivity gone.
-        if shared.take_connection_lost() {
+        let went = shared.take_connection_lost();
+        let came_back = shared.take_connection_restored();
+        if went {
             self.connected.store(false, Ordering::Release);
         }
-        if shared.take_connection_restored() {
+        if came_back {
             self.connected.store(true, Ordering::Release);
         }
+        // Whether the session is down as of this pass, by the flags rather
+        // than by what is queued behind them. A restore still in the backlog
+        // is then history, and must not be read as the state.
+        let down_now = went && !came_back;
         // One batch is one session — the channel is replaced on reconnect — so
         // several `Disconnected` events in it are one loss, and a network cut
         // that takes both the farm and CCP down emits more than one. Firing per
@@ -175,7 +181,13 @@ impl EClient {
         // subscriptions itself, so the caller has nothing to re-request. A
         // client that stood down on 1100 and never saw this stayed down.
         if events.iter().any(|e| matches!(e, Event::Reconnected)) {
-            self.connected.store(true, Ordering::Release);
+            // Announced, because it happened; not stored where the flags say
+            // the session went again behind it. A restore left in the backlog
+            // used to overwrite the loss that followed it, and the caller read
+            // a dead session as up while the other surface read it as down.
+            if !down_now {
+                self.connected.store(true, Ordering::Release);
+            }
             call_wrapper!(self.wrapper, py, "error", (-1i64, 0i64, 1102i64, "Connectivity between client and server has been restored - data maintained", ""));
         }
 

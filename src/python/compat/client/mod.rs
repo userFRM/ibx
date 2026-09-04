@@ -2434,6 +2434,36 @@ w = W()",
             assert_eq!(ended, 1, "the request ends once");
         });
     }
+    /// A restore left in the backlog does not undo the loss that followed it.
+    ///
+    /// The engine's flags say which way the connection last went; the events
+    /// are the announcement, and the channel carrying them drops what it
+    /// cannot hold. A restore still queued when the session went again was
+    /// read as the state, so this surface reported a dead session as up while
+    /// the other read it as down.
+    #[test]
+    fn a_restore_left_in_the_backlog_is_not_read_as_the_state() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, _w) = wired_client(py);
+            let client = client.borrow(py);
+            let (event_tx, event_rx) = std::sync::mpsc::sync_channel(16);
+            *client.event_rx.lock().unwrap() = Some(event_rx);
+
+            // It came back, and went again before anybody read either.
+            shared.set_connection_restored();
+            event_tx.send(crate::bridge::Event::Reconnected).unwrap();
+            shared.set_connection_lost();
+
+            client.dispatch_once(py, &shared).unwrap();
+
+            assert!(
+                !client.connected.load(Ordering::Relaxed),
+                "the session is down, whatever is still queued behind that",
+            );
+        });
+    }
+
     /// The engine records which way the connection last went in flags it
     /// always writes, and announces it on a channel that drops what it cannot
     /// hold. A client that reads only the notice is told nothing by an outage

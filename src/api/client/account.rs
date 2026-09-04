@@ -77,6 +77,11 @@ impl EClient {
         // states what the holdings are now; fired as change events as well it
         // would arrive twice.
         self.drop_unwatched_position_moves();
+        // Watching before reading: see `req_positions_multi`. Read first and
+        // registered after, a holding that moved while the answer was being
+        // assembled was taken by a watcher that already existed — the queue is
+        // drained once for everyone — and reached this caller nowhere.
+        self.positions_requested.store(true, Ordering::Release);
         // A holding arrives as a contract id and a quantity, and its definition
         // is fetched separately. Delivering before that lands names no
         // instrument at all, so give it a moment to arrive rather than handing
@@ -100,8 +105,6 @@ impl EClient {
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             wrapper.position(&self.account_id, &c, pi.position, avg_cost);
         }
-        // Reported from here, on the next holding to move.
-        self.positions_requested.store(true, Ordering::Release);
         wrapper.position_end();
     }
 
@@ -289,6 +292,14 @@ impl EClient {
         // answer that follows, and fired as change events as well it would
         // arrive twice.
         self.drop_unwatched_position_moves();
+        // Watching before reading, so nothing moves into the gap between the
+        // two. Read first and registered after, a holding that moved while the
+        // answer was being assembled was taken by a watcher that already
+        // existed — the queue is drained once for everyone — and this caller
+        // heard of it neither in its answer nor afterwards. Registered first,
+        // the worst that happens is the same holding stated twice, and a
+        // holding states what it is rather than what changed.
+        self.positions_multi_requested.lock().unwrap().insert(req_id);
         let held: Vec<_> = self.shared.portfolio.position_infos()
             .into_iter()
             .filter(|pi| pi.position != 0.0)
@@ -316,9 +327,6 @@ impl EClient {
             );
         }
         wrapper.position_multi_end(req_id);
-        // Reported from here, on the next holding to move. The same live feed
-        // as `position`, asked for under this request id.
-        self.positions_multi_requested.lock().unwrap().insert(req_id);
     }
 
     /// Cancel multi-account positions. Matches `cancelPositionsMulti` in C++.

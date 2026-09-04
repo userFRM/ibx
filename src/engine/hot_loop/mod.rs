@@ -808,6 +808,12 @@ impl HotLoop {
             // Replay is the same shape: the stop has just withdrawn every
             // subscription, and this would put back whatever was still queued.
             if self.running {
+                // Before what has come back is taken. The time the caller
+                // allowed recovery bounds the attempt in flight, and taking
+                // its answer first cleared the record the deadline is read
+                // from — so a connection that came up after the caller had
+                // given up on it was installed anyway, and nothing said so.
+                self.abandon_recovery_past_its_deadline(Instant::now());
                 self.poll_farm_reconnect();
                 // What a reconnect has still to put back. Paced, and paced on
                 // the passes the loop is already making rather than by
@@ -2146,6 +2152,12 @@ impl HotLoop {
         }
         self.shared.set_connection_lost();
         emit(&self.event_tx, Event::Disconnected);
+        // And nothing is left to take an answer from. A worker already dialling
+        // still finishes, and its answer would otherwise be installed on the
+        // next lap — a session coming back after the caller had been told it
+        // would not, with nothing said. The cancellation above ends the worker;
+        // this ends what it could still be believed for.
+        self.take_back_the_recovery_still_in_flight();
     }
 
     /// Give up recovery that has outrun the time the caller allowed it, while
@@ -4165,6 +4177,42 @@ mod tests {
     /// The time the caller allowed recovery bounds the attempt being spent on
     /// it, not only the ones that have not started yet.
     ///
+    /// A connection that comes up after the caller gave up on it is not taken.
+    ///
+    /// What a worker answered was taken before the elapsed limit was read, and
+    /// taking it cleared the record that limit is read from — so a connection
+    /// arriving past the time the caller allowed was installed anyway, the
+    /// session came back after the caller had been told it would not, and
+    /// nothing said so.
+    #[test]
+    fn a_connection_arriving_past_the_limit_is_not_installed() {
+        let shared = Arc::new(SharedState::new());
+        let (tx, _rx) = std::sync::mpsc::sync_channel(4096);
+        let mut hl = HotLoop::new(
+            shared.clone(), Some(EventSink::new(tx, Default::default())), None,
+        );
+        hl.set_reconnect_config(
+            crate::reliability::ReconnectConfig::default()
+                .with_max_elapsed(Duration::from_secs(30)),
+        );
+        hl.ccp.disconnected = true;
+
+        let t = Instant::now();
+        hl.budget.record_attempt(t);
+        let (_worker, worker_rx) = std::sync::mpsc::sync_channel(1);
+        hl.pending_ccp_reconnect = Some(worker_rx);
+
+        // The limit runs out while the worker is still dialling.
+        hl.abandon_recovery_past_its_deadline(t + Duration::from_secs(31));
+
+        assert!(hl.reconnect_halted.is_some(), "recovery is over");
+        assert!(
+            hl.pending_ccp_reconnect.is_none(),
+            "and nothing is left to take an answer from, so a connection that lands \
+             after the caller gave up cannot be installed behind their back",
+        );
+    }
+
     /// The schedulers return as soon as they find an attempt in flight, so the
     /// elapsed limit was read between attempts and nowhere else. One attempt
     /// outlasts a short limit easily — a handshake that asks for a second
