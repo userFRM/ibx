@@ -891,6 +891,36 @@ impl HotLoop {
             else {
                 continue;
             };
+            // A contract numbered beyond what a request carries. Refused where
+            // every request passes rather than narrowed on the way out: a
+            // request naming one is asked under the number that survives the
+            // narrowing, and the venue answers it with that contract's data.
+            if let Some(con_id) = con_id_beyond_the_wire(&cmd) {
+                let told = format!(
+                    "contract {con_id} is numbered beyond what a request carries it in, so \
+                     this one would be answered for a different contract",
+                );
+                log::warn!("{told}");
+                match &cmd {
+                    ControlCommand::Subscribe { reply_tx, .. }
+                    | ControlCommand::SubscribeTbt { reply_tx, .. }
+                    | ControlCommand::SubscribeNews { reply_tx, .. }
+                    | ControlCommand::RegisterInstrument { reply_tx, .. } => {
+                        if let Some(tx) = reply_tx {
+                            let _ = tx.try_send(Err(told));
+                        }
+                    }
+                    _ => {
+                        if let Some(req_id) = ccp::request_id(&cmd) {
+                            push_hmds_error(
+                                &self.shared, req_id, told,
+                                matches!(cmd, ControlCommand::FetchHistorical { .. }),
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
             match cmd {
                 ControlCommand::Subscribe { contract, mode_9887, regulatory_snapshot, reply_tx } => {
                     let ContractRef { con_id, symbol, exchange, sec_type, currency, last_trade_date, strike, right, multiplier } = contract;
@@ -2716,6 +2746,24 @@ pub(crate) fn push_hmds_unavailable(shared: &SharedState, req_id: u32, from_hist
     );
 }
 
+/// The id of the contract a request names, where the wire cannot carry it.
+///
+/// Contracts are numbered in 32 bits and every request that names one by id
+/// states it in that width. A wider number narrowed to fit names a different
+/// contract — one already listed, on this account's own feed — and a negative
+/// one names the highest id there is. Neither is the contract the caller asked
+/// about.
+fn con_id_beyond_the_wire(cmd: &ControlCommand) -> Option<i64> {
+    let con_id = match cmd {
+        ControlCommand::Subscribe { contract, .. }
+        | ControlCommand::SubscribeTbt { contract, .. }
+        | ControlCommand::RegisterInstrument { contract, .. } => contract.con_id,
+        ControlCommand::SubscribeNews { con_id, .. } => *con_id,
+        other => ccp::contract_of(other)?.con_id,
+    };
+    u32::try_from(con_id).is_err().then_some(con_id)
+}
+
 /// Surface an HMDS-side request failure: error 162 plus, for bar requests,
 /// the terminal completion sentinel so a blocked wait unblocks.
 pub(crate) fn push_hmds_error(shared: &SharedState, req_id: u32, message: String, from_historical: bool) {
@@ -2794,10 +2842,16 @@ pub(crate) fn parse_price_tag(val: Option<&String>) -> Price {
 /// `32=0.5` parsed as an integer is a fill of nothing. Rounded rather than
 /// truncated, because a tenth is not exact in binary and truncation takes
 /// `0.3` to one hundred-millionth under three tenths.
+///
+/// A magnitude past what the fixed-point form holds is unreadable too. The
+/// cast saturates rather than wrapping, so such a figure booked as the largest
+/// quantity there is — and the sums it then entered, against the order's total
+/// and the position, have no room left to run.
 pub(crate) fn parse_qty_tag(val: Option<&String>) -> Option<Qty> {
     val.and_then(|s| s.trim().parse::<f64>().ok())
-        .filter(|f| f.is_finite())
-        .map(|f| (f * QTY_SCALE as f64).round() as Qty)
+        .map(|f| (f * QTY_SCALE as f64).round())
+        .filter(|scaled| scaled.is_finite() && scaled.abs() < Qty::MAX as f64)
+        .map(|scaled| scaled as Qty)
 }
 
 /// Decode a wire TIF byte to the API TIF string. Exact inverse of
@@ -3765,6 +3819,72 @@ mod tests {
         assert_eq!(
             destination, "BEST",
             "an unnamed venue is the smart one, and a security type is not a venue",
+        );
+    }
+
+    /// A contract id wider than a request carries it in is refused, on the
+    /// live path and the historical one alike.
+    ///
+    /// Both state the id in 32 bits. Narrowed to fit, `2^32 + 756733` is
+    /// `756733` — a listed contract of its own — so the venue answers with
+    /// that contract's quotes and that contract's bars under this caller's
+    /// request, and nothing says the caller is reading another instrument.
+    #[test]
+    fn a_contract_numbered_past_the_wire_is_refused_rather_than_narrowed() {
+        const PAST_THE_WIRE: i64 = (1i64 << 32) + 756_733;
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(ControlCommand::Subscribe {
+            contract: ContractRef {
+                con_id: PAST_THE_WIRE,
+                sec_type: "STK".into(),
+                exchange: "SMART".into(),
+                ..Default::default()
+            },
+            mode_9887: 0,
+            regulatory_snapshot: false,
+            reply_tx: Some(reply_tx),
+        })
+        .expect("the engine holds the other end");
+        tx.send(ControlCommand::FetchHistorical {
+            req_id: 91,
+            contract: ContractRef {
+                con_id: PAST_THE_WIRE,
+                sec_type: "STK".into(),
+                exchange: "SMART".into(),
+                ..Default::default()
+            },
+            end_date_time: String::new(),
+            duration: "1 D".into(),
+            bar_size: "1 min".into(),
+            what_to_show: "TRADES".into(),
+            use_rth: true,
+            keep_up_to_date: false,
+            include_expired: false,
+            filters: Default::default(),
+        })
+        .expect("the engine holds the other end");
+        hl.poll_control_commands();
+
+        assert!(
+            hl.context.market.instrument_by_con_id(756_733).is_none()
+                && hl.context.market.instrument_by_con_id(PAST_THE_WIRE).is_none(),
+            "neither the id asked for nor the one it narrows to took a slot",
+        );
+        let refused = reply_rx.try_recv().expect("the subscriber is answered");
+        assert!(
+            refused.is_err_and(|why| why.contains(&PAST_THE_WIRE.to_string())),
+            "and is told which contract could not be asked about",
+        );
+        let (_, why) = shared.reference.take_error_for(91)
+            .expect("the historical request is answered too");
+        assert!(
+            why.contains(&PAST_THE_WIRE.to_string()),
+            "and names the same contract: {why}",
         );
     }
 

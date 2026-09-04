@@ -204,6 +204,35 @@ fn parse_bar_response_basic() {
     assert_eq!(bar2.close, 270.10);
 }
 
+/// A trade count past what the callback carries is read as a bar that states
+/// none, rather than reaching the caller as a negative one.
+///
+/// The count goes out to both surfaces as a signed 32-bit number. Held wider
+/// and cast on the way, `3000000000` arrived as `-1294967296`: a bar made by
+/// minus one and a quarter billion trades, which reads as data.
+#[test]
+fn a_trade_count_past_what_the_callback_carries_is_not_delivered_negative() {
+    let xml = r#"<ResultSetBar>
+        <id>q9</id>
+        <eoq>true</eoq>
+        <tz>US/Eastern</tz>
+        <Events>
+            <Bar>
+                <time>20260227-14:30:00</time>
+                <open>1.0</open><high>1.0</high><low>1.0</low><close>1.0</close>
+                <volume>1</volume><weightedAvg>1.0</weightedAvg>
+                <count>3000000000</count>
+            </Bar>
+        </Events>
+    </ResultSetBar>"#;
+
+    let resp = parse_bar_response(xml).expect("the bar still reaches the caller");
+    assert_eq!(
+        resp.bars[0].count, 0,
+        "a count that will not fit is no count, and never a negative one",
+    );
+}
+
 #[test]
 fn parse_bar_response_incomplete() {
     let xml = r#"<ResultSetBar>

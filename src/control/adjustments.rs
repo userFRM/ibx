@@ -505,7 +505,7 @@ pub fn scale_historical_bars(
         .into_iter()
         .map(|b| crate::types::model::BarData {
             date: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
-            volume: b.volume, wap: b.wap, bar_count: b.count as i32,
+            volume: b.volume, wap: b.wap, bar_count: b.count,
             timezone: zone.to_string(),
         })
         .collect();
@@ -513,7 +513,7 @@ pub fn scale_historical_bars(
         .into_iter()
         .map(|b| crate::control::historical::HistoricalBar {
             time: b.date, open: b.open, high: b.high, low: b.low, close: b.close,
-            volume: b.volume, wap: b.wap, count: b.bar_count as u32,
+            volume: b.volume, wap: b.wap, count: b.bar_count,
         })
         .collect())
 }

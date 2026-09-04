@@ -1150,7 +1150,7 @@ impl EClient {
     /// asked in the same breath.
     pub(crate) fn stated_order_id(&self) -> u64 {
         let floor = self.shared.lock().unwrap().as_ref()
-            .map(|shared| shared.orders.working_id_watermark() + 1)
+            .map(|shared| shared.orders.working_id_watermark().saturating_add(1))
             .unwrap_or(1);
         let id = self.next_order_id.load(Ordering::Acquire).max(floor);
         crate::bridge::say_if_past_a_request_id(id);

@@ -447,7 +447,7 @@ impl EClient {
     /// tell that apart from a naming still in flight costs every such account
     /// its first order.
     fn next_id_base(&self) -> u64 {
-        self.shared.orders.working_id_watermark() + 1
+        self.shared.orders.working_id_watermark().saturating_add(1)
     }
 
     /// Get the next order ID (local counter).

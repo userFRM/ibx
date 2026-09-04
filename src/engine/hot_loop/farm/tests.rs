@@ -1382,6 +1382,50 @@ mod exchange_map_tests {
     }
 }
 
+/// An acknowledgement stating an increment nothing can be counted in is
+/// refused, and whoever asked is told.
+///
+/// Every price and every size on the instrument is a count of the increment,
+/// and this parser reads `inf` from the word. Taken as stated, an infinite one
+/// scales every price on the contract to the end of the range and every level
+/// of the book with it; a zero or a negative one erases or inverts them. The
+/// prices then stop reaching the caller with nothing said, which reads as a
+/// contract nobody is quoting.
+#[test]
+fn an_increment_prices_cannot_be_counted_in_is_refused_and_reported() {
+    use crate::bridge::SharedState;
+    use crate::engine::context::Context;
+
+    for stated in ["inf", "-0.01", "0", "NaN"] {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.md_req_to_instrument.push((7, instrument));
+
+        let msg = format!("35=Q\x0133082,7,{stated},0,3");
+        farm.handle_subscription_ack(msg.as_bytes(), &mut context, &shared);
+
+        assert_eq!(
+            context.market.min_tick(instrument), 0.0,
+            "{stated} is not an increment, so the instrument is left with none",
+        );
+        let told = shared.market.drain_subscription_failures();
+        assert!(
+            told.iter().any(|(id, why)| *id == instrument && why.contains(stated)),
+            "and the caller is told which one was refused: {told:?}",
+        );
+    }
+
+    // The size increment rides the same acknowledgement and is read the same
+    // way: an infinite one counts every size on the contract to the end of the
+    // range.
+    assert_eq!(
+        trailing_size_increment(&["33082", "6", "0.01", "", "inf"]), None,
+        "an infinite size increment is no increment either",
+    );
+}
+
 /// A size increment is read only from an acknowledgement shaped like one that
 /// carries it.
 ///

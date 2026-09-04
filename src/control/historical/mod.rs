@@ -384,7 +384,12 @@ pub struct HistoricalBar {
     /// The volume-weighted average price.
     pub wap: f64,
     /// How many trades made it.
-    pub count: u32,
+    ///
+    /// Signed, and the width every surface reports it in. Held wider, a count
+    /// past what that width carries reached a caller negative — a bar made by
+    /// minus two billion trades. A stated count that will not fit is not one
+    /// this client can carry, and is read as a bar that states none.
+    pub count: i32,
 }
 
 /// Parsed historical data response.

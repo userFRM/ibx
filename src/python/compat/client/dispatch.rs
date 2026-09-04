@@ -723,7 +723,7 @@ impl EClient {
                 let bar_obj = BarData::new(
                     self.core.bar_time_for(req_id as i64, &bar.time, &response.timezone),
                     bar.open, bar.high, bar.low, bar.close,
-                    bar.volume, bar.wap, bar.count as i32,
+                    bar.volume, bar.wap, bar.count,
                     response.timezone.clone(),
                 );
                 let bar_py = Py::new(py, bar_obj)?.into_any();

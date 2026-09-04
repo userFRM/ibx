@@ -106,6 +106,22 @@ pub(crate) fn stated_reason(parsed: &std::collections::HashMap<u32, String>) -> 
     }
 }
 
+/// An order id as a report states it, where this client can carry it.
+///
+/// An id reaches a caller as a signed number, and the id to place under next
+/// is one past the highest the venue has named — so an id at the end of that
+/// range is one that can be neither reported nor counted past. Taken as it
+/// stood, such a report named its order under a negative id and left the
+/// next id to hand out at zero, which the venue refuses as one it has used.
+fn stated_order_id(field: &str) -> Option<u64> {
+    let id = field.parse::<u64>().ok()?;
+    if id >= i64::MAX as u64 {
+        log::warn!("a report names order {id}, which is past the highest id this client carries");
+        return None;
+    }
+    Some(id)
+}
+
 pub(crate) fn perm_id_from_fix_order_id(s: &str) -> i64 {
     // Hash only the stable prefix: "00cf16ed.000225ed.69ca0941" (drop ".0001")
     let stable = match s.rmatch_indices('.').next() {
@@ -736,7 +752,7 @@ impl CcpState {
             && parsed.get(&39).map(|s| s.as_str()) == Some("0")
             && parsed.contains_key(&6121)
         {
-            parsed.get(&6121).and_then(|s| s.parse::<u64>().ok())
+            parsed.get(&6121).and_then(|s| stated_order_id(s))
         } else {
             None
         };
@@ -751,7 +767,7 @@ impl CcpState {
                 let stripped = s.strip_prefix('C').or_else(|| s.strip_prefix('L')).unwrap_or(s);
                 // Strip versioned suffix (.0, .1, .2) from modify-chained ClOrdIDs
                 let base = stripped.split('.').next().unwrap_or(stripped);
-                base.parse::<u64>().ok()
+                stated_order_id(base)
             }).unwrap_or(0)
         });
 
@@ -915,7 +931,7 @@ impl CcpState {
         let leaves_qty = parse_qty_tag(parsed.get(&151)).unwrap_or_else(|| {
             let ordered = parse_qty_tag(parsed.get(&38)).unwrap_or(0);
             let done = parse_qty_tag(parsed.get(&14)).unwrap_or(0);
-            (ordered - done).max(0)
+            ordered.saturating_sub(done).max(0)
         });
         // 14 CumQty and 6 AvgPx describe the order as a whole; 32 and 31
         // describe this print alone. The gateway sends all four on every
@@ -936,7 +952,8 @@ impl CcpState {
         // quantity filled while everything was still remaining.
         let order_cum_qty = parse_qty_tag(parsed.get(&14))
             .unwrap_or_else(|| {
-                context.order(clord_id).map_or(last_shares, |o| o.filled + last_shares)
+                context.order(clord_id)
+                    .map_or(last_shares, |o| o.filled.saturating_add(last_shares))
             });
         let order_avg_px = parsed.get(&6)
             .and_then(|s| s.parse::<f64>().ok())

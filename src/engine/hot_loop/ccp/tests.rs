@@ -2272,6 +2272,72 @@ fn exec_report_frame(pairs: &[(u32, &str)]) -> std::collections::HashMap<u32, St
     m
 }
 
+/// A report stating quantities at the end of the range is booked without the
+/// sums that follow it running past their own.
+///
+/// The quantity a report states is scaled to hundred-millionths and held in
+/// sixty-four bits. Taken as it stood, a magnitude past that saturated to the
+/// largest quantity there is, and what remained on the order — the ordered
+/// quantity less what has filled — was then a subtraction with no room left:
+/// wrapped in a release build, and a stop in a checked one.
+#[test]
+fn quantities_at_the_end_of_the_range_do_not_run_the_order_arithmetic_past_it() {
+    let s = |v: &str| v.to_string();
+    assert_eq!(
+        crate::engine::hot_loop::parse_qty_tag(Some(&s("1e30"))), None,
+        "a magnitude the fixed-point form cannot hold is not a quantity",
+    );
+
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    // Both figures inside what the form holds, and their difference outside
+    // it. What is left on the order is worked out from the two.
+    let frame = exec_report_frame(&[
+        (39, "0"), (150, "0"), (100, "ARCA"), (198, "ARCA:1"),
+        (38, "90000000000"), (14, "-90000000000"),
+    ]);
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    // And the sums the order itself keeps: a report booking a quantity at the
+    // end of the range, then a second stating a print with no cumulative
+    // figure beside it, which is added to what the order already holds.
+    let booked = exec_report_frame(&[
+        (39, "1"), (150, "F"), (17, "e1"), (31, "1.0"),
+        (32, "90000000000"), (14, "90000000000"), (38, "90000000000"),
+    ]);
+    ccp.handle_exec_report(&booked, b"", &mut context, &shared, &None, "");
+    let no_cum_qty = exec_report_frame(&[
+        (39, "1"), (150, "F"), (17, "e2"), (31, "1.0"), (32, "90000000000"),
+    ]);
+    ccp.handle_exec_report(&no_cum_qty, b"", &mut context, &shared, &None, "");
+
+    let told = shared.orders.drain_order_updates();
+    assert!(
+        told.iter().all(|u| u.remaining_qty >= 0.0 && u.filled_qty >= 0.0),
+        "what is filled and what is left are quantities, never the wrap of one: {told:?}",
+    );
+}
+
+/// An order id past what a caller's surface carries is not taken as one.
+///
+/// An id reaches a caller as a signed number, and the id to place under next
+/// is one past the highest the venue has named. Taken as it stood, an id at
+/// the top of an unsigned sixty-four bits named its order under `-1` and left
+/// nothing to count past — the next id handed out was zero, which the venue
+/// refuses as an id the account has already used.
+#[test]
+fn an_order_id_past_what_a_caller_can_hold_is_not_taken_as_one() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let frame = exec_report_frame(&[
+        (11, "18446744073709551615"), (39, "0"), (150, "0"), (100, "ARCA"), (198, "ARCA:1"),
+    ]);
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    assert_eq!(
+        shared.orders.working_id_watermark(), 0,
+        "an id nothing here can report is not the one every later id counts from",
+    );
+}
+
 #[test]
 fn ord_status_new_unrouted_is_presubmitted() {
     let (mut ccp, mut context, shared) = ord_status_test_state();

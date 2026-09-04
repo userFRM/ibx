@@ -566,7 +566,7 @@ impl EClient {
                     close: bar.close,
                     volume: bar.volume,
                     wap: bar.wap,
-                    bar_count: bar.count as i32,
+                    bar_count: bar.count,
                     timezone: response.timezone.clone(),
                 };
                 if is_update {

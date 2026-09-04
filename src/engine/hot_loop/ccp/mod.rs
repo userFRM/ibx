@@ -258,7 +258,7 @@ pub(crate) fn contract_named(cmd: &crate::types::ControlCommand) -> Option<&crat
 }
 
 /// The contract a request names, whether or not the venue has numbered it.
-fn contract_of(cmd: &crate::types::ControlCommand) -> Option<&crate::types::ContractRef> {
+pub(crate) fn contract_of(cmd: &crate::types::ControlCommand) -> Option<&crate::types::ContractRef> {
     use crate::types::ControlCommand as C;
     match cmd {
         C::FetchHistorical { contract, .. }
@@ -300,7 +300,7 @@ fn name_the_contract(cmd: &mut crate::types::ControlCommand, id: i64) {
 }
 
 /// Which request a caller is waiting on.
-fn request_id(cmd: &crate::types::ControlCommand) -> Option<u32> {
+pub(crate) fn request_id(cmd: &crate::types::ControlCommand) -> Option<u32> {
     match cmd {
         crate::types::ControlCommand::FetchHistorical { req_id, .. }
         | crate::types::ControlCommand::FetchHeadTimestamp { req_id, .. }

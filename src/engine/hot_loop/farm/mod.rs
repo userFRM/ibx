@@ -314,6 +314,19 @@ const BBO_EXCHANGE_MAP_REQUEST_TYPE: u32 = 626;
 /// penny on a share trading at 772.
 const DEEP_REQUEST: &str = "0";
 
+/// An increment an acknowledgement states, where it states one that can be
+/// counted in.
+///
+/// Every price and every size on the instrument is a count of these. Zero
+/// counts nothing, a negative one turns every figure on the contract upside
+/// down, and an infinity — which this parser reads from the word — saturates
+/// them all. None of the three is a scale, so an acknowledgement stating one
+/// states no increment at all.
+fn stated_increment(field: &str) -> Option<f64> {
+    let stated: f64 = field.trim().parse().ok()?;
+    (stated.is_finite() && stated > 0.0).then_some(stated)
+}
+
 /// What the venue counts an instrument's sizes in, as its acknowledgement
 /// states it: the last field, after the increment prices move in.
 ///
@@ -334,8 +347,7 @@ fn trailing_size_increment(parts: &[&str]) -> Option<f64> {
     if parts.len() < SHORTEST_THAT_CARRIES_ONE {
         return None;
     }
-    let stated: f64 = parts.last()?.trim().parse().ok()?;
-    (stated > 0.0).then_some(stated)
+    stated_increment(parts.last()?)
 }
 
 
@@ -780,7 +792,7 @@ impl FarmState {
                     log::info!("35=Q body: {}", String::from_utf8_lossy(msg).replace('\x01', "|"));
                 }
                 log::info!("Farm 35=Q subscription ack received");
-                self.handle_subscription_ack(msg, context);
+                self.handle_subscription_ack(msg, context, shared);
             }
             b"0" => {}
             b"1" => {
@@ -798,7 +810,7 @@ impl FarmState {
                     hb.last_farm_sent = Instant::now();
                 }
             }
-            b"L" => self.handle_ticker_setup(msg, context),
+            b"L" => self.handle_ticker_setup(msg, context, shared),
             b"UT" | b"UM" | b"RL" => super::ccp::positions::handle_account_update(msg, context, shared),
             b"UP" => {
                 // One frame names several holdings. A flat parse keeps only
@@ -1066,7 +1078,7 @@ impl FarmState {
         self.tick_buf = ticks;
     }
 
-    fn handle_subscription_ack(&mut self, msg: &[u8], context: &mut Context) {
+    fn handle_subscription_ack(&mut self, msg: &[u8], context: &mut Context, shared: &SharedState) {
         let body = match find_body_after_tag(msg, b"35=Q\x01") {
             Some(b) => b,
             None => return,
@@ -1080,17 +1092,26 @@ impl FarmState {
         // The venue states the increment; a penny is not stood in where it did
         // not. Every price on this instrument is scaled by it, so a wrong one
         // is wrong prices rather than a wrong field.
-        let min_tick: f64 = match parts[2].parse() {
-            Ok(v) => v,
-            Err(_) => {
-                log::warn!(
-                    "a subscription was acknowledged with an increment that cannot be \
-                     read ({}), so this instrument has none and its prices cannot be \
-                     worked out",
-                    parts[2],
-                );
-                return;
+        let Some(min_tick) = stated_increment(parts[2]) else {
+            let told = format!(
+                "this subscription was acknowledged with an increment prices cannot be \
+                 counted in ({}), so none of its prices can be worked out",
+                parts[2],
+            );
+            log::warn!("{told}");
+            // Told to whoever asked. Left as a log line, the subscription
+            // stands with no scale and every price on it is dropped, which
+            // reads as a contract nobody is quoting.
+            if let Some((_, instrument)) =
+                self.md_req_to_instrument.iter().find(|(id, _)| *id == req_id)
+            {
+                shared.market.push_subscription_failure(*instrument, told);
+            } else if let Some((_, asked_for)) =
+                self.depth_fanout_map.iter().find(|(sub, _)| *sub == req_id)
+            {
+                shared.reference.push_historical_error(*asked_for, DEPTH_VENUE_REFUSED, told);
             }
+            return;
         };
 
         // Depth ack: always map the server_tag if this req_id is a depth subscription,
@@ -1233,7 +1254,7 @@ impl FarmState {
         }
     }
 
-    fn handle_ticker_setup(&mut self, msg: &[u8], context: &mut Context) {
+    fn handle_ticker_setup(&mut self, msg: &[u8], context: &mut Context, shared: &SharedState) {
         let body = match find_body_after_tag(msg, b"35=L\x01") {
             Some(b) => b,
             None => return,
@@ -1243,16 +1264,17 @@ impl FarmState {
         let parts: Vec<&str> = text.trim().split(',').collect();
         if parts.len() < 3 { return; }
         let con_id: i64 = match parts[0].parse() { Ok(v) => v, Err(_) => return };
-        let min_tick: f64 = match parts[1].parse() {
-            Ok(v) => v,
-            Err(_) => {
-                log::warn!(
-                    "a depth subscription was acknowledged with an increment that \
-                     cannot be read ({}), so this instrument has none",
-                    parts[1],
-                );
-                return;
+        let Some(min_tick) = stated_increment(parts[1]) else {
+            let told = format!(
+                "a depth subscription was acknowledged with an increment prices cannot \
+                 be counted in ({}), so none of its levels can be worked out",
+                parts[1],
+            );
+            log::warn!("{told}");
+            if let Some(instrument) = context.market.instrument_by_con_id(con_id) {
+                shared.market.push_subscription_failure(instrument, told);
             }
+            return;
         };
         let server_tag: u32 = match parts[2].parse() { Ok(v) => v, Err(_) => return };
 

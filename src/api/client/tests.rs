@@ -1091,6 +1091,34 @@ fn next_order_id_monotonic() {
     assert!(id3 > id2);
 }
 
+/// The id a caller places under next is one past the highest the venue has
+/// named, and stepping past the highest id there is does not wrap it to zero.
+///
+/// The venue names the working orders at every connect and that mark is what
+/// the counter is floored at. Stepped with a plain `+ 1`, a mark at the end of
+/// the range answered nothing at all — a stop in a checked build, and order id
+/// zero in a release one, which the venue refuses as an id already used.
+#[test]
+fn the_id_after_the_highest_there_is_does_not_wrap_to_zero() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.push_order_info(u64::MAX, crate::bridge::RichOrderInfo {
+        contract: Default::default(),
+        order: crate::types::model::Order { order_id: -1, ..Default::default() },
+        order_state: Default::default(),
+        last_exec: Default::default(),
+    });
+
+    let mut w = RecordingWrapper::default();
+    client.req_ids(&mut w);
+
+    assert_eq!(w.events.len(), 1);
+    assert!(
+        !w.events[0].ends_with(":0"),
+        "the counter steps rather than wrapping: {}",
+        w.events[0],
+    );
+}
+
 #[test]
 fn req_ids_calls_wrapper() {
     let (client, _rx, _shared) = test_client();
