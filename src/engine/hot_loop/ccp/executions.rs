@@ -810,18 +810,25 @@ impl CcpState {
             // shape also carries a mass-status echo that arrives before any
             // order, so this only counts once at least one has come through —
             // otherwise a caller is told the replay is over before it starts.
+            // Shortening the sweep is gated the same way, for the same reason:
+            // an echo that precedes every order is not the push saying it is
+            // finished, and the sweep releasing the hold is what lets the
+            // queued cancels and modifies go out — released on the strength
+            // of that echo, they name ids the push has not confirmed and the
+            // venue refuses, leaving the orders live there.
             if self.hydrated_any {
                 shared.orders.set_replay_done();
-            }
-            // The push said everything it was going to say, so the orders it
-            // left out can be judged without waiting out the whole grace.
-            // Only ever brought forward: this arm is reached by any report
-            // whose order id does not read, not by the terminator alone, so
-            // assigning the deadline outright pushed it back every time one
-            // arrived and a steady trickle of them meant the sweep never ran.
-            if let Some(at) = self.recovery_sweep_at {
-                self.recovery_sweep_at =
-                    Some(at.min(Instant::now() + RECOVERY_TERMINATOR_GRACE));
+                // The push said everything it was going to say, so the orders
+                // it left out can be judged without waiting out the whole
+                // grace. Only ever brought forward: this arm is reached by any
+                // report whose order id does not read, not by the terminator
+                // alone, so assigning the deadline outright pushed it back
+                // every time one arrived and a steady trickle of them meant
+                // the sweep never ran.
+                if let Some(at) = self.recovery_sweep_at {
+                    self.recovery_sweep_at =
+                        Some(at.min(Instant::now() + RECOVERY_TERMINATOR_GRACE));
+                }
             }
             return;
         }

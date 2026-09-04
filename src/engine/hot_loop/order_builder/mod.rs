@@ -711,44 +711,54 @@ fn send_cancel(
     conn.send_fix(&fields)
 }
 
-/// Say so for every order still waiting when the loop stops.
+/// Say so for every order still waiting when nothing will carry it.
 ///
 /// The buffer's rule is that nothing is dropped from it, because an order
 /// dropped is one nobody was told about. Stopping broke that: whatever the
 /// last drain could not send was put back, and nothing drained it again — the
 /// caller had been told the order was accepted, and given an id for it, and
-/// then heard nothing ever again.
+/// then heard nothing ever again. An abandoned recovery of the trading
+/// connection leaves the buffer the same way: standing orders wait in it for
+/// a connection that is never coming back.
+///
+/// `why` states what happened, in words that read both as "`why` before this
+/// order reached the venue" and as "still waiting when `why`".
 pub(crate) fn refuse_what_is_left(
     context: &mut Context,
     shared: &Arc<SharedState>,
+    why: &str,
 ) {
     let left: Vec<OrderRequest> = context.drain_pending_orders().collect();
     if left.is_empty() {
         return;
     }
-    log::warn!("{} instruction(s) were still waiting when the engine stopped", left.len());
+    log::warn!("{} instruction(s) were still waiting when {why}", left.len());
     for req in left {
         // What is said depends on what was asked for, because these do not
         // all name an order of their own. A cancel and a modify name the order
         // they act ON — one that is working at the venue — so reporting that
         // id as never placed states a live order is dead. What did not happen
         // is the instruction, and that is what is said.
-        let (ids, what): (Vec<crate::types::OrderId>, &str) = match &req {
+        let (ids, what): (Vec<crate::types::OrderId>, String) = match &req {
             OrderRequest::Cancel { .. } => (
                 req.order_ids(),
-                "the engine stopped before this order's cancellation reached the venue, so \
-                 the order stands as it was",
+                format!(
+                    "{why} before this order's cancellation reached the venue, so \
+                     the order stands as it was",
+                ),
             ),
             OrderRequest::Modify { .. } => (
                 req.order_ids(),
-                "the engine stopped before this order's change reached the venue, so the \
-                 order stands as it was",
+                format!(
+                    "{why} before this order's change reached the venue, so the \
+                     order stands as it was",
+                ),
             ),
             OrderRequest::CancelAll { .. } => {
                 // Names no order at all, so there is nobody to tell but the log.
                 log::warn!(
-                    "a request to cancel every order was still waiting when the engine \
-                     stopped, and did not reach the venue: whatever was working still is",
+                    "a request to cancel every order was still waiting when {why}, \
+                     and did not reach the venue: whatever was working still is",
                 );
                 continue;
             }
@@ -762,8 +772,7 @@ pub(crate) fn refuse_what_is_left(
             // function was just repaired for. Listed, the compiler asks.
             OrderRequest::SubmitEx { .. } | OrderRequest::SubmitBracket { .. } => (
                 req.order_ids(),
-                "the engine stopped before this order reached the venue, so it was never \
-                 placed",
+                format!("{why} before this order reached the venue, so it was never placed"),
             ),
         };
         for id in ids {
@@ -773,7 +782,7 @@ pub(crate) fn refuse_what_is_left(
             shared.orders.push_order_inactive(
                 id,
                 crate::error_codes::Refusal::NOT_CONNECTED,
-                what.to_string(),
+                what.clone(),
             );
         }
     }

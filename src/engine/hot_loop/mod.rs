@@ -790,6 +790,7 @@ impl HotLoop {
                 self.maybe_spawn_hmds_reconnect();
                 self.maybe_spawn_secdef_reconnect();
             }
+            self.refuse_the_buffered_orders_once_recovery_is_over();
 
             // 6. Wake any waiting consumers (e.g. Python event loop)
             self.shared.notify();
@@ -1513,7 +1514,9 @@ impl HotLoop {
                     }
                     // And whatever the drain above could not send is said
                     // rather than left in a buffer nothing will read again.
-                    order_builder::refuse_what_is_left(&mut self.context, &self.shared);
+                    order_builder::refuse_what_is_left(
+                        &mut self.context, &self.shared, "the engine stopped",
+                    );
                     self.running = false;
                     // Records the reason alongside the flag. The flag alone
                     // does not distinguish a venue-initiated drop from a
@@ -1535,7 +1538,9 @@ impl HotLoop {
                 self.ccp.disconnected, &self.shared,
                 self.ccp.recovery_sweep_at.is_some(), &self.event_tx,
             );
-            order_builder::refuse_what_is_left(&mut self.context, &self.shared);
+            order_builder::refuse_what_is_left(
+                &mut self.context, &self.shared, "the engine stopped",
+            );
             self.running = false;
             self.shared.reference
                 .set_session_over(retry::DisconnectReason::ByDesign.as_str());
@@ -1904,6 +1909,29 @@ impl HotLoop {
         self.shared.reference.set_session_over(retry::DisconnectReason::ByDesign.as_str());
         self.shared.set_connection_lost();
         emit(&self.event_tx, Event::Disconnected);
+    }
+
+    /// Say what is still buffered once the trading connection's recovery has
+    /// been given up.
+    ///
+    /// Orders accepted while the connection was down wait in the buffer for it
+    /// to come back, and their callers were told they were accepted and given
+    /// ids. Once recovery is over there is nothing left that can carry them —
+    /// a halt is never cleared and no further attempt is scheduled — so they
+    /// are refused rather than left until the engine stops, which may be
+    /// never. Not while an attempt is still in flight: it may yet land, and
+    /// what is buffered would go out on it. A repeat pass finds nothing,
+    /// because the refusal drains the buffer.
+    fn refuse_the_buffered_orders_once_recovery_is_over(&mut self) {
+        if self.ccp.disconnected
+            && self.pending_ccp_reconnect.is_none()
+            && self.reconnect_halted.is_some()
+        {
+            order_builder::refuse_what_is_left(
+                &mut self.context, &self.shared,
+                "recovery of the trading connection was given up",
+            );
+        }
     }
 
     /// Tell the client a transport it was told about is carrying traffic
@@ -3470,6 +3498,47 @@ mod tests {
         assert!(
             shared.reference.session_over().is_some(),
             "a caller that asks for data is told the session is over, not left to time out",
+        );
+    }
+
+    /// An order accepted while the trading connection was down is buffered,
+    /// and its caller was told it was accepted and given an id. Once the
+    /// connection's recovery has been given up there is nothing left that can
+    /// carry it, so it is refused then rather than left in a buffer nothing
+    /// will read again.
+    #[test]
+    fn buffered_orders_are_refused_when_recovery_is_given_up() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.ccp.disconnected = true;
+        hl.context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 31,
+            instrument: 0,
+            side: crate::types::Side::Buy,
+            qty: 100,
+            kind: crate::types::OrderKind::Limit { price: 100_000_000 },
+            tif: 0,
+            attrs: crate::types::OrderAttrs::default(),
+        });
+
+        // An attempt still in flight may land and carry what is waiting, so
+        // nothing is refused while one is about.
+        hl.reconnect_halted = Some(retry::DisconnectReason::ByDesign);
+        hl.pending_ccp_reconnect = Some(sync_channel::<io::Result<Connection>>(1).1);
+        hl.refuse_the_buffered_orders_once_recovery_is_over();
+        assert!(
+            shared.orders.drain_order_inactive().is_empty(),
+            "nothing is refused while an attempt may still carry it",
+        );
+
+        hl.pending_ccp_reconnect = None;
+        hl.refuse_the_buffered_orders_once_recovery_is_over();
+        let refused = shared.orders.drain_order_inactive();
+        assert_eq!(refused.len(), 1, "the order is told about, not dropped");
+        assert_eq!(refused[0].0, 31, "under the id its caller was given");
+        assert!(
+            refused[0].2.contains("never placed"),
+            "and told it was never placed: {}", refused[0].2,
         );
     }
 

@@ -240,6 +240,39 @@ fn a_held_order_that_is_withdrawn_does_not_go_out_later() {
     assert_eq!(sent.len(), 1, "only the order that transmitted: {sent:?}");
 }
 
+/// Withdrawing a held order frees the id it was placed under.
+///
+/// The venue was never given the order, so the id is not spent there — but
+/// the client's own record of it stood, and placing under the id again was
+/// read as a modify of an order nothing had ever submitted: answered Ok,
+/// and nothing went out.
+#[test]
+fn withdrawing_a_held_order_frees_its_id_to_place_again() {
+    let (client, rx, _shared) = test_client();
+    let leg = |id: i64, parent: i64, transmit: bool| Order {
+        order_id: id,
+        parent_id: parent,
+        transmit,
+        action: if parent == 0 { "BUY".into() } else { "SELL".into() },
+        total_quantity: 100.0,
+        order_type: "LMT".into(),
+        lmt_price: 100.0,
+        tif: "DAY".into(),
+        ..Default::default()
+    };
+
+    client.place_order(82, &spy(), &leg(82, 0, false)).expect("held");
+    client.cancel_order(82, "").expect("withdrawn");
+
+    client.place_order(82, &spy(), &leg(82, 0, true)).expect("placed again under the same id");
+    match rx.try_recv().expect("the order goes out") {
+        ControlCommand::Order(OrderRequest::SubmitEx { order_id, .. }) => {
+            assert_eq!(order_id, 82, "the id places a new order");
+        }
+        other => panic!("expected a fresh submit, got {other:?}"),
+    }
+}
+
 /// A parent placed again to transmit sends the children held under it.
 #[test]
 fn transmitting_a_parent_releases_what_hangs_from_it() {
@@ -1113,6 +1146,48 @@ fn a_cancelled_order_stops_being_tracked() {
         client.core.open_orders.lock().unwrap().len(), 1,
         "an inactive order returns to working when what holds it clears",
     );
+
+    // And one the venue states as filled, even where no fill record came
+    // with the status: the fill's own path drops the record, but the status
+    // can arrive without one.
+    client.core.update_order_status(&shared, 10, OrderStatus::Submitted, 0.0, 100.0);
+    client.core.update_order_status(&shared, 10, OrderStatus::Filled, 100.0, 0.0);
+    assert_eq!(
+        client.core.open_orders.lock().unwrap().len(), 1,
+        "a filled order is done, and only the inactive one remains",
+    );
+}
+
+/// An order the venue states as filled is done whatever record accompanies it.
+///
+/// A status can arrive without the fill that ended the order, and while the
+/// record stood the id was read as a working order's: the next order placed
+/// under it went down the modify path, answered Ok, and nothing was
+/// submitted.
+#[test]
+fn an_order_stated_filled_frees_its_id_even_without_a_fill() {
+    let (client, rx, shared) = test_client();
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+    client.place_order(83, &spy(), &order).expect("placed");
+    rx.try_recv().expect("the first order goes out");
+
+    shared.orders.push_order_update(OrderUpdate {
+        order_id: 83, instrument: 0, status: OrderStatus::Filled,
+        filled_qty: 1.0, remaining_qty: 0.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+    });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+
+    client.place_order(83, &spy(), &order).expect("placed again under the same id");
+    match rx.try_recv().expect("the second order goes out") {
+        ControlCommand::Order(OrderRequest::SubmitEx { order_id, .. }) => {
+            assert_eq!(order_id, 83, "the id places a new order");
+        }
+        other => panic!("expected a fresh submit, got {other:?}"),
+    }
 }
 
 /// A refusal that answers no request is reported as answering no request.
@@ -2733,6 +2808,36 @@ fn req_global_cancel_no_instruments_no_commands() {
     shared.orders.set_replay_done();
     client.req_global_cancel().unwrap();
     assert!(rx.try_recv().is_err());
+}
+
+/// A withdrawal of everything covers what was never sent as well as what is
+/// working.
+///
+/// The held orders are forgotten, record and all: left tracked, their ids
+/// could never place again — a placement under one was read as a modify of
+/// an order nothing had ever submitted.
+#[test]
+fn a_global_cancel_frees_the_ids_of_orders_never_sent() {
+    let (client, rx, shared) = test_client();
+    let held = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), transmit: false, ..Default::default()
+    };
+    client.place_order(84, &spy(), &held).expect("held");
+    assert!(rx.try_recv().is_err(), "nothing was sent for it");
+
+    shared.orders.set_replay_done();
+    client.req_global_cancel().expect("everything withdrawn");
+    assert!(!client.core.is_order_tracked(84), "the record goes with the command");
+
+    let order = Order { transmit: true, ..held };
+    client.place_order(84, &spy(), &order).expect("placed again under the same id");
+    match rx.try_recv().expect("the order goes out") {
+        ControlCommand::Order(OrderRequest::SubmitEx { order_id, .. }) => {
+            assert_eq!(order_id, 84, "the id places a new order");
+        }
+        other => panic!("expected a fresh submit, got {other:?}"),
+    }
 }
 
 /// A global cancel issued before the venue has finished naming the working

@@ -948,9 +948,16 @@ impl ClientCore {
     /// Take back everything held, and say how many there were.
     ///
     /// What a withdrawal of everything means for orders that were never sent.
+    /// Their records go with them: left standing, an id reads as a working
+    /// order's, and placing under it again becomes a modify of an order
+    /// nothing has ever submitted.
     pub fn withdraw_all_held(&self) -> usize {
-        let mut held = self.held_orders.lock().unwrap();
-        std::mem::take(&mut *held).len()
+        let taken: Vec<HeldOrder> = std::mem::take(&mut *self.held_orders.lock().unwrap());
+        let mut orders = self.open_orders.lock().unwrap();
+        for h in &taken {
+            orders.remove(&h.order_id);
+        }
+        taken.len()
     }
 
     /// The family an order that transmits would release, in the order it
@@ -2202,11 +2209,14 @@ impl ClientCore {
         // Only a fill removed it before, and a fill is not how most orders end:
         // a cancelled or rejected one reports a quantity still outstanding and
         // produces none, so it stayed for the life of the session and the cost
-        // of listing what is open grew with every cancel. Nothing reads it
-        // after this — what is open is answered by status, and these are not
-        // open. `Inactive` is not among them: it returns to working when
-        // whatever holds the order clears.
-        if matches!(status, OrderStatus::Cancelled | OrderStatus::Rejected) {
+        // of listing what is open grew with every cancel. Filled is here too:
+        // a fill removes the record on its own path, but the status can arrive
+        // without one, and left standing it reads the id as a working order's
+        // — so the next order placed under it becomes a modify of an order
+        // that is done. Nothing reads it after this — what is open is
+        // answered by status, and these are not open. `Inactive` is not among
+        // them: it returns to working when whatever holds the order clears.
+        if matches!(status, OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Rejected) {
             self.untrack_order(order_id);
         }
     }

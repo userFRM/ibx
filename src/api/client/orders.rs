@@ -314,8 +314,12 @@ impl EClient {
         // An order still held never reached the venue, so withdrawing it is
         // forgetting a command rather than sending one. Sent, the venue
         // answers that it knows no such order and the command stays queued to
-        // go out behind the next thing that transmits.
+        // go out behind the next thing that transmits. The record goes with
+        // the command: left standing, the id reads as a working order's, and
+        // placing under it again becomes a modify of an order nothing has
+        // ever submitted.
         if self.core.withdraw_held(order_id) {
+            self.core.untrack_order(order_id);
             return Ok(());
         }
         self.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))

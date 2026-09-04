@@ -26,6 +26,13 @@ fn a_later_sentinel_does_not_push_the_reconciliation_back() {
     let soon = Instant::now() + Duration::from_millis(1);
     ccp.recovery_sweep_at = Some(soon);
 
+    // The push has named an order, so the record that follows is its end
+    // and may bring the reconciliation forward.
+    let order = exec_report_frame(&[
+        (11, "7.0"), (150, "0"), (39, "0"), (54, "1"), (6008, "756733"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&order, b"", &mut context, &shared, &None, "DU111111");
+
     // A report whose order id does not read, which is what reaches that arm.
     let mut parsed = std::collections::HashMap::new();
     parsed.insert(11u32, "*".to_string());
@@ -36,6 +43,47 @@ fn a_later_sentinel_does_not_push_the_reconciliation_back() {
     assert!(
         after <= soon,
         "a sentinel may bring the reconciliation forward and must not delay it",
+    );
+}
+
+/// A record that parses to no order reaches the sentinel arm before the
+/// push has named anything, and it is not the push's end — the same shape
+/// arrives as a mass-status echo ahead of every order. Shortening the
+/// sweep on it let the held cancels and modifies out before the push had
+/// named the orders they name, carrying ids the venue refuses. The
+/// deadline only moves once at least one order has come through.
+#[test]
+fn the_sweep_is_not_shortened_by_a_record_that_precedes_every_order() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+
+    let far = Instant::now() + Duration::from_secs(30);
+    ccp.recovery_sweep_at = Some(far);
+
+    // A record whose order id does not read, arriving before the push has
+    // named anything.
+    let echo = exec_report_frame(&[(11, "*")]);
+    ccp.handle_exec_report(&echo, b"", &mut context, &shared, &None, "DU111111");
+
+    assert_eq!(
+        ccp.recovery_sweep_at,
+        Some(far),
+        "nothing has been named yet, so this is not the push's end and the deadline stands",
+    );
+
+    // Once an order has come through, the same record is the push's end
+    // and shortens the wait.
+    let order = exec_report_frame(&[
+        (11, "7.0"), (150, "0"), (39, "0"), (54, "1"), (6008, "756733"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&order, b"", &mut context, &shared, &None, "DU111111");
+    ccp.handle_exec_report(&echo, b"", &mut context, &shared, &None, "DU111111");
+
+    let after = ccp.recovery_sweep_at.expect("the deadline is still set");
+    assert!(
+        after < far,
+        "once the push has named an order, its ending record brings the reconciliation forward",
     );
 }
 
