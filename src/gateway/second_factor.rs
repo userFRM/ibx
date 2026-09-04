@@ -336,9 +336,12 @@ pub(super) fn second_factor_route(paper: bool, token_type: &str) -> SecondFactor
 ///
 /// A receive error is also a refusal: the farm logons that follow authenticate
 /// with the session key, so anything short of `PASSED` must not reach them. An
-/// NS message here means authentication is already past, so it is returned as
-/// `Skipped` rather than refused.
-pub(super) fn expect_auth_finish<S: Read>(stream: &mut S, whose: &str) -> io::Result<()> {
+/// NS message here means authentication is already past, so it is handed on
+/// rather than refused — and rather than dropped: it belongs to the post-auth
+/// exchange, which cannot ask the socket for it a second time. Dropping it
+/// left a reconnect waiting on a frame it was already holding until its own
+/// deadline, failing on its own success.
+pub(super) fn expect_auth_finish<S: Read>(stream: &mut S, whose: &str) -> io::Result<Option<Vec<u8>>> {
     use crate::protocol::xyz::XYZ_MSG_TOKEN_AUTH;
 
     match session::recv_msg(stream) {
@@ -346,7 +349,7 @@ pub(super) fn expect_auth_finish<S: Read>(stream: &mut S, whose: &str) -> io::Re
             let passed = fields.iter().any(|f| f == "PASSED");
             if msg_id == XYZ_MSG_TOKEN_AUTH && matches!(state, 3 | 5) && passed {
                 log::info!("{whose} AUTH_FINISH: state={state} PASSED");
-                Ok(())
+                Ok(None)
             } else {
                 let stated = fields.iter().rev().find(|s| !s.is_empty()).map(String::as_str).unwrap_or("");
                 Err(io::Error::new(
@@ -357,9 +360,9 @@ pub(super) fn expect_auth_finish<S: Read>(stream: &mut S, whose: &str) -> io::Re
                 ))
             }
         }
-        Ok(session::RecvMsg::Ns { msg_type, .. }) => {
+        Ok(session::RecvMsg::Ns { msg_type, raw, .. }) => {
             log::info!("{whose} post-auth NS type={msg_type}");
-            Ok(())
+            Ok(Some(raw))
         }
         Err(e) => Err(io::Error::new(
             e.kind(),

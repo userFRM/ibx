@@ -631,38 +631,99 @@ pub fn reconnect_ccp(auth: &ReconnectAuth) -> io::Result<Connection> {
     let token_hash = token_short_hash(&auth.session_token);
     let first = reconnect_ccp_attempt(auth, &token_hash, &auth.host, 0);
     let Err(why) = first else { return first };
+    failover(&auth.host, why, &auth.alternate_hosts, |host| {
+        reconnect_ccp_attempt(auth, &token_hash, host, 0)
+    })
+}
 
-    // The host this session was on cannot be reached. The others it reached
-    // the venue through still answer for this account — the venue named them
-    // on the way in — so they are tried before the session is given up on.
-    // Unless the account is the thing that was lost. Every host answers for
-    // the same account, so walking them re-asks the same question and, if one
-    // of them answers yes, takes the account back from a client that holds it
-    // fairly — the fight this refusal exists to end.
-    if why.to_string().contains(TOOK_THE_ACCOUNT) {
-        return Err(why);
+/// The hosts a session reached the venue through, tried in that order when
+/// the one it was on stopped answering, until one of them answers.
+///
+/// The walk is only for a door that did not open. Every host answers for the
+/// same account, so an answer says the same thing at all of them: walking on
+/// after a refusal re-asks the same question with the same credentials, which
+/// is how an account gets locked rather than connected — and if the answer is
+/// that another client holds the account, walking on takes it back from a
+/// client that holds it fairly, the fight that answer exists to end.
+fn failover(
+    first_host: &str,
+    first: io::Error,
+    hosts: &[String],
+    mut attempt: impl FnMut(&str) -> io::Result<Connection>,
+) -> io::Result<Connection> {
+    if !nobody_answered(&first) {
+        return Err(first);
     }
 
-    let mut last = why;
-    for host in &auth.alternate_hosts {
-        log::warn!("{} did not answer ({last}); trying {host}", auth.host);
-        match reconnect_ccp_attempt(auth, &token_hash, host, 0) {
+    let mut last = first;
+    for host in hosts {
+        log::warn!("{first_host} did not answer ({last}); trying {host}");
+        match attempt(host) {
             Ok(conn) => {
                 log::info!("reconnected on {host}");
                 return Ok(conn);
             }
-            // The reason a later host gives, not the first one's. A host that
-            // cannot be reached says nothing about the session; one that
-            // answers and refuses the credentials says everything, and
-            // returning the first meant the caller was told a transport
-            // failure when the venue had stated something it could act on.
-            Err(next) => {
-                log::warn!("{host} did not answer either ({next})");
-                last = next;
+            // A door that answered and refused has answered for the account,
+            // not for itself, and the reason it stated is the one the caller
+            // hears. Only a door that did not open sends the walk on.
+            Err(e) if !nobody_answered(&e) => return Err(e),
+            Err(e) => {
+                log::warn!("{host} did not answer either ({e})");
+                last = e;
             }
         }
     }
     Err(last)
+}
+
+/// Drain the init burst the venue answers a logon with.
+///
+/// The burst has no terminator the client can wait for — the venue sends it
+/// back to back and then goes quiet — so silence is the end, and the socket
+/// carries a read timeout of one `poll`, making each quiet read stand for one
+/// `poll` of nothing. Ending the drain on the first quiet read meant a single
+/// gap inside a burst arriving over a slow path read as the end of it: the
+/// routing tags sat in the bytes never drained, and the venue was blamed for
+/// naming no route it had named. The drain ends once `gap` worth of quiet
+/// reads arrive back to back; anything that arrives resets the count.
+///
+/// A socket that closes while the burst is still arriving is stated as one:
+/// read as a quiet end, the close comes back later as a venue that named no
+/// route.
+fn drain_init_burst<R: Read>(
+    reader: &mut R,
+    mut data: Vec<u8>,
+    poll: Duration,
+    gap: Duration,
+) -> io::Result<Vec<u8>> {
+    let quiet_reads_at_the_end = gap.as_millis().div_ceil(poll.as_millis());
+    let mut quiet = 0u128;
+    let mut tmp = [0u8; 65536];
+    loop {
+        match reader.read(&mut tmp) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "the socket closed while the init burst was still arriving",
+                ));
+            }
+            Ok(n) => {
+                quiet = 0;
+                data.extend_from_slice(&tmp[..n]);
+            }
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                quiet += 1;
+                if quiet >= quiet_reads_at_the_end {
+                    break;
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(data)
 }
 
 fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, depth: u32) -> io::Result<Connection> {
@@ -758,14 +819,15 @@ fn reconnect_ccp_attempt(auth: &ReconnectAuth, token_hash: &str, host: &str, dep
 
     // A message the gate reads that belongs to the loop below, which cannot
     // ask the socket for it a second time.
-    let mut post_auth_unread: Option<Vec<u8>> = None;
+    let mut post_auth_unread: Option<Vec<u8>>;
     if auth_mode == 2 {
         // SOFT_TOKEN challenge-response (4 states)
         do_ccp_soft_token(&mut tls, &auth.session_key)?;
 
         // AUTH_FINISH, which has to say the authentication passed rather than
-        // merely arrive.
-        expect_auth_finish(&mut tls, "CCP reconnect")?;
+        // merely arrive. If the venue moved on without it, the frame read past
+        // it is the post-auth loop's, not this gate's to keep.
+        post_auth_unread = expect_auth_finish(&mut tls, "CCP reconnect")?;
     } else {
         // Server requires full SRP (auth_mode != 2). Re-run the SRP handshake
         // with the credentials cached on ReconnectAuth — the same path
@@ -1388,12 +1450,14 @@ fn authenticate(
             log::info!("Resuming the session for {} — no handshake", crate::logging::redacted(&config.username));
             do_ccp_soft_token(tls, &key)?;
             // AUTH_FINISH follows the challenge exactly as it follows a
-            // handshake, and it says whether the session exists.
-            expect_auth_finish(tls, "Resume")?;
+            // handshake, and it says whether the session exists. What it reads
+            // past its own answer belongs to the post-auth exchange, and is
+            // handed on rather than dropped.
+            let unread = expect_auth_finish(tls, "Resume")?;
             // The stored token is the session key, so the farm logons that
             // follow have what they need without a second factor: the
             // approval that made this session is the one being resumed.
-            (key, None, None)
+            (key, None, unread)
         }
         (resume_key, _) => {
             if resume_key.is_some() {
@@ -1636,29 +1700,18 @@ impl Gateway {
         // read-throughput investigation (2026-05-05):
         // the burst's bulk (~28 kB compressed) arrives in ~300 ms continuous,
         // after which the server emits 67-byte keep-alive trickles every ~10 s
-        // until it FINs the socket at ~140 s. A 300 ms idle-gap is past any
-        // intra-burst jitter (the burst is continuous) and well short of the
-        // 10 s keep-alive trickle interval, so the read ends promptly after the burst.
-        tls.get_ref().set_read_timeout(Some(Duration::from_millis(300)))?;
-        let mut init_data: Vec<u8> = carry;
-        let mut tmp_buf = vec![0u8; 65536];
+        // until it FINs the socket at ~140 s. On a slow path the same burst
+        // arrives with gaps in it, so the drain ends on a quiet stretch
+        // rather than on the first gap: one second is past any intra-burst
+        // jitter and well short of the 10 s keep-alive trickle interval,
+        // which is left undrained — draining it pushes the grace-window
+        // messages past the server-side deadline.
+        tls.get_ref().set_read_timeout(Some(Duration::from_millis(FARM_LOGON_POLL_MS)))?;
         let read_start = std::time::Instant::now();
-        loop {
-            match tls.read(&mut tmp_buf) {
-                Ok(0) => break,
-                Ok(n) => init_data.extend_from_slice(&tmp_buf[..n]),
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
-                {
-                    // First 1-s idle gap = burst is done. Anything past
-                    // this is the server's 10-s keep-alive trickle, which is
-                    // left undrained: draining it pushes grace-window messages
-                    // past the server-side deadline.
-                    break;
-                }
-                Err(e) => return Err(e),
-            }
-        }
+        let init_data = drain_init_burst(
+            &mut tls, carry,
+            Duration::from_millis(FARM_LOGON_POLL_MS), Duration::from_secs(1),
+        )?;
         log::info!(
             "Init response: {} bytes in {:?}",
             init_data.len(), read_start.elapsed(),

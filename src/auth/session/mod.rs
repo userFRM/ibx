@@ -939,7 +939,7 @@ impl GateReader {
         if &self.buf[..4] != NS_MAGIC {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "security-code gate: framing lost (no #%#% magic)",
+                "auth gate: framing lost (no #%#% magic)",
             ));
         }
         let len = u32::from_be_bytes([self.buf[4], self.buf[5], self.buf[6], self.buf[7]]) as usize;
@@ -949,7 +949,7 @@ impl GateReader {
         if len > MAX_GATE_FRAME {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("security-code gate: frame claims {len} bytes"),
+                format!("auth gate: frame claims {len} bytes"),
             ));
         }
         if self.buf.len() < 8 + len {
@@ -968,7 +968,7 @@ impl GateReader {
             }
         Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "security-code gate: unparseable frame",
+            "auth gate: unparseable frame",
         ))
     }
 }
@@ -998,8 +998,12 @@ pub fn do_security_code_2fa<S: Read + Write>(
     use std::time::Instant;
 
     let Some(provider) = code_provider else {
+        // Raised as a kind the retry ladder reads as one it does not come
+        // back from: no code_provider is a lack every attempt carries, and
+        // reading it as transport retried the same unfinished handshake
+        // without end.
         return Err(ib_key_err(
-            io::ErrorKind::InvalidInput,
+            io::ErrorKind::Unsupported,
             "this account's second factor is an authenticator code; \
              set code_provider to supply it",
         ));
@@ -1168,8 +1172,11 @@ pub fn do_security_code_2fa<S: Read + Write>(
                     format!("server error type={msg_type}"),
                 ));
             }
-            RecvMsg::Ns { msg_type, fields, .. } if msg_type == NS_TEST_REQUEST => {
-                let ts = fields.iter().find(|f| !f.is_empty()).cloned().unwrap_or_default();
+            RecvMsg::Ns { msg_type, raw, .. } if msg_type == NS_TEST_REQUEST => {
+                // The timestamp from its position, or nothing: a blank slot
+                // followed by a populated field echoes a value the probe did
+                // not ask for otherwise.
+                let ts = ns::parse_test_request_timestamp(&raw).unwrap_or_default();
                 stream.write_all(&ns_build_heart_beat(NS_VERSION, &ts))?;
             }
             // Identifiers only. The derived `Debug` prints every field, and an
@@ -1233,6 +1240,13 @@ pub fn do_ib_key_2fa<S: Read + Write>(
     let mut saw_challenge = false;
     let mut code_submitted = false;
     let mut pending_code: Option<std::sync::mpsc::Receiver<io::Result<String>>> = None;
+    // The gate polls, and a frame can arrive across polls. The buffered
+    // reader holds the half that has arrived and asks again, where the raw
+    // read it replaces was two reads with nothing keeping the half-arrived
+    // bytes: a poll timeout in the middle discarded them, the next read
+    // started mid-frame, and an approval already given was spent on a login
+    // that then died there.
+    let mut reader = GateReader::default();
 
     loop {
         if Instant::now() >= deadline {
@@ -1242,7 +1256,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
             ));
         }
 
-        let recv = match recv_msg(stream) {
+        let recv = match reader.poll(stream, code_submitted) {
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof
                 || e.kind() == io::ErrorKind::ConnectionReset
@@ -1264,18 +1278,16 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                 };
                 return Err(ib_key_err(io::ErrorKind::ConnectionAborted, msg));
             }
-            // Nothing has arrived yet. The approval is a person reaching for a
-            // phone, so silence is the ordinary case and the loop goes back to
-            // the deadline check at the top — which is the only thing that can
-            // end this wait. Treating it as a failure both ends the login while
-            // the operator is still deciding, and, without a timeout on the
-            // socket at all, leaves the deadline unreachable while a server
-            // that has stopped talking holds the wait open for ever.
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock
-                || e.kind() == io::ErrorKind::TimedOut
-                || e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
+        // Nothing has arrived yet, or not a whole frame has. The approval is
+        // a person reaching for a phone, so silence is the ordinary case and
+        // the loop goes back to the deadline check at the top — which is the
+        // only thing that can end this wait. Treating it as a failure both
+        // ends the login while the operator is still deciding, and, without a
+        // timeout on the socket at all, leaves the deadline unreachable while
+        // a server that has stopped talking holds the wait open for ever.
+        let Some((recv, _)) = recv else { continue };
 
         match recv {
             RecvMsg::Xyz { msg_id, state, fields, .. } if msg_id == xyz::XYZ_MSG_SWCR_TOKEN && state == 2 => {
@@ -1392,8 +1404,11 @@ pub fn do_ib_key_2fa<S: Read + Write>(
                     "2FA approval rejected at AUTH_FINISH",
                 ));
             }
-            RecvMsg::Ns { msg_type, fields, .. } if msg_type == NS_TEST_REQUEST => {
-                let ts = fields.iter().find(|f| !f.is_empty()).cloned().unwrap_or_default();
+            RecvMsg::Ns { msg_type, raw, .. } if msg_type == NS_TEST_REQUEST => {
+                // The timestamp from its position, or nothing: a blank slot
+                // followed by a populated field echoes a value the probe did
+                // not ask for otherwise.
+                let ts = ns::parse_test_request_timestamp(&raw).unwrap_or_default();
                 let reply = ns_build_heart_beat(NS_VERSION, &ts);
                 stream.write_all(&reply)?;
                 log::debug!("2FA gate: heartbeat {ts} -> 531");

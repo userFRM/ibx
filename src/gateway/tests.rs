@@ -799,9 +799,33 @@ mod auth_finish_tests {
     fn a_finish_that_passed_finishes_the_authentication() {
         for state in [3u32, 5] {
             let mut frame = framed(XYZ_MSG_TOKEN_AUTH, state, &["PASSED"]);
-            expect_auth_finish(&mut frame, "test")
+            let carried = expect_auth_finish(&mut frame, "test")
                 .unwrap_or_else(|e| panic!("state {state} passed and was refused: {e}"));
+            assert!(carried.is_none(), "a finish that passed reads nothing past itself");
         }
+    }
+
+    /// The venue can move on without sending the finish: a soft-token reconnect
+    /// and a resume both answer the challenge, and the next frame can already
+    /// be the post-auth exchange. That frame is not this reader's to keep —
+    /// dropped here, the post-auth exchange waits for a frame it is already
+    /// holding until its own deadline, and fails on its own success.
+    #[test]
+    fn a_frame_read_past_the_finish_is_handed_on_not_dropped() {
+        use crate::protocol::ns;
+
+        let frame_bytes = ns::ns_build(50, ns::NS_CONNECT_RESPONSE, &[], "");
+        let mut stream = io::Cursor::new(frame_bytes.clone());
+        let carried = expect_auth_finish(&mut stream, "test")
+            .expect("an NS frame in place of the finish is not a refusal");
+        let payload = &frame_bytes[8..];
+        assert_eq!(
+            carried.as_deref(),
+            Some(payload),
+            "the post-auth exchange cannot ask the socket for this frame again",
+        );
+        let (_, msg_type, _) = ns::ns_parse(payload).unwrap();
+        assert_eq!(msg_type, ns::NS_CONNECT_RESPONSE);
     }
 
     #[test]
@@ -870,4 +894,215 @@ fn a_refusal_from_the_venue_is_not_a_door_that_did_not_open() {
     // And a door that genuinely did not open still sends it to the next one.
     let unreachable = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
     assert!(super::nobody_answered(&unreachable));
+}
+
+/// The reconnect walk stops at an answer the same way the first connect does.
+///
+/// A soft-token reconnect carries the same credentials to every host the
+/// session reached the venue through. When the first host answered and
+/// refused, the walk went on anyway — four refused logons per attempt, and a
+/// "too many sessions" loop locking the account it was trying to recover.
+/// Only the one refusal that names another client was carved out; every other
+/// answered refusal walked all four doors.
+mod reconnect_failover_tests {
+    use crate::protocol::connection::Connection;
+    use crate::protocol::ns;
+    use crate::reliability::retry::DisconnectReason;
+    use std::io;
+
+    fn alternates() -> Vec<String> {
+        ["ndc1", "zdc1", "hdc1"].iter().map(|h| h.to_string()).collect()
+    }
+
+    fn refused() -> io::Error {
+        ns::refused_by_the_venue("Auth error", "1;malformed user name;".to_string())
+    }
+
+    fn silent() -> io::Error {
+        io::Error::new(io::ErrorKind::ConnectionRefused, "refused")
+    }
+
+    /// A connection good enough to say the walk stopped on an answer.
+    fn a_connection() -> Connection {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = std::net::TcpStream::connect(addr).unwrap();
+        Connection::new_raw(stream).unwrap()
+    }
+
+    #[test]
+    fn a_refusal_on_the_first_host_ends_the_walk() {
+        let mut knocked = Vec::new();
+        let err = super::super::failover("cdc1", refused(), &alternates(), |host| {
+            knocked.push(host.to_string());
+            Err(io::Error::other("the walk must not reach another host"))
+        })
+        .err().expect("the walk must end in an error");
+        assert!(
+            knocked.is_empty(),
+            "an answered refusal sent the reconnect round every other host: {knocked:?}",
+        );
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    }
+
+    #[test]
+    fn a_refusal_from_a_later_host_ends_the_walk_there() {
+        let mut knocked = Vec::new();
+        let err = super::super::failover("cdc1", silent(), &alternates(), |host| {
+            knocked.push(host.to_string());
+            if knocked.len() == 1 {
+                Err(silent())
+            } else {
+                Err(ns::refused_by_the_venue(
+                    "CCP reconnect post-auth error",
+                    "stale session".to_string(),
+                ))
+            }
+        })
+        .err().expect("the walk must end in an error");
+        assert_eq!(
+            knocked,
+            vec!["ndc1", "zdc1"],
+            "the walk went on after the venue answered and refused",
+        );
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+        assert!(err.to_string().contains("stale session"), "{err}");
+    }
+
+    #[test]
+    fn doors_that_do_not_open_are_walked_to_the_end() {
+        let mut knocked = Vec::new();
+        let err = super::super::failover("cdc1", silent(), &alternates(), |host| {
+            knocked.push(host.to_string());
+            Err(silent())
+        })
+        .err().expect("the walk must end in an error");
+        assert_eq!(knocked, alternates(), "every host the venue named is tried");
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionRefused, "{err}");
+    }
+
+    #[test]
+    fn a_host_that_answers_reconnects_the_session() {
+        let mut knocked = Vec::new();
+        let conn = super::super::failover("cdc1", silent(), &alternates(), |host| {
+            knocked.push(host.to_string());
+            if host == "zdc1" {
+                Ok(a_connection())
+            } else {
+                Err(silent())
+            }
+        });
+        assert!(conn.is_ok(), "the walk ends on the first host that answers");
+        assert_eq!(knocked, vec!["ndc1", "zdc1"]);
+    }
+
+    /// The refusal that names another client used to be the walk's only
+    /// carve-out, on its own wording. The same gate covers it, because the
+    /// retry ladder reads that wording before it looks at the kind.
+    #[test]
+    fn a_taken_account_still_ends_the_walk() {
+        let taken = io::Error::other(format!(
+            "{} another client holds this account",
+            super::super::TOOK_THE_ACCOUNT,
+        ));
+        assert_eq!(DisconnectReason::from_error(&taken), DisconnectReason::TakenOver);
+        let mut knocked = Vec::new();
+        let err = super::super::failover("cdc1", taken, &alternates(), |host| {
+            knocked.push(host.to_string());
+            Err(silent())
+        })
+        .err().expect("the walk must end in an error");
+        assert!(knocked.is_empty(), "{knocked:?}");
+        assert!(err.to_string().contains("competing logon"), "{err}");
+    }
+}
+
+/// The init burst arrives back to back on a fast path and with gaps in it on
+/// a slow one, so the drain ends on a quiet stretch, not on the first quiet
+/// read. Ending it there left the routing tags in bytes never drained, and
+/// the venue was blamed for naming no route it had named.
+mod init_burst_drain_tests {
+    use std::io::{self, Read};
+    use std::time::Duration;
+
+    /// A socket scripted for one drain: each entry is one read's answer, and
+    /// an exhausted socket keeps answering the way the venue's does once the
+    /// burst is done — with nothing until the quiet stretch ends the drain.
+    struct BurstReader { script: Vec<io::Result<Vec<u8>>> }
+
+    impl Read for BurstReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.script.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "quiet"));
+            }
+            match self.script.remove(0) {
+                Ok(bytes) => {
+                    let n = bytes.len().min(buf.len());
+                    buf[..n].copy_from_slice(&bytes[..n]);
+                    Ok(n)
+                }
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    fn quiet() -> io::Result<Vec<u8>> {
+        Err(io::Error::new(io::ErrorKind::TimedOut, "quiet"))
+    }
+
+    fn chunk(bytes: &[u8]) -> io::Result<Vec<u8>> {
+        Ok(bytes.to_vec())
+    }
+
+    const POLL: Duration = Duration::from_millis(250);
+    const GAP: Duration = Duration::from_secs(1);
+
+    #[test]
+    fn a_gap_in_the_burst_does_not_end_the_drain() {
+        // Two chunks with a quiet read between them — a gap inside the
+        // burst, shorter than the stretch that ends it — and the quiet
+        // stretch after.
+        let mut reader = BurstReader {
+            script: vec![
+                chunk(b"6145=usfarm;"),
+                quiet(),
+                quiet(),
+                chunk(b"6171=eufarm;"),
+                quiet(),
+                quiet(),
+                quiet(),
+                quiet(),
+            ],
+        };
+        let drained = super::super::drain_init_burst(&mut reader, Vec::new(), POLL, GAP)
+            .expect("the drain ends on the quiet stretch, not the gap");
+        assert_eq!(
+            drained,
+            b"6145=usfarm;6171=eufarm;",
+            "the bytes after the gap were left undrained",
+        );
+    }
+
+    #[test]
+    fn a_socket_closed_mid_burst_says_so() {
+        let mut reader = BurstReader {
+            script: vec![chunk(b"6145=usfarm;"), Ok(Vec::new())],
+        };
+        let err = super::super::drain_init_burst(&mut reader, Vec::new(), POLL, GAP)
+            .err()
+            .expect("a closed socket is not a burst that finished");
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset, "{err}");
+    }
+
+    #[test]
+    fn what_arrived_before_the_drain_leads_it() {
+        // The bytes the logon reader carried past the ACK belong to the burst
+        // and lead it.
+        let mut reader = BurstReader {
+            script: vec![chunk(b"late;"), quiet(), quiet(), quiet(), quiet()],
+        };
+        let drained = super::super::drain_init_burst(&mut reader, b"carry;".to_vec(), POLL, GAP)
+            .expect("the drain ends on the quiet stretch");
+        assert_eq!(drained, b"carry;late;");
+    }
 }

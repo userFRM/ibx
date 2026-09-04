@@ -822,6 +822,34 @@ fn security_code_gate_answers_keepalives_while_it_waits() {
 }
 
 #[test]
+fn security_code_gate_echoes_the_timestamp_from_its_position_or_nothing() {
+    // A probe with a blank timestamp slot and a populated later field is
+    // echoed nothing at that position: taking the first non-empty field
+    // answers with a value the probe did not ask for.
+    let probe = ns::ns_build(NS_VERSION, NS_TEST_REQUEST, &["", "1750000000"], "MISC");
+    let mut stream = RepliesAfterWrite::with_preface(
+        probe,
+        xyz::xyz_wrap(&xyz::xyz_build_security_code("123456")),
+        security_code_result(&["", "", "", "PASSED"]),
+    );
+    let provider: CodeProvider = std::sync::Arc::new(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        Ok("123456".to_string())
+    });
+    do_security_code_2fa(&mut stream, far_future_deadline(), Some(&provider))
+        .expect("PASSED must be accepted");
+    let heartbeat = ns_build_heart_beat(NS_VERSION, "");
+    assert!(
+        stream.written.windows(heartbeat.len()).any(|w| w == heartbeat),
+        "the heartbeat must echo the timestamp's position — here, nothing",
+    );
+    assert!(
+        !stream.written.windows(10).any(|w| w == b"1750000000"),
+        "the heartbeat echoed a field the probe did not ask for",
+    );
+}
+
+#[test]
 fn security_code_gate_reports_a_rejection_as_a_rejection_not_a_timeout() {
     // A rejection that falls through is answered with keepalives until the
     // deadline and then reported as a timeout, which hides the reason.
@@ -1217,10 +1245,18 @@ fn security_code_gate_rejects_an_absurd_frame_length_instead_of_buffering() {
 
 #[test]
 fn security_code_gate_requires_a_provider() {
-    // These accounts have no push to fall back to.
+    // These accounts have no push to fall back to. Raised as a kind the
+    // retry ladder reads as one it does not come back from: the lack is the
+    // same on every attempt, and retrying it ran the same unfinished
+    // handshake without end.
     let mut stream = ScriptedStream::new(Vec::new());
     let err = do_security_code_2fa(&mut stream, far_future_deadline(), None).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    let reason = crate::reliability::retry::DisconnectReason::from_error(&err);
+    assert!(
+        reason.is_terminal(),
+        "a second factor nobody is configured to supply retried forever",
+    );
 }
 
 #[test]
@@ -1376,6 +1412,27 @@ fn ib_key_2fa_approved_after_state_2_and_passed() {
 }
 
 #[test]
+fn ib_key_gate_reassembles_a_reply_split_across_reads() {
+    // The gate polls under a short socket timeout, so a frame can arrive
+    // across polls with timeouts in between — byte-at-a-time delivery is the
+    // worst case. A reader that let a timeout discard the half it held
+    // resumed mid-frame, and an approval already given was spent on a login
+    // that died there.
+    let challenge = xyz::xyz_build(xyz::XYZ_MSG_SWCR_TOKEN, 2, "user", &[
+            "e7429fde5b4c26f81fff956be6749908a8653558e7429fde5b4c26f81fff956b",
+        "580 820",
+        "https://www.example.com/seamless?S=YWJjZA==",
+    ]);
+    let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 5, "user", &["PASSED"]);
+    let mut incoming = frame_xyz(&challenge);
+    incoming.extend_from_slice(&frame_xyz(&auth_finish));
+    let mut stream = RepliesAfterWrite::chunked(incoming, 1);
+    let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None)
+        .expect("a frame split across reads must still be read");
+    assert!(matches!(outcome, IbKeyOutcome::Approved { .. }), "{outcome:?}");
+}
+
+#[test]
 fn ib_key_2fa_echoes_test_request_timestamp() {
     // Mid-wait: server probes with NS_TEST_REQUEST. Client must echo the
     // timestamp in an NS_HEART_BEAT before the final AUTH_FINISH PASSED.
@@ -1413,6 +1470,31 @@ fn ib_key_2fa_echoes_test_request_timestamp() {
         offset += 8 + len;
     }
     assert!(saw_heartbeat, "client must echo the test-request timestamp in a HEART_BEAT");
+}
+
+#[test]
+fn ib_key_gate_echoes_the_timestamp_from_its_position_or_nothing() {
+    // A probe with a blank timestamp slot and a populated later field is
+    // echoed nothing at that position: taking the first non-empty field
+    // answers with a value the probe did not ask for.
+    let test_req = ns::ns_build(NS_VERSION, ns::NS_TEST_REQUEST, &["", "1750000000"], "MISC");
+    let auth_finish = xyz::xyz_build(xyz::XYZ_MSG_TOKEN_AUTH, 5, "user", &["PASSED"]);
+    let mut incoming = test_req;
+    incoming.extend_from_slice(&frame_xyz(&auth_finish));
+    let mut stream = ScriptedStream::new(incoming);
+
+    let outcome = do_ib_key_2fa(&mut stream, "2a", far_future_deadline(), None).unwrap();
+    assert!(matches!(outcome, IbKeyOutcome::Skipped { .. }), "{outcome:?}");
+
+    let heartbeat = ns_build_heart_beat(NS_VERSION, "");
+    assert!(
+        stream.written.windows(heartbeat.len()).any(|w| w == heartbeat),
+        "the heartbeat must echo the timestamp's position — here, nothing",
+    );
+    assert!(
+        !stream.written.windows(10).any(|w| w == b"1750000000"),
+        "the heartbeat echoed a field the probe did not ask for",
+    );
 }
 
 #[test]

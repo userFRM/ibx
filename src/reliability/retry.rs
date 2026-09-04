@@ -29,6 +29,10 @@ pub enum DisconnectReason {
     /// The server refused the credentials. Trying again with the same ones
     /// changes nothing.
     AuthorizationFailed,
+    /// The venue asks for something this client cannot perform — a second
+    /// factor it has no exchange for, or one nobody is configured to supply.
+    /// Every attempt carries the same lack, so there is nothing to retry.
+    Unsupported,
     /// Another login took the session. It belongs to whoever connected last,
     /// and racing them for it helps nobody.
     TakenOver,
@@ -81,6 +85,10 @@ impl DisconnectReason {
             // account or the entitlement is wrong, and the next attempt carries
             // exactly the same ones.
             io::ErrorKind::PermissionDenied => Self::AuthorizationFailed,
+            // A stated inability, not a refusal of what was sent: nothing a
+            // retry carries is any different, and reading it as transport
+            // retried a handshake the client could never finish, without end.
+            io::ErrorKind::Unsupported => Self::Unsupported,
             io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => Self::NoResponse,
             _ => Self::Transport,
         }
@@ -107,7 +115,7 @@ impl DisconnectReason {
             // the retrying is the thing that stopped.
             Self::EngineStopped => Recovery::Stop,
             Self::NotReady => Recovery::RetrySlowly,
-            Self::AuthorizationFailed | Self::ByDesign => Recovery::Stop,
+            Self::AuthorizationFailed | Self::Unsupported | Self::ByDesign => Recovery::Stop,
         }
     }
 
@@ -122,6 +130,7 @@ impl DisconnectReason {
             Self::Transport => "the connection broke",
             Self::NoResponse => "the server stopped answering",
             Self::AuthorizationFailed => "the server refused the credentials",
+            Self::Unsupported => "this client cannot do what the venue asks",
             Self::TakenOver => "another login took the session",
             Self::NotReady => "the server is not ready",
             Self::ByDesign => "the client asked to stop",
@@ -229,5 +238,29 @@ mod tests {
         let e = io::Error::new(io::ErrorKind::TimedOut, "no data start after auth");
         assert_eq!(DisconnectReason::from_error(&e), DisconnectReason::NoResponse);
         assert!(!DisconnectReason::from_error(&e).is_terminal());
+    }
+
+    /// A venue asking for something this client cannot perform is the same
+    /// lack on every attempt. Read as transport, both shapes of it — a
+    /// second factor with no exchange, and one nobody is configured to
+    /// supply — were retried without end.
+    #[test]
+    fn a_second_factor_the_client_cannot_perform_is_not_retried() {
+        for e in [
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "second-factor token type \"9\" is not supported; AUTH_START advertised it",
+            ),
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this account's second factor is an authenticator code; \
+                 set code_provider to supply it",
+            ),
+        ] {
+            let reason = DisconnectReason::from_error(&e);
+            assert_eq!(reason, DisconnectReason::Unsupported, "{e}");
+            assert!(reason.is_terminal(), "nothing a retry carries is different: {e}");
+            assert_eq!(delay_for(reason, Duration::from_secs(2)), Duration::ZERO);
+        }
     }
 }
