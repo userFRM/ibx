@@ -100,6 +100,15 @@ pub struct CancelReject {
     pub reason_code: i32,
     /// When the venue said so.
     pub timestamp_ns: u64,
+    /// The status the order went back to, where the venue refused the cancel
+    /// and the order still stands.
+    ///
+    /// The record the surfaces read took the cancel ahead of the answer; where
+    /// the answer is a refusal, it has to go back, or the order reads as
+    /// leaving for the rest of the session while the venue works it. This is
+    /// what it goes back to, taken from the engine's own book rather than
+    /// guessed from a status that has already been overwritten.
+    pub still_working: Option<OrderStatus>,
 }
 
 /// Multi-char OrdType discriminants: values below 32, so they cannot collide

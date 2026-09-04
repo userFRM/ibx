@@ -1649,6 +1649,7 @@ impl CcpState {
         }
 
         // Update local context only for an order tracked in this session.
+        let mut restored: Option<crate::types::OrderStatus> = None;
         let instrument = if let Some(order) = context.order(oid).copied() {
             if unknown_order {
                 // Terminal and removed, which is what the reject states.
@@ -1670,6 +1671,13 @@ impl CcpState {
                 // Deliberate regression (PendingCancel back to working) — the
                 // guard would rightly block it on the ordinary path.
                 context.set_order_status_forced(oid, restore_status);
+                // And said, not only recorded. The engine's book went back to
+                // working while the record the surfaces read stayed on the
+                // cancel that was refused: `req_open_orders` reported an order
+                // as leaving that the venue had said would not leave, and
+                // nothing later corrected it, because the refusal is the last
+                // message this order draws.
+                restored = Some(restore_status);
             }
             order.instrument
         } else {
@@ -1704,6 +1712,7 @@ impl CcpState {
             instrument,
             reject_type,
             reason_code,
+            still_working: restored,
             timestamp_ns: context.now_ns(),
         };
         shared.orders.push_cancel_reject(reject);

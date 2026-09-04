@@ -2295,6 +2295,18 @@ impl ClientCore {
     pub(crate) fn retire_rejected(&self, reject: &CancelReject) -> (i64, String) {
         if reject.reason_code == 1 {
             self.untrack_order(reject.order_id);
+        } else if let Some(status) = reject.still_working {
+            // The record took the cancel ahead of the venue's answer, and the
+            // answer is that the order stands. Left as it was, the order read
+            // as leaving for the rest of the session — `req_open_orders` said
+            // so — while the venue went on working it, and no later message
+            // corrected it, because a refusal is the last thing this order
+            // draws. What it goes back to is the engine's own book, not a
+            // guess from a status this record has already overwritten.
+            let mut orders = self.open_orders.lock().unwrap();
+            if let Some(tracked) = orders.get_mut(&reject.order_id) {
+                tracked.status = crate::types::order_status::order_status_str(status).into();
+            }
         }
         // 10147 is the order the venue could not find; 10148 is the order it
         // found and would not act on. The reason it stated picks between them.
