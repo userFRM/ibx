@@ -2506,7 +2506,7 @@ fn a_cancel_is_still_answered_when_rejections_cross_it() {
     // outstanding, a rejection behind a cancel is the venue's word on the
     // order itself and must stand, or the order waits for ever.
     let before = *context.order(42).expect("the order is tracked");
-    context.pre_replace.insert((42, 1), before);
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string()));
     assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
 
     let report = |exec_type: &str, ord_status: &str, text: &str| {
@@ -5078,11 +5078,11 @@ fn a_refused_revision_falls_back_to_the_revision_it_replaced() {
     // Two revisions out, neither answered. Each keeps what the record held
     // before it: the first the original price, the second the first's.
     let at_100 = *context.order(42).expect("the order is tracked");
-    context.pre_replace.insert((42, 1), at_100);
+    context.pre_replace.insert((42, 1), (at_100, "42.0".to_string()));
     let mut at_101 = at_100;
     at_101.price = 101 * PRICE_SCALE;
     context.insert_order(at_101);
-    context.pre_replace.insert((42, 2), at_101);
+    context.pre_replace.insert((42, 2), (at_101, "42.1".to_string()));
     let mut at_102 = at_100;
     at_102.price = 102 * PRICE_SCALE;
     context.insert_order(at_102);
@@ -5228,6 +5228,58 @@ fn a_replace_refused_on_the_reject_message_puts_back_the_prior_terms() {
     assert_eq!(order.qty, 100 * QTY_SCALE, "the refused quantity does not stand");
     assert_eq!(order.tif, b'0', "the refused time-in-force does not stand");
     assert_eq!(order.status, crate::types::OrderStatus::Submitted, "working again");
+}
+
+/// A refused revision puts back the name the venue holds, not only its terms.
+///
+/// A replace records the name it is about to emit ahead of the venue's answer,
+/// so a cancel sent before the acknowledgement still names the right version.
+/// A refusal says the venue never took that name — and every later cancel and
+/// replace states it as the original, so the venue answers that it knows no
+/// such order and the order goes on working out of reach of a withdrawal. The
+/// venue's own reports cannot correct it either: the recorded name only ever
+/// moves forward.
+#[test]
+fn a_refused_revision_puts_back_the_name_the_venue_holds() {
+    use std::io::Read;
+    let (mut context, shared) = working_order_state();
+    let mut ccp = CcpState::new();
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut conn = Some(conn);
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+
+    context.modify_ex(42, 105 * PRICE_SCALE, 200, false, 0, b'1', 0);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let replace = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(
+        replace.split('\u{1}').any(|f| f == "41=42.0"),
+        "the replace names the order the venue holds: {replace}",
+    );
+
+    // Refused on the reject message: nothing was applied, so the order keeps
+    // the name it had.
+    let mut frame = std::collections::HashMap::new();
+    frame.insert(11u32, "42.1".to_string());
+    frame.insert(41u32, "42.0".to_string());
+    frame.insert(434u32, "2".to_string());
+    frame.insert(102u32, "0".to_string());
+    ccp.handle_cancel_reject(&frame, &mut context, &shared, &None);
+
+    context.cancel(42);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let cancel = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(cancel.contains("35=F"), "a cancel went out: {cancel}");
+    assert!(
+        cancel.split('\u{1}').any(|f| f == "41=42.0"),
+        "it names the order the venue holds, not the revision it refused: {cancel}",
+    );
 }
 
 /// A refusal naming an order the venue does not hold retires it. The fallback

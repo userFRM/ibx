@@ -403,12 +403,6 @@ pub(crate) fn drain_and_send_orders(
                 // Versioned ClOrdID chaining: orderId.0 → .1 → .2
                 let prev_ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
                 let new_ver = prev_ver + 1;
-                // Kept under the revision it belongs to. Revisions overlap —
-                // the venue takes a second before it has answered the first —
-                // and one fallback per order had the answer to one revision
-                // spend or restore another's.
-                context.pre_replace.insert((order_id, new_ver), orig);
-                context.modify_versions.insert(order_id, new_ver);
                 let clord_str = format!("{order_id}.{new_ver}");
                 // OrigClOrdID matches whatever the server last recorded for
                 // this order (which may pre-date the versioned scheme —).
@@ -417,6 +411,14 @@ pub(crate) fn drain_and_send_orders(
                     .get(&order_id)
                     .cloned()
                     .unwrap_or_else(|| format!("{order_id}.{prev_ver}"));
+                // Kept under the revision it belongs to. Revisions overlap —
+                // the venue takes a second before it has answered the first —
+                // and one fallback per order had the answer to one revision
+                // spend or restore another's. The name the venue holds is kept
+                // with the terms: the line below writes the attempt's own over
+                // it ahead of the answer, and a refusal has to put both back.
+                context.pre_replace.insert((order_id, new_ver), (orig, orig_clord.clone()));
+                context.modify_versions.insert(order_id, new_ver);
                 // Pre-seed `last_clord` with the id about to be emitted, so a
                 // subsequent cancel before the modify-ack still references the
                 // right version.

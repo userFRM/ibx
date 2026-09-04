@@ -590,6 +590,23 @@ pub struct HeldOrder {
     pub command: ControlCommand,
 }
 
+impl HeldOrder {
+    /// Whether what is held would place the order, rather than revise one the
+    /// venue is already working.
+    ///
+    /// The two are not the same withdrawal. Forgetting a placement is the
+    /// whole of it, because the venue was never given the order; forgetting a
+    /// revision leaves the order it was a revision to live at the venue.
+    fn places_the_order(&self) -> bool {
+        matches!(
+            self.command,
+            ControlCommand::Order(
+                OrderRequest::SubmitEx { .. } | OrderRequest::SubmitBracket { .. },
+            ),
+        )
+    }
+}
+
 /// What one historical request asked for.
 ///
 /// Kept because the reply states neither. The range written beside the last
@@ -953,13 +970,20 @@ impl ClientCore {
     /// Take back everything held, and say how many there were.
     ///
     /// What a withdrawal of everything means for orders that were never sent.
-    /// Their records go with them: left standing, an id reads as a working
-    /// order's, and placing under it again becomes a modify of an order
+    /// The record of a placement goes with it: left standing, an id reads as a
+    /// working order's, and placing under it again becomes a modify of an order
     /// nothing has ever submitted.
+    ///
+    /// A held revision of an order the venue is working keeps its record. The
+    /// revision goes, because it was never sent; the order it was a revision to
+    /// is live, and the withdrawal composed for it has an answer coming.
+    /// Dropped along with the revision, that order read as one that was never
+    /// placed, and placing under its id again built a fresh submission for an
+    /// order already on the market.
     pub fn withdraw_all_held(&self) -> usize {
         let taken: Vec<HeldOrder> = std::mem::take(&mut *self.held_orders.lock().unwrap());
         let mut orders = self.open_orders.lock().unwrap();
-        for h in &taken {
+        for h in taken.iter().filter(|h| h.places_the_order()) {
             orders.remove(&h.order_id);
         }
         taken.len()
@@ -1029,7 +1053,16 @@ impl ClientCore {
         // one that asked to go, and it cannot stay queued to go out behind a
         // later transmit under the terms this call has just replaced.
         self.withdraw_held(order_id);
-        let family = self.family_before(order_id, parent_id);
+        // What a placement releases, and only a placement. A replace states new
+        // terms for an order the venue is already working, so nothing is
+        // waiting on it: gathered as a placement's family, a caller moving a
+        // parent's price had the exit it was still building sent for it,
+        // unpaired and unasked.
+        let family = if matches!(own, ControlCommand::Order(OrderRequest::Modify { .. })) {
+            Vec::new()
+        } else {
+            self.family_before(order_id, parent_id)
+        };
         let mut reached: Vec<u64> = Vec::new();
         for member in family.iter() {
             // The engine takes its commands in order, so a send that did not
@@ -2111,15 +2144,8 @@ impl ClientCore {
     /// Whether what is held under this id would place the order, rather than
     /// revise one the venue is already working.
     pub fn holds_a_submission(&self, order_id: u64) -> bool {
-        self.held_orders.lock().unwrap().iter().any(|h| {
-            h.order_id == order_id
-                && matches!(
-                    h.command,
-                    ControlCommand::Order(
-                        OrderRequest::SubmitEx { .. } | OrderRequest::SubmitBracket { .. },
-                    ),
-                )
-        })
+        self.held_orders.lock().unwrap().iter()
+            .any(|h| h.order_id == order_id && h.places_the_order())
     }
 
     /// The order a tracked id was submitted with, if it is tracked.
@@ -2274,10 +2300,12 @@ impl ClientCore {
 
     /// Update a tracked order after a fill. Removes the order if fully filled.
     pub fn update_order_fill(&self, order_id: u64, status: &str, filled: f64, remaining: f64) {
-        let mut orders = self.open_orders.lock().unwrap();
+        // Through the one place an order leaves the book, so what was staged
+        // against it goes with it here as on every other path.
         if remaining == 0.0 {
-            orders.remove(&order_id);
-        } else if let Some(o) = orders.get_mut(&order_id) {
+            return self.untrack_order(order_id);
+        }
+        if let Some(o) = self.open_orders.lock().unwrap().get_mut(&order_id) {
             o.status = status.into();
             o.filled = filled;
             o.remaining = remaining;
@@ -2290,8 +2318,17 @@ impl ClientCore {
     /// client's own record has to go with it — the open-order snapshot unions
     /// the two, so leaving this one behind kept reporting the order the
     /// rejection was about.
+    ///
+    /// A revision of it waiting to be transmitted goes too: an order that has
+    /// left the book has nothing left to revise, and nothing took the revision
+    /// back. It stayed in the hold for the life of the session, and the next
+    /// order placed beside it released a replace for an order that had already
+    /// finished. A held placement stays: the venue was never given it, and it
+    /// is still the order the caller asked to send.
     pub fn untrack_order(&self, order_id: u64) {
         self.open_orders.lock().unwrap().remove(&order_id);
+        self.held_orders.lock().unwrap()
+            .retain(|h| h.order_id != order_id || h.places_the_order());
     }
 
     /// An order's permanent id and its parent.

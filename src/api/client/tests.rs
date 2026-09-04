@@ -2740,6 +2740,79 @@ fn a_staged_revision_does_not_hide_the_order_the_venue_is_working() {
     assert!(!client.core.is_held(88), "and the change that was kept goes with it");
 }
 
+/// A replace releases nothing that is waiting to be placed.
+///
+/// The order that transmits sends whatever of its family was kept, which is how
+/// a bracket goes out as one thing. A replace places nothing — it states new
+/// terms for an order the venue is already working — so a caller moving a
+/// parent's price had the exit it was still building sent for it, unpaired and
+/// unasked.
+#[test]
+fn replacing_an_order_does_not_send_the_family_it_is_still_building() {
+    let (client, rx, _shared) = test_client();
+    let entry = |price: f64| Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: price, tif: "DAY".into(), transmit: true, ..Default::default()
+    };
+    client.place_order(50, &spy(), &entry(100.0)).expect("the parent goes");
+    assert!(matches!(
+        rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::SubmitEx { .. })),
+    ));
+    // One exit kept back, while the caller builds the other.
+    let exit = Order {
+        action: "SELL".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 110.0, tif: "DAY".into(), transmit: false, parent_id: 50,
+        ..Default::default()
+    };
+    client.place_order(51, &spy(), &exit).expect("the exit is kept");
+    assert!(rx.try_recv().is_err(), "and nothing goes out for it");
+
+    client.place_order(50, &spy(), &entry(99.0)).expect("the parent is replaced");
+    match rx.try_recv().expect("the replace goes out") {
+        ControlCommand::Order(OrderRequest::Modify { order_id, .. }) => assert_eq!(order_id, 50),
+        other => panic!("expected a replace of the parent, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "and the exit is not sent with it");
+    assert!(client.core.is_held(51), "it is still waiting to be placed");
+}
+
+/// A change to an order that has finished is not sent with a later family.
+///
+/// A revision of a live order can be built and kept, waiting for something that
+/// transmits. Nothing took it back when the order it changed left the book, so
+/// it stayed in the hold for the life of the session — and the next order
+/// placed beside it released a replace for an order that had already filled,
+/// which the venue answers by stating that it knows no such order.
+#[test]
+fn a_change_to_an_order_that_finished_is_not_released_with_the_next_family() {
+    let (client, rx, shared) = test_client();
+    let exit = |transmit: bool, price: f64| Order {
+        action: "SELL".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: price, tif: "DAY".into(), transmit, parent_id: 60,
+        ..Default::default()
+    };
+    client.place_order(61, &spy(), &exit(true, 110.0)).expect("the exit goes");
+    assert!(matches!(
+        rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::SubmitEx { .. })),
+    ));
+    client.place_order(61, &spy(), &exit(false, 111.0)).expect("a change to it is kept");
+    assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
+    // And then the order it was a change to fills.
+    client.core.update_order_status(
+        &shared, 61, crate::types::OrderStatus::Filled, 100.0, 0.0,
+    );
+    assert!(!client.core.is_held(61), "the change goes with the order it changed");
+
+    client.place_order(62, &spy(), &exit(true, 112.0)).expect("the next exit goes");
+    match rx.try_recv().expect("it goes out") {
+        ControlCommand::Order(OrderRequest::SubmitEx { order_id, .. }) => {
+            assert_eq!(order_id, 62, "the order that transmits is the one that goes");
+        }
+        other => panic!("expected the new order, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "and nothing goes out for the order that finished");
+}
+
 /// A replace states new terms for an order the venue is working; it does not
 /// place a new one.
 ///
@@ -3057,6 +3130,37 @@ fn a_global_cancel_frees_the_ids_of_orders_never_sent() {
         }
         other => panic!("expected a fresh submit, got {other:?}"),
     }
+}
+
+/// A withdrawal of everything forgets what was never sent, and only that.
+///
+/// An order the venue is working can have a revision of its own waiting to be
+/// transmitted. Forgetting its record along with the revision left the live
+/// order reading as one that was never placed: placing under the id again built
+/// a fresh submission for an order already on the market, and the withdrawal
+/// the venue was asked for had nothing here to answer to.
+#[test]
+fn a_global_cancel_keeps_the_order_a_staged_revision_belongs_to() {
+    let (client, rx, shared) = test_client();
+    shared.market.set_instrument_count(1);
+    let order = |price: f64, transmit: bool| Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: price, tif: "DAY".into(), transmit, ..Default::default()
+    };
+    client.place_order(85, &spy(), &order(100.0, true)).expect("placed and sent");
+    assert!(matches!(
+        rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::SubmitEx { .. })),
+    ));
+    client.place_order(85, &spy(), &order(101.0, false)).expect("the change is kept");
+    assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
+
+    shared.orders.set_replay_done();
+    client.req_global_cancel().expect("everything withdrawn");
+    assert!(!client.core.is_held(85), "the change that was never sent is forgotten");
+    assert!(
+        client.core.is_working_at_the_venue(85),
+        "and the order it was a change to is still one the venue is working",
+    );
 }
 
 /// A global cancel issued before the venue has finished naming the working

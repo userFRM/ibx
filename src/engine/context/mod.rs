@@ -75,13 +75,16 @@ pub struct Context {
     /// server is entitled to drop — which is exactly the case a retry exists
     /// for. Counts so each attempt is a new name.
     pub(crate) cancel_attempts: HashMap<OrderId, u32>,
-    /// What an order held before the latest replace went out. A replace writes
-    /// its attempt into the record ahead of the venue's answer, and the answer
-    /// can refuse it; this is the record that stands again then, so nothing
-    /// the venue did not accept is restated by a later cancel or replace.
+    /// What an order held before the latest replace went out, and the name it
+    /// held it under. A replace writes its attempt into the record ahead of the
+    /// venue's answer, and the answer can refuse it; this is the record that
+    /// stands again then, so nothing the venue did not accept is restated by a
+    /// later cancel or replace. The name goes with the terms: it is what a
+    /// cancel states as the original, and the attempt's own name was written
+    /// into `last_clord` ahead of the same answer.
     /// Keyed by the order rather than held beside the send, because the
     /// refusal arrives as a message of its own, later, on another path.
-    pub(crate) pre_replace: HashMap<(OrderId, u32), Order>,
+    pub(crate) pre_replace: HashMap<(OrderId, u32), (Order, String)>,
     /// Timestamp when the last farm socket recv returned data (for decode latency
     /// measurement).
     pub(crate) recv_at: Instant,
@@ -532,6 +535,11 @@ impl Context {
         self.pre_replace.retain(|(id, _), _| *id != order_id);
     }
 
+    /// Whether the venue still owes an answer to a revision of this order.
+    pub fn replace_is_outstanding(&self, order_id: OrderId) -> bool {
+        self.pre_replace.keys().any(|(id, _)| *id == order_id)
+    }
+
     /// Put back what the venue is known to hold, where it refused a revision.
     ///
     /// By the revision refused, not by the order: revisions overlap — the venue
@@ -546,16 +554,18 @@ impl Context {
     /// and replace restates from the record, and would carry the refused
     /// terms. A fill that raced the attempt is the venue's own word and
     /// survives the restore, and the status follows it.
-    /// Whether the venue still owes an answer to a revision of this order.
-    pub fn replace_is_outstanding(&self, order_id: OrderId) -> bool {
-        self.pre_replace.keys().any(|(id, _)| *id == order_id)
-    }
-
+    ///
+    /// The name the order carries goes back with its terms. It was written
+    /// ahead of the same answer, for the same reason, and a cancel states it
+    /// as the original: left on the refused revision, the venue answered that
+    /// it knew no such order and the order went on working out of reach of a
+    /// withdrawal. Nothing later corrected it, because the recorded name only
+    /// ever moves forward.
     pub fn restore_pre_replace(&mut self, order_id: OrderId, revision: u32) {
         // Every later revision was built on terms the venue never held, so its
         // fallback records a state that never existed. They go with this one.
         self.pre_replace.retain(|(id, ver), _| *id != order_id || *ver <= revision);
-        let Some(mut prior) = self.pre_replace.remove(&(order_id, revision)) else { return };
+        let Some((mut prior, name)) = self.pre_replace.remove(&(order_id, revision)) else { return };
         if let Some(current) = self.open_orders.get(&order_id) {
             prior.filled = current.filled;
         }
@@ -563,6 +573,7 @@ impl Context {
             prior.status = OrderStatus::PartiallyFilled;
         }
         self.insert_order(prior);
+        self.last_clord.insert(order_id, name);
     }
 
     /// Mark all live open orders as Uncertain (auth disconnect — status may have
