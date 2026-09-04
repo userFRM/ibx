@@ -2418,6 +2418,11 @@ impl CcpState {
         // waits for the new push the way it waited for the first.
         self.hydrated_any = false;
         shared.orders.replay_is_pending();
+        // And the account itself. The same flag, for the same reason: a
+        // caller asking what the account holds was answered from the pre-drop
+        // snapshot the moment the connection came back, before the venue had
+        // restated a single holding.
+        shared.portfolio.account_download_is_pending();
         self.recovery_sweep_at = Some(Instant::now() + RECOVERY_PUSH_GRACE);
         hb.last_ccp_sent = Instant::now();
         hb.last_ccp_recv = Instant::now();

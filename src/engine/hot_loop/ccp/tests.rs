@@ -4169,6 +4169,31 @@ fn a_reconnect_waits_for_the_new_account_of_what_is_working() {
     assert!(!ccp.hydrated_any, "and nothing has been hydrated from it");
 }
 
+/// A reconnect has not stated what the account holds either.
+///
+/// The flag that says the download finished belongs to the connection that
+/// finished it. Left set, `req_positions` is answered at once from the
+/// pre-drop snapshot while the venue's own statement is still on its way, so
+/// a holding that moved or closed while the connection was down is handed
+/// back as though it still stood.
+#[test]
+fn a_reconnect_waits_for_the_new_statement_of_what_the_account_holds() {
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+    let market = crate::engine::market_state::MarketState::new();
+    let mut hb = HeartbeatState::new();
+    shared.portfolio.set_account_download_complete();
+
+    let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp_conn: Option<Connection> = None;
+    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &market, &shared);
+
+    assert!(
+        !shared.portfolio.account_download_complete(),
+        "the new connection has stated nothing about the account yet",
+    );
+}
+
 /// The venue says why it would not cancel an order, and the structured
 /// rejection carries two numbers and no text. The reason went to a log no
 /// caller reads, where "the order does not exist" and "it is too late" look

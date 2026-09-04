@@ -161,6 +161,18 @@ impl PortfolioState {
         self.account_download_complete.load(Ordering::Acquire)
     }
 
+    /// A new connection has not yet stated what the account holds.
+    ///
+    /// The flag above belongs to the connection that earned it. Left set
+    /// across a reconnect it still reports the previous connection's download
+    /// as finished, and a caller asking what the account holds is answered at
+    /// once from the pre-drop snapshot while the venue's own statement is
+    /// still arriving — so a holding that moved or closed while the
+    /// connection was down is handed back as though it still stood.
+    #[doc(hidden)] pub fn account_download_is_pending(&self) {
+        self.account_download_complete.store(false, Ordering::Release);
+    }
+
     #[doc(hidden)] pub fn set_position_info(&self, info: PositionInfo) {
         let con_id = info.con_id;
         let mut map = self.position_infos.lock().unwrap();

@@ -646,6 +646,26 @@ mod tests {
         assert!(!shared.orders.replay_done(), "and a reconnect starts over");
     }
 
+    /// And it has not named anything on it yet.
+    ///
+    /// The flag saying the venue had begun is what tells an account working
+    /// nothing apart from one whose naming was cut short, and a withdrawal of
+    /// every order reports the second and not the first. Carried across a
+    /// reconnect it reports the second for ever: a later connection to an
+    /// account with nothing working is answered with a partial-cancel warning
+    /// about orders that do not exist.
+    #[test]
+    fn a_new_connection_has_not_named_anything_on_it_either() {
+        let shared = SharedState::new();
+        shared.orders.note_naming_began();
+        assert!(shared.orders.naming_began());
+        shared.orders.replay_is_pending();
+        assert!(
+            !shared.orders.naming_began(),
+            "and a reconnect starts over",
+        );
+    }
+
     /// The orders the last connection's naming could not find a slot for are
     /// that connection's. The new one names them all again, against a table
     /// whose slots may since have been freed — so the count starts over with

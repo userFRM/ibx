@@ -153,6 +153,25 @@ impl MarketDataState {
         self.real_time_bars.lock().unwrap().drain(..).collect()
     }
 
+    /// Take the bars a dispatch loop should deliver, leaving behind those a
+    /// stream is going to read by id.
+    ///
+    /// A stream cannot hold the session's turn — it outlives any one read of
+    /// it — so its records are left where it will find them, the way the
+    /// answering calls' own are. `mine` says which ids this session is reading
+    /// for itself; see `ReferenceState::is_ours`.
+    pub fn drain_real_time_bars_for_dispatch(
+        &self, mine: impl Fn(u32) -> bool,
+    ) -> Vec<(u32, RealTimeBar)> {
+        let mut held = self.real_time_bars.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < held.len() {
+            if mine(held[i].0) { i += 1; } else { out.push(held.remove(i)); }
+        }
+        out
+    }
+
     /// Bars answering one request, leaving other requests' alone.
     pub fn take_real_time_bars_for(&self, req_id: u32) -> Vec<RealTimeBar> {
         // Partitioned rather than removed one at a time: each `remove` shifts
@@ -179,6 +198,21 @@ impl MarketDataState {
     /// Take every depth updates waiting, leaving none.
     pub fn drain_depth_updates(&self) -> Vec<DepthUpdate> {
         self.depth_updates.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take the depth updates a dispatch loop should deliver, leaving behind
+    /// those a stream is going to read by id — see
+    /// [`drain_real_time_bars_for_dispatch`](Self::drain_real_time_bars_for_dispatch).
+    pub fn drain_depth_updates_for_dispatch(
+        &self, mine: impl Fn(u32) -> bool,
+    ) -> Vec<DepthUpdate> {
+        let mut held = self.depth_updates.lock().unwrap();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < held.len() {
+            if mine(held[i].req_id) { i += 1; } else { out.push(held.remove(i)); }
+        }
+        out
     }
 
     /// Take every tick news waiting, leaving none.

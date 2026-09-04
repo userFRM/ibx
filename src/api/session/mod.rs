@@ -176,8 +176,9 @@ impl Client {
             .spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     {
-                        let _turn = client.asking.lock().unwrap_or_else(|e| e.into_inner());
                         let mut kept = state.lock().unwrap_or_else(|e| e.into_inner());
+                        // The turn is taken inside `process_msgs`, and it is
+                        // not re-entrant.
                         client.process_msgs(&mut *kept);
                     }
                     // The engine rebuilds a connection that goes away, and

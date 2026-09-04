@@ -655,7 +655,9 @@ impl EClient {
         }
 
         // Drain depth updates -> updateMktDepth / updateMktDepthL2
-        let depth_updates = shared.market.drain_depth_updates();
+        let depth_updates = shared.market.drain_depth_updates_for_dispatch(
+            |id| shared.reference.is_ours(i64::from(id)),
+        );
         if !depth_updates.is_empty() {
             log::debug!("delivering {} book level(s)", depth_updates.len());
         }
@@ -973,7 +975,9 @@ impl EClient {
 
         // Drain real-time bars -> real_time_bar or historical_data_update
         // (keepUpToDate)
-        let rtbars = shared.market.drain_real_time_bars();
+        let rtbars = shared.market.drain_real_time_bars_for_dispatch(
+            |id| shared.reference.is_ours(i64::from(id)),
+        );
         for (req_id, bar) in rtbars {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
                 // keepUpToDate bar → dispatch as historical_data_update

@@ -4193,6 +4193,46 @@ fn a_move_is_kept_while_no_request_stands() {
     );
 }
 
+/// A watcher's first answer and its registration are one moment.
+///
+/// The answer states what the account holds and the registration is what
+/// hears about it moving afterwards. Taken apart, a holding that moves between
+/// the two is in neither: not in the answer, which was read before it moved,
+/// and not in the moves, which the dispatch pass took while this watcher was
+/// still being registered. Nothing repeats it, so that watcher never hears of
+/// that holding again until it moves once more.
+#[test]
+fn a_watchers_first_answer_and_its_registration_are_one_moment() {
+    let (client, _rx, shared) = test_client();
+    let held = |con_id: i64, qty: f64| PositionInfo {
+        con_id, position: qty, symbol: "AAPL".into(),
+        sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+    };
+    shared.portfolio.set_position_info(held(265598, 100.0));
+
+    // Held from outside, the way a dispatch pass holds it while it takes the
+    // moves: the registration cannot complete until it is let go.
+    let registering = client.positions_multi_requested.lock().unwrap();
+    std::thread::scope(|s| {
+        let asking = s.spawn(|| {
+            let mut heard = RecordingWrapper::default();
+            client.req_positions_multi(7, "", "", &mut heard);
+            heard
+        });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // A second holding arrives while this watcher is being registered.
+        shared.portfolio.set_position_info(held(756733, 50.0));
+        drop(registering);
+        let heard = asking.join().unwrap();
+        assert_eq!(
+            heard.events.iter().filter(|e| e.starts_with("position_multi:")).count(), 2,
+            "a holding that moved while the watcher was being registered \
+             reached neither its answer nor its moves: {:?}",
+            heard.events,
+        );
+    });
+}
+
 /// `req_positions` subscribes to a real-time feed: a holding that moves after
 /// the call is reported as it moves. Answering only the set held when the
 /// call was made left a caller tracking its positions from a snapshot that
@@ -6858,6 +6898,34 @@ fn solving_an_option_answers_against_the_venues_own_model() {
     }
 }
 
+/// A dispatch loop reads the session, so it takes the session's turn.
+///
+/// The calls that answer pump the loop themselves and keep what carries their
+/// own request id. A second reader running beside one takes the answer first
+/// and hands it to a callback, and the question waits out its whole deadline
+/// for a reply that had already arrived. The session shape has always taken
+/// the turn around its reader; a caller driving the loop itself had no way to
+/// know it had to.
+#[test]
+fn a_dispatch_loop_waits_for_the_question_that_is_reading() {
+    let (client, _rx, shared) = test_client();
+    shared.reference.push_historical_error(9, 321, "the venue said no".to_string());
+    let turn = client.asking.lock().unwrap();
+    std::thread::scope(|s| {
+        let reading = s.spawn(|| {
+            let mut heard = RecordingWrapper::default();
+            client.process_msgs(&mut heard);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            shared.reference.take_error_for(9).is_some(),
+            "the reason was taken while a question held the turn",
+        );
+        drop(turn);
+        reading.join().unwrap();
+    });
+}
+
 /// Completed orders are retained: the arrival queue empties on read and the
 /// venue does not resend them, so later calls answer from the archive.
 #[test]
@@ -6879,6 +6947,42 @@ fn completed_orders_are_still_there_when_they_are_asked_for_again() {
         1,
         "asked a second time, the account read as having completed nothing: {:?}",
         again.events,
+    );
+}
+
+/// And retracted when the venue takes the execution back.
+///
+/// A trade cancel or trade correction returns a finished order to a working
+/// quantity, and the bridge drops the completion it had queued. The archive is
+/// the copy a caller reads after that queue has emptied, so an order the venue
+/// has taken back has to leave it too — otherwise the same order is listed as
+/// working and as finished at the same time, for the rest of the session.
+#[test]
+fn a_completed_order_the_venue_takes_back_leaves_the_archive() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.push_completed_order(crate::types::CompletedOrder {
+        order_id: 31, instrument: 0, status: crate::types::OrderStatus::Filled,
+        filled_qty: 100, timestamp_ns: 0,
+    });
+
+    let mut w = RecordingWrapper::default();
+    client.req_completed_orders(false, &mut w);
+    assert_eq!(w.events.iter().filter(|e| *e == "completed_order").count(), 1);
+
+    shared.orders.push_order_correction(31, crate::bridge::RichOrderInfo {
+        contract: Default::default(),
+        order: crate::types::model::Order { order_id: 31, ..Default::default() },
+        order_state: Default::default(),
+        last_exec: Default::default(),
+    });
+
+    let mut after = RecordingWrapper::default();
+    client.req_completed_orders(false, &mut after);
+    assert_eq!(
+        after.events.iter().filter(|e| *e == "completed_order").count(),
+        0,
+        "the order the venue took back is still reported as finished: {:?}",
+        after.events,
     );
 }
 

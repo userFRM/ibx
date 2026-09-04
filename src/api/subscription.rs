@@ -72,6 +72,10 @@ impl<T> Subscription<T> {
         take: impl Fn(&SharedState, i64) -> Vec<T> + Send + 'static,
         cancel: impl Fn(i64) + Send + 'static,
     ) -> Self {
+        // Said for as long as the stream lasts, so a dispatch loop running
+        // beside it leaves these records where this will find them. Taken back
+        // when the stream ends, whichever way it ends.
+        shared.reference.note_ours(req_id);
         Self {
             req_id,
             shared,
@@ -96,6 +100,7 @@ impl<T> Subscription<T> {
         shared: Arc<SharedState>,
         take: impl Fn(&SharedState, i64) -> Vec<T> + Send + 'static,
     ) -> Self {
+        shared.reference.note_ours(req_id);
         Self {
             req_id,
             shared,
@@ -133,6 +138,7 @@ impl<T> Subscription<T> {
         if let Some(cancel) = self.cancel.take() {
             cancel(self.req_id);
         }
+        self.shared.reference.forget_ours(self.req_id);
         self.done = true;
     }
 
@@ -197,6 +203,7 @@ impl<T> Drop for Subscription<T> {
         if let Some(cancel) = self.cancel.take() {
             cancel(self.req_id);
         }
+        self.shared.reference.forget_ours(self.req_id);
     }
 }
 

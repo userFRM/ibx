@@ -587,6 +587,15 @@ impl EClient {
         // not resend completed orders, so later calls answer from this archive.
         {
             let mut archive = self.completed.lock().unwrap();
+            // What the venue has taken back goes first. A trade cancel or
+            // correction returns a finished order to a working quantity, and
+            // the bridge can only drop the completion it still holds — this is
+            // the copy it cannot reach. Applied before the arrivals below, an
+            // order taken back and then finished again keeps the new record
+            // and loses the superseded one.
+            for order_id in self.shared.orders.drain_order_corrections() {
+                archive.retain(|(_, order, _)| order.order_id != order_id as i64);
+            }
             for order in self.shared.orders.drain_completed_orders() {
                 let status_str = crate::types::order_status::order_status_str(order.status);
                 let entry = if let Some(info) = self.shared.orders.get_order_info(order.order_id) {

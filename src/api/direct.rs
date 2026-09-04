@@ -318,6 +318,11 @@ impl Client {
         // connected" they read as a session problem, so a caller retried
         // for ever a request that no session could carry. The one refusal
         // that states a session problem carries that number already.
+        // One question at a time, and the session's own reader waits on it:
+        // this takes its answer out of the queue by id rather than off a
+        // callback, and a dispatch loop running beside it would take that
+        // answer first. See `EClient::asking`.
+        let _turn = self.inner.asking.lock().unwrap_or_else(|e| e.into_inner());
         self.inner.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1)?;
         let what = format!("the earliest data for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
@@ -329,6 +334,11 @@ impl Client {
     /// Contracts whose symbol or name matches a pattern.
     pub fn matching_symbols(&self, pattern: &str) -> Result<Vec<crate::control::contracts::SymbolMatch>, Refusal> {
         let req_id = self.stream_id();
+        // One question at a time, and the session's own reader waits on it:
+        // this takes its answer out of the queue by id rather than off a
+        // callback, and a dispatch loop running beside it would take that
+        // answer first. See `EClient::asking`.
+        let _turn = self.inner.asking.lock().unwrap_or_else(|e| e.into_inner());
         self.inner.req_matching_symbols(req_id, pattern)?;
         let what = format!("a symbol search for {pattern}");
         self.wait_for(req_id, &what, |sh| {
@@ -344,6 +354,11 @@ impl Client {
         period: &str,
     ) -> Result<Vec<crate::control::histogram::HistogramEntry>, Refusal> {
         let req_id = self.stream_id();
+        // One question at a time, and the session's own reader waits on it:
+        // this takes its answer out of the queue by id rather than off a
+        // callback, and a dispatch loop running beside it would take that
+        // answer first. See `EClient::asking`.
+        let _turn = self.inner.asking.lock().unwrap_or_else(|e| e.into_inner());
         self.inner.req_histogram_data(req_id, contract, use_rth, period)?;
         let what = format!("a histogram for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
@@ -358,6 +373,11 @@ impl Client {
         report_type: &str,
     ) -> Result<String, Refusal> {
         let req_id = self.stream_id();
+        // One question at a time, and the session's own reader waits on it:
+        // this takes its answer out of the queue by id rather than off a
+        // callback, and a dispatch loop running beside it would take that
+        // answer first. See `EClient::asking`.
+        let _turn = self.inner.asking.lock().unwrap_or_else(|e| e.into_inner());
         self.inner.req_fundamental_data(req_id, contract, report_type)?;
         let what = format!("a {report_type} report for {}", contract.symbol);
         self.wait_for(req_id, &what, |sh| {
@@ -1023,6 +1043,69 @@ mod tests {
         assert_eq!(
             client.stream_id(), stated,
             "the next request goes out under the number stated",
+        );
+    }
+
+    /// A question that reads its answer by id holds the session while it
+    /// waits.
+    ///
+    /// These take the answer out of the queue themselves rather than off a
+    /// callback, and the two shapes are one session: a program driving
+    /// `inner().process_msgs()` beside one — which is what this shape tells it
+    /// to do for the figures it does not carry — read the answer first and
+    /// handed it to a wrapper, and the question waited out its whole deadline
+    /// for a reply that had already arrived.
+    #[test]
+    fn a_question_read_by_id_holds_the_session_while_it_waits() {
+        let (client, _rx, shared) = test_direct_client();
+        // Stated, not spent: this is the number the question below goes out
+        // under.
+        let asked = client.next_request_id();
+        std::thread::scope(|s| {
+            let asking = s.spawn(|| {
+                let c = crate::api::Contract { symbol: "SPY".into(), ..Default::default() };
+                client.head_timestamp(&c, "TRADES", true)
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(
+                client.inner.asking.try_lock().is_err(),
+                "the session was free to be read while a question was waiting on it",
+            );
+            shared.reference.push_head_timestamp(
+                asked as u32,
+                crate::control::historical::HeadTimestampResponse {
+                    head_timestamp: "20200101-00:00:00".to_string(),
+                    timezone: String::new(),
+                },
+            );
+            assert!(asking.join().unwrap().is_ok(), "the question was answered");
+        });
+    }
+
+    /// A stream reads its own records, and a dispatch loop leaves them alone.
+    ///
+    /// The two shapes are one session, and a stream cannot hold the session's
+    /// turn: it outlives any one read of it. So the records it takes by id are
+    /// left where it will find them, the way the answering calls' own are —
+    /// otherwise a program driving `inner().process_msgs()` beside a stream
+    /// sees the stream stop moving, on a subscription the venue is still
+    /// feeding.
+    #[test]
+    fn a_stream_reading_by_id_keeps_its_records_from_a_dispatch_loop() {
+        let (client, _rx, shared) = test_direct_client();
+        let asked = client.next_request_id();
+        let contract = crate::api::Contract { symbol: "SPY".into(), ..Default::default() };
+        let _bars = client
+            .realtime_bars(&contract, "TRADES", true)
+            .expect("the stream opened");
+        shared.market.push_real_time_bar(asked as u32, RealTimeBar::default());
+
+        let mut heard = crate::api::wrapper::tests::RecordingWrapper::default();
+        client.inner.process_msgs(&mut heard);
+
+        assert_eq!(
+            shared.market.take_real_time_bars_for(asked as u32).len(), 1,
+            "the bar the stream was going to read went to a callback instead",
         );
     }
 

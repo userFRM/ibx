@@ -48,7 +48,24 @@ impl EClient {
 
     /// Drain all SharedState queues and dispatch to the Wrapper.
     /// Call this in a loop — it is the Rust equivalent of C++ `EReader::processMsgs()`.
+    ///
+    /// Reading takes the session's turn, because the queues empty as they are
+    /// read. The calls that answer pump this loop themselves and keep what
+    /// carries their own request id, so a second reader running beside one
+    /// takes the answer first and hands it to a callback — and the question
+    /// waits out its whole deadline for a reply that had already arrived. The
+    /// turn is released before this returns, so a loop calling it holds
+    /// nothing between reads.
     pub fn process_msgs(&self, wrapper: &mut impl Wrapper) {
+        let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        self.read_the_session(wrapper);
+    }
+
+    /// The same read, for a caller that already holds the turn.
+    ///
+    /// The turn is not re-entrant, and a question that took it before sending
+    /// pumps this loop while it waits.
+    pub(crate) fn read_the_session(&self, wrapper: &mut impl Wrapper) {
         self.dispatch_positions(wrapper);
         self.dispatch_orders(wrapper);
         self.dispatch_quotes(wrapper);
@@ -448,7 +465,9 @@ impl EClient {
         }
 
         // Depth updates → update_mkt_depth / update_mkt_depth_l2
-        for du in self.shared.market.drain_depth_updates() {
+        for du in self.shared.market.drain_depth_updates_for_dispatch(
+            |id| self.shared.reference.is_ours(i64::from(id)),
+        ) {
             if du.market_maker.is_empty() {
                 wrapper.update_mkt_depth(du.req_id as i64, du.position, du.operation, du.side, du.price, du.size);
             } else {
@@ -727,7 +746,9 @@ impl EClient {
         // Real-time bars, and the continued half of a keep-up-to-date request.
         // The two arrive on one feed and are told apart by whether the request
         // has already answered with its history.
-        for (req_id, bar) in self.shared.market.drain_real_time_bars() {
+        for (req_id, bar) in self.shared.market.drain_real_time_bars_for_dispatch(
+            |id| self.shared.reference.is_ours(i64::from(id)),
+        ) {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
                 // A forming bar is stamped at its open, in seconds since the
                 // epoch, and carries no timezone. Historical bars carry the

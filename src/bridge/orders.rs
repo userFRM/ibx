@@ -1,7 +1,7 @@
 //! What has been submitted, filled, and refused.
 
 use super::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::sync::Mutex;
 use std::collections::HashMap;
@@ -10,6 +10,31 @@ use crate::types::model as api;
 
 /// How long a caller waits for the venue to finish naming the working orders.
 const REPLAY_WAIT: Duration = Duration::from_secs(3);
+
+/// What a connection has said about the orders it already had working.
+///
+/// One record rather than three flags. A reconnect has to put all of it back
+/// to "nothing said yet" in one move: written separately, a caller reading
+/// between the writes saw the new connection's unfinished naming against the
+/// previous connection's bound, which had already passed, and was answered at
+/// once instead of waiting for the naming it was asking about.
+#[derive(Default)]
+struct Replay {
+    /// Set when the server finishes naming the orders already working, which
+    /// it does unprompted after a connect. Until then "none" and "not yet
+    /// told" look the same to a caller.
+    done: bool,
+    /// Whether the venue has named anything on this connection.
+    began: bool,
+    /// When the wait for that naming gives up, shared by everyone waiting.
+    ///
+    /// An account with nothing working never sees the naming end, so a wait
+    /// entered on every call ran to its bound every time. Set when a
+    /// connection comes up — the venue starts the naming then — and replaced
+    /// with the next one on a reconnect, so each connection pays the bound
+    /// once and every caller in that window waits for the same moment.
+    deadline: Option<Instant>,
+}
 
 /// Fills, order status updates, cancel rejects, what-if responses, order
 /// cache, and inactive-order reasons.
@@ -33,6 +58,14 @@ pub struct OrderState {
     restated_executions: Mutex<Vec<(api::Contract, api::Execution)>>,
     what_if_responses: Mutex<Vec<WhatIfResponse>>,
     completed_orders: Mutex<Vec<CompletedOrder>>,
+    /// Orders the venue has taken back after reporting them finished.
+    ///
+    /// The completion queue empties on read, and what is read out of it is
+    /// kept by the caller's side for as long as the session lasts — so
+    /// removing a queued completion cannot reach one already read. This is how
+    /// the correction reaches it: the id goes out on the same path the
+    /// completion did, and whoever holds the archive drops it.
+    order_corrections: Mutex<Vec<u64>>,
     /// Enriched order info from CCP exec reports (order_id -> RichOrderInfo).
     order_cache: Mutex<HashMap<u64, RichOrderInfo>>,
     /// Orders that reached a terminal state, and when. The cache row is evicted
@@ -40,12 +73,8 @@ pub struct OrderState {
     /// is done — a replayed frame would find nothing to refuse and insert it as
     /// open.
     pub(super) completed: Mutex<HashMap<u64, Instant>>,
-    /// Set when the server finishes naming the orders already working, which
-    /// it does unprompted after a connect. Until then "none" and "not yet
-    /// told" look the same to a caller.
-    replay_done: AtomicBool,
-    /// Whether the venue has named anything on this connection.
-    naming_began: AtomicBool,
+    /// What this connection has said about the orders it already has working.
+    replay: Mutex<Replay>,
     /// How many orders the venue named that this client could not give a slot
     /// in its instrument table.
     ///
@@ -57,14 +86,6 @@ pub struct OrderState {
     /// holds — never names it. Counted here so the calls that would otherwise
     /// answer as though the account were covered can say what they left out.
     orders_without_a_slot: AtomicU64,
-    /// When the wait for that naming gives up, shared by everyone waiting.
-    ///
-    /// An account with nothing working never sees the naming end, so a wait
-    /// entered on every call ran to its bound every time. Set when a
-    /// connection comes up — the venue starts the naming then — and replaced
-    /// with the next one on a reconnect, so each connection pays the bound
-    /// once and every caller in that window waits for the same moment.
-    replay_deadline: Mutex<Option<Instant>>,
     /// The highest id the venue has named an order working under, from any
     /// session. An id is spent only while its order is live, so this is the
     /// floor a new id has to clear.
@@ -116,12 +137,11 @@ impl OrderState {
             restated_executions: Mutex::new(Vec::new()),
             what_if_responses: Mutex::new(Vec::with_capacity(8)),
             completed_orders: Mutex::new(Vec::with_capacity(64)),
+            order_corrections: Mutex::new(Vec::new()),
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
-            replay_done: AtomicBool::new(false),
-            naming_began: AtomicBool::new(false),
+            replay: Mutex::new(Replay::default()),
             orders_without_a_slot: AtomicU64::new(0),
-            replay_deadline: Mutex::new(None),
             working_id_watermark: AtomicU64::new(0),
             narrow_id_watermark: AtomicU64::new(0),
             order_inactive: Mutex::new(Vec::with_capacity(8)),
@@ -196,6 +216,15 @@ impl OrderState {
     /// Take every completed orders waiting, leaving none.
     pub fn drain_completed_orders(&self) -> Vec<CompletedOrder> {
         self.completed_orders.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take the orders the venue has taken back, leaving none.
+    ///
+    /// Read before the completions beside them: an order taken back and then
+    /// finished again is one order that finished once, and applied the other
+    /// way round the new record is retracted and the superseded one kept.
+    pub fn drain_order_corrections(&self) -> Vec<u64> {
+        self.order_corrections.lock().unwrap().drain(..).collect()
     }
 
     /// Snapshot enriched entries that belong in the open-order book: a
@@ -273,12 +302,12 @@ impl OrderState {
     /// cover needs to know which of the two it is looking at — with nothing
     /// named there is nothing uncovered to warn about.
     #[doc(hidden)] pub fn note_naming_began(&self) {
-        self.naming_began.store(true, Ordering::Release);
+        self.replay.lock().unwrap().began = true;
     }
 
     /// Whether the venue has named anything on this connection.
     pub fn naming_began(&self) -> bool {
-        self.naming_began.load(Ordering::Acquire)
+        self.replay.lock().unwrap().began
     }
 
     /// An order the venue named could not be given a slot in the instrument
@@ -300,7 +329,7 @@ impl OrderState {
     }
 
     #[doc(hidden)] pub fn set_replay_done(&self) {
-        self.replay_done.store(true, Ordering::Release);
+        self.replay.lock().unwrap().done = true;
     }
 
     /// A new connection has not named what is already working yet.
@@ -311,7 +340,7 @@ impl OrderState {
     /// the venue's account is still arriving.
     /// Whether the orders already working have been received.
     pub fn replay_done(&self) -> bool {
-        self.replay_done.load(Ordering::Acquire)
+        self.replay.lock().unwrap().done
     }
 
     /// Wait for the venue to finish naming the orders already working, and
@@ -325,13 +354,22 @@ impl OrderState {
     /// out does not spend a later caller's wait, and once it has passed
     /// nobody waits again until a reconnect.
     pub fn wait_for_replay(&self) -> bool {
-        let deadline = *self
-            .replay_deadline
-            .lock()
-            .unwrap()
+        let (done, deadline) = {
+            let mut replay = self.replay.lock().unwrap();
+            // Read as a pair, because they are written as one: the bound
+            // belongs to the connection whose naming this reports on, and the
+            // two taken apart let a caller hold one connection's bound against
+            // another's naming.
+            //
             // The connection sets the deadline when it comes up; where one
             // never has, the first waiter marks the start of the wait.
-            .get_or_insert_with(|| Instant::now() + REPLAY_WAIT);
+            let deadline = *replay.deadline
+                .get_or_insert_with(|| Instant::now() + REPLAY_WAIT);
+            (replay.done, deadline)
+        };
+        if done {
+            return true;
+        }
         while !self.replay_done() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -364,18 +402,26 @@ impl OrderState {
     /// answered straight away, from the old session's record, and never waited
     /// for the new one to say — which is how the same order gets placed twice.
     #[doc(hidden)] pub fn replay_is_pending(&self) {
-        self.replay_done.store(false, Ordering::Release);
+        {
+            let mut replay = self.replay.lock().unwrap();
+            replay.done = false;
+            // And it has named nothing on this connection. Carried across, the
+            // flag reports for ever that some earlier connection had begun,
+            // and a withdrawal of every order against an account working
+            // nothing warns about orders that were never there.
+            replay.began = false;
+            // The venue starts the naming as the connection comes up, so the
+            // bound a caller waits on starts here too. Anchored on the first
+            // caller instead, a first request that waited it out spent it, and
+            // a global cancel issued straight after waited nothing and said
+            // nothing.
+            replay.deadline = Some(Instant::now() + REPLAY_WAIT);
+        }
         // The orders the previous connection's naming could not hold are that
         // connection's. The new one names them all again, against a table
         // whose slots may since have been freed; left standing, the count
         // refuses for ever a withdrawal that in fact covered the account.
         self.orders_without_a_slot.store(0, Ordering::Release);
-        // The venue starts the naming as the connection comes up, so the
-        // bound a caller waits on starts here too. Anchored on the first
-        // caller instead, a first request that waited it out spent it, and a
-        // global cancel issued straight after waited nothing and said
-        // nothing.
-        *self.replay_deadline.lock().unwrap() = Some(Instant::now() + REPLAY_WAIT);
     }
 
     /// File a completion once. The venue resends terminal reports — a
@@ -485,6 +531,11 @@ impl OrderState {
         // queued still went out after the correction had put the order back to
         // working — a caller was told the same order was open and finished.
         self.completed_orders.lock().unwrap().retain(|c| c.order_id != order_id);
+        // And the copy the caller's side kept, which this cannot reach. Said
+        // there instead: the queue empties on read, so a completion already
+        // read is held on the far side of it and went on being reported as
+        // this order's outcome after the venue had withdrawn it.
+        self.order_corrections.lock().unwrap().push(order_id);
         self.order_cache.lock().unwrap().insert(order_id, info);
     }
 }
