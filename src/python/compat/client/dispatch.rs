@@ -433,10 +433,7 @@ impl EClient {
             let tracked = self.core.open_orders.lock().unwrap().get(&update.order_id).cloned();
             if let Some(tracked) = tracked {
                 let contract_py = Py::new(py, Contract::from_api(py, &tracked.contract)?)?.into_any();
-                let order_py = Py::new(
-                    py,
-                    Order::from_api(py, &tracked.order, self.client_id.load(Ordering::Acquire))?,
-                )?.into_any();
+                let order_py = Py::new(py, Order::from_api(py, &tracked.order)?)?.into_any();
                 let state_py = Py::new(py, OrderState {
                     status: status.to_string(),
                     ..Default::default()
@@ -702,7 +699,7 @@ impl EClient {
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
             let (contract_py, order_py) = if let Some(t) = tracked {
                 let c = Contract::from_api(py, &t.contract)?;
-                let o = Order::from_api(py, &t.order, self.client_id.load(Ordering::Acquire))?;
+                let o = Order::from_api(py, &t.order)?;
                 (Py::new(py, c)?.into_any(), Py::new(py, o)?.into_any())
             } else {
                 (Py::new(py, Contract::default())?.into_any(),
@@ -791,14 +788,17 @@ impl EClient {
         for (req_id, matches) in symbol_results {
             let descriptions: Vec<Py<ContractDescription>> = matches.iter().map(|m| {
                 Py::new(py, ContractDescription {
-                    con_id: m.con_id as i64,
-                    symbol: m.symbol.clone(),
-                    // The user-visible spelling, the same one the Rust
-                    // surface hands back: a stock reaches this as CS, the
-                    // wire name for it, which no request accepts.
-                    sec_type: m.sec_type.to_api_str().to_string(),
-                    currency: m.currency.clone(),
-                    primary_exchange: m.primary_exchange.clone(),
+                    contract: Py::new(py, Contract {
+                        con_id: m.con_id as i64,
+                        symbol: m.symbol.clone(),
+                        // The user-visible spelling, the same one the Rust
+                        // surface hands back: a stock reaches this as CS, the
+                        // wire name for it, which no request accepts.
+                        sec_type: m.sec_type.to_api_str().to_string(),
+                        currency: m.currency.clone(),
+                        primary_exchange: m.primary_exchange.clone(),
+                        ..Default::default()
+                    }).unwrap(),
                     derivative_sec_types: m.derivative_types.clone(),
                 }).unwrap()
             }).collect();

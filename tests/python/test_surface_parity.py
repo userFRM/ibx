@@ -137,17 +137,13 @@ def test_both_clients_refuse_the_same_arguments():
 #: value is an object and reading one needs the interpreter the conversion does
 #: not hold. Named here so that adding to the list stays a decision.
 #:
-#: The same three come back empty from `from_api`, which is a real gap and not
-#: a shrug: an order read back and placed again loses its conditions and its
-#: price per leg. Closing it needs a class for a leg price, which this surface
-#: does not have, and a way back from what the engine keeps to the condition
-#: classes, which have only the way in.
 #: The two the forward conversion reads through the interpreter rather than
-#: copying, and which the reverse has nothing to build from: the venue's report
-#: of an order names its legs without saying what each was struck at, and the
-#: miscellaneous options are the caller's own strings, which no report echoes.
-#: `conditions` is not among them — the engine reads those back off the wire and
-#: the reverse conversion builds them into the classes a caller states them in.
+#: copying. The reverse builds the leg prices back, where the engine holds
+#: them, as the class a caller states them in; the miscellaneous options are
+#: the caller's own strings, which no report echoes, so one read back carries
+#: none. `conditions` is not among them either — the engine reads those back
+#: off the wire and the reverse conversion builds them into the classes a
+#: caller states them in.
 _FILLED_BY_THE_CALLER = {"order_combo_legs", "order_misc_options"}
 
 
@@ -243,7 +239,7 @@ def test_what_cannot_be_read_is_refused_rather_than_emptied():
 
 
 def test_what_the_caller_fills_is_filled_by_the_caller():
-    """The three the conversion leaves empty are filled where it says they are.
+    """The two the conversion leaves empty are filled where it says they are.
 
     Left to the conversion they would be silently empty, which is what the test
     above forbids; named as exceptions and then filled nowhere, they would be

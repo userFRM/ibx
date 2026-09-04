@@ -54,15 +54,32 @@ impl PriceCondition {
 }
 
 impl PriceCondition {
-    pub fn to_internal(&self) -> OrderCondition {
-        OrderCondition::Price {
+    /// A condition this client cannot carry as stated is refused rather than
+    /// changed: a price the wire's fixed point cannot hold converted in
+    /// silence, and a trigger method outside the set the venue carries cast to
+    /// another, and the order went to the venue waiting for something the
+    /// caller never stated.
+    pub fn to_internal(&self) -> Result<OrderCondition, String> {
+        crate::client_core::require_finite_price("a price condition's price", self.price)?;
+        // What the trigger method can state on a condition: 0 is the default,
+        // 1 last, 2 bid/ask, 3 bid and 4 ask. Anything else narrows to one of
+        // those or wraps on the cast, which is a different condition.
+        let trigger_method = match self.trigger_method {
+            0..=4 => self.trigger_method as u8,
+            other => return Err(format!(
+                "a price condition's trigger method {other} is not one the venue \
+                 carries on a condition: it is 0 to 4, and anything else would go \
+                 out as a different trigger than the one stated",
+            )),
+        };
+        Ok(OrderCondition::Price {
             con_id: self.con_id,
             exchange: self.exchange.clone(),
             price: crate::types::price_from_f64(self.price),
             is_more: self.is_more,
-            trigger_method: self.trigger_method as u8,
+            trigger_method,
             is_conjunction_connection: self.is_conjunction_connection,
-        }
+        })
     }
 }
 
@@ -398,7 +415,7 @@ mod tests {
         // one, so nothing has started it yet.
         Python::initialize();
         Python::attach(|py| {
-            let back = super::super::class_orders::Order::from_api(py, &held, 7)
+            let back = super::super::class_orders::Order::from_api(py, &held)
                 .expect("the order comes back");
             assert_eq!(back.conditions.bound(py).len(), sent.len(), "each one comes back");
             assert_eq!(
@@ -407,6 +424,59 @@ mod tests {
                 "what the venue reported is what a caller would place again",
             );
         });
+    }
+
+    /// A price condition stating a price the wire cannot hold or a trigger the
+    /// venue does not carry is refused, not changed: converted in silence, the
+    /// order went to the venue waiting on a zero price and a default trigger
+    /// the caller never stated.
+    #[test]
+    fn a_price_condition_that_cannot_be_carried_is_refused_rather_than_changed() {
+        Python::initialize();
+        Python::attach(|py| {
+            let holding = |condition: PriceCondition| {
+                let order = super::super::class_orders::Order::default();
+                order.conditions.bound(py).append(condition).unwrap();
+                order
+            };
+            let why = holding(PriceCondition {
+                con_id: 756733, exchange: "SMART".into(), price: f64::NAN,
+                is_more: true, trigger_method: 0, is_conjunction_connection: true,
+            })
+            .convert_conditions(py)
+            .expect_err("a price nobody can state is refused");
+            assert!(why.contains("price"), "the refusal names the price: {why}");
+
+            let why = holding(PriceCondition {
+                con_id: 756733, exchange: "SMART".into(), price: 100.0,
+                is_more: true, trigger_method: 256, is_conjunction_connection: true,
+            })
+            .convert_conditions(py)
+            .expect_err("a trigger the venue does not carry is refused");
+            assert!(why.contains("trigger method"), "the refusal names the trigger: {why}");
+        });
+
+        // The same guard the other surface's orders pass through: a condition
+        // built on this side in the shape the venue carries is refused there
+        // too, stated with a trigger the venue does not carry.
+        let built = crate::types::model::Order {
+            action: "BUY".into(),
+            total_quantity: 1.0,
+            order_type: "LMT".into(),
+            lmt_price: 10.0,
+            conditions: vec![OrderCondition::Price {
+                con_id: 756733,
+                exchange: "SMART".into(),
+                price: (100.0 * PRICE_SCALE_F) as Price,
+                is_more: true,
+                trigger_method: 5,
+                is_conjunction_connection: true,
+            }],
+            ..Default::default()
+        };
+        let why = crate::client_core::ClientCore::validate_order(&built, "")
+            .expect_err("a trigger the venue does not carry is refused on either surface");
+        assert!(why.contains("trigger method"), "the refusal names the trigger: {why}");
     }
 }
 

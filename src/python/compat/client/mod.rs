@@ -2243,6 +2243,39 @@ w = W()",
         });
     }
 
+    /// A symbol match states the contract it found under `contract`, as the
+    /// reference client states one: a program written against it reads
+    /// `description.contract.conId`, and under flat fields it raised before
+    /// it read anything.
+    #[test]
+    fn a_symbol_match_states_what_it_found_as_a_contract_and_its_derivatives() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            shared.reference.push_matching_symbols(8, vec![
+                crate::control::contracts::SymbolMatch {
+                    con_id: 265598, symbol: "AAPL".into(),
+                    sec_type: crate::control::contracts::SecurityType::Stock,
+                    currency: "USD".into(), primary_exchange: "NASDAQ".into(),
+                    description: "Apple Inc".into(), derivative_types: vec!["OPT".into()],
+                },
+            ]);
+            client.borrow(py).dispatch_once(py, &shared).unwrap();
+
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            let c = py.eval(
+                c"[c[2][0] for c in w.calls if c[0] == 'symbolSamples'][0]",
+                Some(&g), None,
+            ).unwrap();
+            let con_id: i64 = c.getattr("contract").unwrap()
+                .getattr("conId").unwrap().extract().unwrap();
+            assert_eq!(con_id, 265598, "the contract found, under the name the reference client gives it");
+            let derivatives: Vec<String> = c.getattr("derivativeSecTypes").unwrap().extract().unwrap();
+            assert_eq!(derivatives, ["OPT"], "the kinds of derivative the venue lists on it");
+        });
+    }
+
     /// `permId` is what survives a restart; the local order id does not.
     #[test]
     fn an_order_can_be_cancelled_by_its_perm_id() {

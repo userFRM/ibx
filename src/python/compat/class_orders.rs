@@ -775,7 +775,9 @@ impl Order {
     /// carries are price, time, margin, execution, volume and percent change.
     pub fn convert_conditions(&self, py: Python<'_>) -> Result<Vec<OrderCondition>, String> {
         self.conditions.bound(py).iter().enumerate().map(|(at, any)| {
-            if let Ok(c) = any.cast::<PriceCondition>() { return Ok(c.borrow().to_internal()); }
+            if let Ok(c) = any.cast::<PriceCondition>() {
+                return c.borrow().to_internal().map_err(|why| format!("condition {at}: {why}"));
+            }
             if let Ok(c) = any.cast::<TimeCondition>() { return Ok(c.borrow().to_internal()); }
             if let Ok(c) = any.cast::<MarginCondition>() { return Ok(c.borrow().to_internal()); }
             if let Ok(c) = any.cast::<ExecutionCondition>() { return Ok(c.borrow().to_internal()); }
@@ -864,20 +866,19 @@ impl Order {
     /// this surface with the same fields, so an order read back states what it
     /// is waiting for and can be placed again as it stood.
     ///
-    /// The price per leg of a combination is not, because nothing reads one
-    /// back: the venue's report of an order names its legs without saying what
-    /// each was struck at, so the engine holds none to carry. An order read
-    /// back and placed again is priced as a whole. Hold the order that was
-    /// placed to state them again.
-    /// `under` is the client id this session connected with, and stands in only
-    /// where the venue named no client. The reference client keys a trade by
-    /// client id together with order id, so an order placed elsewhere keeps the
-    /// client id it was placed under. Restating it as this session's collides
-    /// with whatever this session holds under the same order id.
+    /// The price per leg of a combination is, where the engine holds one: an
+    /// order this session placed was tracked with the prices the caller stated,
+    /// and each is built back as the class a caller builds one with. The
+    /// venue's report of an order placed elsewhere names its legs without
+    /// saying what each was struck at, so one read back carries none.
+    ///
+    /// The client id is carried as the record states it: zero is a client, and
+    /// restating it as this session's made an order placed under client zero
+    /// read as this session's own. An order this session placed was tracked
+    /// under the client id it connected with.
     pub(crate) fn from_api(
         py: Python<'_>,
         a: &crate::types::model::Order,
-        under: i32,
     ) -> PyResult<Self> {
         Ok(Self {
             order_id: a.order_id,
@@ -935,7 +936,7 @@ impl Order {
             bond_accrued_interest: a.bond_accrued_interest.clone(),
             clearing_account: a.clearing_account.clone(),
             clearing_intent: a.clearing_intent.clone(),
-            client_id: if a.client_id != 0 { a.client_id } else { under },
+            client_id: a.client_id,
             compete_against_best_offset: a.compete_against_best_offset,
             continuous_update: a.continuous_update,
             customer_account: a.customer_account.clone(),
@@ -985,7 +986,10 @@ impl Order {
             oca_type: a.oca_type,
             open_close: a.open_close.clone(),
             opt_out_smart_routing: a.opt_out_smart_routing,
-            order_combo_legs: ListField::new(),
+            order_combo_legs: ListField::of(
+                py,
+                a.order_combo_legs.iter().map(|price| OrderComboLegPy { price: *price }),
+            )?,
             order_misc_options: ListField::new(),
             order_ref: a.order_ref.clone(),
             origin: a.origin,
@@ -1225,6 +1229,32 @@ impl Order {
 
 }
 
+/// The price a combination order names for one of its legs.
+///
+/// Built by a caller for the order they place, and built here for the order
+/// handed back, so a leg price read off an order this session placed is the
+/// class a program appends to the next combination. Unset is the largest
+/// double there is, as the reference client leaves a price nobody stated.
+#[pyclass(from_py_object, name = "OrderComboLeg")]
+#[derive(Clone, Debug)]
+pub struct OrderComboLegPy {
+    #[pyo3(get, set)]
+    pub price: f64,
+}
+
+#[pymethods]
+impl OrderComboLegPy {
+    #[new]
+    #[pyo3(signature = (price=f64::MAX))]
+    fn new(price: f64) -> Self {
+        Self { price }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("OrderComboLeg(price={})", self.price)
+    }
+}
+
 /// The tag-value pairs a list holds, read as the reference client sends
 /// them: `str()` of each half, off any object carrying the two names.
 ///
@@ -1265,6 +1295,20 @@ pub struct OrderAllocation {
 
 #[pymethods]
 impl OrderAllocation {
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    ///
+    /// This object is handed to a caller by a callback and only ever read. Code
+    /// written for the reference client reads the run-together names, and under
+    /// this class they were absent — so the object arrived carrying everything
+    /// and answered nothing.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the names this class defines.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        by_reference_name(slf.as_any(), name, &[])
+    }
+
     #[new]
     #[pyo3(signature = ())]
     fn new() -> Self { Self::default() }
@@ -1639,6 +1683,34 @@ order.algoParams.append(TagValue('allowPastEndTime', int(True)))
             };
             assert_eq!(allow_past_end_time, Some(true), "the flag the sample hands over as an int");
             assert_eq!((start_time.as_deref(), end_time.as_deref()), (Some("09:00:00 US/Eastern"), Some("16:00:00 US/Eastern")));
+        });
+    }
+
+    /// The prices a caller stated for each leg of a combination are what an
+    /// order read back states.
+    ///
+    /// The engine keeps them for an order this session placed, and dropped,
+    /// the order placed again from what was read struck each leg at whatever
+    /// the venue struck it at, which is not the price the caller stated.
+    #[test]
+    fn leg_prices_read_back_are_the_leg_prices_that_were_sent() {
+        let stated = vec![10.0, f64::MAX, 405.0];
+        let held = crate::types::model::Order {
+            order_combo_legs: stated.clone(),
+            ..Default::default()
+        };
+        Python::initialize();
+        Python::attach(|py| {
+            let back = Order::from_api(py, &held).expect("the order comes back");
+            assert_eq!(
+                back.order_combo_legs.bound(py).len(), stated.len(),
+                "one per leg, in order",
+            );
+            assert_eq!(
+                back.convert_order_combo_legs(py).expect("and read as themselves"),
+                stated,
+                "what was placed is what comes back, an unstated price included",
+            );
         });
     }
 

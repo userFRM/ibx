@@ -9,8 +9,9 @@ Everything here is plain Python, as it is there, because this client reads
 these objects by attribute: the shape is the contract, and any object carrying
 the same attribute names is already accepted. What each field means is the
 venue's business and is documented by the venue; what is written here is the
-shape and nothing else. A combination leg is not here: a callback hands legs
-back as well as taking them, so that class lives beside the contract class.
+shape and nothing else. A combination leg, a leg price and a delta-neutral
+hedge are not here: a callback hands those back as well as taking them, so
+those classes live beside the classes that carry them.
 """
 
 import math
@@ -115,22 +116,6 @@ class ScannerSubscription:
         self.averageOptionVolumeAbove = UNSET_INTEGER
         self.scannerSettingPairs = ""
         self.stockTypeFilter = ""
-
-
-class DeltaNeutralContract:
-    """The contract a delta-neutral order hedges against, and at what."""
-
-    def __init__(self):
-        self.conId = 0
-        self.delta = 0.0
-        self.price = 0.0
-
-
-class OrderComboLeg:
-    """The price a combination order names for one of its legs."""
-
-    def __init__(self, price=UNSET_DOUBLE):
-        self.price = price
 
 
 class OrderCancel:

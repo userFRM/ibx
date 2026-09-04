@@ -3160,6 +3160,18 @@ impl ClientCore {
                     }
                 }
             }
+            // A price condition's trigger method states 0 to 4: the default,
+            // last, bid/ask, bid and ask. Another value is a caller's mistake
+            // and is reported rather than sent as a different trigger.
+            if let crate::types::OrderCondition::Price { trigger_method, .. } = condition
+                && *trigger_method > 4
+            {
+                return Err(format!(
+                    "a price condition's trigger method {trigger_method} is not one \
+                     the venue carries on a condition: it is 0 to 4, and anything \
+                     else would go out as a different trigger than the one stated",
+                ));
+            }
         }
 
         // Reject non-finite and out-of-range numerics up front, before any

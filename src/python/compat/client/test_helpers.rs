@@ -360,6 +360,11 @@ impl EClient {
             order_type: "LMT".into(),
             lmt_price,
             parent_id,
+            // Under this session's client, as a real placement records it: an
+            // order recorded without one reads as another client's, which is
+            // what an order the venue names for a client that is not this one
+            // is meant to read as.
+            client_id: self.client_id.load(Ordering::Acquire),
             ..Default::default()
         };
         self.core.track_order(order_id, contract, order, instrument);

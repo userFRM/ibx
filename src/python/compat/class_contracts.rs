@@ -160,7 +160,9 @@ impl Clone for Contract {
             issuer_id: self.issuer_id.clone(),
             combo_legs_descrip: self.combo_legs_descrip.clone(),
             combo_legs: self.combo_legs.clone(),
-            delta_neutral_contract: None,
+            // The same object, as Python assignment shares it.
+            delta_neutral_contract: self.delta_neutral_contract.as_ref()
+                .map(|d| Python::attach(|py| d.clone_ref(py))),
         }
     }
 }
@@ -264,9 +266,10 @@ impl Contract {
     /// The whole contract the engine holds, not the handful of fields a
     /// callback happens to print: an option with no strike, right or expiry
     /// names nothing the caller can act on, and a combination with no legs
-    /// names a different contract from the one placed. The legs are built as
-    /// the class a caller builds one with, which is what takes the interpreter.
-    /// The delta-neutral contract is left unset: nothing here builds one.
+    /// names a different contract from the one placed. The legs and the hedge
+    /// are built as the class a caller builds one with, which is what takes
+    /// the interpreter. The hedge left out, an order reported for a hedged
+    /// position came back unhedged, and placed again, went as one.
     pub(crate) fn from_api(py: Python<'_>, c: &crate::types::model::Contract) -> PyResult<Self> {
         Ok(Self {
             con_id: c.con_id,
@@ -289,7 +292,10 @@ impl Contract {
             issuer_id: c.issuer_id.clone(),
             combo_legs_descrip: c.combo_legs_descrip.clone(),
             combo_legs: ListField::of(py, c.combo_legs.iter().map(ComboLeg::from_api))?,
-            delta_neutral_contract: None,
+            delta_neutral_contract: match c.delta_neutral_contract.as_ref() {
+                Some(d) => Some(Py::new(py, DeltaNeutralContractPy::from_api(d))?.into_any()),
+                None => None,
+            },
         })
     }
 
@@ -513,6 +519,51 @@ impl ComboLeg {
             designated_location: l.designated_location.clone(),
             exempt_code: l.exempt_code,
         }
+    }
+}
+
+/// The contract a delta-neutral order hedges against, and at what.
+///
+/// Built by a caller for the order they place, and built here for the contract
+/// handed back, so a hedge read off an open order is the class a program
+/// compares against and hands to the next order. The defaults are the
+/// reference client's: a hedge nobody stated anything on states noughts.
+#[pyclass(from_py_object, name = "DeltaNeutralContract")]
+#[derive(Clone, Debug, Default)]
+pub struct DeltaNeutralContractPy {
+    #[pyo3(get, set)]
+    pub con_id: i64,
+    #[pyo3(get, set)]
+    pub delta: f64,
+    #[pyo3(get, set)]
+    pub price: f64,
+}
+
+#[pymethods]
+impl DeltaNeutralContractPy {
+    #[new]
+    #[pyo3(signature = (con_id=0, delta=0.0, price=0.0, **keywords))]
+    fn new(con_id: i64, delta: f64, price: f64, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+        let made = Py::new(py, Self { con_id, delta, price })?;
+        set_from_keywords(made.bind(py).as_any(), keywords)?;
+        Ok(made)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("DeltaNeutralContract(conId={}, delta={}, price={})", self.con_id, self.delta, self.price)
+    }
+}
+
+impl DeltaNeutralContractPy {
+    /// The same hedge, as the Python side names it.
+    pub(crate) fn from_api(d: &crate::types::model::DeltaNeutralContract) -> Self {
+        Self { con_id: d.con_id, delta: d.delta, price: d.price }
+    }
+}
+
+camel_aliases_copy! {
+    DeltaNeutralContractPy {
+        get_con_id_alias set_con_id_alias conId con_id i64;
     }
 }
 
@@ -1037,40 +1088,107 @@ pub struct SmartComponentPy {
 
 #[pymethods]
 impl SmartComponentPy {
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    ///
+    /// This object is handed to a caller by a callback and only ever read. Code
+    /// written for the reference client reads the run-together names, and under
+    /// this class they were absent — so the object arrived carrying everything
+    /// and answered nothing.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the names this class defines.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        by_reference_name(slf.as_any(), name, &[])
+    }
+
     #[new]
     #[pyo3(signature = ())]
     fn new() -> Self { Self::default() }
 }
 
 /// ibapi-compatible ContractDescription class for symbol search results.
+///
+/// Stated the way the reference client states one: the contract found, under
+/// `contract`, and the kinds of derivative the venue lists on it. A program
+/// written against that client reads `description.contract.conId`, and under
+/// flat fields it raised before it read anything. The flat fields beside
+/// them read and write through the contract, so a program reading either
+/// spelling reads the same thing.
 #[pyclass(from_py_object)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ContractDescription {
     #[pyo3(get, set)]
-    pub con_id: i64,
-    #[pyo3(get, set)]
-    pub symbol: String,
-    #[pyo3(get, set)]
-    pub sec_type: String,
-    #[pyo3(get, set)]
-    pub currency: String,
-    #[pyo3(get, set)]
-    pub primary_exchange: String,
+    pub contract: Py<Contract>,
     #[pyo3(get, set)]
     pub derivative_sec_types: Vec<String>,
 }
 
 #[pymethods]
 impl ContractDescription {
-    #[new]
-    #[pyo3(signature = (con_id=0, symbol="".to_string(), sec_type="".to_string(), currency="".to_string(), primary_exchange="".to_string(), derivative_sec_types=Vec::new()))]
-    fn new(con_id: i64, symbol: String, sec_type: String, currency: String, primary_exchange: String, derivative_sec_types: Vec<String>) -> Self {
-        Self { con_id, symbol, sec_type, currency, primary_exchange, derivative_sec_types }
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    ///
+    /// This object is handed to a caller by a callback and only ever read. Code
+    /// written for the reference client reads the run-together names, and under
+    /// this class they were absent — so the object arrived carrying everything
+    /// and answered nothing.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the names this class defines.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        by_reference_name(slf.as_any(), name, &[])
     }
 
-    fn __repr__(&self) -> String {
+    #[new]
+    #[pyo3(signature = (con_id=0, symbol="".to_string(), sec_type="".to_string(), currency="".to_string(), primary_exchange="".to_string(), derivative_sec_types=Vec::new()))]
+    fn new(py: Python<'_>, con_id: i64, symbol: String, sec_type: String, currency: String, primary_exchange: String, derivative_sec_types: Vec<String>) -> PyResult<Self> {
+        Ok(Self {
+            contract: Py::new(py, Contract {
+                con_id, symbol, sec_type, currency, primary_exchange, ..Default::default()
+            })?,
+            derivative_sec_types,
+        })
+    }
+
+    // The contract's own fields, under the names this class carried before:
+    // each reads and writes the contract itself.
+    #[getter]
+    fn con_id(&self, py: Python<'_>) -> i64 { self.contract.borrow(py).con_id }
+    #[setter]
+    fn set_con_id(&mut self, py: Python<'_>, v: i64) { self.contract.bind(py).borrow_mut().con_id = v; }
+    #[getter]
+    fn symbol(&self, py: Python<'_>) -> String { self.contract.borrow(py).symbol.clone() }
+    #[setter]
+    fn set_symbol(&mut self, py: Python<'_>, v: String) { self.contract.bind(py).borrow_mut().symbol = v; }
+    #[getter]
+    fn sec_type(&self, py: Python<'_>) -> String { self.contract.borrow(py).sec_type.clone() }
+    #[setter]
+    fn set_sec_type(&mut self, py: Python<'_>, v: String) { self.contract.bind(py).borrow_mut().sec_type = v; }
+    #[getter]
+    fn currency(&self, py: Python<'_>) -> String { self.contract.borrow(py).currency.clone() }
+    #[setter]
+    fn set_currency(&mut self, py: Python<'_>, v: String) { self.contract.bind(py).borrow_mut().currency = v; }
+    #[getter]
+    fn primary_exchange(&self, py: Python<'_>) -> String { self.contract.borrow(py).primary_exchange.clone() }
+    #[setter]
+    fn set_primary_exchange(&mut self, py: Python<'_>, v: String) { self.contract.bind(py).borrow_mut().primary_exchange = v; }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let c = self.contract.borrow(py);
         format!("ContractDescription(conId={}, symbol='{}', secType='{}', currency='{}')",
-            self.con_id, self.symbol, self.sec_type, self.currency)
+            c.con_id, c.symbol, c.sec_type, c.currency)
+    }
+}
+
+impl Clone for ContractDescription {
+    /// `Py<Contract>` clones by reference under the GIL: the copy shares the
+    /// same Python Contract object, matching Python assignment semantics.
+    fn clone(&self) -> Self {
+        Python::attach(|py| Self {
+            contract: self.contract.clone_ref(py),
+            derivative_sec_types: self.derivative_sec_types.clone(),
+        })
     }
 }
 
@@ -1091,6 +1209,20 @@ pub struct DepthMktDataDescriptionPy {
 
 #[pymethods]
 impl DepthMktDataDescriptionPy {
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    ///
+    /// This object is handed to a caller by a callback and only ever read. Code
+    /// written for the reference client reads the run-together names, and under
+    /// this class they were absent — so the object arrived carrying everything
+    /// and answered nothing.
+    ///
+    /// Only reached when the attribute was not found, so it costs nothing on
+    /// the names this class defines.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        by_reference_name(slf.as_any(), name, &[])
+    }
+
     #[new]
     #[pyo3(signature = (exchange="".to_string(), sec_type="".to_string(), listing_exch="".to_string(), service_data_type="".to_string(), agg_group=0))]
     fn new(exchange: String, sec_type: String, listing_exch: String, service_data_type: String, agg_group: i32) -> Self {
@@ -1201,6 +1333,38 @@ mod tests {
             let built = contract.combo_legs_api(py).expect("the leg reads");
             assert_eq!(built[0].ratio, 0, "no ratio stated, so none is invented");
             assert_eq!(built[0].con_id, 756733);
+        });
+    }
+
+    /// A hedge the caller stated is the hedge a reported contract states.
+    ///
+    /// Left out of what the callbacks hand back, an order reported for a
+    /// hedged position read as unhedged, and placed again from what was read,
+    /// went to the venue as one.
+    #[test]
+    fn a_hedge_the_caller_stated_is_the_hedge_a_reported_contract_states() {
+        Python::initialize();
+        Python::attach(|py| {
+            let held = crate::types::model::Contract {
+                con_id: 756733,
+                symbol: "IBM".into(),
+                delta_neutral_contract: Some(crate::types::model::DeltaNeutralContract {
+                    con_id: 265598, delta: 0.5, price: 100.0,
+                }),
+                ..Default::default()
+            };
+            let back = Contract::from_api(py, &held).expect("the contract comes back");
+            let hedge = back.delta_neutral_contract.as_ref().expect("the hedge is stated");
+            assert_eq!(
+                hedge.getattr(py, "conId").unwrap().extract::<i64>(py).unwrap(), 265598,
+                "the contract the order hedges against",
+            );
+            assert_eq!(hedge.getattr(py, "delta").unwrap().extract::<f64>(py).unwrap(), 0.5);
+            assert_eq!(hedge.getattr(py, "price").unwrap().extract::<f64>(py).unwrap(), 100.0);
+            assert!(
+                back.clone().delta_neutral_contract.is_some(),
+                "and a copy of the contract states it too",
+            );
         });
     }
 

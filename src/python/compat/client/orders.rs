@@ -312,6 +312,10 @@ impl EClient {
         };
         let mut tracked_order = api_order.clone();
         tracked_order.order_id = oid as i64;
+        // The client this order goes out under. Left at nought, the order
+        // read back could not be told from one placed under client zero, and
+        // restating one as the other collides with whatever is held there.
+        tracked_order.client_id = self.client_id.load(Ordering::Acquire);
         self.core.cache_contract(contract.con_id, api_contract.clone());
         // A replace restates an order the venue is already working, so it
         // states new terms and not a new order: recorded as one, a partly
@@ -659,7 +663,7 @@ impl EClient {
         let orders = self.core.collect_open_orders(&shared);
         for (order_id, tracked) in &orders {
             let c_py = Py::new(py, Contract::from_api(py, &tracked.contract)?)?.into_any();
-            let o = Order::from_api(py, &tracked.order, self.client_id.load(Ordering::Acquire))?;
+            let o = Order::from_api(py, &tracked.order)?;
             let o_py = Py::new(py, o)?.into_any();
             let state = super::super::contract::OrderState {
                 status: tracked.status.clone(),
@@ -882,10 +886,7 @@ impl EClient {
             let completed = self.completed.lock().unwrap().clone();
             for (contract, order, state) in &completed {
                 let c_py = Py::new(py, Contract::from_api(py, contract)?)?.into_any();
-                let o_py = Py::new(
-                    py,
-                    Order::from_api(py, order, self.client_id.load(Ordering::Acquire))?,
-                )?.into_any();
+                let o_py = Py::new(py, Order::from_api(py, order)?)?.into_any();
                 let state_py = Py::new(py, OrderState::from_api(state))?.into_any();
                 self.deliver(py, "completed_order", (&c_py, &o_py, &state_py))?;
             }
@@ -1035,6 +1036,61 @@ w = W()",
                         && message.contains("had not finished naming")
                 }),
                 "the caller is told the snapshot is not known to be whole: {told:?}",
+            );
+        });
+    }
+
+    /// An order placed under client zero keeps that client id when another
+    /// session reads it back, and an order this session placed reads under
+    /// the client it went out under.
+    ///
+    /// Zero is a client, not an absence: restated as the observer's own, an
+    /// order placed elsewhere read as one this session held under the same
+    /// id, and whatever this session held under that id read as another's.
+    #[test]
+    fn an_order_placed_by_client_zero_keeps_that_client_id_when_read_back() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, wrapper) = wired_client(py);
+            shared.orders.set_replay_done();
+            client.client_id.store(7, Ordering::Release);
+            client.core.con_id_to_instrument.lock().unwrap().insert(756733, 0);
+            // Placed by this session, held back from the venue.
+            client.place_order(py, 3, &bracket_contract(), &bracket_order(false, 0)).unwrap();
+            // Placed under client zero, as the venue reports one.
+            client.core.track_order(
+                4,
+                crate::types::model::Contract {
+                    con_id: 756733, symbol: "SPY".into(), ..Default::default()
+                },
+                crate::types::model::Order {
+                    order_id: 4, action: "BUY".into(), total_quantity: 1.0,
+                    order_type: "LMT".into(), lmt_price: 10.0, ..Default::default()
+                },
+                0,
+            );
+            client.req_open_orders(py).unwrap();
+            client.hand_over_what_is_waiting(py).unwrap();
+            let calls = wrapper.bind(py).getattr("calls").unwrap();
+            let mut read_back = std::collections::BTreeMap::new();
+            for i in 0..calls.len().unwrap() {
+                let call = calls.get_item(i).unwrap();
+                let name: String = call.get_item(0).unwrap().extract().unwrap();
+                if name != "openOrder" {
+                    continue;
+                }
+                let order_id: i64 = call.get_item(1).unwrap().extract().unwrap();
+                let client_id: i64 = call.get_item(3).unwrap()
+                    .getattr("clientId").unwrap().extract().unwrap();
+                read_back.insert(order_id, client_id);
+            }
+            assert_eq!(
+                read_back.get(&3), Some(&7),
+                "the order this session placed reads under the client it went out under: {read_back:?}",
+            );
+            assert_eq!(
+                read_back.get(&4), Some(&0),
+                "the order placed under client zero is not restated as this session's: {read_back:?}",
             );
         });
     }

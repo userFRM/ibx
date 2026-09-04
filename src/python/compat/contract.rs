@@ -84,7 +84,9 @@ pub(super) fn set_from_keywords(
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Contract>()?;
     m.add_class::<ComboLeg>()?;
+    m.add_class::<DeltaNeutralContractPy>()?;
     m.add_class::<Order>()?;
+    m.add_class::<OrderComboLegPy>()?;
     m.add_class::<OptionChain>()?;
     m.add_class::<TagValue>()?;
     m.add_class::<OrderState>()?;
@@ -362,6 +364,52 @@ mod tests {
         assert_eq!(tv.value, "0.1");
     }
 
+    /// The objects a callback hands over answer to the run-together names a
+    /// program written against the reference client reads them by: under the
+    /// flat names alone, they arrived carrying everything and answered
+    /// nothing.
+    #[test]
+    fn the_reference_spellings_resolve_on_the_objects_a_callback_hands_over() {
+        Python::initialize();
+        Python::attach(|py| {
+            let smart = Py::new(py, SmartComponentPy {
+                bit_number: 1, exchange: "NYSE".into(), exchange_letter: "N".into(),
+            }).unwrap();
+            assert_eq!(smart.getattr(py, "bitNumber").unwrap().extract::<i32>(py).unwrap(), 1);
+            assert_eq!(
+                smart.getattr(py, "exchangeLetter").unwrap().extract::<String>(py).unwrap(), "N",
+            );
+
+            let depth = Py::new(py, DepthMktDataDescriptionPy {
+                exchange: "NYSE".into(), sec_type: "STK".into(), listing_exch: "NYSE".into(),
+                service_data_type: "Deep".into(), agg_group: 1,
+            }).unwrap();
+            assert_eq!(depth.getattr(py, "secType").unwrap().extract::<String>(py).unwrap(), "STK");
+            assert_eq!(
+                depth.getattr(py, "listingExch").unwrap().extract::<String>(py).unwrap(), "NYSE",
+            );
+            assert_eq!(
+                depth.getattr(py, "serviceDataType").unwrap().extract::<String>(py).unwrap(), "Deep",
+            );
+            assert_eq!(depth.getattr(py, "aggGroup").unwrap().extract::<i32>(py).unwrap(), 1);
+
+            let allocation = Py::new(py, OrderAllocation::from_api(
+                &crate::types::model::OrderAllocation {
+                    position_desired: "150".into(), allowed_alloc_qty: "50".into(),
+                    ..Default::default()
+                },
+            )).unwrap();
+            assert_eq!(
+                allocation.getattr(py, "positionDesired").unwrap().extract::<String>(py).unwrap(),
+                "150",
+            );
+            assert_eq!(
+                allocation.getattr(py, "allowedAllocQty").unwrap().extract::<String>(py).unwrap(),
+                "50",
+            );
+        });
+    }
+
     #[test]
     fn price_condition_to_internal() {
         let pc = PriceCondition {
@@ -372,7 +420,7 @@ mod tests {
             trigger_method: 1,
             is_conjunction_connection: true,
         };
-        match pc.to_internal() {
+        match pc.to_internal().expect("a condition stated in full converts") {
             OrderCondition::Price { con_id, price, is_more, trigger_method, .. } => {
                 assert_eq!(con_id, 265598);
                 assert_eq!(price, (200.0 * PRICE_SCALE_F) as Price);
@@ -414,3 +462,4 @@ mod tests {
         }
     }
 }
+

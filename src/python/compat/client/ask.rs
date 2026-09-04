@@ -430,20 +430,23 @@ impl EClient {
         let found = wait_for(py, &shared, req_id, &what, |sh| {
             sh.reference.take_matching_symbols_for(req_id as u32)
         })?;
-        Ok(found
+        found
             .iter()
-            .map(|m| ContractDescription {
-                con_id: m.con_id as i64,
-                symbol: m.symbol.clone(),
-                // The user-visible spelling, the same one the Rust surface
-                // hands back: a stock reached this as CS, the wire name for
-                // it, which no request accepts.
-                sec_type: m.sec_type.to_api_str().to_string(),
-                currency: m.currency.clone(),
-                primary_exchange: m.primary_exchange.clone(),
+            .map(|m| Ok(ContractDescription {
+                contract: Py::new(py, Contract {
+                    con_id: m.con_id as i64,
+                    symbol: m.symbol.clone(),
+                    // The user-visible spelling, the same one the Rust surface
+                    // hands back: a stock reached this as CS, the wire name for
+                    // it, which no request accepts.
+                    sec_type: m.sec_type.to_api_str().to_string(),
+                    currency: m.currency.clone(),
+                    primary_exchange: m.primary_exchange.clone(),
+                    ..Default::default()
+                })?,
                 derivative_sec_types: m.derivative_types.clone(),
-            })
-            .collect())
+            }))
+            .collect()
     }
 
     /// The option chains an underlying has, answered rather than only sent.
