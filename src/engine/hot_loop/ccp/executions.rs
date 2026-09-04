@@ -1049,7 +1049,12 @@ impl CcpState {
         // 20=1 is a cancelled execution and 20=2 a corrected one. Both restate
         // what the account holds and may restate it downwards, which a replay
         // never does.
-        let restates_history = matches!(trans_type, "1" | "2");
+        // The venue also states a restatement on the report type itself: a
+        // trade cancel and a trade correction. Read only from tag 20, one
+        // arriving under the report type alone booked nothing at all, so the
+        // quantity the venue had just undone stayed on the account.
+        let restates_history = matches!(trans_type, "1" | "2")
+            || matches!(exec_type, "G" | "H");
         let is_resend = is_resend || restates_history;
 
         // CumQty — the order's cumulative filled quantity as of this report.
@@ -1080,7 +1085,10 @@ impl CcpState {
             exec_id.to_string()
         };
 
-        let is_execution = matches!(exec_type, "F" | "1" | "2") && last_shares > 0;
+        // A trade cancel and a trade correction carry a quantity and restate
+        // what the account holds, exactly as a fill does; the reconciliation
+        // below works from the cumulative figure and moves it either way.
+        let is_execution = matches!(exec_type, "F" | "1" | "2" | "G" | "H") && last_shares > 0;
         let filled = if is_execution {
             self.book_fill(
                 parsed, clord_id, &dedup_key, is_resend, restates_history, last_px,

@@ -445,6 +445,11 @@ impl OrderState {
     /// remembered as completed.
     #[doc(hidden)] pub fn push_order_correction(&self, order_id: u64, info: RichOrderInfo) {
         self.completed.lock().unwrap().remove(&order_id);
+        // And the notice itself, where it has not been read yet. Only the
+        // memory that refuses a replay was cleared, so a completion already
+        // queued still went out after the correction had put the order back to
+        // working — a caller was told the same order was open and finished.
+        self.completed_orders.lock().unwrap().retain(|c| c.order_id != order_id);
         self.order_cache.lock().unwrap().insert(order_id, info);
     }
 }

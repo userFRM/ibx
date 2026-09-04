@@ -4612,6 +4612,48 @@ fn a_record_that_states_no_charge_reports_none() {
     }
 }
 
+/// A trade cancel stated on the report type alone reverses what it undoes.
+///
+/// The venue states a restatement two ways: on the transaction type, and on the
+/// report type itself. Read only from the first, a trade cancel arriving under
+/// the second booked nothing at all, so a quantity the venue had just undone
+/// stayed on the account and on every exposure decision made from it.
+#[test]
+fn a_trade_cancel_stated_on_the_report_type_reverses_what_it_undoes() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let shared = SharedState::new();
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * QTY_SCALE, 400 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+
+    // Fifty trade.
+    let fill = exec_report_frame(&[
+        (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
+        (17, "exec-1"), (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&fill, b"", &mut context, &shared, &None, "");
+    assert_eq!(context.position(instrument), 50.0, "fifty are held");
+    let _ = shared.orders.drain_fills();
+
+    // The venue cancels the trade, stating it on the report type.
+    let bust = exec_report_frame(&[
+        (39, "1"), (150, "H"), (100, "ARCA"), (198, "ARCA:1"),
+        (17, "exec-2"), (32, "50"), (31, "412.25"), (14, "0"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&bust, b"", &mut context, &shared, &None, "");
+
+    assert_eq!(
+        context.position(instrument), 0.0,
+        "the account no longer holds what the venue undid",
+    );
+    let fills = shared.orders.drain_fills();
+    let reversal = fills.last().expect("the reversal is reported to the caller");
+    assert_eq!(reversal.0.cum_qty, 0, "the order total goes back: {reversal:?}");
+}
+
 /// A busted trade on an order this session does not track books nothing,
 /// rather than booking the trade again as a purchase.
 ///

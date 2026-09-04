@@ -607,6 +607,30 @@ mod tests {
         }
     }
 
+    /// A correction takes the completion notice with it.
+    ///
+    /// The venue can undo a trade that finished an order, which puts the order
+    /// back to working. Only the memory that refuses a replay was cleared, so a
+    /// completion already queued still went out afterwards and the caller was
+    /// told the same order was both open and finished.
+    #[test]
+    fn a_correction_withdraws_a_completion_nobody_has_read_yet() {
+        let shared = SharedState::new();
+        shared.orders.push_completed_order(completed(9));
+        shared.orders.push_completed_order(completed(10));
+
+        shared.orders.push_order_correction(9, RichOrderInfo {
+            contract: Default::default(),
+            order: Default::default(),
+            order_state: Default::default(),
+            last_exec: Default::default(),
+        });
+
+        let seen: Vec<u64> = shared.orders.drain_completed_orders()
+            .into_iter().map(|c| c.order_id).collect();
+        assert_eq!(seen, vec![10], "the corrected order is not reported as finished: {seen:?}");
+    }
+
     /// The replay flag belongs to the connection that earned it.
     ///
     /// Set once and never cleared, it outlives that connection: after a
