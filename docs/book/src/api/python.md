@@ -16,7 +16,7 @@ Both naming conventions resolve on every type and method: `reqMktData` and
 
 `ibx.configure()` carries what a gateway would hold in a configuration file:
 the session time zone, the build announced at logon, which executions arrive
-when a session opens, logging, and the rest. `ibx.describe()` lists them, and
+when a session opens, and the rest. `ibx.describe()` lists them, and
 `ibx.UNAVAILABLE` names the gateway settings that mean nothing without a local
 process — a port to listen on, the addresses allowed to reach it, how much heap
 the runtime may take — so a program being migrated finds an answer rather than
@@ -26,6 +26,12 @@ Settings given to `connect(settings=...)` belong to that session; those given to
 `configure()` belong to the process and are what a session that states none
 falls back to. They are read when a session opens, so set them before
 `connect()`.
+
+Logging is the one settled earlier: a process has one logger and importing
+`ibx` installs it, so `IBX_LOG_LEVEL`, `IBX_LOG_DIR` and `IBX_LOG_QUEUE` belong
+in the environment before that import. Both `configure()` and
+`connect(settings=...)` refuse them rather than storing a value nothing will
+read.
 
 ## The reference
 

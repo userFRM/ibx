@@ -45,11 +45,14 @@ pub(crate) fn settings_from(
             // One logger per process, so these are not settled per session:
             // taken here they were parsed, held and then dropped on the way to
             // the session, which reads as a log level that was set and did
-            // nothing. Said plainly instead, naming where they do work.
+            // nothing. Said plainly instead, naming where they do work — which
+            // for this client is before it is imported, because importing it
+            // installs the logger.
             "log_level" | "log_dir" | "log_queue" => {
                 return Err(format!(
-                    "{name} belongs to the process, not one session: set it with \
-                     ibx.configure() or the environment before the first connect",
+                    "{name} belongs to the process, not one session: importing ibx \
+                     installs the logger, so set IBX_{} in the environment before that",
+                    name.to_uppercase(),
                 ));
             }
             // However it is spelled, matching what the same settings are read

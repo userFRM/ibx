@@ -50,6 +50,26 @@ impl LogConfig {
                 .unwrap_or(65_536),
         }
     }
+
+    /// The logging a caller stated, else what the environment holds.
+    ///
+    /// The same order every other setting resolves in: what the caller states
+    /// wins over the environment, which wins over the default. Taken and
+    /// dropped instead, a caller who stated a level or a directory got
+    /// whatever the environment held and no word about it.
+    pub fn stated(settings: &crate::settings::GatewaySettings) -> Self {
+        let environment = Self::from_env();
+        let named = |value: Option<&String>| {
+            value.filter(|v| !v.is_empty()).cloned()
+        };
+        Self {
+            log_dir: named(settings.log_dir.as_ref())
+                .map(PathBuf::from)
+                .or(environment.log_dir),
+            level: named(settings.log_level.as_ref()).or(environment.level),
+            queue_capacity: settings.log_queue.unwrap_or(environment.queue_capacity),
+        }
+    }
 }
 
 /// Nanosecond-precision UTC timestamp.
@@ -142,13 +162,18 @@ pub fn try_init(config: &LogConfig) -> Option<LogGuard> {
             .unwrap_or_else(|_| EnvFilter::new("info")),
     };
 
+    // Records the writer may hold before it starts dropping them. Left to the
+    // appender's own default, `queue_capacity` was read from the environment
+    // and thrown away, so the one setting that says how much a busy session
+    // may buffer said nothing.
+    let buffered = tracing_appender::non_blocking::NonBlockingBuilder::default()
+        .buffered_lines_limit(config.queue_capacity);
     let (writer, guard) = match &config.log_dir {
         Some(dir) => {
             std::fs::create_dir_all(dir).expect("failed to create log directory");
-            let appender = tracing_appender::rolling::daily(dir, "ibx.log");
-            tracing_appender::non_blocking(appender)
+            buffered.finish(tracing_appender::rolling::daily(dir, "ibx.log"))
         }
-        None => tracing_appender::non_blocking(std::io::stdout()),
+        None => buffered.finish(std::io::stdout()),
     };
 
     tracing_subscriber::fmt()
@@ -159,6 +184,41 @@ pub fn try_init(config: &LogConfig) -> Option<LogGuard> {
         .try_init()
         .ok()
         .map(|()| LogGuard { _guard: guard })
+}
+
+/// Install the logger a session's settings ask for, as the session opens.
+///
+/// A gateway reads its logging configuration once, as the process starts, and
+/// this is the same moment: the first session that states any of the three
+/// installs the logger from what its caller stated, else from the environment.
+/// A process has one logger and whoever installed it holds what flushes it, so
+/// a session that opens later cannot move it — what that session stated is
+/// named in a warning rather than dropped, which is what stating a log level
+/// and getting neither the level nor a word about it used to do.
+///
+/// A session that states none of the three installs nothing, so a program that
+/// installs its own logger keeps it.
+pub fn apply(settings: &crate::settings::GatewaySettings) {
+    let stated: Vec<&str> = [
+        ("log_level", settings.log_level.is_some()),
+        ("log_dir", settings.log_dir.is_some()),
+        ("log_queue", settings.log_queue.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, stated)| stated.then_some(name))
+    .collect();
+    if stated.is_empty() {
+        return;
+    }
+    match try_init(&LogConfig::stated(settings)) {
+        Some(guard) => guard.keep_for_the_process(),
+        None => log::warn!(
+            "{} stated after this process installed its logger, and a process has \
+             one: logging is settled before the first session opens, and this \
+             session runs under the logger that is already installed",
+            stated.join(", "),
+        ),
+    }
 }
 
 impl LogGuard {

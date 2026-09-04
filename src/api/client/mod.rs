@@ -576,6 +576,9 @@ impl EClient {
         config: &EClientConfig,
         event_tx: Option<EventSink>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        // Before anything is logged, because the settings that say where it
+        // goes are among them.
+        crate::logging::apply(&config.gateway);
         let gw_config = gateway_config(config);
 
         let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = Gateway::connect(&gw_config)?;

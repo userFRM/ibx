@@ -19,12 +19,12 @@ def _rust_settings() -> set[str]:
     return set(re.findall(r"^\s*pub (\w+):", text[at:end], re.M))
 
 
-def _rust_unavailable() -> set[str]:
+def _rust_unavailable() -> dict[str, str]:
     source = pathlib.Path(__file__).resolve().parents[2] / "src/settings.rs"
     text = source.read_text()
     at = text.index("pub const UNAVAILABLE:")
     end = text.index("];", at)
-    return set(re.findall(r'\(\s*"([\w.]+)"', text[at:end]))
+    return dict(re.findall(r'\(\s*"([\w.]+)",\s*"([^"]*)"\s*\)', text[at:end]))
 
 
 def test_both_clients_carry_the_same_settings():
@@ -41,8 +41,22 @@ def test_both_clients_name_the_same_settings_as_unavailable():
     about them was told nothing rather than why. What a caller cannot have is
     as much a part of the surface as what they can.
     """
-    assert _rust_unavailable() == set(ibx.UNAVAILABLE), (
+    assert set(_rust_unavailable()) == set(ibx.UNAVAILABLE), (
         "a setting is recorded as having no counterpart on one client and not the other"
+    )
+
+
+def test_both_clients_give_the_same_reason_for_a_setting_with_no_counterpart():
+    """The reason is the whole of the answer, and two copies of it drift.
+
+    Comparing only the names leaves each client free to say something different
+    about the same setting, and a reason that is wrong is worse than none:
+    someone migrating believes it. Two of these said nothing here paces
+    outgoing messages while a reconnect's replay was paced, and both clients
+    said it.
+    """
+    assert _rust_unavailable() == dict(ibx.UNAVAILABLE), (
+        "the two clients give different reasons for the same setting"
     )
 
 

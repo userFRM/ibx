@@ -17,10 +17,12 @@
 //!
 //! Logging is the exception, and is named as one: a process has one logger, and
 //! whoever installs it holds what flushes it, so `log_level`, `log_dir` and
-//! `log_queue` are not settled per session. Logging reads them from the
-//! environment when it starts, under the names each field gives below, and a
-//! value stated on the client is the name of the setting rather than a way to
-//! set it.
+//! `log_queue` belong to the process rather than to a session. The first
+//! session to open installs the logger from them, the same way a gateway reads
+//! its logging configuration as it starts; a session that opens after that
+//! cannot move a logger that is already running, and one that states them then
+//! is told so rather than left believing it was heard. See
+//! [`logging::apply`](crate::logging::apply).
 
 /// A setting stated on the client, or left to the environment.
 ///
@@ -30,23 +32,32 @@
 /// have to know the environment exists.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GatewaySettings {
-    /// The time zone the gateway ran in, which is the one its times were
-    /// stated in. Defaults to UTC.
+    /// The time zone the gateway ran in, which it announced at logon. This
+    /// announces the same one and no more: a time handed to this client
+    /// without a zone of its own is read as UTC whatever this says. Defaults
+    /// to UTC.
     pub timezone: Option<String>,
-    /// The locale it announced itself with.
+    /// The locale it announced itself with. Reaches the wire through
+    /// [`encoded`](Self::encoded), whose locale segment it replaces, so
+    /// stating both leaves this one with nothing to do.
     pub locale: Option<String>,
     /// The build it announced itself as, which the venue keeps a list of and
     /// stops accepting when it is old enough.
     pub build: Option<String>,
     /// The version beside that build.
     pub version: Option<String>,
-    /// The longer string it announced with them.
+    /// The longer string it announced with them. A session resumed from an
+    /// earlier one announces that one's instead, because it is the identity
+    /// the server holds the session under.
     pub encoded: Option<String>,
-    /// The machine identity it presented.
+    /// The machine identity it presented. Resumed the same way
+    /// [`encoded`](Self::encoded) is.
     pub hardware_id: Option<String>,
-    /// The market data connection, where it is not the one the venue names.
+    /// The host every farm connection is opened on, where it is not the one
+    /// the venue names.
     pub market_data_host: Option<String>,
-    /// The port it reached the venue on.
+    /// The port a farm connection opens on, where the venue's routing names
+    /// none. Logging in is always on the port the protocol fixes for it.
     pub port: Option<u16>,
     /// How long it waited to be admitted, in milliseconds.
     pub registration_timeout_ms: Option<u64>,
@@ -54,9 +65,11 @@ pub struct GatewaySettings {
     pub log_level: Option<String>,
     /// Where it wrote it. Logging reads this from `IBX_LOG_DIR`.
     pub log_dir: Option<String>,
-    /// Whether it buffered what it wrote. Logging reads this from
-    /// `IBX_LOG_QUEUE`.
-    pub log_queue: Option<bool>,
+    /// How many records it buffered before dropping them. Logging reads this
+    /// from `IBX_LOG_QUEUE`, and reads it as a count: a boolean here could
+    /// state nothing the reader understood, so every value fell to the
+    /// default.
+    pub log_queue: Option<usize>,
 
     // ── What the gateway did with what it received ──
     /// Which executions arrive when a session opens: today's, or every one
@@ -82,13 +95,20 @@ pub enum ExecutionReportScope {
 /// Named rather than dropped: someone moving off a gateway will look for them,
 /// and "there is no such thing here" is an answer where silence is not.
 pub const UNAVAILABLE: &[(&str, &str)] = &[
-    ("ApiMsgsPerSlice", "nothing here paces outgoing messages; the gateway ships with pacing off"),
-    ("ApiTimeSliceMillis", "nothing here paces outgoing messages; the gateway ships with pacing off"),
-    ("TimestampZone", "a timestamp is delivered as the venue states it, in the venue's terms"),
+    ("ApiMsgsPerSlice", "nothing paces what a caller sends; the pacing here is the subscription burst a reconnect replays, stated on ReconnectConfig"),
+    ("ApiTimeSliceMillis", "nothing paces what a caller sends; the pacing here is the subscription burst a reconnect replays, stated on ReconnectConfig"),
+    ("TimestampZone", "no setting chooses the zone a timestamp is stated in; a bar is stated on the zone the venue names beside it, or as seconds since the epoch where the request asked for that"),
+    ("useSsl", "the connection to the venue is encrypted and there is nothing to turn off: every session is opened through TLS"),
+    ("UseSSL", "the connection to the venue is encrypted and there is nothing to turn off: every session is opened through TLS"),
+    ("reconnectOnSocketErr", "stated per session rather than once for a process: `policy` on ReconnectConfig, which is Automatic by default and Manual for a caller that would rather be told and decide"),
+    ("RemoteHostOrderRouting", "stated per session rather than once for a process: `host` on the client config, which is where to knock — the venue names the server this account belongs on and the session moves there"),
+    ("RemotePortOrderRouting", "stated per session rather than once for a process: `port` on the client config"),
+    ("Select_account_type", "stated per session rather than once for a process: `paper` on the client config"),
+    ("Local_FIX_Server_Settings", "no local socket to listen on; this client is the client"),
     ("LocalServerPort", "no local socket to listen on; this client is the client"),
     ("LocalApiPort", "no local socket to listen on; this client is the client"),
     ("TrustedIPs", "nothing connects to this client, so nothing needs trusting"),
-    ("ApiOnly", "stated per session as `readonly` on the client config, not once for a process"),
+    ("ApiOnly", "stated per session rather than once for a process: `readonly` on the client config, or connect(readonly=True)"),
     ("MainWindow.Width", "no window"),
     ("MainWindow.Height", "no window"),
     ("vmoptions", "no runtime to size"),
@@ -101,9 +121,9 @@ pub const UNAVAILABLE: &[(&str, &str)] = &[
 /// another session's reconnects through the process environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSettings {
-    /// The zone the session states its times in.
+    /// The zone the session announces at logon.
     pub timezone: String,
-    /// The locale it states them for.
+    /// The locale it announces itself for.
     pub locale: String,
     /// The build this session announces itself as.
     pub build: String,
@@ -113,9 +133,10 @@ pub struct SessionSettings {
     pub encoded: String,
     /// What it identifies this machine as. Derived when unset.
     pub hardware_id: Option<String>,
-    /// Which market-data host to use, where the caller names one.
+    /// Which host every farm connection opens on, where the caller names one.
     pub market_data_host: Option<String>,
-    /// Which port the session opens on.
+    /// Which port a farm connection opens on, where the venue's routing names
+    /// none.
     pub port: u16,
     /// How long a call waits for the engine to name a contract before giving up.
     pub registration_timeout: std::time::Duration,
@@ -338,7 +359,7 @@ mod tests {
             registration_timeout_ms: Some(2),
             log_level: Some("debug".into()),
             log_dir: Some("d".into()),
-            log_queue: Some(true),
+            log_queue: Some(4096),
             execution_reports: Some(ExecutionReportScope::Today),
             island_for_nasdaq: Some(false),
         };
@@ -354,10 +375,18 @@ mod tests {
         assert_eq!(resolved.registration_timeout, std::time::Duration::from_millis(2));
         assert_eq!(resolved.execution_reports, ExecutionReportScope::Today);
         assert!(!resolved.island_for_nasdaq);
+        // The three log settings are process-scoped by nature — one logger per
+        // process — so they are not on the resolved form. They reach the
+        // logger instead, and are checked here for the same reason: stated
+        // and reaching neither, they were a setting a caller could state and
+        // nothing read.
+        let logging = crate::logging::LogConfig::stated(&all);
+        assert_eq!(logging.level.as_deref(), Some("debug"));
+        assert_eq!(logging.log_dir.as_deref(), Some(std::path::Path::new("d")));
+        assert_eq!(logging.queue_capacity, 4096);
+
         // Destructured without `..`, so a field added to the stated form stops
-        // compiling here until it is resolved above. The three log settings
-        // are process-scoped by nature — one logger per process — and are
-        // named here rather than resolved.
+        // compiling here until it is resolved above.
         let GatewaySettings {
             timezone: _, locale: _, build: _, version: _, encoded: _, hardware_id: _,
             market_data_host: _, port: _, registration_timeout_ms: _,

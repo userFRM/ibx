@@ -414,6 +414,61 @@ fn build_ccp_logon_structure() {
     assert!(fields[&6351].contains("abc123"));
 }
 
+/// What a session states is what its logon announces.
+///
+/// The structure test above states nothing and reads the defaults back, which
+/// holds just as well for a logon that ignores its settings and composes the
+/// same message every time. These are the fields a caller changes by stating a
+/// setting, checked against a value no default could have produced.
+#[test]
+fn a_stated_setting_is_what_the_logon_announces() {
+    let settings = crate::settings::SessionSettings {
+        timezone: "Europe/Zurich".into(),
+        build: "9999".into(),
+        version: "9.9.9".into(),
+        ..Default::default()
+    };
+    let msg = build_ccp_logon(
+        &settings, "abc123|00:00:00:00:00:00", "17.0.10.0.101/W/ja_JP/G", 10, 1,
+    );
+    let fields = fix_parse(&msg);
+    assert_eq!(fields[&6947], "Europe/Zurich", "the zone the session announces");
+    assert_eq!(fields[&6034], "9999", "the build it announces");
+    assert_eq!(fields[&6968], "9.9.9", "the version beside it");
+    assert_eq!(fields[&6266], "17.0.10.0.101/W/ja_JP/G", "the longer string with them");
+}
+
+/// Where a farm connection goes is the whole of what these two settings do.
+#[test]
+fn a_stated_host_and_port_are_where_a_farm_connection_goes() {
+    let venue_named = crate::settings::SessionSettings {
+        market_data_host: None,
+        port: 4000,
+        ..Default::default()
+    };
+    assert_eq!(
+        farm_destination(&venue_named, "hdc1.example.com", Some(4002)),
+        ("hdc1.example.com".to_string(), 4002),
+        "what the venue routed to stands where the session states nothing",
+    );
+
+    let stated = crate::settings::SessionSettings {
+        market_data_host: Some("farm.example.invalid".into()),
+        port: 5001,
+        ..Default::default()
+    };
+    assert_eq!(
+        farm_destination(&stated, "hdc1.example.com", Some(4002)),
+        ("farm.example.invalid".to_string(), 4002),
+        "a stated host is where the connection opens",
+    );
+    assert_eq!(
+        farm_destination(&stated, "hdc1.example.com", None),
+        ("farm.example.invalid".to_string(), 5001),
+        "and the stated port applies where the routing named none",
+    );
+}
+
 #[test]
 fn build_farm_logon_has_required_tags() {
     let token = BigUint::from(999u64);

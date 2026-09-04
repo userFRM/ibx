@@ -224,6 +224,21 @@ fn hw_info_machine_id_is_stable_across_calls() {
         "machine ID must be 8 hex chars, got {machine1:?}");
 }
 
+/// A stated machine identity is the one presented, padded to the width the
+/// field takes. It reaches the wire in tag 6351 and in the connection request,
+/// and every other test here states none and reads back the machine's own.
+#[test]
+fn a_stated_machine_identity_is_the_one_presented() {
+    assert!(
+        get_hw_info(Some("abc123")).starts_with("00abc123|"),
+        "got {}",
+        get_hw_info(Some("abc123")),
+    );
+    // Anything the field cannot carry is not an identity to present, so the
+    // machine's own stands rather than a malformed one going out.
+    assert_eq!(get_hw_info(Some("not hex")), get_hw_info(None));
+}
+
 #[test]
 fn hw_info_mac_format_is_six_hex_octets() {
     let info = get_hw_info(None);

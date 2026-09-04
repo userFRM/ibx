@@ -400,6 +400,31 @@ pub struct Session {
     pub security_definition: Option<Connection>,
 }
 
+/// Where a farm connection goes: the host the venue named unless the session
+/// states one of its own, and the port the venue named unless it named none.
+///
+/// Every farm this opens, not the market-data one alone. `Farm` does name the
+/// connection — `MarketData` is the quote connection, and the trading
+/// connection is the CCP one, which never comes through here — so scoping this
+/// is a one-line change and deliberately not made: the setting is an escape
+/// hatch for pointing a session somewhere else, and moving one of three
+/// connections is not what anyone reaches for it to do. Documented as moving
+/// them all, which is what it does.
+///
+/// Named on its own because it is the whole of what `market_data_host` and
+/// `port` do, and a destination that is only computed on the way into a socket
+/// cannot be read back without opening one.
+pub(crate) fn farm_destination(
+    settings: &crate::settings::SessionSettings,
+    host: &str,
+    stated_port: Option<u16>,
+) -> (String, u16) {
+    (
+        settings.market_data_host.clone().unwrap_or_else(|| host.to_string()),
+        stated_port.unwrap_or(settings.port),
+    )
+}
+
 /// Connect to a data farm: key exchange → encrypted logon → token auth → routing →
 /// Connection.
 pub fn connect_farm(
@@ -423,20 +448,7 @@ pub fn connect_farm(
     if cancelled() {
         return Err(cancelled_by_the_client(&format!("{farm_id} reconnect")));
     }
-    // What the venue said to reach this farm on. The configured port applies
-    // only where it said nothing.
-    let port = stated_port.unwrap_or(settings.port);
-    // Every farm this opens, not the market-data one alone. `Farm` does name
-    // the connection — `MarketData` is the quote connection, and the trading
-    // connection is the CCP one, which never comes through here — so scoping
-    // this is a one-line change and deliberately not made: the setting is an
-    // escape hatch for pointing a session somewhere else, and moving one of
-    // three connections is not what anyone reaches for it to do. Documented as
-    // moving them all, which is what it does.
-    let farm_host = settings
-        .market_data_host
-        .clone()
-        .unwrap_or_else(|| host.to_string());
+    let (farm_host, port) = farm_destination(settings, host, stated_port);
     log::info!("Connecting to {farm_id} {farm_host}:{port}");
     let addr = format!("{farm_host}:{port}")
         .to_socket_addrs()?
