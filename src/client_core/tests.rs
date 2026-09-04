@@ -1450,15 +1450,15 @@ fn a_family_send_that_stops_partway_forgets_what_it_did_not_send() {
 
     assert!(sent.is_err(), "the caller is told the family did not all go");
     assert!(
-        core.is_working_at_the_venue(80),
+        core.is_working_at_the_venue(80, None),
         "the parent reached the engine and may be live at the venue",
     );
     assert!(
-        !core.is_working_at_the_venue(81),
+        !core.is_working_at_the_venue(81, None),
         "the order that asked to transmit did not reach the engine",
     );
     assert!(
-        !core.is_working_at_the_venue(82),
+        !core.is_working_at_the_venue(82, None),
         "nor did the sibling behind it, so neither is an order to withdraw or revise",
     );
 }

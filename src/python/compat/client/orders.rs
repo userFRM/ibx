@@ -227,31 +227,42 @@ impl EClient {
             )));
         };
 
+        // If orderId already names a working order, this is a modification —
+        // emit Modify instead of Submit. Settled before anything is
+        // registered, as on the other surface: asking for a slot first spent
+        // one of the table's on a contract this call then refused, and the
+        // table does not grow.
+        let venue = self.shared_state().ok();
+        let replacing = self.core.is_working_at_the_venue(oid, venue.as_deref());
+        // A replace carries the order id and its fields, not the contract, so
+        // the order stays on the instrument it was placed on. A contract
+        // naming a different instrument is refused rather than recorded.
+        let placed_on = if replacing { self.core.tracked_instrument(oid) } else { None };
+        let wrong_contract = || Refusal::validation(format!(
+            "order {oid} is working on another contract, and a replace names \
+             the order rather than the contract: withdraw it and place a new \
+             order to trade {}",
+            contract.symbol,
+        ));
         // A registration the engine does not answer — a wait that ran out or
         // an engine that went away mid-request — is a refusal, and reported
         // as one: nothing this call sends has anywhere to go.
-        let instrument = match self.find_or_register_instrument(py, contract) {
-            Ok(instrument) => instrument,
-            Err(why) => return self.report_refusal(py, order_id, why),
+        let instrument = match placed_on {
+            Some(placed_on) if contract.con_id != 0 => {
+                if self.core.cached_instrument(contract.con_id) != Some(placed_on) {
+                    return self.report_refusal(py, order_id, wrong_contract());
+                }
+                placed_on
+            }
+            _ => match self.find_or_register_instrument(py, contract) {
+                Ok(instrument) => instrument,
+                Err(why) => return self.report_refusal(py, order_id, why),
+            },
         };
 
-        // If orderId is already tracked, this is a modification — emit Modify instead
-        // of Submit.
-        let replacing = self.core.is_working_at_the_venue(oid);
         let cmd = if replacing {
-            // A replace carries the order id and its fields, not the contract, so
-            // the order stays on the instrument it was placed on. A contract naming
-            // a different instrument is refused rather than recorded.
-            let placed_on = self.core.open_orders.lock().unwrap()
-                .get(&oid)
-                .map(|tracked| tracked.instrument);
             if placed_on.is_some_and(|placed_on| placed_on != instrument) {
-                return self.report_refusal(py, order_id, Refusal::validation(format!(
-                    "order {oid} is working on another contract, and a replace names \
-                     the order rather than the contract: withdraw it and place a new \
-                     order to trade {}",
-                    contract.symbol,
-                )));
+                return self.report_refusal(py, order_id, wrong_contract());
             }
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one.
@@ -688,7 +699,11 @@ impl EClient {
             self.deliver(py, "order_status",
                 (*order_id as i64, tracked.status.as_str(), tracked.filled, tracked.remaining,
                  0.0f64, tracked.order.perm_id, tracked.order.parent_id, 0.0f64,
-                 self.client_id.load(Ordering::Acquire) as i64, "", 0.0f64))?;
+                 // The client the order was placed under, as the accompanying
+                 // order object already states. Read off this client instead,
+                 // the two callbacks for one order disagree and the status
+                 // attributes the order to whoever happened to ask.
+                 tracked.order.client_id as i64, "", 0.0f64))?;
         }
         self.deliver(py, "open_order_end", ())?;
         Ok(())

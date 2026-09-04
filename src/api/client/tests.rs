@@ -2846,7 +2846,7 @@ fn a_staged_revision_does_not_hide_the_order_the_venue_is_working() {
     client.place_order(88, &spy(), &order(false, 101.0)).expect("the change is kept");
     assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
     assert!(
-        client.core.is_working_at_the_venue(88),
+        client.core.is_working_at_the_venue(88, Some(&client.shared)),
         "the order is still one the venue is working",
     );
 
@@ -3356,7 +3356,7 @@ fn a_global_cancel_keeps_the_order_a_staged_revision_belongs_to() {
     client.req_global_cancel().expect("everything withdrawn");
     assert!(!client.core.is_held(85), "the change that was never sent is forgotten");
     assert!(
-        client.core.is_working_at_the_venue(85),
+        client.core.is_working_at_the_venue(85, Some(&client.shared)),
         "and the order it was a change to is still one the venue is working",
     );
 }
@@ -8185,4 +8185,42 @@ fn a_book_given_up_on_is_said_to_the_caller_that_asked_for_it() {
         "the request that asked for the book is told it is no longer served: {:?}",
         heard.told,
     );
+}
+
+/// An order the venue replayed at connect is replaced, not placed again.
+///
+/// A replayed order was placed by some earlier session, so it is in no book
+/// this client keeps. Asked only of that book, a call naming its id read as a
+/// first placement: a new order went out under a number the venue is already
+/// working, and the engine's record of the order it named was overwritten on
+/// the way, so the caller was reading terms nothing at the venue held.
+#[test]
+fn a_replayed_order_is_replaced_rather_than_placed_again() {
+    let (client, rx, shared) = test_client();
+    shared.orders.push_order_info(4242, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: crate::types::model::Order {
+            order_id: 4242, action: "BUY".into(), total_quantity: 100.0,
+            order_type: "LMT".into(), lmt_price: 100.0, ..Default::default()
+        },
+        order_state: crate::types::model::OrderState {
+            status: "Submitted".into(), ..Default::default()
+        },
+        last_exec: Default::default(),
+    });
+    shared.orders.set_replay_done();
+
+    let revision = Order {
+        order_id: 4242, action: "BUY".into(), total_quantity: 100.0,
+        order_type: "LMT".into(), lmt_price: 101.0, tif: "DAY".into(),
+        transmit: true, ..Default::default()
+    };
+    client.place_order(4242, &spy(), &revision).expect("the revision travels");
+    match rx.try_recv().expect("something travels") {
+        ControlCommand::Order(OrderRequest::Modify { order_id, price, .. }) => {
+            assert_eq!(order_id, 4242);
+            assert_eq!(price, crate::types::price_from_f64(101.0));
+        }
+        other => panic!("a replace of a working order, not {other:?}"),
+    }
 }

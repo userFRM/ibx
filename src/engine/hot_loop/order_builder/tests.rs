@@ -3556,3 +3556,63 @@ fn a_withdrawal_of_everything_that_never_went_is_said_to_the_caller() {
         "and it says what did not reach the venue: {message}",
     );
 }
+
+/// A replacement is named `orderId.revision`, and the revision counts up.
+///
+/// The counter has a width. Reached, the next increment overflows: the engine
+/// dies where overflow is checked, and where it is not the name wraps to a
+/// revision the venue has already answered, so the order is replaced under an
+/// older name than the one it is working under. Either way the record had
+/// already been overwritten with the attempted terms, so the caller reads an
+/// order the venue never took.
+#[test]
+fn a_replacement_that_cannot_be_named_leaves_the_order_standing() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy,
+        100 * crate::types::QTY_SCALE, 150 * crate::types::PRICE_SCALE,
+        b'2', b'1', 0,
+    ));
+    // The last name the order can carry.
+    context.modify_versions.insert(42, u32::MAX);
+    context.last_clord.insert(42, format!("42.{}", u32::MAX));
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 42,
+        price: 151 * crate::types::PRICE_SCALE,
+        qty: 100 * crate::types::QTY_SCALE,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+
+    let mut buf = [0u8; 8192];
+    assert!(peer.read(&mut buf).is_err(), "nothing went out under a name the venue has answered");
+    let kept = context.order(42).expect("the order the venue holds is still tracked");
+    assert_eq!(kept.price, 150 * crate::types::PRICE_SCALE, "on the terms the venue holds");
+    assert_ne!(
+        kept.status, crate::types::OrderStatus::PendingReplace,
+        "and not standing as though a replace were out for it",
+    );
+    assert_eq!(
+        context.modify_versions.get(&42), Some(&u32::MAX),
+        "the counter did not wrap past its last name",
+    );
+    let said = shared.orders.drain_order_inactive();
+    assert!(
+        said.iter().any(|(id, _, why)| *id == 42 && why.contains("named")),
+        "and the caller is told why the replace did not go: {said:?}",
+    );
+}

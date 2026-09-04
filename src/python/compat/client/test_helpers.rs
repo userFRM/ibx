@@ -278,6 +278,34 @@ impl EClient {
         Ok(())
     }
 
+    /// Seed the venue's own order book with an order this client did not
+    /// place, as a connect replays one.
+    #[doc(hidden)]
+    #[pyo3(signature = (
+        order_id, symbol, action, total_quantity, lmt_price, status="Submitted".to_string(),
+    ))]
+    fn _test_push_venue_order(
+        &self, order_id: u64, symbol: &str, action: &str,
+        total_quantity: f64, lmt_price: f64, status: String,
+    ) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.orders.push_order_info(order_id, crate::bridge::RichOrderInfo {
+            contract: crate::types::model::Contract {
+                symbol: symbol.to_string(), sec_type: "STK".into(),
+                exchange: "SMART".into(), currency: "USD".into(),
+                ..Default::default()
+            },
+            order: crate::types::model::Order {
+                order_id: order_id as i64, action: action.to_string(),
+                total_quantity, order_type: "LMT".into(), lmt_price,
+                ..Default::default()
+            },
+            order_state: crate::types::model::OrderState { status, ..Default::default() },
+            last_exec: Default::default(),
+        });
+        Ok(())
+    }
+
     /// Push a completed order + rich info into SharedState (for req_completed_orders
     /// regression tests).
     #[doc(hidden)]

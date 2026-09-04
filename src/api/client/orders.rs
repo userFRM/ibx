@@ -172,7 +172,7 @@ impl EClient {
             )));
         };
 
-        let replacing = self.core.is_working_at_the_venue(oid);
+        let replacing = self.core.is_working_at_the_venue(oid, Some(&self.shared));
         // Where a replace names a contract other than the one the order is
         // working on, that is settled before anything is registered: asking
         // for a slot first spent one of the table's on a contract this call

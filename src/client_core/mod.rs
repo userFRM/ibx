@@ -2234,8 +2234,17 @@ impl ClientCore {
     /// What decides it is a held submission, not a hold of any kind: a live
     /// order can have a revision of its own waiting to be transmitted, and that
     /// order is still one the venue is working.
-    pub fn is_working_at_the_venue(&self, order_id: u64) -> bool {
-        self.is_order_tracked(order_id) && !self.holds_a_submission(order_id)
+    ///
+    /// The venue's own book is asked beside this client's. An order the venue
+    /// replayed at connect was not placed here, so it is in no local book, and
+    /// asked of the local book alone a replace of one read as a first
+    /// placement: it went out as a new order under a number the venue is
+    /// already working, and the record of the order it named was overwritten
+    /// on the way.
+    pub fn is_working_at_the_venue(&self, order_id: u64, venue: Option<&SharedState>) -> bool {
+        (self.is_order_tracked(order_id)
+            || venue.is_some_and(|v| v.orders.venue_is_working(order_id)))
+            && !self.holds_a_submission(order_id)
     }
 
     /// Whether this id names an order built and kept rather than sent.

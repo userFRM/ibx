@@ -254,6 +254,21 @@ impl OrderState {
             .collect()
     }
 
+    /// Whether the venue has named this order as one it is working.
+    ///
+    /// An order the venue replayed at connect is known here and in no local
+    /// book: this client did not place it. Asked only of the book of what
+    /// this client placed, a replace of a replayed order reads as a first
+    /// placement and is sent as one, under a number the venue is already
+    /// working.
+    pub fn venue_is_working(&self, order_id: u64) -> bool {
+        self.order_cache.lock().unwrap().get(&order_id).is_some_and(|info| {
+            crate::types::order_status::is_open_or_reactivatable(
+                &info.order_state.status, &info.order_state.completed_status,
+            )
+        })
+    }
+
     /// Get enriched order info by order_id.
     pub fn get_order_info(&self, order_id: u64) -> Option<RichOrderInfo> {
         self.order_cache.lock().unwrap().get(&order_id).cloned()

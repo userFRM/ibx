@@ -373,6 +373,23 @@ pub(crate) fn drain_and_send_orders(
                     orig_stop
                 };
 
+                // Named before the record is restated. Names run out at the
+                // width of the counter, and a modification that cannot be
+                // named has to leave the order standing as the venue holds
+                // it — not half-replaced here under a name the venue has
+                // already seen, which is how the same terms go out twice.
+                let prev_ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
+                let Some(new_ver) = prev_ver.checked_add(1) else {
+                    shared.orders.push_order_inactive(
+                        order_id,
+                        ORDER_MESSAGE_ERROR_CODE,
+                        format!(
+                            "order {order_id} has been replaced as many times as it can be \
+                             named; withdraw it and place a new order",
+                        ),
+                    );
+                    continue;
+                };
                 {
                     // The moved trigger is recorded too: a replacement that
                     // kept the old one would leave the next modify restating a
@@ -401,8 +418,6 @@ pub(crate) fn drain_and_send_orders(
                 // this back in the record's place. The write-failure restore
                 // below does the same off its own copy.
                 // Versioned ClOrdID chaining: orderId.0 → .1 → .2
-                let prev_ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
-                let new_ver = prev_ver + 1;
                 let clord_str = format!("{order_id}.{new_ver}");
                 // OrigClOrdID matches whatever the server last recorded for
                 // this order (which may pre-date the versioned scheme —).
@@ -905,6 +920,8 @@ const CUSTOMER: &str = "0";
 /// IB error code 135: the order a request names does not exist. Reported when
 /// a replace arrives for an order this session does not track.
 const ORDER_NOT_FOUND_ERROR_CODE: i32 = 135;
+/// The venue's code for a message about an order rather than about the wire.
+const ORDER_MESSAGE_ERROR_CODE: i32 = 399;
 
 fn oca_type_str(oca_type: u8) -> &'static str {
     match oca_type {
