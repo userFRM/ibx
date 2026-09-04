@@ -87,6 +87,14 @@ pub(crate) fn untracked_fill_target(
 /// with the tag 103 reason code. Either alone is ambiguous — the text is often
 /// generic and the code alone names no instrument — so both are reported when
 /// the report carries both. Empty when it carries neither.
+/// Which revision of an order a ClOrdID names.
+///
+/// A revision is chained on the number: `90`, then `90.1`, then `90.2`. One
+/// with no suffix is the original, which is revision nought.
+fn revision_of(clord: &str) -> u32 {
+    clord.rsplit_once('.').and_then(|(_, v)| v.parse().ok()).unwrap_or(0)
+}
+
 pub(crate) fn stated_reason(parsed: &std::collections::HashMap<u32, String>) -> String {
     let text = parsed.get(&58).map(|s| s.as_str()).unwrap_or("");
     let code = parsed.get(&103).map(|s| s.as_str()).unwrap_or("");
@@ -847,12 +855,22 @@ impl CcpState {
         // retired the order here, and the order went on working there —
         // absent from the open orders, out of reach of a withdrawal of
         // everything, its fills arriving against nothing.
+        //
+        // Forward only. Reports do not have to arrive in the order the
+        // revisions were sent, and one for an earlier revision arriving behind
+        // a later one moved this back to a name the venue had already
+        // superseded — so the next cancel named that superseded revision as
+        // the original, and the venue answered that it knew no such order.
         if let Some(raw_clord) = parsed.get(&11)
             && !raw_clord.starts_with('C')
             && !raw_clord.starts_with('L')
-            && raw_clord != "*" {
-                context.last_clord.insert(clord_id, raw_clord.clone());
-            }
+            && raw_clord != "*"
+            && context.last_clord.get(&clord_id).is_none_or(|held| {
+                revision_of(raw_clord) >= revision_of(held)
+            })
+        {
+            context.last_clord.insert(clord_id, raw_clord.clone());
+        }
 
         // What-If response: tag 6091=1 with margin data (tag 6092+).
         // The gateway emits a not-ready ack frame whose margin fields carry the
@@ -956,6 +974,12 @@ impl CcpState {
         // it will not make arrive on the same message shape as a successful one.
         // Read as an acknowledgement, a refused revision left
         // the caller believing an order had been changed that had not been.
+        // Which revision this report answers. The venue takes a second
+        // revision before it has answered the first, so an acknowledgement or
+        // a refusal belongs to the one it names and not simply to the order.
+        let reported_revision = parsed.get(&11)
+            .map(|c| revision_of(c))
+            .unwrap_or_else(|| *context.modify_versions.get(&clord_id).unwrap_or(&0));
         let restatement_reason = parsed.get(&378).map(|s| s.as_str()).unwrap_or("");
         let revision_refused = matches!(restatement_reason, "102" | "103");
         let is_replace_ack = ord_status == "5" && !revision_refused;
@@ -963,7 +987,7 @@ impl CcpState {
             // The venue holds what the attempt stated, so the fallback kept
             // against a refusal is spent. A stale refusal arriving behind the
             // acceptance must not put the old terms back over it.
-            context.pre_replace.remove(&clord_id);
+            context.pre_replace.remove(&(clord_id, reported_revision));
         }
         if revision_refused {
             // A revision the venue will not make leaves the order on the terms
@@ -972,7 +996,7 @@ impl CcpState {
             // changed no terms, and the revision it may be waiting on has its
             // own answer coming.
             if restatement_reason == "102" {
-                context.restore_pre_replace(clord_id);
+                context.restore_pre_replace(clord_id, reported_revision);
             }
             // The order stands as it was, so it has no new status to report —
             // but the caller asked for a change and has to learn it did not
@@ -1556,7 +1580,7 @@ impl CcpState {
             // other than the cancel itself.
             let cancel_still_owed = status == crate::types::OrderStatus::Rejected
                 && tracked.is_some_and(|o| o.status == crate::types::OrderStatus::PendingCancel)
-                && context.pre_replace.contains_key(&clord_id);
+                && context.replace_is_outstanding(clord_id);
             if !cancel_still_owed {
                 context.retire_order(clord_id);
             }
@@ -1618,7 +1642,10 @@ impl CcpState {
         // and the refusal of a cancellation changed none — the revision it may
         // be waiting on has its own answer coming.
         if reject_type == 2 && !unknown_order {
-            context.restore_pre_replace(oid);
+            let refused_revision = parsed.get(&11)
+                .map(|c| revision_of(c))
+                .unwrap_or_else(|| *context.modify_versions.get(&oid).unwrap_or(&0));
+            context.restore_pre_replace(oid, refused_revision);
         }
 
         // Update local context only for an order tracked in this session.

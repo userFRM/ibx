@@ -400,10 +400,14 @@ pub(crate) fn drain_and_send_orders(
                 // refusal arrives later, as a message of its own, and puts
                 // this back in the record's place. The write-failure restore
                 // below does the same off its own copy.
-                context.pre_replace.insert(order_id, orig);
                 // Versioned ClOrdID chaining: orderId.0 → .1 → .2
                 let prev_ver = *context.modify_versions.get(&order_id).unwrap_or(&0);
                 let new_ver = prev_ver + 1;
+                // Kept under the revision it belongs to. Revisions overlap —
+                // the venue takes a second before it has answered the first —
+                // and one fallback per order had the answer to one revision
+                // spend or restore another's.
+                context.pre_replace.insert((order_id, new_ver), orig);
                 context.modify_versions.insert(order_id, new_ver);
                 let clord_str = format!("{order_id}.{new_ver}");
                 // OrigClOrdID matches whatever the server last recorded for
@@ -631,8 +635,10 @@ pub(crate) fn drain_and_send_orders(
                 {
                     context.insert_order(prior);
                     // The attempt never reached the wire, so the fallback kept
-                    // against a refusal goes with it.
-                    context.pre_replace.remove(&oid);
+                    // against a refusal goes with it — the revision it was
+                    // recorded under is the one this send was building.
+                    let ver = *context.modify_versions.get(&oid).unwrap_or(&0);
+                    context.pre_replace.remove(&(oid, ver));
                 }
                 // Every leg is marked, not just the one the outcome was
                 // reported under. A bracket's children are sent whatever the

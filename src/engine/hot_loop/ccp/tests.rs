@@ -2425,7 +2425,7 @@ fn a_cancel_is_still_answered_when_rejections_cross_it() {
     // outstanding, a rejection behind a cancel is the venue's word on the
     // order itself and must stand, or the order waits for ever.
     let before = *context.order(42).expect("the order is tracked");
-    context.pre_replace.insert(42, before);
+    context.pre_replace.insert((42, 1), before);
     assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
 
     let report = |exec_type: &str, ord_status: &str, text: &str| {
@@ -4850,6 +4850,82 @@ fn working_order_state() -> (Context, std::sync::Arc<SharedState>) {
     (context, std::sync::Arc::new(SharedState::new()))
 }
 
+/// The name a later cancel gives as the original does not go backwards.
+///
+/// Reports do not have to arrive in the order the revisions were sent. One for
+/// an earlier revision arriving behind a later one moved the recorded name back
+/// to a revision the venue had already superseded, so the next cancel named
+/// that superseded revision as the original and the venue answered that it knew
+/// no such order — leaving the order working, out of reach of a withdrawal.
+#[test]
+fn a_report_for_an_earlier_revision_does_not_take_back_the_name() {
+    let (mut context, shared) = working_order_state();
+    let mut ccp = CcpState::new();
+
+    for revision in ["42.1", "42.2"] {
+        let ack = exec_report_frame(&[
+            (11, revision), (150, "5"), (39, "5"), (100, "ARCA"), (198, "ARCA:1"),
+        ]);
+        ccp.handle_exec_report(&ack, b"", &mut context, &shared, &None, "");
+    }
+    assert_eq!(context.last_clord.get(&42).map(String::as_str), Some("42.2"));
+
+    // The venue answers the first revision after the second.
+    let late = exec_report_frame(&[
+        (11, "42.1"), (150, "5"), (39, "5"), (100, "ARCA"), (198, "ARCA:1"),
+    ]);
+    ccp.handle_exec_report(&late, b"", &mut context, &shared, &None, "");
+
+    assert_eq!(
+        context.last_clord.get(&42).map(String::as_str),
+        Some("42.2"),
+        "the name stays on the latest revision the venue was sent",
+    );
+}
+
+/// A refused revision puts back what the venue held before that revision, not
+/// the terms of an attempt the venue itself refused.
+///
+/// Revisions overlap: the venue takes a second before it has answered the
+/// first, and a refusal of either takes the order out of the book. Kept one
+/// per order, the fallback was overwritten by the later attempt, so the
+/// refusal restored a price the venue had already refused — or found nothing
+/// and left the record showing one it had never accepted.
+#[test]
+fn a_refused_revision_falls_back_to_the_revision_it_replaced() {
+    let (mut context, shared) = working_order_state();
+    let mut ccp = CcpState::new();
+
+    // Two revisions out, neither answered. Each keeps what the record held
+    // before it: the first the original price, the second the first's.
+    let at_100 = *context.order(42).expect("the order is tracked");
+    context.pre_replace.insert((42, 1), at_100);
+    let mut at_101 = at_100;
+    at_101.price = 101 * PRICE_SCALE;
+    context.insert_order(at_101);
+    context.pre_replace.insert((42, 2), at_101);
+    let mut at_102 = at_100;
+    at_102.price = 102 * PRICE_SCALE;
+    context.insert_order(at_102);
+    context.modify_versions.insert(42, 2);
+
+    // The venue refuses the first revision, naming it; the order stands.
+    let refusal = exec_report_frame(&[
+        (11, "42.1"), (150, "5"), (39, "5"), (100, "ARCA"), (198, "ARCA:1"), (378, "102"),
+    ]);
+    ccp.handle_exec_report(&refusal, b"", &mut context, &shared, &None, "");
+
+    assert_eq!(
+        context.order(42).expect("the order still stands").price,
+        100 * PRICE_SCALE,
+        "the record holds what the venue had before the revision it refused",
+    );
+    assert!(
+        !context.replace_is_outstanding(42),
+        "and a fallback built on terms the venue never held goes with it",
+    );
+}
+
 /// A replace writes its attempt into the record ahead of the venue's answer.
 /// Where the venue refuses the attempt, the record must fall back to what the
 /// venue is known to hold: every later action restates from the record, so a
@@ -5057,7 +5133,7 @@ fn a_rejection_with_no_replace_outstanding_finishes_the_order() {
     ));
     assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
     assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
-    assert!(!context.pre_replace.contains_key(&42), "nothing was replaced");
+    assert!(!context.replace_is_outstanding(42), "nothing was replaced");
 
     ccp.process_ccp_message(
         &crate::protocol::fix::fix_build(&[
