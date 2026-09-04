@@ -910,8 +910,13 @@ impl CcpState {
         // is not reconstructible that way, so it falls back to the print — and
         // a negative average is a real value for a spread, so only an absent
         // or unparseable tag falls back at all.
+        //
+        // A stated zero is a value, not an absence: a bust of everything the
+        // order held states one. Filtering the figure on being positive read
+        // it as missing, and the fallback added the bust's own print to what
+        // was already booked — the caller was told the order had doubled its
+        // quantity filled while everything was still remaining.
         let order_cum_qty = parse_qty_tag(parsed.get(&14))
-            .filter(|q| *q > 0)
             .unwrap_or_else(|| {
                 context.order(clord_id).map_or(last_shares, |o| o.filled + last_shares)
             });

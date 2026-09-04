@@ -26,7 +26,13 @@ use crate::bridge::SharedState;
 /// A stream that blocks forever cannot be got out of; one that returns
 /// immediately is a busy loop. This is the compromise, and a caller wanting a
 /// different one says so with [`Subscription::with_timeout`].
+#[cfg(not(test))]
 pub const DEFAULT_IDLE: Duration = Duration::from_secs(30);
+
+/// Short under test, so a wait that must outlast the idle span can be told
+/// from one that is not, without waiting out the whole span.
+#[cfg(test)]
+pub const DEFAULT_IDLE: Duration = Duration::from_millis(30);
 
 /// How long to sleep between looks. Short enough not to add noticeable delay to
 /// a five-second bar, long enough not to spin a core.
@@ -45,7 +51,9 @@ pub struct Subscription<T> {
     take: Take<T>,
     cancel: Option<Cancel>,
     buffered: VecDeque<T>,
-    idle: Duration,
+    /// How long a quiet stretch may last before the stream ends, where it
+    /// ends on one at all. `None` waits as long as it takes.
+    idle: Option<Duration>,
     /// The venue's words, if it refused the request.
     refusal: Option<(i64, String)>,
     done: bool,
@@ -70,13 +78,19 @@ impl<T> Subscription<T> {
             take: Box::new(take),
             cancel: Some(Box::new(cancel)),
             buffered: VecDeque::new(),
-            idle: DEFAULT_IDLE,
+            idle: Some(DEFAULT_IDLE),
             refusal: None,
             done: false,
         }
     }
 
     /// A stream that nothing needs to withdraw — one the venue closes itself.
+    ///
+    /// No idle ending either: there is no request standing that a quiet
+    /// caller would leave unserved, and a quiet stretch is not an end —
+    /// what it carries arrives when something happens, and nothing
+    /// happening is ordinary. Ended on a quiet stretch anyway, everything
+    /// arriving after it reached nobody.
     pub fn without_cancel(
         req_id: i64,
         shared: Arc<SharedState>,
@@ -88,15 +102,16 @@ impl<T> Subscription<T> {
             take: Box::new(take),
             cancel: None,
             buffered: VecDeque::new(),
-            idle: DEFAULT_IDLE,
+            idle: None,
             refusal: None,
             done: false,
         }
     }
 
-    /// How long to wait for the next item before the stream ends.
+    /// How long to wait for the next item before the stream ends. Stated on
+    /// one of the streams that wait as long as it takes, it ends them too.
     pub fn with_timeout(mut self, idle: Duration) -> Self {
-        self.idle = idle;
+        self.idle = Some(idle);
         self
     }
 
@@ -123,8 +138,9 @@ impl<T> Subscription<T> {
 
     /// The next item, or nothing once the stream has ended.
     ///
-    /// Blocks while it waits. Ends on the venue's refusal, on `cancel`, or when
-    /// nothing has arrived for the idle period.
+    /// Blocks while it waits. Ends on the venue's refusal, on `cancel`, on
+    /// the session ending, or — where the stream has one — when nothing has
+    /// arrived for the idle period.
     pub fn next_item(&mut self) -> Option<T> {
         if let Some(item) = self.buffered.pop_front() {
             return Some(item);
@@ -133,7 +149,7 @@ impl<T> Subscription<T> {
             return None;
         }
 
-        let deadline = Instant::now() + self.idle;
+        let deadline = self.idle.map(|idle| Instant::now() + idle);
         loop {
             for item in (self.take)(&self.shared, self.req_id) {
                 self.buffered.push_back(item);
@@ -146,7 +162,15 @@ impl<T> Subscription<T> {
                 self.done = true;
                 return None;
             }
-            if Instant::now() >= deadline {
+            // A session that has ended produces nothing more. Left waiting,
+            // a caller blocked here waits for what is not coming and nobody
+            // says so — the stream that waits as long as it takes waits
+            // forever.
+            if self.shared.reference.session_over().is_some() {
+                self.cancel();
+                return None;
+            }
+            if deadline.is_some_and(|at| Instant::now() >= at) {
                 // Withdrawn, not merely given up on. The idle period ending
                 // ends this subscription for the caller — every call after it
                 // answers nothing — so leaving the request standing has the
@@ -201,7 +225,7 @@ mod tests {
             |_, _| Vec::new(),
             move |req_id| { w.store(req_id, Ordering::Relaxed); },
         );
-        sub.idle = Duration::from_millis(20);
+        sub.idle = Some(Duration::from_millis(20));
 
         assert!(sub.next_item().is_none(), "nothing arrives, so the idle period ends it");
         assert_eq!(withdrawn.load(Ordering::Relaxed), 7, "and the request is withdrawn");
@@ -210,6 +234,50 @@ mod tests {
         withdrawn.store(0, Ordering::Relaxed);
         drop(sub);
         assert_eq!(withdrawn.load(Ordering::Relaxed), 0);
+    }
+
+    /// A stream that withdraws nothing outlasts a quiet stretch.
+    ///
+    /// It ended at the idle span before — right for a request the venue is
+    /// serving, wrong for a feed of what happens: an order changes when the
+    /// account trades, and an hour without one is ordinary. Ended anyway,
+    /// every fill and status after the first quiet span reached nobody.
+    #[test]
+    fn a_stream_that_withdraws_nothing_outlasts_the_idle_span() {
+        let shared = state();
+        // The same shape `order_update_stream` opens.
+        let mut sub: Subscription<crate::types::OrderUpdate> = Subscription::without_cancel(
+            1,
+            Arc::clone(&shared),
+            |sh, _| sh.orders.drain_order_updates(),
+        );
+        let sh = Arc::clone(&shared);
+        let pusher = std::thread::spawn(move || {
+            // Well past the idle span, which the stream did not survive.
+            std::thread::sleep(DEFAULT_IDLE * 3);
+            sh.orders.push_order_update(crate::types::OrderUpdate {
+                order_id: 5, instrument: 0, status: crate::types::OrderStatus::Submitted,
+                filled_qty: 0.0, remaining_qty: 1.0, avg_price: 0, perm_id: 0,
+                parent_id: 0, timestamp_ns: 0,
+            });
+        });
+        let got = sub.next_item();
+        pusher.join().unwrap();
+        assert_eq!(got.map(|u| u.order_id), Some(5), "the wait outlasted the quiet and took what arrived");
+    }
+
+    /// A stream ends with the session that feeds it: nothing more arrives,
+    /// and a wait with no idle span of its own would otherwise never end.
+    #[test]
+    fn a_stream_ends_with_its_session() {
+        let shared = state();
+        let mut sub: Subscription<i64> = Subscription::without_cancel(
+            1,
+            Arc::clone(&shared),
+            |_, _| Vec::new(),
+        );
+        shared.reference.set_session_over("the engine stopped");
+        assert_eq!(sub.next_item(), None, "an ended session feeds no stream");
     }
 
     /// What has arrived is handed over in the order it arrived.

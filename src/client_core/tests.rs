@@ -33,7 +33,7 @@ fn an_account_with_no_positions_still_reports_its_pnl() {
     let shared = SharedState::new();
     shared.portfolio.set_account(&crate::types::AccountState::default());
 
-    core.subscribe_pnl(7);
+    core.subscribe_pnl(7).unwrap();
     let update = core.poll_pnl(&shared).expect("a subscription is answered");
     assert_eq!(update.req_id, 7);
     assert_eq!(update.daily_pnl, 0.0);
@@ -254,7 +254,7 @@ fn poll_pnl_no_subscription_returns_none() {
 fn one_unpriceable_position_sends_the_whole_account_to_the_gateway() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(11);
+    core.subscribe_pnl(11).unwrap();
 
     // One ordinary position that prices fine.
     seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.00, 101.00, 100.00);
@@ -328,7 +328,7 @@ fn an_unknown_seed_does_not_suppress_the_rest_of_a_single_callback() {
 fn an_unsizeable_overnight_position_is_not_priced_as_sold() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(7);
+    core.subscribe_pnl(7).unwrap();
 
     // A quote and a seed, but no position row — the feed dropped it.
     core.con_id_to_instrument.lock().unwrap().insert(756733, 0);
@@ -370,7 +370,7 @@ fn an_unsizeable_overnight_position_is_not_priced_as_sold() {
 fn a_seed_without_a_quantity_is_not_read_as_opened_today() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(8);
+    core.subscribe_pnl(8).unwrap();
 
     seed_pnl_position(&core, &shared, 756733, 0, 10.0, 700.00, 735.00, 730.00);
     shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {
@@ -428,7 +428,7 @@ fn poll_pnl_intraday_opened_position_fires_callback() {
     // After fix: position iterated, money_traded synthesized, daily P&L = unrealized.
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(42);
+    core.subscribe_pnl(42).unwrap();
 
     // 1 share bought at $735.00, now $735.07. No midnight seed (flat at midnight).
     seed_pnl_position(&core, &shared, 756733, 0, 1.0, 735.00, 735.07, 0.0);
@@ -444,7 +444,7 @@ fn poll_pnl_intraday_opened_position_fires_callback() {
 fn poll_pnl_overnight_position_with_seed_unchanged() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(99);
+    core.subscribe_pnl(99).unwrap();
 
     // Held 10 SPY through midnight: qty_midnight=10, prev_close=$730, avg_cost=$700.
     // No fills today (money_traded=0). Current price $735.
@@ -473,7 +473,7 @@ fn poll_pnl_seeded_position_traded_intraday_uses_signed_net_cash() {
     // seed carries +330 net cash (sell proceeds) and +30 realized.
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(31);
+    core.subscribe_pnl(31).unwrap();
 
     // Now holding 7 (was 10 at midnight), avg $100, last $110, prev close $100.
     seed_pnl_position(&core, &shared, 1, 0, 7.0, 100.00, 110.00, 100.00);
@@ -498,7 +498,7 @@ fn poll_pnl_seeded_position_traded_intraday_uses_signed_net_cash() {
 fn poll_pnl_change_detection_suppresses_duplicate() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(7);
+    core.subscribe_pnl(7).unwrap();
     seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.0, 101.0, 0.0);
     assert!(core.poll_pnl(&shared).is_some());
     // Same inputs → no callback.
@@ -513,7 +513,7 @@ fn poll_pnl_falls_back_to_account_level_without_market_data() {
     // account-level P&L instead of returning None forever.
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(21);
+    core.subscribe_pnl(21).unwrap();
 
     // Open position, but NO instrument mapping and NO quote pushed.
     shared.portfolio.set_position_info(PositionInfo {
@@ -551,7 +551,7 @@ fn poll_pnl_falls_back_to_account_level_without_market_data() {
 fn the_overnight_leg_is_valued_at_the_mark_the_venue_states() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(31);
+    core.subscribe_pnl(31).unwrap();
 
     // Quoted at 101.25 now, with no locally derived previous close. The venue
     // states the mark it closed the contract at, which is what the
@@ -590,7 +590,7 @@ fn the_overnight_leg_is_valued_at_the_mark_the_venue_states() {
 fn the_venues_midnight_value_beats_the_clients_previous_close() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(32);
+    core.subscribe_pnl(32).unwrap();
 
     // Quoted at 101.00 with a previous close of 90.00.
     seed_pnl_position(&core, &shared, 7001, 0, 10.0, 100.00, 101.00, 90.00);
@@ -618,7 +618,7 @@ fn the_venues_midnight_value_beats_the_clients_previous_close() {
 fn a_mark_that_does_not_read_as_a_number_sends_the_account_to_the_venue() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(33);
+    core.subscribe_pnl(33).unwrap();
 
     for (i, con_id) in [6001i64, 6002, 6003].into_iter().enumerate() {
         seed_pnl_position(&core, &shared, con_id, i as u32, 1.0, 50.00, 51.00, 0.0);
@@ -673,7 +673,7 @@ fn poll_pnl_prefers_quotes_over_account_level_when_priced() {
     // the account-level fallback must not override it.
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(22);
+    core.subscribe_pnl(22).unwrap();
 
     // Priced position: 1 share, avg 100, last 101 → daily/unrealized = 1.00.
     seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.0, 101.0, 0.0);
@@ -1031,7 +1031,7 @@ fn an_account_summary_reports_every_figure_the_venue_stated() {
         shared.portfolio.note_account_value(key, value, currency);
     }
 
-    core.subscribe_account_summary(3, "All");
+    core.subscribe_account_summary(3, "All").unwrap();
     let batch = core.prepare_account_summary(&shared, "DU1").expect("a summary");
     assert_eq!(batch.req_id, 3);
     let names: Vec<&str> = batch.entries.iter().map(|e| e.tag.as_str()).collect();
@@ -1040,16 +1040,66 @@ fn an_account_summary_reports_every_figure_the_venue_stated() {
     }
 
     // A figure stated in more than one currency is stated in each of them.
-    core.subscribe_account_summary(4, "TotalCashValue");
+    core.unsubscribe_account_summary(3);
+    core.subscribe_account_summary(4, "TotalCashValue").unwrap();
     let batch = core.prepare_account_summary(&shared, "DU1").expect("a summary");
     assert_eq!(batch.entries.len(), 1);
     assert_eq!(batch.entries[0].tag, "TotalCashValue");
     assert_eq!(batch.entries[0].currency, "EUR");
 
     // And a tag the venue never stated reports nothing rather than a zero.
-    core.subscribe_account_summary(5, "Cushion");
+    core.unsubscribe_account_summary(4);
+    core.subscribe_account_summary(5, "Cushion").unwrap();
     let batch = core.prepare_account_summary(&shared, "DU1").expect("a summary");
     assert!(batch.entries.is_empty(), "{:?}", batch.entries.len());
+}
+
+/// One slot serves each of these subscriptions. A second asker under another
+/// request is refused rather than handed the slot, which took the updates
+/// away from the first caller without a word to either one. The first
+/// subscription keeps receiving, and asking again under the id that holds the
+/// slot is not a second subscription.
+#[test]
+fn a_second_pnl_or_summary_subscription_is_refused_not_silenced() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.portfolio.set_account(&crate::types::AccountState::default());
+
+    core.subscribe_pnl(7).unwrap();
+    let second = core.subscribe_pnl(8);
+    let why = second.expect_err("the slot is held, so a second asker is refused");
+    assert_eq!(why.code, Refusal::VALIDATION);
+    assert!(
+        why.message.contains("request 7"),
+        "the refusal names the holder: {}", why.message,
+    );
+    core.subscribe_pnl(7).unwrap_or_else(|e| panic!("asking again under the holder is allowed: {e:?}"));
+    assert_eq!(
+        core.poll_pnl(&shared).map(|u| u.req_id), Some(7),
+        "the first subscription still receives",
+    );
+
+    core.subscribe_account_summary(3, "All").unwrap();
+    let second = core.subscribe_account_summary(4, "Cushion");
+    let why = second.expect_err("the summary slot is held too");
+    assert_eq!(why.code, Refusal::VALIDATION);
+    assert!(
+        why.message.contains("request 3"),
+        "the refusal names the holder: {}", why.message,
+    );
+    core.subscribe_account_summary(3, "NetLiquidation").unwrap_or_else(|e| {
+        panic!("asking again under the holder is allowed: {e:?}")
+    });
+    assert!(
+        core.prepare_account_summary(&shared, "DU1").is_some(),
+        "the first subscription still receives",
+    );
+
+    // A cancelled subscription frees the slot for another.
+    core.unsubscribe_pnl(7);
+    core.subscribe_pnl(8).unwrap();
+    core.unsubscribe_account_summary(3);
+    core.subscribe_account_summary(4, "Cushion").unwrap();
 }
 
 /// A quote is per unit and a contract may be worth many of them. Valued from
@@ -1060,7 +1110,7 @@ fn an_account_summary_reports_every_figure_the_venue_stated() {
 fn an_option_holding_is_not_valued_from_a_per_unit_price() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.subscribe_pnl(41);
+    core.subscribe_pnl(41).unwrap();
 
     seed_pnl_position(&core, &shared, 7001, 0, 2.0, 3.00, 4.00, 3.00);
     shared.portfolio.set_position_info(PositionInfo {

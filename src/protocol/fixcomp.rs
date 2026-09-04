@@ -208,7 +208,10 @@ pub fn fixcomp_frame_length(data: &[u8]) -> FrameLength {
 /// calendar's own list of event types at a little under a hundred and eighty
 /// kilobytes, so this is some hundreds of times the largest thing seen rather
 /// than a figure anything is expected to approach.
-const MAX_INFLATED: u64 = 64 * 1024 * 1024;
+///
+/// Visible to the connection because the largest frame that may be buffered
+/// is the largest frame that may be inflated: one bounds the other.
+pub(crate) const MAX_INFLATED: u64 = 64 * 1024 * 1024;
 
 /// How much of a frame is read before its header is given up on.
 ///

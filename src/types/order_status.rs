@@ -21,6 +21,7 @@ pub fn is_open_status(status: &str) -> bool {
         "ApiPending"
             | "PendingSubmit"
             | "PendingCancel"
+            | "PendingReplace"
             | "PreSubmitted"
             | "Submitted"
     )
@@ -70,7 +71,11 @@ pub fn order_status_str(status: OrderStatus) -> &'static str {
         OrderStatus::PreSubmitted => "PreSubmitted",
         OrderStatus::Submitted => "Submitted",
         OrderStatus::PendingCancel => "PendingCancel",
-        OrderStatus::PendingReplace => "PendingCancel", // IB API has no PendingReplace string
+        // The venue's own word for an order whose change it has not made
+        // yet. Named as a pending cancel, a caller watching its order saw a
+        // withdrawal under way while a modification was, and its cancel
+        // logic fired on a change.
+        OrderStatus::PendingReplace => "PendingReplace",
         OrderStatus::Filled => "Filled",
         // The venue reports a partly filled working order as submitted, and
         // the filled and remaining quantities carry the distinction. Named as

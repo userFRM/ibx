@@ -39,7 +39,11 @@ impl EClient {
     /// asked which, so there is no second account or model portfolio to name.
     #[pyo3(signature = (req_id, account, model_code=""))]
     fn req_pnl(&self, py: Python<'_>, req_id: i64, account: &str, model_code: &str) -> PyResult<()> {
-        self.core.subscribe_pnl(req_id);
+        // Refused while another request holds the subscription, and nothing
+        // is asked of the venue for a request that will not be reported.
+        if let Err(why) = self.core.subscribe_pnl(req_id) {
+            return self.report_refusal(py, req_id, why);
+        }
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         let acct = if account.is_empty() { self.account() } else { account.to_string() };
         let _ = model_code;
@@ -94,9 +98,13 @@ impl EClient {
     /// here, and the venue states its figures for that account without being
     /// asked which, so there is no second account or model portfolio to name.
     #[pyo3(signature = (req_id, group_name, tags))]
-    fn req_account_summary(&self, req_id: i64, group_name: &str, tags: &str) -> PyResult<()> {
+    fn req_account_summary(&self, py: Python<'_>, req_id: i64, group_name: &str, tags: &str) -> PyResult<()> {
         let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
-        self.core.subscribe_account_summary(req_id, tags);
+        // Refused while another request holds the subscription, as for
+        // `req_pnl`, and said to the caller rather than silently taking it.
+        if let Err(why) = self.core.subscribe_account_summary(req_id, tags) {
+            return self.report_refusal(py, req_id, why);
+        }
         let _ = group_name;
         Ok(())
     }

@@ -295,6 +295,13 @@ impl EClient {
         // Inactive (39=I) order reasons → error. order_status above
         // already reported the "Inactive" string; this carries why.
         for (order_id, code, msg) in self.shared.orders.drain_order_inactive() {
+            // A refusal is the end of a preview: it states what an order
+            // would have cost, and nothing reached the book. Left
+            // standing, the record read as a working order and its number
+            // as spent.
+            if self.core.tracked_order(order_id).is_some_and(|o| o.what_if) {
+                self.core.untrack_order(order_id);
+            }
             wrapper.error(order_id as i64, code as i64, &msg, "");
         }
 

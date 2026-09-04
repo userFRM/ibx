@@ -4637,6 +4637,115 @@ fn process_msgs_what_if_emits_full_order_state() {
     assert!(evt.contains("comm=7"), "commission wrong: {evt}");
 }
 
+/// A preview is a question about an order, not an order: nothing reaches
+/// the book while it runs, and nothing may report it as working. Left on
+/// the book, every preview counted as exposure the account did not have.
+#[test]
+fn a_preview_is_never_reported_as_a_working_order() {
+    let (client, rx, shared) = test_client();
+    let preview = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 150.0, what_if: true, ..Default::default()
+    };
+    client.place_order(6101, &spy(), &preview).unwrap();
+    while rx.try_recv().is_ok() {}
+
+    // Still unanswered: nothing reads it as working.
+    assert!(
+        client.core.collect_open_orders(&client.shared).iter().all(|(id, _)| *id != 6101),
+        "a preview awaiting its answer is not an open order",
+    );
+
+    // Answered: it leaves nothing behind.
+    shared.orders.push_what_if(WhatIfResponse {
+        order_id: 6101, instrument: 0,
+        init_margin_before: 0, maint_margin_before: 0, equity_with_loan_before: 0,
+        init_margin_after: crate::types::PRICE_SCALE, maint_margin_after: 0,
+        equity_with_loan_after: 0, commission: 0, min_commission: 0, max_commission: 0,
+        commission_currency: String::new(), warning_text: String::new(),
+    });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        client.core.collect_open_orders(&client.shared).iter().all(|(id, _)| *id != 6101),
+        "an answered preview leaves nothing on the book",
+    );
+}
+
+/// A preview the venue refuses ends there: the reason is reported under
+/// the order's number and the record goes with the refusal. Left
+/// standing, the refusal read as a live order and its number as spent.
+#[test]
+fn a_refused_preview_is_reported_and_leaves_nothing() {
+    let (client, rx, shared) = test_client();
+    let preview = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 150.0, what_if: true, ..Default::default()
+    };
+    client.place_order(6102, &spy(), &preview).unwrap();
+    while rx.try_recv().is_ok() {}
+
+    // The venue's refusal of a preview arrives as an error under the
+    // order's number.
+    shared.orders.push_order_inactive(6102, 201, "the margin cannot be stated".into());
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:6102:201:")),
+        "the refusal reaches the caller: {:?}", w.events,
+    );
+    assert!(!client.core.is_order_tracked(6102), "the record went with the refusal");
+    assert!(client.core.collect_open_orders(&client.shared).is_empty());
+}
+
+/// A preview asked as a question answers with the venue's refusal and
+/// leaves nothing behind: no record, and the number it went out under is
+/// free to the next order.
+#[test]
+fn a_preview_the_venue_refuses_answers_the_refusal_and_leaves_nothing() {
+    let (client, _rx, shared) = test_client();
+    let preview = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 150.0, what_if: true, ..Default::default()
+    };
+    let pushed = Arc::clone(&shared);
+    let refused = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            // The number is this client's own choosing while the question
+            // runs; wait for the record before refusing under it.
+            let id = loop {
+                let found = client.core.open_orders.lock().unwrap().iter()
+                    .find(|(_, tracked)| tracked.order.what_if)
+                    .map(|(id, _)| *id);
+                if let Some(id) = found { break id; }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            };
+            pushed.orders.push_order_inactive(id, 201, "the margin cannot be stated".into());
+        });
+        client.what_if_order(&spy(), &preview).expect_err("the venue refused")
+    });
+    assert_eq!(refused.code, 201, "the venue's number reaches the caller: {refused}");
+    assert!(client.core.open_orders.lock().unwrap().is_empty(), "nothing stays on the book");
+}
+
+/// A preview nothing answers is given up on, and its record goes with
+/// the giving up. The wait is the whole answer timeout, which is the
+/// length of this test.
+#[test]
+fn a_preview_nothing_answers_leaves_nothing_behind() {
+    let (client, _rx, _shared) = test_client();
+    let preview = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 150.0, what_if: true, ..Default::default()
+    };
+    let refused = client.what_if_order(&spy(), &preview).expect_err("nothing answers");
+    assert_eq!(refused.code, Refusal::NO_ANSWER, "silence says so: {refused}");
+    assert!(
+        client.core.open_orders.lock().unwrap().is_empty(),
+        "a question nobody answered leaves nothing on the book",
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  process_msgs — historical data
 // ═══════════════════════════════════════════════════════════════════
@@ -5526,6 +5635,22 @@ fn engine_connection_loss_fires_connection_closed_once() {
     // Polling again must not repeat it.
     client.process_msgs(&mut w);
     assert_eq!(w.events, vec!["connection_closed"]);
+}
+
+/// The health check reads the session's own state, not only what a pump
+/// has observed. A shape that never pumps `process_msgs` heard of an
+/// engine-side ending nowhere else, and kept saying connected after the
+/// session underneath it was over.
+#[test]
+fn is_connected_says_false_once_the_session_is_over() {
+    let (client, _rx, shared) = test_client();
+    assert!(client.is_connected(), "a fresh session is connected");
+
+    // Recorded by the engine itself; nothing is pumped here.
+    shared.reference.set_session_over(
+        crate::reliability::retry::DisconnectReason::EngineStopped.as_str(),
+    );
+    assert!(!client.is_connected(), "an ended session is not connected");
 }
 
 #[test]
@@ -6726,7 +6851,9 @@ fn asking_for_the_accounts_pnl_asks_the_venue() {
         "the venue was not asked for the account's P&L",
     );
 
-    // And under the account named, where one is.
+    // And under the account named, where one is. The slot is held by the
+    // first request, so that one is cancelled before another may ask.
+    client.cancel_pnl(9);
     client.req_pnl(10, "DU999", "");
     assert!(rx.try_iter().any(|cmd| matches!(
         cmd, ControlCommand::SubscribePnl { account, .. } if account == "DU999"

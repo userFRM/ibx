@@ -119,6 +119,17 @@ impl Client {
         })
     }
 
+    /// Build around a session assembled elsewhere (for testing).
+    #[doc(hidden)]
+    pub fn from_parts(inner: EClient) -> Self {
+        Self {
+            inner,
+            recorded: Arc::new(Mutex::new(Recorded::default())),
+            next_stream_id: std::sync::atomic::AtomicI64::new(STREAM_ID_BASE),
+            connected_at: 0,
+        }
+    }
+
     // ── Calls that exist because the other client talks to a local process ──
 
     /// What this client speaks.
@@ -305,12 +316,13 @@ impl Client {
         use_rth: bool,
     ) -> Result<String, Refusal> {
         let req_id = self.stream_id();
-        // The id is this facade's own and always fits the wire, so the only
-        // way the request fails to leave is the engine being gone. Under the
-        // number the reference client reports that under, rather than the one
-        // an untyped message would default to, which says the venue refused
-        // something it never saw.
-        self.inner.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1).map_err(Refusal::not_connected)?;
+        // A refusal keeps the number it left with. These requests are
+        // refused for reasons of their own — a contract nobody can name,
+        // a field the wire cannot carry — and rewritten as "not
+        // connected" they read as a session problem, so a caller retried
+        // for ever a request that no session could carry. The one refusal
+        // that states a session problem carries that number already.
+        self.inner.req_head_time_stamp(req_id, contract, what_to_show, use_rth, 1)?;
         let what = format!("the earliest data for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_head_timestamp_for(req_id as u32)
@@ -321,7 +333,7 @@ impl Client {
     /// Contracts whose symbol or name matches a pattern.
     pub fn matching_symbols(&self, pattern: &str) -> Result<Vec<crate::control::contracts::SymbolMatch>, Refusal> {
         let req_id = self.stream_id();
-        self.inner.req_matching_symbols(req_id, pattern).map_err(Refusal::not_connected)?;
+        self.inner.req_matching_symbols(req_id, pattern)?;
         let what = format!("a symbol search for {pattern}");
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_matching_symbols_for(req_id as u32)
@@ -336,7 +348,7 @@ impl Client {
         period: &str,
     ) -> Result<Vec<crate::control::histogram::HistogramEntry>, Refusal> {
         let req_id = self.stream_id();
-        self.inner.req_histogram_data(req_id, contract, use_rth, period).map_err(Refusal::not_connected)?;
+        self.inner.req_histogram_data(req_id, contract, use_rth, period)?;
         let what = format!("a histogram for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_histogram_for(req_id as u32)
@@ -350,7 +362,7 @@ impl Client {
         report_type: &str,
     ) -> Result<String, Refusal> {
         let req_id = self.stream_id();
-        self.inner.req_fundamental_data(req_id, contract, report_type).map_err(Refusal::not_connected)?;
+        self.inner.req_fundamental_data(req_id, contract, report_type)?;
         let what = format!("a {report_type} report for {}", contract.symbol);
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_fundamental_for(req_id as u32)
@@ -543,7 +555,7 @@ impl Client {
         use_rth: bool,
     ) -> Result<crate::types::HistoricalScheduleResponse, Refusal> {
         let req_id = self.stream_id();
-        self.inner.req_historical_schedule(req_id, contract, end_date_time, duration, use_rth).map_err(Refusal::not_connected)?;
+        self.inner.req_historical_schedule(req_id, contract, end_date_time, duration, use_rth)?;
         let what = format!("a schedule for {} {}", contract.sec_type, contract.symbol);
         self.wait_for(req_id, &what, |sh| {
             sh.reference.take_historical_schedule_for(req_id as u32)
@@ -879,6 +891,26 @@ mod tests {
             crate::types::NewsProvider { code: "BRFG".into(), name: "Briefing".into() },
         ]);
         assert_eq!(r.news_providers, ["BRFG"]);
+    }
+
+    /// A refusal that can never work keeps its own number.
+    ///
+    /// A contract the venue has not named is refused before anything is
+    /// sent, under the number that says so. Rewritten as "not connected",
+    /// it read as a session problem, and a caller retried for ever what
+    /// no session could carry.
+    #[test]
+    fn a_permanent_refusal_keeps_its_own_number() {
+        let (inner, _rx, _shared) = crate::api::client::tests::test_client();
+        let client = Client::from_parts(inner);
+        let refused = client
+            .fundamental_data(&Contract::default(), "ReportsOwnership")
+            .expect_err("a contract without the venue's id cannot be asked about");
+        assert_eq!(
+            refused.code,
+            Refusal::VALIDATION,
+            "a permanent refusal is not a session problem: {refused}",
+        );
     }
 
     /// A refusal names the request it belongs to. Without the id a caller

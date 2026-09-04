@@ -1739,9 +1739,21 @@ fn a_busted_execution_reconciles_rather_than_adds() {
     );
     assert_eq!(context.position(0), 0.0, "and neither does the position");
     let fills = shared.orders.drain_fills();
-    assert!(
-        fills.iter().any(|f| f.0.qty == -50 * QTY_SCALE),
-        "the caller is told what was taken back: {fills:?}",
+    let bust_fill = fills
+        .iter()
+        .find(|f| f.0.qty == -50 * QTY_SCALE)
+        .unwrap_or_else(|| panic!("the caller is told what was taken back: {fills:?}"));
+    // The report states zero, and zero is what the caller reads. Filtering
+    // the stated figure on being positive fell back to adding the print to
+    // what was already booked, and the caller was told the order had twice
+    // its quantity filled while everything was still remaining.
+    assert_eq!(
+        bust_fill.0.cum_qty, 0,
+        "the order total goes back to nothing with the trade: {bust_fill:?}",
+    );
+    assert_eq!(
+        bust_fill.0.remaining, 100 * QTY_SCALE,
+        "the whole order is still working: {bust_fill:?}",
     );
 }
 
@@ -1781,6 +1793,37 @@ fn a_pending_status_does_not_retire_the_order() {
     assert_eq!(updates[0].status, crate::types::OrderStatus::PendingCancel,
         "D is pending, not cancelled");
     assert_ne!(updates[0].status, crate::types::OrderStatus::Cancelled);
+}
+
+/// The venue names the state of an order whose change it has not made yet
+/// (39=E), and its own word for it is what reaches the caller. Read as a
+/// pending cancel, a caller watching its order saw a withdrawal under way
+/// while a modification was — and its cancel logic fired on a change.
+#[test]
+fn a_pending_replace_is_reported_as_one_not_as_a_cancel() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    // The order is working before the change is asked of the venue.
+    let working = exec_report_frame(&[(39, "0"), (150, "0"), (100, "ARCA"), (198, "ARCA:1")]);
+    ccp.handle_exec_report(&working, b"", &mut context, &shared, &None, "");
+    let _ = shared.orders.drain_order_updates();
+
+    let pending = exec_report_frame(&[(39, "E"), (150, "E"), (100, "ARCA"), (198, "ARCA:1")]);
+    ccp.handle_exec_report(&pending, b"", &mut context, &shared, &None, "");
+
+    let updates = shared.orders.drain_order_updates();
+    assert_eq!(
+        updates[0].status, crate::types::OrderStatus::PendingReplace,
+        "the change is what is in flight: {updates:?}",
+    );
+    let info = shared.orders.get_order_info(42).expect("the record a caller reads back");
+    assert_eq!(
+        info.order_state.status, "PendingReplace",
+        "the venue's word for the state, not a withdrawal",
+    );
+    assert!(
+        shared.orders.drain_open_orders().iter().any(|(id, _)| *id == 42),
+        "and an order mid-modification is still on the open book",
+    );
 }
 
 /// The fill was thrown away with the report: an unrecognised status returned

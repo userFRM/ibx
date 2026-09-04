@@ -14,6 +14,21 @@ use super::fixcomp;
 /// Recv buffer size.
 const RECV_BUF_SIZE: usize = 32768;
 
+/// The most an unfinished frame may hold in the buffer.
+///
+/// A frame states its length and then never completes: the peer trickles,
+/// stops, or stated a length it never meant to fill. Without a bound,
+/// waiting for the rest grew the buffer until the process died. Passing the
+/// bound gives up the read, and the reconnect path takes the connection
+/// over, as it does for a frame that failed to verify.
+///
+/// Set above anything legitimate: the largest frame this protocol carries
+/// is a compressed one, and nothing is used once it inflates past
+/// `fixcomp::MAX_INFLATED` — its wire form cannot exceed its inflated one by
+/// more than the compression's own overhead. The margin beside it covers
+/// that overhead and whatever else one read held when the bound was passed.
+const MAX_BUFFERED: usize = fixcomp::MAX_INFLATED as usize + 1024 * 1024;
+
 /// What a compressed frame starts with, and the longest header this framing
 /// recognises. A read that stops inside it leaves fewer bytes than the marker,
 /// so the buffer holds them until the rest arrives.
@@ -290,6 +305,19 @@ impl Connection {
                 "connection closed",
             )),
             Ok(n) => {
+                // Past the bound this is not a frame arriving but a demand
+                // for memory: nothing this large completes into a frame this
+                // protocol carries, so the read is given up rather than
+                // buffered, and the reconnect path takes the connection.
+                if self.buf.len() + n > MAX_BUFFERED {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!(
+                            "a frame states a length that is not completing; \
+                             refusing to buffer beyond {MAX_BUFFERED} bytes",
+                        ),
+                    ));
+                }
                 self.buf.extend_from_slice(&tmp[..n]);
                 Ok(n)
             }
@@ -1002,6 +1030,68 @@ mod tests {
         let mut conn = test_connection_with_buf(buf);
         let frames = conn.extract_frames();
         assert!(frames.is_empty(), "incomplete message should not produce a frame");
+    }
+
+    /// A frame states a length and then never completes: the bytes behind the
+    /// statement are a demand for memory, not a frame arriving, because no
+    /// frame this protocol carries is that large. Without a bound the wait
+    /// grew the buffer until the process died. The read is given up once the
+    /// bound is passed, and the caller treats that as a lost connection, the
+    /// same path a dead socket takes.
+    #[test]
+    fn a_stated_length_that_never_completes_is_given_up_not_buffered_forever() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = std::net::TcpStream::connect(addr).unwrap();
+        stream.set_nonblocking(true).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        // Both ends non-blocking: a blocking write would wait on the kernel
+        // buffer this side fills faster than the bound allows, and the test
+        // would hang on its own deadlock instead of reaching the bound.
+        peer.set_nonblocking(true).unwrap();
+        let mut conn = Connection {
+            stream: Stream::Raw(stream),
+            buf: Vec::new(),
+            seq: 0,
+            sign_key: Vec::new(),
+            sign_iv: Vec::new(),
+            read_key: Vec::new(),
+            read_iv: Vec::new(),
+            connected_host: None,
+            logged_in_at: None,
+            competing: None,
+            heartbeat_secs: None,
+            routing: Default::default(),
+            write_failed: false,
+            read_failed: false,
+        };
+        // States near a gigabyte; the largest frame this protocol carries is
+        // a compressed one, and nothing is used that inflates past a small
+        // fraction of this.
+        conn.buf.extend_from_slice(b"8=FIX.4.1\x019=999999999\x01");
+
+        let chunk = vec![0xABu8; RECV_BUF_SIZE];
+        let mut refused = false;
+        let mut sent = 0usize;
+        let mut spins = 0usize;
+        while sent <= MAX_BUFFERED + 8 * 1024 * 1024 && spins < 1_000_000 {
+            spins += 1;
+            if let Ok(n) = peer.write(&chunk) {
+                sent += n;
+            }
+            match conn.try_recv() {
+                Err(_) => { refused = true; break; }
+                Ok(0) => std::thread::sleep(std::time::Duration::from_millis(1)),
+                Ok(_) => {
+                    assert!(
+                        conn.buffered() <= MAX_BUFFERED,
+                        "the buffer grew past the bound: {}B",
+                        conn.buffered(),
+                    );
+                }
+            }
+        }
+        assert!(refused, "the read was never given up on the uncompleting frame");
     }
 
     #[test]

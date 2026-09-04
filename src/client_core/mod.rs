@@ -1767,12 +1767,25 @@ impl ClientCore {
     // ── PnL subscription management ──
 
     /// Ask for the pnl.
-    pub fn subscribe_pnl(&self, req_id: i64) {
-        *self.pnl_req_id.lock().unwrap() = Some(req_id);
+    ///
+    /// Refused while another request holds the subscription. One slot serves
+    /// it, and handing that slot to a second asker stopped the first one's
+    /// updates without a word to either caller. Asking again under the id
+    /// that already holds it is the same subscription, not a second one.
+    pub fn subscribe_pnl(&self, req_id: i64) -> Result<(), Refusal> {
+        let mut slot = self.pnl_req_id.lock().unwrap();
+        if let Some(held) = *slot && held != req_id {
+            return Err(Refusal::validation(format!(
+                "the account P&L is already subscribed under request {held}; \
+                 cancel that one before subscribing under another",
+            )));
+        }
+        *slot = Some(req_id);
         // Nothing has been reported to this subscription yet. Without a value
         // that no account can hold, an account whose P&L is genuinely zero
         // matched the initial state and the caller was told nothing at all.
         *self.last_pnl.lock().unwrap() = [i64::MIN; 3];
+        Ok(())
     }
 
     /// Stop the pnl.
@@ -1797,12 +1810,24 @@ impl ClientCore {
     // ── Account summary subscription management ──
 
     /// Ask for the account summary.
-    pub fn subscribe_account_summary(&self, req_id: i64, tags: &str) {
+    ///
+    /// Refused while another request holds the subscription, for the same
+    /// reason as `subscribe_pnl`: one slot serves it, and a silent handover
+    /// stopped the first asker's updates without a word.
+    pub fn subscribe_account_summary(&self, req_id: i64, tags: &str) -> Result<(), Refusal> {
         let tag_list: Vec<String> = tags.split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        *self.account_summary_req.lock().unwrap() = Some((req_id, tag_list));
+        let mut slot = self.account_summary_req.lock().unwrap();
+        if let Some((held, _)) = *slot && held != req_id {
+            return Err(Refusal::validation(format!(
+                "the account summary is already subscribed under request {held}; \
+                 cancel that one before subscribing under another",
+            )));
+        }
+        *slot = Some((req_id, tag_list));
+        Ok(())
     }
 
     /// Stop the account summary.
@@ -2260,6 +2285,13 @@ impl ClientCore {
         {
             let orders = self.open_orders.lock().unwrap();
             for (&oid, o) in orders.iter() {
+                // A margin preview states what an order would cost; nothing
+                // reaches the book, so it is not among what is working. Its
+                // record exists while the question runs and is read as an
+                // open order otherwise — exposure the account does not have.
+                if o.order.what_if {
+                    continue;
+                }
                 if is_open_status(&o.status) || (o.status == "Inactive" && !o.rejected) {
                     let contract = if o.contract.con_id != 0 {
                         self.get_contract(o.contract.con_id, shared).unwrap_or_else(|| o.contract.clone())

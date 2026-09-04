@@ -101,7 +101,11 @@ impl EClient {
     /// `model_code` is taken and not applied: there is no model portfolio to
     /// name here.
     pub fn req_pnl(&self, req_id: i64, account: &str, _model_code: &str) {
-        self.core.subscribe_pnl(req_id);
+        // Refused while another request holds the subscription, and nothing
+        // is asked of the venue for a request that will not be reported.
+        if let Err(why) = self.core.subscribe_pnl(req_id) {
+            return self.report_reason(req_id, &why);
+        }
         let account = if account.is_empty() { self.account_id.clone() } else { account.to_string() };
         if let Err(why) = self.send(ControlCommand::SubscribePnl { req_id, account }) {
             self.report_reason(req_id, &why);
@@ -144,7 +148,11 @@ impl EClient {
     /// which, so there is no second account or model portfolio to name.
     pub fn req_account_summary(&self, req_id: i64, _group: &str, tags: &str) {
         if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
-        self.core.subscribe_account_summary(req_id, tags);
+        // Refused while another request holds the subscription, as for
+        // `req_pnl`, and said to the caller rather than silently taking it.
+        if let Err(why) = self.core.subscribe_account_summary(req_id, tags) {
+            self.report_reason(req_id, &why);
+        }
     }
 
     /// Cancel account summary. Matches `cancelAccountSummary` in C++.

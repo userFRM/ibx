@@ -835,7 +835,19 @@ impl EClient {
         let mut collector = Preview { order_id, state: Arc::clone(&state) };
         self.place_order(order_id, contract, &asked)?;
         let what = format!("a preview of {} {} {}", asked.action, asked.total_quantity, contract.symbol);
-        Ok(self.wait_for(&mut collector, &state, &what)?.remove(0))
+        match self.wait_for(&mut collector, &state, &what) {
+            Ok(mut rows) => Ok(rows.remove(0)),
+            Err(refused) => {
+                // The question ended without an answer the caller could
+                // keep — refused or silent — but its record was placed on
+                // the book like an order's when it went out. Taken back
+                // here, where the ending is known; nothing later sees a
+                // preview to retire, and left standing it read as a
+                // working order and its number as spent.
+                self.core.untrack_order(order_id as u64);
+                Err(refused)
+            }
+        }
     }
 
     /// Every holding in the account.

@@ -43,7 +43,7 @@ mod dispatch;
 mod stubs;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::control::adjustments::{AdjustedContract, Adjustment};
@@ -675,10 +675,16 @@ impl EClient {
         self.discarded.load(Ordering::Relaxed)
     }
 
-    /// False after [`disconnect()`](EClient::disconnect), and after a
-    /// `process_msgs()` call that observed the engine stopping.
+    /// False after [`disconnect()`](EClient::disconnect), after the engine
+    /// has ended the session, and after a `process_msgs()` call that
+    /// observed the engine stopping.
+    ///
+    /// The engine records an ended session itself. A shape that never pumps
+    /// `process_msgs` hears of it nowhere else, and kept saying connected
+    /// after the session underneath it was over.
     pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
+            && self.shared.reference.session_over().is_none()
     }
 
     /// Whether this session is finished rather than merely disconnected:

@@ -401,6 +401,13 @@ fn order_status_equality() {
     assert_eq!(order_status_str(OrderStatus::PartiallyFilled), "Submitted");
     assert!(is_open_status(order_status_str(OrderStatus::PartiallyFilled)));
     assert!(!is_open_status("PartiallyFilled"), "and it is not a status this states");
+
+    // The venue names the state of an order whose change it has not made
+    // yet, and its own word for it is what a caller reads. Reporting a
+    // pending cancel for it said a withdrawal was under way while a
+    // modification was, and an order mid-modify is still working.
+    assert_eq!(order_status_str(OrderStatus::PendingReplace), "PendingReplace");
+    assert!(is_open_status(order_status_str(OrderStatus::PendingReplace)));
 }
 
 // --- WhatIfResponse ---
