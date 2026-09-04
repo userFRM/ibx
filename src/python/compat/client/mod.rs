@@ -1269,11 +1269,21 @@ impl EClient {
             // the paths that carry one unsigned turned into an order number
             // above nine quintillion.
             if id > crate::bridge::MAX_ORDER_ID {
-                log::error!(
+                let why = format!(
                     "this account has no order id left: the ids in use reach {id}, and an \
                      order above {} cannot be named back by the venue's own reports",
                     crate::bridge::MAX_ORDER_ID,
                 );
+                log::error!("{why}");
+                // And on the channel a caller already watches. Told only in
+                // the log, a caller reads a zero and has nowhere to learn why.
+                if let Ok(shared) = self.shared_state() {
+                    shared.reference.push_historical_error(
+                        crate::bridge::ReferenceState::NO_REQUEST,
+                        crate::error_codes::Refusal::VALIDATION,
+                        why,
+                    );
+                }
                 return 0;
             }
             match self.next_order_id.compare_exchange_weak(

@@ -524,12 +524,18 @@ impl EClient {
 
     /// Get the next order ID (local counter).
     ///
-    /// Zero where the account has no id left that the venue's reports can name
-    /// back, which every placement path refuses: an id carries no reason with
-    /// it, so the reason is logged and the number says there is none.
+    /// Zero where there is no id to give, which every placement path refuses.
+    /// A number carries no reason with it, so the reason goes out on the
+    /// channel a caller already watches as well as to the log: told only in
+    /// the log, a caller reads a zero and has nowhere to learn why.
     pub fn next_order_id(&self) -> i64 {
         self.reserve_order_ids(1).unwrap_or_else(|why| {
             log::error!("{}", why.message);
+            self.shared.reference.push_historical_error(
+                crate::bridge::ReferenceState::NO_REQUEST,
+                Refusal::VALIDATION,
+                why.message.clone(),
+            );
             0
         })
     }
