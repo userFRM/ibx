@@ -1089,8 +1089,7 @@ mod init_burst_drain_tests {
             script: vec![chunk(b"6145=usfarm;"), Ok(Vec::new())],
         };
         let err = super::super::drain_init_burst(&mut reader, Vec::new(), POLL, GAP)
-            .err()
-            .expect("a closed socket is not a burst that finished");
+            .expect_err("a closed socket is not a burst that finished");
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset, "{err}");
     }
 
