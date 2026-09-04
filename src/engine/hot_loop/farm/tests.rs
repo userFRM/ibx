@@ -1277,6 +1277,47 @@ mod depth_position_tests {
         }
     }
 
+    /// A frame can switch into a stream this session does not hold: the
+    /// withdrawal of a book is on its way to the venue while the frames it
+    /// already sent are still arriving. The switch names the stream the
+    /// levels that follow it belong to, so nothing after it is delivered
+    /// until a section names one this session holds.
+    #[test]
+    fn a_section_for_a_stream_this_session_does_not_hold_delivers_nothing() {
+        let mut farm = FarmState::new();
+        let shared = SharedState::new();
+        farm.depth_tag_to_req.push((0x1122, 1, false, 0.01, 1.0, "IEX".to_string()));
+
+        let mut msg = b"35=Y\x01".to_vec();
+        msg.extend_from_slice(&[
+            // Header: two bytes, a marker, and the opening section's tag.
+            0x00, 0x00, 0x80, 0x00, 0x11, 0x22,
+            // A level on the held stream, in the snapshot shape.
+            0xC4, b'T', b'E', b'S', b'T', 0x00, 0x00, 100, 0x80, 5,
+            // A switch naming a stream this session does not hold, and one of
+            // that stream's levels after it.
+            0x80, 0x00, 0x00, 0x05, 0x80,
+            0x80, 0x05, 0x00, 0x64, 0x80, 0x0A,
+            // The frame switches back to the held stream, with another level.
+            0x80, 0x00, 0x00, 0x11, 0x22,
+            0x80, 0x01, 0x00, 0xC8, 0x80, 0x07,
+        ]);
+
+        farm.handle_depth_35y(&msg, &shared);
+
+        let updates = shared.market.drain_depth_updates();
+        assert_eq!(updates.len(), 2, "only the held stream's levels: {updates:?}");
+        assert_eq!(updates[0].position, 0, "{updates:?}");
+        assert_eq!(updates[0].price, 1.0, "{updates:?}");
+        assert_eq!(updates[0].size, 5.0, "{updates:?}");
+        assert_eq!(updates[1].position, 1, "{updates:?}");
+        assert_eq!(updates[1].price, 2.0, "{updates:?}");
+        assert_eq!(updates[1].size, 7.0, "{updates:?}");
+        for u in &updates {
+            assert_eq!(u.req_id, 1, "nothing is delivered under a stream this session does not hold: {updates:?}");
+        }
+    }
+
     /// A level requires both a price and a size. One alone would report the
     /// other as zero, which is not a quoted level.
     #[test]

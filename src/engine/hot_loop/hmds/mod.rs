@@ -309,6 +309,11 @@ pub(crate) struct HeldSeries {
     /// page is in, from the earliest day the series holds: the venue pages a
     /// long series newest first, so that day is not known until then.
     pub(crate) actions_asked: bool,
+    /// The id of the series' own corporate-actions query, where one went out.
+    /// The caller's number is shared with standalone requests for the same
+    /// thing, so an answer or a refusal belongs to the hold only if it names
+    /// the query the hold itself sent.
+    pub(crate) actions_query: Option<String>,
     /// The contract's actions, once the venue has stated them.
     pub(crate) actions: Option<Vec<crate::control::adjustments::Adjustment>>,
     /// Whether the raw series is complete — the last bar has arrived.
@@ -405,6 +410,20 @@ impl HmdsState {
         stranded.extend(self.pending_ticks.drain(..).map(|(_, rid, _)| (rid, false)));
         if stranded.is_empty() {
             return;
+        }
+        // What a failed bar request still holds of its stream half goes with
+        // it. A request kept up to date rides a five-second stream under the
+        // caller's number; left standing, the next reconnect asks for it again
+        // and bars keep arriving under a number the caller was just told had
+        // failed. Only a request marked as kept up to date has a stream half
+        // of its own: the number alone is shared with streams that belong to
+        // another request.
+        for (req_id, from_historical) in &stranded {
+            if *from_historical && self.keep_up_to_date_reqs.remove(req_id) {
+                self.rtbar_subs.retain(|(_, rid, ..)| rid != req_id);
+                self.rtbar_resub.retain(|r| &r.req_id != req_id);
+                self.forming_bars.retain(|f| &f.req_id != req_id);
+            }
         }
         log::warn!(
             "{} historical request(s) were still unanswered when the connection went: {why}",
@@ -834,7 +853,6 @@ impl HmdsState {
                         if let Some(qid) = &query_id {
                             if let Some(pos) = self.pending_historical.iter().position(|(q, _)| q == qid) {
                                 let (_, req_id) = self.pending_historical.remove(pos);
-                                self.keep_up_to_date_reqs.remove(&req_id);
                                 // The reconnect list is what gets asked for
                                 // again, so a query the server rejected has to
                                 // leave it or it comes straight back. Only the
@@ -843,6 +861,17 @@ impl HmdsState {
                                 // two id spaces are not shared, so matching on
                                 // the number alone tore down a live bar stream
                                 // that nothing had rejected.
+                                //
+                                // Where the flag is set the request rides a
+                                // five-second stream under this same number,
+                                // and the batch failing fails the whole
+                                // request: the stream is withdrawn with it.
+                                // Left running, the bars keep arriving under a
+                                // number the caller is told has failed, and
+                                // the next reconnect asks for the stream again.
+                                if self.keep_up_to_date_reqs.remove(&req_id) {
+                                    self.withdraw_the_stream_half(req_id, hmds_conn, hb);
+                                }
                                 released_req_id = Some(req_id);
                                 from_historical = true;
                                 refused_a_held_query = true;
@@ -862,9 +891,17 @@ impl HmdsState {
                                 let (_, req_id) = self.pending_histogram.remove(pos);
                                 released_req_id = Some(req_id);
                             } else if let Some(pos) = self.pending_adjustments.iter().position(|(q, _, _)| q == qid) {
-                                let (_, req_id, _) = self.pending_adjustments.remove(pos);
+                                let (asked, req_id, _) = self.pending_adjustments.remove(pos);
                                 released_req_id = Some(req_id);
-                                refused_a_held_query = true;
+                                // The fold fails on a refusal of the query it
+                                // sent, and on no other. Its caller's number is
+                                // shared with a standalone request for the same
+                                // contract's actions, so a refusal matched on
+                                // the number alone dropped a series the venue
+                                // had refused nothing about, and answered its
+                                // caller with an end and no bars.
+                                refused_a_held_query = self.held.iter()
+                                    .any(|a| a.actions_query.as_deref() == Some(asked.as_str()));
                             } else if let Some(pos) = self.pending_ticks.iter().position(|(q, _, _)| q == qid) {
                                 let (_, req_id, _) = self.pending_ticks.remove(pos);
                                 released_req_id = Some(req_id);
@@ -1125,7 +1162,7 @@ impl HmdsState {
                                         crate::control::adjustments::parse_adjustments(body);
                                     match waiting {
                                         Some(pos) => {
-                                            let (_, answers, asked_about) = self.pending_adjustments[pos].clone();
+                                            let (qid, answers, asked_about) = self.pending_adjustments[pos].clone();
                                             // The body names its own contract.
                                             // One naming a different contract
                                             // from the one asked about is not
@@ -1144,8 +1181,18 @@ impl HmdsState {
                                                 // against the contract is left
                                                 // as before, so a corporate
                                                 // actions call reads it too.
+                                                //
+                                                // Matched on the query the hold
+                                                // itself sent. The caller's
+                                                // number is shared with a
+                                                // standalone request for the
+                                                // same thing, and matched on
+                                                // that alone, the standalone
+                                                // answer folded an unrelated
+                                                // series with another query's
+                                                // actions.
                                                 if let Some(apos) = self.held
-                                                    .iter().position(|a| a.req_id == answers)
+                                                    .iter().position(|a| a.actions_query.as_deref() == Some(qid.as_str()))
                                                 {
                                                     self.held[apos].actions = Some(actions.clone());
                                                     shared.reference.note_adjustments(contract, actions, answers);
@@ -1691,6 +1738,7 @@ fn build_tbt_query(
             bars: Vec::new(),
             timezone: String::new(),
             actions_asked: false,
+            actions_query: None,
             actions: None,
             complete: false,
         });
@@ -1771,9 +1819,16 @@ fn build_tbt_query(
                 (a.con_id, a.sec_type.clone(), a.exchange.clone())
             };
             self.held[pos].actions_asked = true;
-            self.send_adjustments_request(
+            let sent_under = self.send_adjustments_request(
                 req_id, con_id, &sec_type, &exchange, &from, &today, shared, hmds_conn, hb,
             );
+            // The answer, when it comes, names the query and not the request;
+            // this is what tells the series' own answer from a standalone
+            // request that shares the caller's number. Where the send failed
+            // the hold is already gone, let go where that is stated.
+            if let Some(entry) = self.held.iter_mut().find(|a| a.req_id == req_id) {
+                entry.actions_query = sent_under;
+            }
         }
         self.try_file_held(req_id, shared, event_tx);
     }
@@ -1871,6 +1926,27 @@ fn build_tbt_query(
             ]);
             hb.last_hmds_sent = Instant::now();
         }
+    }
+
+    /// Withdraw the five-second stream a bar request rides, where it has one.
+    ///
+    /// Withdrawn the way a caller's own cancel does it — by the venue's number
+    /// for the stream where it has given one. Named by the id this client made
+    /// up, the venue does not find it and keeps sending.
+    fn withdraw_the_stream_half(
+        &mut self,
+        req_id: u32,
+        hmds_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        self.forming_bars.retain(|f| f.req_id != req_id);
+        let Some(pos) = self.rtbar_subs.iter().position(|(_, rid, ..)| *rid == req_id) else {
+            return;
+        };
+        let (query_id, _, ticker_id, ..) = self.rtbar_subs.remove(pos);
+        self.rtbar_resub.retain(|r| r.req_id != req_id);
+        let cancel_id = ticker_id.map(|t| t.to_string()).unwrap_or(query_id);
+        self.send_historical_cancel(&cancel_id, hmds_conn, hb);
     }
 
     pub(crate) fn send_head_timestamp_request(&mut self, req_id: u32, con_id: i64, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
@@ -2041,11 +2117,16 @@ fn build_tbt_query(
     /// went out. The reply names the contract it is for and echoes that id, and
     /// both are checked before anything is filed: the contract alone cannot say
     /// which of two questions about it an answer belongs to.
+    ///
+    /// States the id it went out under where one went out. A series waiting to
+    /// be folded records it as its own: the caller's number is shared with
+    /// standalone requests for the same thing, and the query's id is the one
+    /// name an answer or a refusal can be matched on without doubt.
     pub(crate) fn send_adjustments_request(
         &mut self, req_id: u32, con_id: u32, sec_type: &str, exchange: &str,
         start_date: &str, end_date: &str, shared: &SharedState,
         hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState,
-    ) {
+    ) -> Option<String> {
         let query_id = format!("adj_{}", self.next_hmds_query_id);
         let xml = crate::control::adjustments::build_adjustments_request_xml(
             &crate::control::adjustments::AdjustmentRequest {
@@ -2073,7 +2154,8 @@ fn build_tbt_query(
                 Ok(()) => {
                     hb.last_hmds_sent = Instant::now();
                     log::info!("Sent corporate actions request: req_id={req_id} con_id={con_id}");
-                    self.pending_adjustments.push((query_id, req_id, con_id));
+                    self.pending_adjustments.push((query_id.clone(), req_id, con_id));
+                    Some(query_id)
                 }
                 Err(e) => {
                     // Said to the caller, not only to the log. Not registered
@@ -2086,6 +2168,7 @@ fn build_tbt_query(
                          con_id={con_id}: {e}"
                     );
                     self.the_actions_did_not_go_out(req_id, &e.to_string(), shared);
+                    None
                 }
             }
         } else {
@@ -2096,6 +2179,7 @@ fn build_tbt_query(
             self.the_actions_did_not_go_out(
                 req_id, "there is no connection to the venue", shared,
             );
+            None
         }
     }
 

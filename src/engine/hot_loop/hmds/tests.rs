@@ -198,7 +198,7 @@ fn segmented_bar_reply_completes_on_eoq_true() {
     hmds.pending_historical.push(("q7".to_string(), 21));
     hmds.held.push(HeldSeries {
         req_id: 21, fold: Fold::None, con_id: 0, sec_type: String::new(), exchange: String::new(),
-        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions: None, complete: false,
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, actions: None, complete: false,
     });
 
     hmds.process_hmds_message(&make_bar_msg("q7", false), &mut conn, &shared, &None, &mut hb);
@@ -250,7 +250,7 @@ fn query_error_releases_historical_and_emits_error_and_end_sentinel() {
     // series that will never complete.
     hmds.held.push(HeldSeries {
         req_id: 11, fold: Fold::None, con_id: 0, sec_type: String::new(), exchange: String::new(),
-        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions: None, complete: false,
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, actions: None, complete: false,
     });
     hmds.process_hmds_message(&make_bar_msg("hist_1003", false), &mut conn, &shared, &None, &mut hb);
 
@@ -435,7 +435,7 @@ fn an_adjusted_request_folds_its_raw_trades_before_it_files_them() {
     hmds.pending_historical.push(("hist_1".to_string(), 42));
     hmds.held.push(HeldSeries {
         req_id: 42, con_id: 756733, sec_type: "STK".into(), exchange: "SMART".into(),
-        bars: Vec::new(), timezone: String::new(), actions_asked: false, fold: Fold::Adjusted,
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, fold: Fold::Adjusted,
         actions: None, complete: false,
     });
 
@@ -496,7 +496,7 @@ fn an_adjusted_request_whose_actions_are_refused_is_a_stated_refusal() {
     hmds.pending_historical.push(("hist_1".to_string(), 42));
     hmds.held.push(HeldSeries {
         req_id: 42, con_id: 756733, sec_type: "STK".into(), exchange: "SMART".into(),
-        bars: Vec::new(), timezone: String::new(), actions_asked: false, fold: Fold::Adjusted,
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, fold: Fold::Adjusted,
         actions: None, complete: false,
     });
 
@@ -537,7 +537,7 @@ fn an_adjusted_request_with_no_bars_ends_without_asking_for_actions() {
     hmds.pending_historical.push(("hist_1".to_string(), 42));
     hmds.held.push(HeldSeries {
         req_id: 42, con_id: 756733, sec_type: "STK".into(), exchange: "SMART".into(),
-        bars: Vec::new(), timezone: String::new(), actions_asked: false, fold: Fold::Adjusted,
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, fold: Fold::Adjusted,
         actions: None, complete: false,
     });
 
@@ -751,7 +751,7 @@ fn a_paged_series_asks_for_its_actions_from_its_earliest_day_not_its_first_page(
     hmds.pending_historical.push(("hist_1".to_string(), 42));
     hmds.held.push(HeldSeries {
         req_id: 42, con_id: 4815747, sec_type: "STK".into(), exchange: "SMART".into(),
-        bars: Vec::new(), timezone: String::new(), actions_asked: false, fold: Fold::Adjusted,
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, fold: Fold::Adjusted,
         actions: None, complete: false,
     });
 
@@ -821,7 +821,7 @@ fn a_page_that_states_no_zone_takes_the_one_the_series_stated() {
     hmds.pending_historical.push(("hist_1".to_string(), 7));
     hmds.held.push(HeldSeries {
         req_id: 7, fold: Fold::None, con_id: 0, sec_type: String::new(), exchange: String::new(),
-        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions: None, complete: false,
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, actions: None, complete: false,
     });
 
     hmds.process_hmds_message(&bar_page_msg("hist_1", false, "US/Eastern"), &mut conn, &shared, &None, &mut hb);
@@ -872,7 +872,7 @@ fn a_paged_series_is_delivered_oldest_first_whatever_order_the_pages_arrive_in()
     hmds.pending_historical.push(("hist_1".to_string(), 7));
     hmds.held.push(HeldSeries {
         req_id: 7, fold: Fold::None, con_id: 0, sec_type: String::new(), exchange: String::new(),
-        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions: None, complete: false,
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, actions: None, complete: false,
     });
 
     // Newest page first, oldest last, as the venue sends them.
@@ -1482,7 +1482,7 @@ fn a_refusal_of_another_query_leaves_a_held_series_alone() {
     hmds.rtbar_subs.push(("rt_2002".to_string(), 7, None, 0.01, 1.0));
     hmds.held.push(HeldSeries {
         req_id: 7, fold: Fold::None, con_id: 0, sec_type: String::new(), exchange: String::new(),
-        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions: None,
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, actions: None,
         complete: false,
     });
     hmds.process_hmds_message(&make_bar_msg("hist_2001", false), &mut conn, &shared, &None, &mut hb);
@@ -1513,6 +1513,99 @@ fn a_refusal_of_another_query_leaves_a_held_series_alone() {
     );
 }
 
+/// A standalone request for a contract's actions shares the caller's number
+/// with whatever bar request is being folded under it. The answer is matched
+/// to the hold on the query the hold itself sent: matched on the number
+/// alone, the standalone answer folded an unrelated series with another
+/// query's actions — a different range, or a different contract entirely.
+#[test]
+fn a_standalone_actions_reply_is_not_folded_into_another_request_s_series() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let mut conn = Some(Connection::new_raw(sock).unwrap());
+
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+
+    hmds.pending_historical.push(("hist_1".to_string(), 7));
+    hmds.held.push(HeldSeries {
+        req_id: 7, con_id: 756733, sec_type: "STK".into(), exchange: "SMART".into(),
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None,
+        fold: Fold::Adjusted, actions: None, complete: false,
+    });
+
+    // The series completes, and the fold asks for its actions under its own id.
+    hmds.process_hmds_message(
+        &adj_bar_msg("hist_1", "20240607", 1208.88, true), &mut conn, &shared, &None, &mut hb,
+    );
+    let _ = read_frame(&mut peer);
+    let qid = hmds.pending_adjustments.iter().find(|(_, rid, _)| *rid == 7)
+        .map(|(q, _, _)| q.clone()).expect("the actions query is outstanding");
+
+    // A standalone question about another contract, under this same caller
+    // number, answers first.
+    hmds.pending_adjustments.push(("adj_9999".to_string(), 7, 999999));
+    hmds.process_hmds_message(
+        &conadj_msg("adj_9999", 999999, "SS\n20240610,10"), &mut conn, &shared, &None, &mut hb,
+    );
+
+    assert_eq!(hmds.held.len(), 1, "the series is still waiting on its own actions");
+    assert!(hmds.held[0].actions.is_none(), "and holds no answer from another query");
+    assert!(
+        shared.reference.drain_historical_data().is_empty(),
+        "nothing is filed, folded with another query's actions",
+    );
+    assert_eq!(hmds.pending_adjustments.len(), 1, "the answered question is spent");
+    assert_eq!(hmds.pending_adjustments[0].0, qid, "and the series' own still waits");
+}
+
+/// A refusal of a standalone actions query is not a refusal of the bar
+/// request folded under the same caller number. Refusals are matched the way
+/// answers are, on the query the hold itself sent.
+#[test]
+fn a_refusal_of_a_standalone_actions_query_leaves_the_fold_alone() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let mut conn = Some(Connection::new_raw(sock).unwrap());
+
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+
+    hmds.pending_historical.push(("hist_1".to_string(), 7));
+    hmds.held.push(HeldSeries {
+        req_id: 7, con_id: 756733, sec_type: "STK".into(), exchange: "SMART".into(),
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None,
+        fold: Fold::Adjusted, actions: None, complete: false,
+    });
+
+    hmds.process_hmds_message(
+        &adj_bar_msg("hist_1", "20240607", 1208.88, true), &mut conn, &shared, &None, &mut hb,
+    );
+    let _ = read_frame(&mut peer);
+
+    // The venue refuses the standalone question, not the fold's.
+    hmds.pending_adjustments.push(("adj_9999".to_string(), 7, 999999));
+    hmds.process_hmds_message(
+        &make_query_error_msg("adj_9999", "no permission"), &mut conn, &shared, &None, &mut hb,
+    );
+
+    assert_eq!(hmds.held.len(), 1, "the fold's series was not what was refused");
+    assert!(hmds.held[0].actions.is_none(), "and it still waits on its own actions");
+    assert!(
+        shared.reference.drain_historical_data().is_empty(),
+        "no end for a series the venue did not refuse",
+    );
+    let errors = shared.reference.drain_historical_errors();
+    assert_eq!(errors.len(), 1, "the refused question is still reported");
+    assert_eq!(errors[0].0, 7);
+}
+
 /// A series whose corporate actions could not be asked for is let go, not held.
 ///
 /// The request is registered as outstanding only if it actually went out, so a
@@ -1532,7 +1625,7 @@ fn a_series_whose_actions_could_not_be_asked_for_is_let_go() {
     hmds.held.push(HeldSeries {
         req_id: 21, fold: Fold::Adjusted, con_id: 756733, sec_type: "STK".to_string(),
         exchange: "SMART".to_string(), bars: Vec::new(), timezone: String::new(),
-        actions_asked: false, actions: None, complete: true,
+        actions_asked: false, actions_query: None, actions: None, complete: true,
     });
 
     hmds.send_adjustments_request(
@@ -1547,4 +1640,119 @@ fn a_series_whose_actions_could_not_be_asked_for_is_let_go() {
     assert_eq!(ended.len(), 1, "and given the end that lets a blocked caller go");
     assert!(ended[0].1.is_complete);
     assert!(ended[0].1.bars.is_empty());
+}
+
+/// A request kept up to date whose batch the venue refuses is a request that
+/// failed whole: the five-second stream it rides under this same number is
+/// withdrawn with it. Left running, bars keep arriving under a number the
+/// caller was told had failed, and the next reconnect asks for the stream
+/// again.
+#[test]
+fn a_refused_batch_takes_the_kept_up_to_date_stream_with_it() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let mut conn = Some(Connection::new_raw(sock).unwrap());
+
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+
+    // One caller number, the two queries it rides, and the venue's number for
+    // the stream already stated.
+    hmds.pending_historical.push(("hist_3001".to_string(), 7));
+    hmds.keep_up_to_date_reqs.insert(7);
+    hmds.rtbar_subs.push(("rt_3002".to_string(), 7, Some(5), 0.01, 1.0));
+    hmds.rtbar_resub.push(RtBarRequest {
+        req_id: 7, con_id: 756733, sec_type: "STK".into(), exchange: "SMART".into(),
+        what_to_show: "TRADES".into(), use_rth: true,
+    });
+    hmds.forming_bars.push(FormingBar {
+        req_id: 7, seconds: 60, opened_at: 0, bar: Default::default(), weighted: 0.0,
+    });
+
+    hmds.process_hmds_message(
+        &make_query_error_msg("hist_3001", "Invalid time length"),
+        &mut conn, &shared, &None, &mut hb,
+    );
+
+    assert!(hmds.rtbar_subs.is_empty(), "the stream goes with the request that failed");
+    assert!(hmds.rtbar_resub.is_empty(), "and no reconnect asks for it again");
+    assert!(hmds.forming_bars.is_empty(), "nor does the bar it was folding stay behind");
+    assert!(!hmds.keep_up_to_date_reqs.contains(&7));
+
+    // The withdrawal goes out under the number the venue knows the stream by.
+    let sent = String::from_utf8_lossy(&read_frame(&mut peer)).to_string();
+    assert!(sent.contains("ticker:5"), "the stream is cancelled by the venue's number: {sent}");
+
+    let errors = shared.reference.drain_historical_errors();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].0, 7);
+}
+
+/// A request that failed because its connection went is failed in its stream
+/// half as well: a reconnect asks again for the streams that are still wanted,
+/// and one whose request the caller was told had failed is not among them.
+/// Left on the reconnect list, the bars resume under a number already
+/// answered, and answer whatever is next asked under it.
+#[test]
+fn a_disconnect_does_not_resurrect_a_failed_request_s_stream() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let market = crate::engine::market_state::MarketState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+
+    // A request kept up to date, still waiting on its batch. Beside it, an
+    // ordinary bar stream that is still wanted.
+    hmds.pending_historical.push(("hist_4001".to_string(), 9));
+    hmds.keep_up_to_date_reqs.insert(9);
+    hmds.rtbar_subs.push(("rt_4002".to_string(), 9, None, 0.01, 1.0));
+    hmds.rtbar_resub.push(RtBarRequest {
+        req_id: 9, con_id: 756733, sec_type: "STK".into(), exchange: "SMART".into(),
+        what_to_show: "TRADES".into(), use_rth: true,
+    });
+    hmds.forming_bars.push(FormingBar {
+        req_id: 9, seconds: 60, opened_at: 0, bar: Default::default(), weighted: 0.0,
+    });
+    hmds.rtbar_subs.push(("rt_4003".to_string(), 10, None, 0.01, 1.0));
+    hmds.rtbar_resub.push(RtBarRequest {
+        req_id: 10, con_id: 265598, sec_type: "STK".into(), exchange: "SMART".into(),
+        what_to_show: "TRADES".into(), use_rth: true,
+    });
+
+    hmds.disconnect(&mut conn, &shared, &None);
+
+    assert!(
+        shared.reference.drain_historical_errors().iter().any(|(rid, ..)| *rid == 9),
+        "the caller was told the request failed",
+    );
+    assert!(
+        hmds.rtbar_resub.iter().all(|r| r.req_id != 9),
+        "and nothing asks for its stream again",
+    );
+    assert!(hmds.rtbar_subs.iter().all(|(_, rid, ..)| *rid != 9));
+    assert!(hmds.forming_bars.iter().all(|f| f.req_id != 9));
+    assert!(
+        hmds.rtbar_resub.iter().any(|r| r.req_id == 10),
+        "a stream that is still wanted survives the disconnect",
+    );
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    hmds.reconnect(
+        Connection::new_raw(sock).unwrap(),
+        &mut conn, &market, &mut hb,
+    );
+
+    assert!(
+        hmds.rtbar_subs.iter().all(|(_, rid, ..)| *rid != 9),
+        "the failed request's stream was not asked for again",
+    );
+    assert!(
+        hmds.rtbar_subs.iter().any(|(_, rid, ..)| *rid == 10),
+        "and the wanted one was",
+    );
 }

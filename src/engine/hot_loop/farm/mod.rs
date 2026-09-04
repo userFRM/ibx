@@ -2045,6 +2045,17 @@ impl FarmState {
                     pos += 5;
                     continue;
                 }
+                // A switch into a stream this session does not hold. The
+                // withdrawal of a book is on its way to the venue while the
+                // frames it already sent are still arriving, so a section can
+                // name a tag whose requests are gone. Its levels belong to
+                // that stream and to nobody here: nothing is delivered until
+                // a section names one this session holds. Left to the entry
+                // reading below, the switch's own bytes were pushed to the
+                // previous section's subscribers as a level of their book.
+                subscribers.clear();
+                pos += 5;
+                continue;
             }
 
             // Snapshot entry: [C4|44][4B market_maker][1B position][field_tags...]

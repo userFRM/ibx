@@ -360,13 +360,15 @@ impl SharedState {
             *pending = false;
             return true;
         }
-        let (lock, result) = self.notify_condvar.wait_timeout(pending, timeout).unwrap();
-        let had_data = *lock;
+        let (mut flag, result) = self.notify_condvar.wait_timeout(pending, timeout).unwrap();
+        let had_data = *flag;
+        // Taken back through the guard the wait returns. Letting go of it to
+        // take it again left a gap an announcement could land in, and the
+        // clear that followed wiped it: what had arrived was never announced
+        // to anybody, and the last thing a producer sent before going quiet
+        // was the one that went missing.
         if had_data {
-            // Reset the flag via a mutable reference obtained from the MutexGuard's
-            // deref.
-            drop(lock);
-            *self.notify_mutex.lock().unwrap() = false;
+            *flag = false;
         }
         had_data || !result.timed_out()
     }
@@ -638,6 +640,76 @@ mod tests {
             "a first waiter arriving after the bound has passed is answered at once, \
              not held for a fresh bound of its own",
         );
+    }
+
+    ///
+    /// A producer announces each arrival on the notification flag; a
+    /// consumer wakes on the wait alone and drains the arrivals only when it
+    /// is told there are some. A timeout is therefore legitimate only when
+    /// nothing is waiting — one that arrives with data still unread means a
+    /// notification landed while the waiter was letting go of the flag, and
+    /// the clear that followed wiped it. The hammer holds the notification
+    /// lock briefly whenever it can, the way the hot loop and a dispatching
+    /// caller contend for it; that is also what stretches the waiter's
+    /// let-go wide enough for a notification to land in it. Each session
+    /// ends in silence on purpose: a wiped notification is covered by the
+    /// next one while they flow, so it is the last one that goes missing.
+    #[test]
+    fn a_wakeup_is_not_lost_to_the_waiter_that_is_waking() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        for session in 0..40u64 {
+            let shared = Arc::new(SharedState::new());
+            let queue: Arc<std::sync::Mutex<Vec<u64>>> =
+                Arc::new(std::sync::Mutex::new(Vec::new()));
+            let done = Arc::new(AtomicBool::new(false));
+            let stop = Arc::new(AtomicBool::new(false));
+            let hammer = {
+                let shared = shared.clone();
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        if let Ok(held) = shared.notify_mutex.try_lock() {
+                            let until = std::time::Instant::now() + Duration::from_micros(2);
+                            while std::time::Instant::now() < until {
+                                std::hint::spin_loop();
+                            }
+                            drop(held);
+                        } else {
+                            std::hint::spin_loop();
+                        }
+                    }
+                })
+            };
+            let producer = {
+                let shared = shared.clone();
+                let queue = queue.clone();
+                let done = done.clone();
+                std::thread::spawn(move || {
+                    for i in 1..=40u64 {
+                        queue.lock().unwrap().push(i);
+                        shared.notify();
+                        std::thread::sleep(Duration::from_micros(50));
+                    }
+                    done.store(true, Ordering::Release);
+                })
+            };
+            loop {
+                if shared.wait_for_data(Duration::from_millis(10)) {
+                    queue.lock().unwrap().clear();
+                } else if done.load(Ordering::Acquire) {
+                    assert!(
+                        queue.lock().unwrap().is_empty(),
+                        "session {session}: data arrived and no wakeup said so",
+                    );
+                    break;
+                }
+            }
+            stop.store(true, Ordering::Relaxed);
+            producer.join().unwrap();
+            hammer.join().unwrap();
+        }
     }
 
     /// A completed order is remembered as completed, so a replayed frame

@@ -516,6 +516,30 @@ fn a_midnight_seed_without_a_quantity_is_not_seeded_flat() {
     assert_eq!(silent.realized_pnl, 2.5);
 }
 
+/// A non-finite cash or realized figure is not a figure. `"NaN"` parses
+/// successfully, and one such value folded into the daily and realized
+/// totals poisons them, so a caller reads nonsense for its whole position
+/// rather than for the one contract that stated it. An unparseable value
+/// already lands as nothing; a non-finite one must land the same way.
+#[test]
+fn a_non_finite_seed_figure_is_taken_as_unstated() {
+    let shared = SharedState::new();
+    let body = [
+        "6008=756733", "6064=100", "6822=NaN", "6099=NaN",
+        "6008=265598", "6064=10", "6822=-10.0", "6099=2.5",
+    ].join("\x01");
+    positions::handle_pnl_response(body.as_bytes(), &shared);
+
+    let seeds = shared.portfolio.midnight_seeds();
+    let poisoned = seeds.iter().find(|s| s.con_id == 756733).expect("the row is kept");
+    assert!(poisoned.money_traded.is_finite(), "a NaN cash figure is not booked");
+    assert!(poisoned.realized_pnl.is_finite(), "a NaN realized figure is not booked");
+
+    let stated = seeds.iter().find(|s| s.con_id == 265598).expect("the other row");
+    assert_eq!(stated.money_traded, -10.0, "finite figures are unaffected");
+    assert_eq!(stated.realized_pnl, 2.5);
+}
+
 /// A fractional overnight position is a position. Narrowing the midnight
 /// quantity to a whole number reads half a share as flat, and the day's
 /// baseline is then sized against nothing.
@@ -3415,6 +3439,38 @@ fn a_late_partial_does_not_reopen_a_completed_order() {
         shared.orders.get_order_info(42).map(|i| i.order_state.status.clone()),
         terminal,
         "the completed order stays completed",
+    );
+}
+
+/// A terminal report the venue resends is the one it already sent. The
+/// order was retired when it finished, so the replay finds nothing tracked
+/// and files the completion again — with no contract and nothing filled,
+/// contradicting the terminal status the caller was already given. The
+/// completion is remembered from the first time; the replay adds nothing.
+#[test]
+fn a_replayed_terminal_report_does_not_file_the_completion_again() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    ccp.handle_exec_report(
+        &exec_report_frame(&[
+            (150, "2"), (39, "2"), (32, "100"), (31, "100.00"), (151, "0"), (17, "E1"),
+        ]), b"",
+        &mut context, &shared, &None, "",
+    );
+    let first = shared.orders.drain_completed_orders();
+    assert_eq!(first.len(), 1, "the fill finishes the order");
+    assert_eq!(first[0].filled_qty, 100 * QTY_SCALE, "filed with what it filled");
+
+    // The venue resends the same report, marked as a resend.
+    ccp.handle_exec_report(
+        &exec_report_frame(&[
+            (150, "2"), (39, "2"), (32, "100"), (31, "100.00"), (151, "0"), (17, "E1"),
+            (97, "Y"),
+        ]), b"",
+        &mut context, &shared, &None, "",
+    );
+    assert!(
+        shared.orders.drain_completed_orders().is_empty(),
+        "the completion is filed once, not once per delivery of it",
     );
 }
 

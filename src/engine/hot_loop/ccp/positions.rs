@@ -125,9 +125,12 @@ pub(crate) fn handle_pnl_response(msg: &[u8], shared: &SharedState) {
             } else if let Some(v) = part.strip_prefix("6822=") {
                 // moneyTradedSinceMidnight: signed net cash, SELL positive / BUY
                 // negative. Stored with the wire sign; poll_pnl adds it.
-                seed.money_traded = v.parse().unwrap_or(0.0);
+                // Filtered to finite like the figures above: `"NaN".parse()`
+                // succeeds, and one such value folded into the daily and
+                // realized totals poisons the whole position.
+                seed.money_traded = v.parse::<f64>().ok().filter(|m| m.is_finite()).unwrap_or(0.0);
             } else if let Some(v) = part.strip_prefix("6099=") {
-                seed.realized_pnl = v.parse().unwrap_or(0.0);
+                seed.realized_pnl = v.parse::<f64>().ok().filter(|r| r.is_finite()).unwrap_or(0.0);
             }
         }
     }

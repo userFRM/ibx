@@ -343,7 +343,17 @@ impl OrderState {
         *self.replay_deadline.lock().unwrap() = Some(Instant::now() + REPLAY_WAIT);
     }
 
+    /// File a completion once. The venue resends terminal reports — a
+    /// reconnect replays recent activity, and a report can simply arrive
+    /// twice — and a replay finds the order retired, with nothing tracked to
+    /// file it against. Filed again anyway, reconciliation counted the same
+    /// finished order twice and read it with no contract and nothing filled,
+    /// contradicting the terminal status the caller had already been given.
+    /// An order still remembered as completed is therefore not filed again;
+    /// the memory itself is refreshed, so a notice extends the window in which
+    /// a replay of it can still be refused.
     #[doc(hidden)] pub fn push_completed_order(&self, order: CompletedOrder) {
+        let already = self.recently_completed(order.order_id);
         {
             let now = Instant::now();
             let mut completed = self.completed.lock().unwrap();
@@ -364,6 +374,9 @@ impl OrderState {
                     completed.remove(&id);
                 }
             }
+        }
+        if already {
+            return;
         }
         self.completed_orders.lock().unwrap().push(order);
     }
