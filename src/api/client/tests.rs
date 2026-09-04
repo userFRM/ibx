@@ -2841,6 +2841,46 @@ fn a_change_to_an_order_that_finished_is_not_released_with_the_next_family() {
     assert!(rx.try_recv().is_err(), "and nothing goes out for the order that finished");
 }
 
+/// Naming a contract the venue has not named does not take the order apart.
+///
+/// A contract carrying only a symbol is handed to the venue to name, and what
+/// comes back is the venue's description of it — which carries no hedge and no
+/// legs, because a description of one contract has neither. Used in place of
+/// what the caller stated, a delta-neutral order lost the contract it hedges
+/// against and a combination lost every leg, and both went to the venue as
+/// something else entirely.
+#[test]
+fn naming_a_contract_keeps_the_hedge_and_the_legs_the_caller_stated() {
+    let (client, _rx, _shared) = test_client();
+    let mut hedged = spy();
+    hedged.con_id = 0;
+    hedged.delta_neutral_contract = Some(crate::types::model::DeltaNeutralContract {
+        con_id: 265598, delta: 0.5, price: 100.0,
+    });
+    // Named already, so the lookup is answered from the record rather than the
+    // venue: the question here is what survives the naming, not the naming.
+    let key = ClientCore::description_key(&hedged);
+    let mut as_the_venue_names_it = spy();
+    as_the_venue_names_it.con_id = 756733;
+    as_the_venue_names_it.delta_neutral_contract = None;
+    client.core.remember_named(key, as_the_venue_names_it);
+
+    let order = Order {
+        order_id: 60, action: "BUY".into(), total_quantity: 100.0,
+        order_type: "LMT".into(), lmt_price: 100.0, tif: "DAY".into(),
+        transmit: true, ..Default::default()
+    };
+    client.place_order(60, &hedged, &order).expect("placed");
+
+    let held = client.core.open_orders.lock().unwrap();
+    let placed = held.get(&60).expect("the order is tracked");
+    assert!(
+        placed.contract.delta_neutral_contract.is_some(),
+        "the contract this order hedges against is what the caller stated: {:?}",
+        placed.contract,
+    );
+}
+
 /// A replace states new terms for an order the venue is working; it does not
 /// place a new one.
 ///

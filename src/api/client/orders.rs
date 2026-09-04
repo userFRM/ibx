@@ -129,7 +129,7 @@ impl EClient {
         )?;
         self.check_sec_type_permitted(&contract.sec_type)?;
 
-        let named;
+        let mut named;
         let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
             let key = ClientCore::description_key(contract);
             named = match self.core.named_for(&key) {
@@ -145,6 +145,16 @@ impl EClient {
                     answer
                 }
             };
+            // What the venue names is a description of one contract, and a
+            // description carries no hedge and no legs. Put in place of what
+            // the caller stated, a delta-neutral order lost the contract it
+            // hedges against and a combination lost every leg, and each went
+            // to the venue as something else entirely. The naming supplies
+            // what the caller left out; it does not take away what they said.
+            named.delta_neutral_contract = contract.delta_neutral_contract.clone();
+            if !contract.combo_legs.is_empty() {
+                named.combo_legs = contract.combo_legs.clone();
+            }
             &named
         } else {
             contract
