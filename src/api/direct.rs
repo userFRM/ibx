@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::api::client::{EClient, EClientConfig};
 use crate::api::client::ask::hold_id;
+use crate::bridge::RecordKind;
 use crate::types::model::{BarData, ContractDetails};
 use crate::api::wrapper::Wrapper;
 use crate::error_codes::Refusal;
@@ -416,7 +417,7 @@ impl Client {
         // record — or the venue's refusal — can arrive and be taken by a
         // dispatch loop running beside this, which sees a number nobody has
         // claimed. Given up again if the request cannot be sent.
-        let held = hold_id(&self.inner.shared, req_id);
+        let held = hold_id(&self.inner.shared, RecordKind::Bars, req_id);
         self.inner.req_real_time_bars(req_id, contract, 5, what_to_show, use_rth)?;
         // The hold passes to the stream, which gives it up when it ends.
         let req_id = held.keep();
@@ -427,6 +428,7 @@ impl Client {
         let tx = self.inner.control_tx.clone();
         Ok(Subscription::new(
             req_id,
+            RecordKind::Bars,
             Arc::clone(&self.inner.shared),
             |sh, id| sh.market.take_real_time_bars_for(id as u32),
             move |id| {
@@ -447,12 +449,13 @@ impl Client {
         // record — or the venue's refusal — can arrive and be taken by a
         // dispatch loop running beside this, which sees a number nobody has
         // claimed. Given up again if the request cannot be sent.
-        let held = hold_id(&self.inner.shared, req_id);
+        let held = hold_id(&self.inner.shared, RecordKind::Depth, req_id);
         self.inner.req_mkt_depth(req_id, contract, num_rows, smart_depth)?;
         let req_id = held.keep();
         let tx = self.inner.control_tx.clone();
         Ok(Subscription::new(
             req_id,
+            RecordKind::Depth,
             Arc::clone(&self.inner.shared),
             |sh, id| sh.market.take_depth_updates_for(id as u32),
             move |id| {
@@ -665,7 +668,7 @@ impl Client {
     ) -> Result<Subscription<crate::control::scanner::ScannerResult>, Refusal> {
         let req_id = self.stream_id();
         // Held before the request goes out; see `realtime_bars`.
-        let held = hold_id(&self.inner.shared, req_id);
+        let held = hold_id(&self.inner.shared, RecordKind::Scanner, req_id);
         self.inner.req_scanner_subscription(
             req_id, instrument, location_code, scan_code, max_items, filters,
         )?;
@@ -673,6 +676,7 @@ impl Client {
         let tx = self.inner.control_tx.clone();
         Ok(Subscription::new(
             req_id,
+            RecordKind::Scanner,
             Arc::clone(&self.inner.shared),
             |sh, id| sh.reference.take_scanner_data_for(id as u32),
             move |id| {
@@ -1276,7 +1280,7 @@ mod tests {
         });
         std::thread::sleep(Duration::from_millis(100));
         assert!(
-            shared.reference.is_ours(asked),
+            shared.reference.is_ours(RecordKind::Bars, asked),
             "the stream's number was nobody's while its request was going out",
         );
 
@@ -1317,6 +1321,42 @@ mod tests {
         assert_eq!(
             shared.reference.take_scanner_data_for(asked as u32).len(), 1,
             "the batch the stream was going to read went to a callback instead",
+        );
+    }
+
+    /// A number held for one kind of request is not held for another.
+    ///
+    /// A request number means one thing per kind of request, so a stream
+    /// reading bars under a number and a scan asked for under the same number
+    /// on the surface underneath are both entitled to it, and each is answered
+    /// on a queue of its own. Held by the number alone, the stream's claim
+    /// withheld the scan's rows from the dispatch loop that was going to
+    /// deliver them — and nothing else ever read them, because the stream
+    /// holding that number reads bars.
+    #[test]
+    fn a_number_held_for_bars_does_not_hold_it_for_a_scan() {
+        let (client, _rx, shared) = test_direct_client();
+        let asked = client.next_request_id();
+        let _bars = client
+            .realtime_bars(&Contract { symbol: "SPY".into(), ..Default::default() }, "TRADES", true)
+            .expect("the stream opened");
+        // The same number, for a scan the caller asked for itself.
+        shared.reference.push_scanner_data(
+            asked as u32,
+            crate::control::scanner::ScannerResult {
+                con_ids: vec![756733],
+                entries: vec![crate::control::scanner::ScannerEntry { con_id: 756733 }],
+                scan_time: String::new(), error_text: String::new(),
+            },
+        );
+
+        let mut heard = crate::api::wrapper::tests::RecordingWrapper::default();
+        client.inner.process_msgs(&mut heard);
+
+        assert!(
+            heard.events.iter().any(|e| e.starts_with("scanner_data:")),
+            "the scan's rows were withheld for a stream that reads bars: {:?}",
+            heard.events,
         );
     }
 
@@ -1379,6 +1419,37 @@ mod tests {
         let (code, why) = book.refusal().expect("the reason the book was given up");
         assert_eq!(*code, 354, "the stream read the drop as a quiet market: {why}");
         assert!(why.contains("part of a book is not a book"), "{why}");
+    }
+
+    /// And ends that stream, not another reading under the same number.
+    ///
+    /// The notice is queued under the number the book was asked for, and a
+    /// number means one thing per kind of request — so a caller running a
+    /// book on the surface underneath may hold the number a stream here is
+    /// reading bars under. Read by every stream, the bars stream ended on a
+    /// book it had never asked for, kept the reason as its own refusal, and
+    /// withdrew a subscription the venue was still serving.
+    #[test]
+    fn a_book_given_up_on_does_not_end_a_stream_reading_bars() {
+        let (client, _rx, shared) = test_direct_client();
+        let mut bars = client
+            .realtime_bars(&Contract { symbol: "SPY".into(), ..Default::default() }, "TRADES", true)
+            .expect("the stream opened");
+        let asked = bars.req_id() as u32;
+        for _ in 0..=crate::bridge::STREAM_BACKLOG_LIMIT {
+            shared.market.push_depth_update(DepthUpdate {
+                req_id: asked, position: 0, market_maker: String::new(),
+                operation: 0, side: 1, price: 1.0, size: 1.0, is_smart_depth: false,
+            });
+        }
+        assert!(shared.market.depth_was_dropped(asked), "the book was given up");
+
+        assert!(bars.next_item().is_none(), "no bar arrived, so the quiet ends it");
+        assert!(
+            bars.refusal().is_none(),
+            "the bars stream ended on another request's book: {:?}",
+            bars.refusal(),
+        );
     }
 
     /// The profit subscriptions open nothing: their figures arrive on a

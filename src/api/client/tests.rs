@@ -6551,7 +6551,7 @@ mod answering_calls_receive_through_dispatch {
         // it hands the id out. Which ids those are is no longer read off their
         // magnitude, so a number alone establishes nothing.
         let ask_id = crate::bridge::ReferenceState::ASK_ID_BASE;
-        shared.reference.note_ours(ask_id as i64);
+        shared.reference.note_ours(crate::bridge::RecordKind::Answer, ask_id as i64);
         shared.reference.push_contract_details(
             ask_id,
             ContractDefinition { con_id: 756733, ..Default::default() },
@@ -6565,7 +6565,7 @@ mod answering_calls_receive_through_dispatch {
         assert_eq!(delivered.len(), 1, "a caller's own reply was withheld");
         assert_eq!(delivered[0].0, 7);
         assert_eq!(shared.reference.take_contract_details_for(ask_id).len(), 1);
-        shared.reference.forget_ours(ask_id as i64);
+        shared.reference.forget_ours(crate::bridge::RecordKind::Answer, ask_id as i64);
     }
 
     /// A caller may number a request anything at all, including inside the
@@ -7751,12 +7751,12 @@ fn a_caller_cannot_take_a_number_this_client_reserves() {
     // Refused whether or not this session happens to be holding that number.
     // Held is exactly when the collision is possible, so a check that lets a
     // held one through is open precisely when it matters.
-    _shared.reference.note_ours(taken);
+    _shared.reference.note_ours(crate::bridge::RecordKind::Answer, taken);
     assert!(
         client.req_adjustments(taken, 4815747, "STK", "SMART", "20240101", "20241231").is_err(),
         "held or not, the band is not a caller's to number in",
     );
-    _shared.reference.forget_ours(taken);
+    _shared.reference.forget_ours(crate::bridge::RecordKind::Answer, taken);
 
     // The number below the band is a caller's to use, and still works.
     assert!(

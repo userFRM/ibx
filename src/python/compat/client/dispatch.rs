@@ -653,7 +653,7 @@ impl EClient {
 
         // Drain depth updates -> updateMktDepth / updateMktDepthL2
         let depth_updates = shared.market.drain_depth_updates_for_dispatch(
-            |id| shared.reference.is_ours(i64::from(id)),
+            |id| shared.reference.is_ours(crate::bridge::RecordKind::Depth, i64::from(id)),
         );
         if !depth_updates.is_empty() {
             log::debug!("delivering {} book level(s)", depth_updates.len());
@@ -718,7 +718,7 @@ impl EClient {
         // Drain HMDS query errors -> error. Surface gateway-side validation
         // failures (e.g. "Invalid time length") that previously vanished silently.
         for (req_id, code, msg) in shared.reference.drain_historical_errors_for_dispatch(
-            |id| shared.reference.is_ours(i64::from(id)),
+            |id| shared.reference.held_under_any_kind(i64::from(id)),
         ) {
             let req_id = crate::bridge::ReferenceState::request_id_reported(req_id);
             call_wrapper!(self.wrapper, py, "error", (req_id, 0i64, code as i64, msg.as_str(), ""));
@@ -978,7 +978,7 @@ impl EClient {
         // Drain real-time bars -> real_time_bar or historical_data_update
         // (keepUpToDate)
         let rtbars = shared.market.drain_real_time_bars_for_dispatch(
-            |id| shared.reference.is_ours(i64::from(id)),
+            |id| shared.reference.is_ours(crate::bridge::RecordKind::Bars, i64::from(id)),
         );
         for (req_id, bar) in rtbars {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {

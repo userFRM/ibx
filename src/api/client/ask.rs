@@ -59,6 +59,9 @@ pub(crate) struct AskId {
     /// took it without the session outliving anything: forgetting the guard
     /// whole would hold this reference for as long as the process runs.
     shared: Option<std::sync::Arc<crate::bridge::SharedState>>,
+    /// Which of the venue's records the id is held for, so releasing it
+    /// releases the hold that was taken and not another kind's.
+    kind: crate::bridge::RecordKind,
 }
 
 impl AskId {
@@ -82,13 +85,17 @@ impl AskId {
 impl Drop for AskId {
     fn drop(&mut self) {
         if let Some(shared) = &self.shared {
-            shared.reference.forget_ours(self.id);
+            shared.reference.forget_ours(self.kind, self.id);
         }
     }
 }
 
 pub(crate) fn ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> AskId {
-    hold_id(shared, NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed))
+    hold_id(
+        shared,
+        crate::bridge::RecordKind::Answer,
+        NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed),
+    )
 }
 
 /// Hold a number as this session's own until the guard is dropped.
@@ -100,13 +107,20 @@ pub(crate) fn ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> Ask
 /// a callback. The first positional entry of a book is the worst one to lose:
 /// every entry after it describes a book that never had a start.
 ///
+/// `kind` says which of the venue's records the number is held for: a number
+/// means one thing per kind of request, so holding it for bars must not
+/// withhold the scan a caller is running under the same number.
+///
 /// Released on drop, so a request that could not be sent does not leave its
-/// number held; [`AskId::keep`] passes the hold to the stream.
+/// number held; [`AskId::keep`] passes the hold to the stream, which states
+/// the same kind and gives it up when it ends.
 pub(crate) fn hold_id(
-    shared: &std::sync::Arc<crate::bridge::SharedState>, id: i64,
+    shared: &std::sync::Arc<crate::bridge::SharedState>,
+    kind: crate::bridge::RecordKind,
+    id: i64,
 ) -> AskId {
-    shared.reference.note_ours(id);
-    AskId { id, shared: Some(std::sync::Arc::clone(shared)) }
+    shared.reference.note_ours(kind, id);
+    AskId { id, shared: Some(std::sync::Arc::clone(shared)), kind }
 }
 
 #[derive(Default)]
@@ -1425,7 +1439,10 @@ mod ask_id_holds_nothing_after_it_is_kept {
             before,
             "keeping id {id} held a reference to the session it was taken from",
         );
-        assert!(shared.reference.is_ours(id), "and the id is still this session's own");
+        assert!(
+            shared.reference.is_ours(crate::bridge::RecordKind::Answer, id),
+            "and the id is still this session's own",
+        );
     }
 
     /// One released the ordinary way gives the session up too.
@@ -1439,6 +1456,9 @@ mod ask_id_holds_nothing_after_it_is_kept {
             asked.get()
         };
         assert_eq!(Arc::strong_count(&shared), before, "and lets go when it ends");
-        assert!(!shared.reference.is_ours(id), "and the id goes with it");
+        assert!(
+            !shared.reference.is_ours(crate::bridge::RecordKind::Answer, id),
+            "and the id goes with it",
+        );
     }
 }

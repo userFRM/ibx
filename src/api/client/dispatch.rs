@@ -7,6 +7,7 @@ use crate::types::model::{
     Order as ApiOrder, OrderState, TickAttribLast, TickAttribBidAsk, PRICE_SCALE_F,
 };
 use crate::api::wrapper::Wrapper;
+use crate::bridge::RecordKind;
 use crate::types::order_status::order_status_str;
 const QTY_SCALE_F: f64 = crate::types::QTY_SCALE as f64;
 
@@ -477,7 +478,7 @@ impl EClient {
 
         // Depth updates → update_mkt_depth / update_mkt_depth_l2
         for du in self.shared.market.drain_depth_updates_for_dispatch(
-            |id| self.shared.reference.left_for_its_reader(id),
+            |id| self.shared.reference.is_ours(RecordKind::Depth, i64::from(id)),
         ) {
             if du.market_maker.is_empty() {
                 wrapper.update_mkt_depth(du.req_id as i64, du.position, du.operation, du.side, du.price, du.size);
@@ -573,7 +574,7 @@ impl EClient {
         // for it. Nothing further is kept for it, so a caller not told reads a
         // subscription that is up and a book that has stopped moving.
         for (req_id, reason) in self.shared.market.drain_depth_drops_for_dispatch(
-            |id| self.shared.reference.left_for_its_reader(id),
+            |id| self.shared.reference.is_ours(RecordKind::Depth, i64::from(id)),
         ) {
             wrapper.error(i64::from(req_id), DEPTH_NOT_SERVED, &reason, "");
         }
@@ -702,7 +703,7 @@ impl EClient {
         // The Some-arm fills the rich fields; the fallback covers deadline-
         // flushed partials where a secdef reply never arrived.
         for (req_id, result) in self.shared.reference.drain_scanner_data_for_dispatch(
-            |id| self.shared.reference.left_for_its_reader(id),
+            |id| self.shared.reference.is_ours(RecordKind::Scanner, i64::from(id)),
         ) {
             // A refused scan arrives in the shape of a completed one and carries
             // the reason. Reported against the requesting id, so a refusal is not
@@ -764,7 +765,7 @@ impl EClient {
         // The two arrive on one feed and are told apart by whether the request
         // has already answered with its history.
         for (req_id, bar) in self.shared.market.drain_real_time_bars_for_dispatch(
-            |id| self.shared.reference.left_for_its_reader(id),
+            |id| self.shared.reference.is_ours(RecordKind::Bars, i64::from(id)),
         ) {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
                 // A forming bar is stamped at its open, in seconds since the

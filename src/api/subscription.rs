@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::bridge::SharedState;
+use crate::bridge::{RecordKind, SharedState};
 
 /// How long a caller waits for the next item before the stream ends.
 ///
@@ -47,6 +47,13 @@ type Cancel = Box<dyn Fn(i64) + Send>;
 /// A stream of one kind of thing, for one request.
 pub struct Subscription<T> {
     req_id: i64,
+    /// Which of the venue's records this reads under that number, where it
+    /// reads any by number at all.
+    ///
+    /// `None` for a stream over what belongs to no request: nothing under its
+    /// number is its own, so nothing is withheld for it and nothing here is
+    /// asked in its name.
+    reads: Option<RecordKind>,
     shared: Arc<SharedState>,
     take: Take<T>,
     cancel: Option<Cancel>,
@@ -62,22 +69,28 @@ pub struct Subscription<T> {
 impl<T> Subscription<T> {
     /// Build a stream over a request already sent.
     ///
-    /// `take` reads whatever has arrived for this request; `cancel` withdraws
-    /// it. A stream with no way to withdraw is one the venue keeps feeding
-    /// after the caller has gone, so `cancel` is asked for rather than optional
-    /// by default.
+    /// `take` reads whatever has arrived for this request; `reads` says which
+    /// of the venue's records that is, because a number means one thing per
+    /// kind of request and holding it for one kind must not withhold another's;
+    /// `cancel` withdraws it. A stream with no way to withdraw is one the venue
+    /// keeps feeding after the caller has gone, so `cancel` is asked for rather
+    /// than optional by default.
     pub fn new(
         req_id: i64,
+        reads: RecordKind,
         shared: Arc<SharedState>,
         take: impl Fn(&SharedState, i64) -> Vec<T> + Send + 'static,
         cancel: impl Fn(i64) + Send + 'static,
     ) -> Self {
         // Said for as long as the stream lasts, so a dispatch loop running
         // beside it leaves these records where this will find them. Taken back
-        // when the stream ends, whichever way it ends.
-        shared.reference.note_ours(req_id);
+        // when the stream ends, whichever way it ends. Said of one kind of
+        // record, because that is what the number means: another kind's
+        // records under the same number are somebody else's.
+        shared.reference.note_ours(reads, req_id);
         Self {
             req_id,
+            reads: Some(reads),
             shared,
             take: Box::new(take),
             cancel: Some(Box::new(cancel)),
@@ -100,9 +113,13 @@ impl<T> Subscription<T> {
         shared: Arc<SharedState>,
         take: impl Fn(&SharedState, i64) -> Vec<T> + Send + 'static,
     ) -> Self {
-        shared.reference.note_ours(req_id);
+        // Nothing is held: what these read belongs to no request, so there is
+        // no queue anything would be withheld from and no kind to hold the
+        // number for. Held anyway, the number would be withheld from whatever
+        // request a caller was actually running under it.
         Self {
             req_id,
+            reads: None,
             shared,
             take: Box::new(take),
             cancel: None,
@@ -138,7 +155,9 @@ impl<T> Subscription<T> {
         if let Some(cancel) = self.cancel.take() {
             cancel(self.req_id);
         }
-        self.shared.reference.forget_ours(self.req_id);
+        if let Some(kind) = self.reads {
+            self.shared.reference.forget_ours(kind, self.req_id);
+        }
         self.done = true;
     }
 
@@ -165,7 +184,17 @@ impl<T> Subscription<T> {
             }
             if let Some((code, message)) = self.shared.reference.take_error_for(self.req_id as u32) {
                 self.refusal = Some((code as i64, message));
-                self.done = true;
+                // Ended the way the endings below end it, and not merely
+                // marked done. A caller keeps a refused stream to read the
+                // reason off it, and while it held one the number went on
+                // being this stream's — so what arrived under it reached
+                // nothing — and the withdrawal stayed armed, to go out
+                // whenever the object was dropped, against whatever request
+                // was using that number by then. Withdrawn rather than
+                // dropped, because a refusal here is not always the venue
+                // declining to start: it is also what a subscription already
+                // running is failed with.
+                self.cancel();
                 return None;
             }
             // A book this client could not keep whole ends the stream that
@@ -176,7 +205,15 @@ impl<T> Subscription<T> {
             // ended saying nothing had gone wrong. Withdrawn as well as
             // ended: the venue is still serving a book nobody can use, and
             // withdrawing is how a caller starts one again.
-            if let Some(reason) = self.shared.market.take_depth_drop_for(self.req_id as u32) {
+            //
+            // Asked only by a stream reading a book. The notice is queued
+            // under the number the book was asked for, and a number means one
+            // thing per kind of request — so a stream reading bars under the
+            // same number would otherwise end on another request's dropped
+            // book, and report it as its own.
+            if self.reads == Some(RecordKind::Depth)
+                && let Some(reason) = self.shared.market.take_depth_drop_for(self.req_id as u32)
+            {
                 self.refusal = Some((
                     crate::api::client::dispatch::DEPTH_NOT_SERVED, reason,
                 ));
@@ -218,7 +255,9 @@ impl<T> Drop for Subscription<T> {
         if let Some(cancel) = self.cancel.take() {
             cancel(self.req_id);
         }
-        self.shared.reference.forget_ours(self.req_id);
+        if let Some(kind) = self.reads {
+            self.shared.reference.forget_ours(kind, self.req_id);
+        }
     }
 }
 
@@ -243,6 +282,7 @@ mod tests {
         let w = Arc::clone(&withdrawn);
         let mut sub: Subscription<i64> = Subscription::new(
             7,
+            RecordKind::Bars,
             Arc::clone(&shared),
             |_, _| Vec::new(),
             move |req_id| { w.store(req_id, Ordering::Relaxed); },
@@ -286,6 +326,29 @@ mod tests {
         let got = sub.next_item();
         pusher.join().unwrap();
         assert_eq!(got.map(|u| u.order_id), Some(5), "the wait outlasted the quiet and took what arrived");
+    }
+
+    /// A stream over what belongs to no request holds no number.
+    ///
+    /// It reads a queue nothing is keyed by, so nothing under its number is
+    /// its own and nothing would be withheld for it. Held anyway, the number
+    /// it was opened under — one from the same counter every request here is
+    /// numbered from — withheld the records of whatever request a caller was
+    /// running under it, from a dispatch loop that was the only thing going
+    /// to deliver them.
+    #[test]
+    fn a_stream_over_what_belongs_to_no_request_holds_no_number() {
+        let shared = state();
+        // The same shape `order_update_stream` opens.
+        let _sub: Subscription<crate::types::OrderUpdate> = Subscription::without_cancel(
+            1,
+            Arc::clone(&shared),
+            |sh, _| sh.orders.drain_order_updates(),
+        );
+        assert!(
+            !shared.reference.held_under_any_kind(1),
+            "a stream reading nothing by number was holding one",
+        );
     }
 
     /// A stream ends with the session that feeds it: nothing more arrives,
@@ -335,6 +398,7 @@ mod tests {
         {
             let _sub: Subscription<i64> = Subscription::new(
                 42,
+                RecordKind::Bars,
                 Arc::clone(&shared),
                 |_, _| vec![],
                 move |req_id| { c.store(req_id, Ordering::Relaxed); },
@@ -352,6 +416,7 @@ mod tests {
         {
             let mut sub: Subscription<i64> = Subscription::new(
                 7,
+                RecordKind::Bars,
                 Arc::clone(&shared),
                 |_, _| vec![],
                 move |_| { c.fetch_add(1, Ordering::Relaxed); },
@@ -378,6 +443,43 @@ mod tests {
         let (code, message) = sub.refusal().expect("the refusal is kept");
         assert_eq!(*code, 354);
         assert!(message.contains("not subscribed"));
+    }
+
+    /// A refused stream ends the way every other ending ends it.
+    ///
+    /// The refusal is what a caller keeps the object to read, so a stream that
+    /// ended on one outlives its stream. While it did, it went on being the
+    /// reader of its number — so records arriving under that number were
+    /// withheld from everything else — and its withdrawal stayed armed, to go
+    /// out whenever the object happened to be dropped, against whatever
+    /// request was using that number by then.
+    #[test]
+    fn a_refused_stream_gives_up_its_number_where_it_ends() {
+        let shared = state();
+        shared.reference.push_historical_error(9, 354, "Requested market data is not subscribed".into());
+        let withdrawn = Arc::new(AtomicI64::new(0));
+        let w = Arc::clone(&withdrawn);
+        let mut sub: Subscription<i64> = Subscription::new(
+            9,
+            RecordKind::Bars,
+            Arc::clone(&shared),
+            |_, _| vec![],
+            move |req_id| { w.store(req_id, Ordering::Relaxed); },
+        );
+
+        assert_eq!(sub.next_item(), None, "the venue's refusal ends it");
+        assert_eq!(sub.refusal().expect("the refusal is kept").0, 354);
+        assert!(
+            !shared.reference.is_ours(RecordKind::Bars, 9),
+            "the number is still this stream's, and it has ended",
+        );
+        assert_eq!(withdrawn.load(Ordering::Relaxed), 9, "and the request is withdrawn");
+
+        // Withdrawn once, where it ended: dropping it afterwards does not ask
+        // again, under a number that may since be somebody else's.
+        withdrawn.store(0, Ordering::Relaxed);
+        drop(sub);
+        assert_eq!(withdrawn.load(Ordering::Relaxed), 0);
     }
 
     /// A stream that ended because nothing came holds no refusal, which is how

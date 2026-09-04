@@ -19,16 +19,43 @@ type StatedActions = (
     Vec<crate::control::adjustments::Adjustment>,
 );
 
+/// Which of the venue's records a number is held for.
+///
+/// A request number means one thing per kind of request: a caller may hold the
+/// same number for bars and for a scan at once, and each kind is answered on a
+/// queue of its own. Recorded by the number alone, the first reader to claim it
+/// held it against every kind — so another kind's records were withheld from
+/// the dispatch loop that was going to deliver them, and nothing else read them
+/// either, because the reader holding the number reads somewhere else.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum RecordKind {
+    /// Bars, as the venue prints them.
+    Bars,
+    /// A contract's book: its entries, and the notice that ends one.
+    Depth,
+    /// A scan's rows.
+    Scanner,
+    /// The one answer to a question this client asked on its own account.
+    Answer,
+}
+
+impl RecordKind {
+    /// Every kind, for the one queue that cannot say which it belongs to.
+    const ALL: [Self; 4] = [Self::Bars, Self::Depth, Self::Scanner, Self::Answer];
+}
+
 /// Historical data, contract definitions, scanners, news archives, market rules,
 /// contract cache.
 pub struct ReferenceState {
-    /// The ids this session is itself waiting on an answer for.
+    /// The numbers this session is itself reading records under, each against
+    /// the kind of record it is reading — a number means one thing per kind of
+    /// request, so holding one for bars holds it for bars alone.
     ///
     /// Held here rather than beside the counter that hands them out: the
     /// queues these guard belong to a session, and two sessions in one process
     /// count from the same number, so a set shared between them would let one
     /// release what the other is waiting on.
-    ours_in_flight: Mutex<std::collections::HashSet<i64>>,
+    ours_in_flight: Mutex<std::collections::HashSet<(RecordKind, i64)>>,
     historical_data: Mutex<Vec<(u32, HistoricalResponse)>>,
     head_timestamps: Mutex<Vec<(u32, HeadTimestampResponse)>>,
     /// Set while the smart-component table is this client's own rather than
@@ -252,7 +279,11 @@ impl ReferenceState {
         let mut out = Vec::new();
         let mut i = 0;
         while i < g.len() {
-            if self.is_ours(g[i] as i64) { i += 1; } else { out.push(g.remove(i)); }
+            if self.is_ours(RecordKind::Answer, g[i] as i64) {
+                i += 1;
+            } else {
+                out.push(g.remove(i));
+            }
         }
         out
     }
@@ -311,27 +342,43 @@ impl ReferenceState {
         (Self::ASK_ID_BASE..ENGINE_ID_BASE).contains(&req_id)
     }
 
-    /// Record that this session is waiting on an answer under this id.
-    pub fn note_ours(&self, req_id: i64) {
-        self.ours_in_flight.lock().unwrap().insert(req_id);
+    /// Record that this session is reading records of one kind under this id.
+    pub fn note_ours(&self, kind: RecordKind, req_id: i64) {
+        self.ours_in_flight.lock().unwrap().insert((kind, req_id));
     }
 
     /// Stop holding an id, whether the question was answered or given up on.
-    pub fn forget_ours(&self, req_id: i64) {
-        self.ours_in_flight.lock().unwrap().remove(&req_id);
+    pub fn forget_ours(&self, kind: RecordKind, req_id: i64) {
+        self.ours_in_flight.lock().unwrap().remove(&(kind, req_id));
     }
 
-    /// Whether this id belongs to a question this session asked for itself.
+    /// Whether records of this kind under this id belong to a reader of this
+    /// session's.
     ///
     /// Read from what was recorded when the id was handed out, so a caller's
     /// own number — however large, and whatever counter it came from — is
-    /// never mistaken for one of these.
-    pub fn is_ours(&self, req_id: i64) -> bool {
-        self.ours_in_flight.lock().unwrap().contains(&req_id)
+    /// never mistaken for one of these. Asked one kind at a time, because a
+    /// number means one thing per kind: a stream reading bars under 7 says
+    /// nothing about the scan a caller is running under 7.
+    pub fn is_ours(&self, kind: RecordKind, req_id: i64) -> bool {
+        self.ours_in_flight.lock().unwrap().contains(&(kind, req_id))
     }
 
-    /// Whether a record under this id belongs to a reader that takes it out of
-    /// the queue itself, so a dispatch loop has to leave it there.
+    /// Whether any reader of this session's holds this id, whatever it holds
+    /// it for.
+    ///
+    /// For the refusals, which share one queue keyed by the number alone: the
+    /// calendar, the contract lookups, the trading connection and the scanner
+    /// all write to it, so alone among the queues it cannot say which kind of
+    /// request failed. Until it can, the most that may be asked of a number
+    /// there is whether anybody is reading under it at all.
+    pub fn held_under_any_kind(&self, req_id: i64) -> bool {
+        let held = self.ours_in_flight.lock().unwrap();
+        RecordKind::ALL.iter().any(|kind| held.contains(&(*kind, req_id)))
+    }
+
+    /// Whether a refusal under this id belongs to a reader that takes it out
+    /// of the queue itself, so a dispatch loop has to leave it there.
     ///
     /// The streams the answering shape hands back read by id and hold no turn,
     /// because a stream outlives any one read of the session. This client's own
@@ -339,8 +386,11 @@ impl ReferenceState {
     /// dispatch loop themselves and receive through it, so their answers must go
     /// on being delivered to it or they are withheld from the call waiting for
     /// them. The band the second are numbered in is what tells the two apart.
+    ///
+    /// For the refusals alone. Every other queue names one kind of record and
+    /// asks about that kind; see [`held_under_any_kind`](Self::held_under_any_kind).
     pub fn left_for_its_reader(&self, req_id: u32) -> bool {
-        !Self::is_ask_id(req_id) && self.is_ours(i64::from(req_id))
+        !Self::is_ask_id(req_id) && self.held_under_any_kind(i64::from(req_id))
     }
 
     /// Drain what a dispatch loop should deliver, leaving behind what a waiting
@@ -357,7 +407,11 @@ impl ReferenceState {
         let mut out = Vec::new();
         let mut i = 0;
         while i < g.len() {
-            if self.is_ours(g[i].0 as i64) { i += 1; } else { out.push(g.remove(i)); }
+            if self.is_ours(RecordKind::Answer, g[i].0 as i64) {
+                i += 1;
+            } else {
+                out.push(g.remove(i));
+            }
         }
         out
     }
@@ -611,7 +665,7 @@ impl ReferenceState {
         let mut out = Vec::new();
         let mut i = 0;
         while i < held.len() {
-            if self.is_ours(held[i].0 as i64) {
+            if self.is_ours(RecordKind::Answer, held[i].0 as i64) {
                 i += 1;
             } else {
                 out.push(held.remove(i));
@@ -684,7 +738,7 @@ impl ReferenceState {
         let mut out = Vec::new();
         let mut i = 0;
         while i < held.len() {
-            if self.is_ours(held[i].0 as i64) {
+            if self.is_ours(RecordKind::Answer, held[i].0 as i64) {
                 i += 1;
             } else {
                 out.push(held.remove(i));
@@ -1101,7 +1155,7 @@ const _: () = assert!(ReferenceState::ASK_ID_BASE < ENGINE_ID_BASE);
 
 #[cfg(test)]
 mod ask_id_band {
-    use super::ReferenceState;
+    use super::{RecordKind, ReferenceState};
 
     /// A caller's id is not one of this client's own.
     ///
@@ -1135,7 +1189,7 @@ mod ask_id_band {
         // Recorded, because that is what makes it this session's own now. Read
         // off its size, the test passed only when some other test in the same
         // run had happened to record it — and failed on its own.
-        state.note_ours(ReferenceState::ASK_ID_BASE as i64);
+        state.note_ours(RecordKind::Answer, ReferenceState::ASK_ID_BASE as i64);
         let q = std::sync::Mutex::new(vec![(1_786_766_504_u32, "theirs"),
                                            (ReferenceState::ASK_ID_BASE, "ours")]);
         let out = state.drain_dispatchable(&q);
@@ -1156,12 +1210,18 @@ mod ask_id_band {
         let theirs = ReferenceState::new();
         let id = ReferenceState::ASK_ID_BASE as i64;
 
-        mine.note_ours(id);
-        theirs.note_ours(id);
-        theirs.forget_ours(id);
+        mine.note_ours(RecordKind::Answer, id);
+        theirs.note_ours(RecordKind::Answer, id);
+        theirs.forget_ours(RecordKind::Answer, id);
 
-        assert!(mine.is_ours(id), "another session's release took mine with it");
-        assert!(!theirs.is_ours(id), "and its own release still took effect");
+        assert!(
+            mine.is_ours(RecordKind::Answer, id),
+            "another session's release took mine with it",
+        );
+        assert!(
+            !theirs.is_ours(RecordKind::Answer, id),
+            "and its own release still took effect",
+        );
     }
 }
 

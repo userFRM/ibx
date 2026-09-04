@@ -70,13 +70,13 @@ impl AskId {
 
 impl Drop for AskId {
     fn drop(&mut self) {
-        self.shared.reference.forget_ours(self.id);
+        self.shared.reference.forget_ours(crate::bridge::RecordKind::Answer, self.id);
     }
 }
 
 fn ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> AskId {
     let id = NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed);
-    shared.reference.note_ours(id);
+    shared.reference.note_ours(crate::bridge::RecordKind::Answer, id);
     AskId { id, shared: std::sync::Arc::clone(shared) }
 }
 
@@ -92,7 +92,7 @@ fn ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> AskId {
 #[cfg(feature = "test-helpers")]
 pub(crate) fn peek_ask_id(shared: &std::sync::Arc<crate::bridge::SharedState>) -> i64 {
     let id = NEXT_ASK_ID.load(Ordering::Relaxed);
-    shared.reference.note_ours(id);
+    shared.reference.note_ours(crate::bridge::RecordKind::Answer, id);
     id
 }
 
