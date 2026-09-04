@@ -1466,8 +1466,28 @@ impl ClientCore {
 
     /// Find instrument ID for a contract, registering if needed.
     /// Returns `Err` if the control channel is closed.
+    /// Forget the slots the engine has given back.
+    ///
+    /// The cache below answers "which slot does this contract hold" without
+    /// asking the engine, which is what keeps a placement off a round trip. A
+    /// slot the engine has freed goes to the next contract that needs one, so
+    /// an answer from here after that names another contract altogether: the
+    /// order was recorded against the new occupant and its fill moved that
+    /// contract's position.
+    pub fn forget_released_slots(&self, shared: &SharedState) {
+        let released = shared.market.take_released_con_ids();
+        if released.is_empty() {
+            return;
+        }
+        let mut cache = self.con_id_to_instrument.lock().unwrap();
+        for con_id in released {
+            cache.remove(&con_id);
+        }
+    }
+
     pub fn find_or_register_instrument(
         &self,
+        shared: &SharedState,
         control_tx: &SyncSender<ControlCommand>,
         con_id: i64,
         symbol: &str,
@@ -1475,6 +1495,7 @@ impl ClientCore {
         sec_type: &str,
         identity: &str,
     ) -> Result<InstrumentId, Refusal> {
+        self.forget_released_slots(shared);
         // The cache is skipped when the caller states an identity, because the
         // slot may have been allocated by a market-data subscription that had
         // none — and the engine is where the identity is stored. Short-circuiting

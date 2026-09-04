@@ -55,6 +55,14 @@ pub struct Context {
     pub(crate) market: MarketState,
     positions: Box<[f64]>,
     open_orders: HashMap<OrderId, Order>,
+    /// Slots an order has just stopped holding, for the loop to reconsider.
+    ///
+    /// A slot is freed when the last thing referring to it goes, and until now
+    /// only a cancelled subscription asked. An order — or a preview, which is
+    /// tracked as one — held its slot for the life of the session, so a
+    /// program working a chain a few thousand contracts wide ran the table out
+    /// and was refused the next contract it named.
+    pub slots_to_reconsider: Vec<InstrumentId>,
     pub(crate) pending_orders: OrderBuffer,
     pub(crate) account: AccountState,
     clock: Clock,
@@ -104,6 +112,7 @@ impl Context {
             market: MarketState::new(),
             positions: vec![0.0f64; MAX_INSTRUMENTS].into(),
             open_orders: HashMap::with_capacity(128),
+            slots_to_reconsider: Vec::new(),
             pending_orders: OrderBuffer::new(),
             modify_versions: HashMap::new(),
             last_clord: HashMap::new(),
@@ -518,7 +527,9 @@ impl Context {
     /// failed to send leaves the previous version working, and a cancel for it
     /// has to state the ClOrdID the broker last recorded.
     pub fn remove_order(&mut self, order_id: OrderId) {
-        self.open_orders.remove(&order_id);
+        if let Some(order) = self.open_orders.remove(&order_id) {
+            self.slots_to_reconsider.push(order.instrument);
+        }
     }
 
     /// Drop an order and everything keyed to it, for an order that is over.

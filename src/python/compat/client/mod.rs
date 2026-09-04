@@ -1464,6 +1464,8 @@ impl EClient {
         let Some(tx) = self.control_tx.lock().unwrap().clone() else {
             return Err(crate::error_codes::Refusal::not_connected("Not connected"));
         };
+        let shared = self.shared_state()
+            .map_err(|_| crate::error_codes::Refusal::not_connected("Not connected"))?;
         let con_id = contract.con_id;
         let symbol = contract.symbol.clone();
         let exchange = contract.exchange.clone();
@@ -1473,7 +1475,7 @@ impl EClient {
             &contract.right, &contract.multiplier, &contract.currency,
         );
         py.detach(|| self.core.find_or_register_instrument(
-            &tx, con_id, &symbol, &exchange, &sec_type, &identity,
+            &shared, &tx, con_id, &symbol, &exchange, &sec_type, &identity,
         ))
     }
 }

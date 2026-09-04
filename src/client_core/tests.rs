@@ -1573,3 +1573,24 @@ fn a_restatement_that_never_left_is_undone() {
     core.retire_rejected(&refusal(2));
     assert_eq!(price_on_record(&core), 100.0, "and there is nothing left to put back twice");
 }
+
+/// A slot the engine has given back is not answered from the cache.
+///
+/// The cache answers "which slot does this contract hold" without asking the
+/// engine, which is what keeps a placement off a round trip. The slot goes to
+/// the next contract that needs one, so an answer from the cache after that
+/// names another contract altogether: the order is recorded against the new
+/// occupant and its fill moves that contract's position.
+#[test]
+fn a_slot_the_engine_gave_back_is_not_answered_from_the_cache() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    core.cache_instrument(756733, 4);
+    core.cache_instrument(265598, 5);
+
+    shared.market.note_released_con_id(756733);
+    core.forget_released_slots(&shared);
+
+    assert_eq!(core.cached_instrument(756733), None, "the freed slot is not answered");
+    assert_eq!(core.cached_instrument(265598), Some(5), "the others stand");
+}

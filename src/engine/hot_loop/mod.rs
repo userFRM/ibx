@@ -596,6 +596,17 @@ impl HotLoop {
         }
     }
 
+    /// Offer back the slots an order has just stopped holding.
+    ///
+    /// Asked here rather than where the order ends, because whether a slot is
+    /// free is a question about everything else that could be pointing at it,
+    /// and this is where all of that is known.
+    fn reclaim_slots_no_order_holds(&mut self) {
+        for instrument in std::mem::take(&mut self.context.slots_to_reconsider) {
+            self.try_reclaim_instrument(instrument);
+        }
+    }
+
     /// Reclaim an instrument slot if nothing references it any more
     /// Reclaimed only with nothing referring to the slot: no open orders, no
     /// market data, no tick-by-tick subscription, no news subscription. A
@@ -639,7 +650,13 @@ impl HotLoop {
             return;
         }
         self.pinned_by_position.retain(|id| *id != instrument);
-        if self.context.market.unregister(instrument).is_some() {
+        if let Some(con_id) = self.context.market.unregister(instrument) {
+            // Said, so the surfaces stop naming a slot this contract no longer
+            // holds. They cache the slot a contract was given, and the slot
+            // goes to the next contract that needs one: an order placed on the
+            // cached number was recorded against the new occupant, and its
+            // fill moved that contract's position.
+            self.shared.market.note_released_con_id(con_id);
             // Zero the shared-side quote so a reused slot cannot serve the
             // previous contract's prices before its first tick.
             self.shared.market.push_quote(instrument, &crate::types::Quote::default());
@@ -757,6 +774,8 @@ impl HotLoop {
                 &self.event_tx, &mut self.hb, &self.account_id,
             );
             self.send_resolved_subscriptions();
+
+            self.reclaim_slots_no_order_holds();
 
             // A holding that has since been closed releases the slot the
             // caller already asked to free.
@@ -6034,5 +6053,46 @@ mod calendar_farm_reconnect_tests {
         hl.maybe_spawn_secdef_reconnect();
         assert!(hl.secdef_next_attempt_at.is_none());
         assert!(hl.pending_secdef_reconnect.is_none());
+    }
+}
+
+#[cfg(test)]
+mod slot_reclamation_tests {
+    use super::*;
+
+    /// The slot an order held goes back to the table when the order ends.
+    ///
+    /// A slot is freed when the last thing referring to it goes, and only a
+    /// cancelled subscription ever asked. An order — or a preview, which is
+    /// tracked as one — held its slot for the life of the session, so a
+    /// program working a chain a few thousand contracts wide ran the table out
+    /// and was refused the next contract it named, with nothing referring to
+    /// most of what it held.
+    #[test]
+    fn the_slot_an_order_held_goes_back_when_the_order_ends() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let instrument = hl.context.market.register(756733);
+        hl.context.insert_order(crate::types::Order::new(
+            42, instrument, crate::types::Side::Buy,
+            100 * crate::types::QTY_SCALE, 150 * crate::types::PRICE_SCALE,
+            b'2', b'0', 0,
+        ));
+
+        hl.reclaim_slots_no_order_holds();
+        assert_eq!(
+            hl.context.market.instrument_by_con_id(756733), Some(instrument),
+            "a working order holds its slot",
+        );
+
+        hl.context.retire_order(42);
+        hl.reclaim_slots_no_order_holds();
+        assert_eq!(
+            hl.context.market.register(265598), instrument,
+            "and the next contract that needs one is given it",
+        );
+        assert_eq!(
+            hl.shared.market.take_released_con_ids(), vec![756733],
+            "the surfaces are told, so they stop naming the slot it no longer holds",
+        );
     }
 }

@@ -233,6 +233,11 @@ impl EClient {
         // one of the table's on a contract this call then refused, and the
         // table does not grow.
         let venue = self.shared_state().ok();
+        // Before the slot a tracked order holds is compared with the one this
+        // contract is cached under: the engine may have given that slot back.
+        if let Some(shared) = venue.as_deref() {
+            self.core.forget_released_slots(shared);
+        }
         let replacing = self.core.is_working_at_the_venue(oid, venue.as_deref());
         // A replace carries the order id and its fields, not the contract, so
         // the order stays on the instrument it was placed on. A contract

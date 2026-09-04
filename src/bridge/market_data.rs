@@ -43,6 +43,13 @@ pub struct MarketDataState {
     quotes: Box<[SeqQuote]>,
     /// InstrumentId counter — set by hot loop on RegisterInstrument.
     instrument_count: AtomicU64,
+    /// Contracts whose slot has been given back, for the surfaces to forget.
+    ///
+    /// A slot is handed to the next contract that needs one, and a surface
+    /// that had cached the old contract's slot went on naming it: the order it
+    /// placed was recorded against whatever now holds that slot, and the fill
+    /// moved the wrong position.
+    released_con_ids: Mutex<Vec<i64>>,
     tbt_trades: Mutex<Vec<TbtTrade>>,
     tbt_quotes: Mutex<Vec<TbtQuote>>,
     real_time_bars: Mutex<Vec<(u32, RealTimeBar)>>,
@@ -94,6 +101,7 @@ impl MarketDataState {
         Self {
             quotes: (0..MAX_INSTRUMENTS).map(|_| SeqQuote::new()).collect(),
             instrument_count: AtomicU64::new(0),
+            released_con_ids: Mutex::new(Vec::new()),
             tbt_trades: Mutex::new(Vec::with_capacity(256)),
             tbt_quotes: Mutex::new(Vec::with_capacity(256)),
             real_time_bars: Mutex::new(Vec::with_capacity(64)),
@@ -131,6 +139,16 @@ impl MarketDataState {
         } else {
             None
         }
+    }
+
+    /// Say that a contract no longer holds the slot it held.
+    #[doc(hidden)] pub fn note_released_con_id(&self, con_id: i64) {
+        self.released_con_ids.lock().unwrap().push(con_id);
+    }
+
+    /// The contracts whose slot has been given back since this was last asked.
+    pub fn take_released_con_ids(&self) -> Vec<i64> {
+        std::mem::take(&mut *self.released_con_ids.lock().unwrap())
     }
 
     /// Number of registered instruments.

@@ -172,6 +172,9 @@ impl EClient {
             )));
         };
 
+        // Before the slot a tracked order holds is compared with the one this
+        // contract is cached under: the engine may have given that slot back.
+        self.core.forget_released_slots(&self.shared);
         let replacing = self.core.is_working_at_the_venue(oid, Some(&self.shared));
         // Where a replace names a contract other than the one the order is
         // working on, that is settled before anything is registered: asking
@@ -192,6 +195,7 @@ impl EClient {
                 placed_on
             }
             _ => self.core.find_or_register_instrument(
+                &self.shared,
                 &self.control_tx,
                 contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
                 &crate::types::model::contract_identity(
@@ -332,6 +336,7 @@ impl EClient {
             self.reserve_order_ids(1)? as u64
         };
         let instrument = self.core.find_or_register_instrument(
+                &self.shared,
             &self.control_tx,
             contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
             &identity,
@@ -798,6 +803,7 @@ impl EClient {
         )?;
         self.check_sec_type_permitted(&contract.sec_type)?;
         let instrument = self.core.find_or_register_instrument(
+                &self.shared,
             &self.control_tx,
             contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
             &crate::types::model::contract_identity(
