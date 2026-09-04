@@ -18,7 +18,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Requests | 80. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
 | Order fields | 154. 114 are sent; 33 have no field in the protocol to carry them and the call says so rather than dropping them; 6 are what the venue fills on the way back, which an order does not carry out; 1 is acted on here rather than sent |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 2,690 offline, and 191 more that live in the suites run against a broker session |
+| Tests | 2,699 offline, and 192 more that live in the suites run against a broker session |
 
 ## API surface
 
@@ -63,11 +63,11 @@ nothing reaches and is counted as one on the limits page.
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 1,919 | No |
+| Rust unit and integration | 1,928 | No |
 | Rust, live | 9 | Yes |
 | Python | 771 | No |
 | Python, live | 137 | Yes |
-| Paper compatibility suite (153 phases) | 45 tests | Yes |
+| Paper compatibility suite (153 phases) | 46 tests | Yes |
 
 Counted rather than stated: `scripts/check_status_counts.py` names every test
 in each suite and fails the gate when this table disagrees with it, so a figure

@@ -1818,7 +1818,7 @@ fn build_tbt_query(
                 let actions: Vec<_> = if fold == Fold::Splits {
                     actions
                         .into_iter()
-                        .filter(|a| a.kind.map_or(true, |k| k.moves_the_scale()))
+                        .filter(|a| a.kind.is_none_or(|k| k.moves_the_scale()))
                         .collect()
                 } else {
                     actions
