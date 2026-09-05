@@ -1638,3 +1638,49 @@ fn a_replayed_order_is_recorded_as_the_venue_states_it() {
         "and the terms the venue holds, for a refusal to put back",
     );
 }
+
+/// A refusal that never reached the venue still puts the terms back.
+///
+/// The record takes a replacement ahead of the answer, and the answer can come
+/// from this side of the wire: an order nothing here has a record of, an
+/// offset that cannot be restated, a revision that cannot be named. None of
+/// those states where the order stands, so a refusal carrying no status left
+/// the terms of an attempt that never left this process standing in the
+/// record, and every later cancel and replace restated from them.
+#[test]
+fn a_refusal_that_states_no_status_still_puts_the_terms_back() {
+    let (core, shared, revision) = working_at(100.0);
+    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
+    core.retire_rejected(&crate::types::CancelReject {
+        order_id: 42, instrument: 0, reject_type: 2, reason_code: -1,
+        still_working: None, timestamp_ns: 0,
+    });
+
+    assert_eq!(price_on_record(&core), 100.0, "the record states what the venue holds");
+}
+
+/// A refusal this client made states no reason of the venue's.
+///
+/// The reason code is the venue's, and a refusal composed on this side of the
+/// wire has none — it carries the sentinel that says so. Formatted as a
+/// number, the caller was handed "reason: -1" as though the venue had stated
+/// it, and a program branching on the reason had a code to match that means
+/// nothing.
+#[test]
+fn a_refusal_from_this_side_states_no_reason_code() {
+    let (core, _shared, _revision) = working_at(100.0);
+    let (_, ours) = core.retire_rejected(&crate::types::CancelReject {
+        order_id: 42, instrument: 0, reject_type: 2, reason_code: -1,
+        still_working: None, timestamp_ns: 0,
+    });
+    assert_eq!(ours, "Order 42 modify rejected", "no reason, and none invented");
+
+    let (_, theirs) = core.retire_rejected(&crate::types::CancelReject {
+        order_id: 42, instrument: 0, reject_type: 1, reason_code: 0,
+        still_working: None, timestamp_ns: 0,
+    });
+    assert_eq!(
+        theirs, "Order 42 cancel rejected by the venue (reason: 0)",
+        "and the venue's own reason still reaches the caller",
+    );
+}

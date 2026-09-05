@@ -1035,10 +1035,26 @@ impl ClientCore {
         let placement = held.iter()
             .any(|h| h.order_id == order_id && h.places_the_order());
         let before = held.len();
-        held.retain(|other| other.order_id != order_id);
+        let mut a_revision_went = false;
+        held.retain(|other| {
+            if other.order_id != order_id {
+                return true;
+            }
+            if !other.places_the_order() {
+                a_revision_went = true;
+            }
+            false
+        });
         let withdrew = held.len() != before;
         if withdrew && placement {
             orders.remove(&order_id);
+        } else if a_revision_went
+            && let Some(tracked) = orders.get_mut(&order_id)
+        {
+            // A revision that never left this process is not a revision the
+            // record may state. Left standing, every later cancel and replace
+            // restated a price nothing had ever been given.
+            put_back_the_terms(tracked);
         }
         withdrew && placement
     }
@@ -1053,8 +1069,24 @@ impl ClientCore {
     /// had the parent it had cancelled placed for it.
     pub fn withdraw_held(&self, order_id: u64) -> bool {
         let mut held = self.held_orders.lock().unwrap();
+        let mut orders = self.open_orders.lock().unwrap();
         let before = held.len();
-        held.retain(|other| other.order_id != order_id);
+        let mut a_revision_went = false;
+        held.retain(|other| {
+            if other.order_id != order_id {
+                return true;
+            }
+            if !other.places_the_order() {
+                a_revision_went = true;
+            }
+            false
+        });
+        // As above: what never left cannot stand in the record.
+        if a_revision_went
+            && let Some(tracked) = orders.get_mut(&order_id)
+        {
+            put_back_the_terms(tracked);
+        }
         held.len() != before
     }
 
@@ -1076,6 +1108,14 @@ impl ClientCore {
         let mut orders = self.open_orders.lock().unwrap();
         for h in taken.iter().filter(|h| h.places_the_order()) {
             orders.remove(&h.order_id);
+        }
+        // And the record of each order a discarded revision had restated goes
+        // back to what the venue holds: the revision never left this process,
+        // so nothing at the venue ever stated its terms.
+        for h in taken.iter().filter(|h| !h.places_the_order()) {
+            if let Some(tracked) = orders.get_mut(&h.order_id) {
+                put_back_the_terms(tracked);
+            }
         }
         taken.len()
     }
@@ -2604,6 +2644,14 @@ impl ClientCore {
     /// Zero where this session has no record of the order, which is also what
     /// the venue states for an order it names no client for.
     pub(crate) fn placing_client(&self, shared: &SharedState, order_id: u64) -> i32 {
+        // What this client placed, first. The record here knows the client the
+        // order went out under from the moment it went; the venue's book knows
+        // nothing about it until the venue names it, so asked of that alone an
+        // order this session had just placed was reported under client zero.
+        if let Some(tracked) = self.open_orders.lock().unwrap().get(&order_id) {
+            return tracked.order.client_id;
+        }
+        // And for an order this client did not place, what the venue says.
         shared.orders.get_order_info(order_id).map_or(0, |info| info.order.client_id)
     }
 
@@ -2635,22 +2683,28 @@ impl ClientCore {
     pub(crate) fn retire_rejected(&self, reject: &CancelReject) -> (i64, String) {
         if reject.reason_code == 1 {
             self.untrack_order(reject.order_id);
-        } else if let Some(status) = reject.still_working {
-            // The record took the cancel ahead of the venue's answer, and the
-            // answer is that the order stands. Left as it was, the order read
-            // as leaving for the rest of the session — `req_open_orders` said
-            // so — while the venue went on working it, and no later message
-            // corrected it, because a refusal is the last thing this order
-            // draws. What it goes back to is the engine's own book, not a
-            // guess from a status this record has already overwritten.
+        } else {
             let mut orders = self.open_orders.lock().unwrap();
             if let Some(tracked) = orders.get_mut(&reject.order_id) {
-                tracked.status = crate::types::order_status::order_status_str(status).into();
-                // And the terms with it, where it was the modification the
-                // venue refused. The record took the attempt ahead of the
-                // answer, so a refusal that put back only the status left it
-                // stating a price the venue had said no to — and every later
-                // cancel and replace restates from the record. A refused
+                // The record took the cancel ahead of the venue's answer, and
+                // the answer is that the order stands. Left as it was, the
+                // order read as leaving for the rest of the session —
+                // `req_open_orders` said so — while the venue went on working
+                // it, and no later message corrected it, because a refusal is
+                // the last thing this order draws. What it goes back to is the
+                // engine's own book, not a guess from a status this record has
+                // already overwritten.
+                if let Some(status) = reject.still_working {
+                    tracked.status =
+                        crate::types::order_status::order_status_str(status).into();
+                }
+                // And the terms, where it was the modification that was
+                // refused. The record took the attempt ahead of the answer, so
+                // a refusal that put back only the status left it stating a
+                // price nothing had accepted — and every later cancel and
+                // replace restates from the record. Independent of the status
+                // above: a refusal from this side of the wire knows the change
+                // did not go without knowing where the order stands. A refused
                 // cancellation changed no terms, and rolling them back on one
                 // undid a replacement the venue may since have taken.
                 if reject.reject_type == 2 { put_back_the_terms(tracked); }
@@ -2660,13 +2714,16 @@ impl ClientCore {
         // found and would not act on. The reason it stated picks between them.
         let code = if reject.reason_code == 1 { 10147 } else { 10148 };
         let what = if reject.reject_type == 1 { "cancel" } else { "modify" };
-        (
-            code,
-            format!(
-                "Order {} {what} rejected by the venue (reason: {})",
-                reject.order_id, reject.reason_code,
-            ),
-        )
+        // A refusal from this side of the wire carries no reason of the
+        // venue's, and the sentinel that says so is not a reason to hand a
+        // caller. Said as a number, "reason: -1" reads as one the venue
+        // stated.
+        let stated = if reject.reason_code < 0 {
+            String::new()
+        } else {
+            format!(" by the venue (reason: {})", reject.reason_code)
+        };
+        (code, format!("Order {} {what} rejected{stated}", reject.order_id))
     }
 
     /// Update a tracked order status from an order update event.

@@ -10,6 +10,34 @@ use crate::types::{AlgoParams, OrderCondition, OrderRequest, OrderStatus, OrderU
 
 use super::{HeartbeatState, format_price, format_qty, format_uint};
 
+/// Say that a change did not go, on the channel a refusal already travels on.
+///
+/// The surfaces restate their record before the command is queued, because the
+/// venue can answer a replacement before the call that sent it returns. A
+/// refusal from this side of the wire never reached them: the message said the
+/// change did not happen and their own book went on stating that it had.
+fn the_change_did_not_go(
+    order_id: u64,
+    instrument: crate::types::InstrumentId,
+    stands_as: Option<crate::types::OrderStatus>,
+    context: &Context,
+    shared: &SharedState,
+    event_tx: &Option<crate::engine::hot_loop::EventSink>,
+) {
+    let reject = crate::types::CancelReject {
+        order_id,
+        instrument,
+        // A modification, and refused here rather than by the venue, which
+        // states no reason code of its own for one it never saw.
+        reject_type: 2,
+        reason_code: -1,
+        still_working: stands_as,
+        timestamp_ns: context.now_ns(),
+    };
+    shared.orders.push_cancel_reject(reject);
+    crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::CancelReject(reject));
+}
+
 pub(crate) fn drain_and_send_orders(
     ccp_conn: &mut Option<Connection>,
     context: &mut Context,
@@ -297,6 +325,7 @@ pub(crate) fn drain_and_send_orders(
                         ORDER_NOT_FOUND_ERROR_CODE,
                         format!("no order {order_id} is tracked here, so it cannot be replaced"),
                     );
+                    the_change_did_not_go(order_id, 0, None, context, shared, event_tx);
                     continue;
                 };
                 let spec = context.submitted.get(&order_id).cloned();
@@ -315,6 +344,9 @@ pub(crate) fn drain_and_send_orders(
                              that defines it cannot be restated; withdraw it and place a \
                              new order",
                         ),
+                    );
+                    the_change_did_not_go(
+                        order_id, orig.instrument, Some(orig.status), context, shared, event_tx,
                     );
                     continue;
                 }
@@ -387,6 +419,9 @@ pub(crate) fn drain_and_send_orders(
                             "order {order_id} has been replaced as many times as it can be \
                              named; withdraw it and place a new order",
                         ),
+                    );
+                    the_change_did_not_go(
+                        order_id, orig.instrument, Some(orig.status), context, shared, event_tx,
                     );
                     continue;
                 };

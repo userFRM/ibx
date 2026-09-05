@@ -8224,3 +8224,34 @@ fn a_replayed_order_is_replaced_rather_than_placed_again() {
         other => panic!("a replace of a working order, not {other:?}"),
     }
 }
+
+/// A revision built and kept, then withdrawn, leaves no trace in the record.
+///
+/// A change to a working order that does not transmit is built and held, and
+/// the record states its terms at once because the venue can answer a change
+/// before the call that sent it returns. Withdrawing the order throws the held
+/// change away — it was never sent — but the record went on stating it, so
+/// every later cancel and replace restated a price nothing had ever been
+/// given, and a refused cancellation would not put it back.
+#[test]
+fn a_held_revision_that_is_withdrawn_leaves_the_terms_the_venue_holds() {
+    let (client, rx, _shared) = test_client();
+    let order = |transmit: bool, price: f64| Order {
+        order_id: 91, action: "BUY".into(), total_quantity: 100.0,
+        order_type: "LMT".into(), lmt_price: price, tif: "DAY".into(),
+        transmit, ..Default::default()
+    };
+    client.place_order(91, &spy(), &order(true, 100.0)).expect("placed and sent");
+    assert!(matches!(
+        rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::SubmitEx { .. })),
+    ));
+    // A change to it, kept rather than sent.
+    client.place_order(91, &spy(), &order(false, 101.0)).expect("the change is kept");
+    assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
+
+    client.cancel_order(91, "").expect("withdrawn");
+
+    let stated = client.core.open_orders.lock().unwrap()
+        .get(&91).expect("the order is still tracked").order.lmt_price;
+    assert_eq!(stated, 100.0, "the record states the terms the venue was given");
+}

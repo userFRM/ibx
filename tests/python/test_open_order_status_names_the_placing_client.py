@@ -45,3 +45,26 @@ def test_the_status_names_the_client_the_order_was_placed_under():
 
     assert w.opened == [(ORDER_ID, PLACED_UNDER)], w.opened
     assert w.status == [(ORDER_ID, PLACED_UNDER)], w.status
+
+
+def test_a_fill_and_a_status_name_the_client_that_placed_the_order():
+    """The two dispatch callbacks read the same record as `open_order`.
+
+    They read the client this session happens to be asking under, so a status
+    about an order this client did not place named whoever was watching.
+    """
+    w = Recorder()
+    c = EClient(w)
+    c._test_connect()
+    c._test_set_client_id(PLACED_UNDER)
+    c._test_map_instrument(1, 0)
+    c._test_track_order(ORDER_ID, 0, "SPY", "BUY", 1.0, 110.0, 0)
+
+    c._test_set_client_id(ASKING_UNDER)
+    c._test_push_order_update(ORDER_ID, 0, "Submitted", 0.0, 1.0)
+    c._test_dispatch_once()
+    c._test_push_fill(0, ORDER_ID, "BUY", 110.0, 1, 0, 0.0)
+    c._test_dispatch_once()
+
+    assert w.status, "the order draws a status"
+    assert all(client == PLACED_UNDER for _, client in w.status), w.status

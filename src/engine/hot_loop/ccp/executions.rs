@@ -1726,10 +1726,16 @@ impl CcpState {
         // hold. An order the venue says is gone has no terms to fall back to,
         // and the refusal of a cancellation changed none — the revision it may
         // be waiting on has its own answer coming.
+        // Whether it answers a revision still outstanding. The venue takes a
+        // second revision before it has answered the first, and a cancel can
+        // be sent over both, so a refusal of a revision already answered says
+        // nothing about where the order stands now.
+        let mut answers_a_live_revision = true;
         if reject_type == 2 && !unknown_order {
             let refused_revision = parsed.get(&11)
                 .map(|c| revision_of(c))
                 .unwrap_or_else(|| *context.modify_versions.get(&oid).unwrap_or(&0));
+            answers_a_live_revision = context.pre_replace.contains_key(&(oid, refused_revision));
             context.restore_pre_replace(oid, refused_revision);
         }
 
@@ -1747,7 +1753,7 @@ impl CcpState {
                 // A fill that races the rejection is not lost with the order:
                 // the untracked-fill path books it and moves the position.
                 context.retire_order(oid);
-            } else {
+            } else if answers_a_live_revision {
                 let restore_status = if order.filled > 0 {
                     crate::types::OrderStatus::PartiallyFilled
                 } else {

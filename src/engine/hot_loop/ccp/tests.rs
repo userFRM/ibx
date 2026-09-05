@@ -5624,3 +5624,46 @@ fn the_venue_taking_a_replacement_is_said_behind_a_fill() {
         "and the order is still what the fill left it",
     );
 }
+
+/// A refusal of a revision the venue has already answered says nothing about
+/// where the order stands now.
+///
+/// The venue takes a second revision before it has answered the first, and a
+/// cancel can be sent over both. The refusal of a revision already answered
+/// used to force the order back to working whatever had happened since: a
+/// caller who had withdrawn the order was told it was working again, and the
+/// cancel's own answer only arrived later.
+#[test]
+fn a_refused_revision_the_venue_has_answered_does_not_revive_the_order() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy,
+        100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    // Withdrawn, and the venue has not answered the withdrawal yet.
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
+
+    // A refusal of a revision nothing is waiting on — the venue answered it
+    // before the cancel went out.
+    let mut refused = std::collections::HashMap::new();
+    refused.insert(41u32, "42.1".to_string());
+    refused.insert(11u32, "42.1".to_string());
+    refused.insert(434u32, "2".to_string());
+    refused.insert(102u32, "0".to_string());
+    ccp.handle_cancel_reject(&refused, &mut context, &shared, &None);
+
+    assert_eq!(
+        context.order(42).map(|o| o.status),
+        Some(crate::types::OrderStatus::PendingCancel),
+        "the order is still the one the caller withdrew",
+    );
+    let updates = shared.orders.drain_order_updates();
+    assert!(
+        !updates.iter().any(|u| u.order_id == 42
+            && matches!(u.status, crate::types::OrderStatus::Submitted)),
+        "and nobody is told it is working again: {updates:?}",
+    );
+}

@@ -309,7 +309,11 @@ impl EClient {
             let avg_price = fill.avg_price as f64 / PRICE_SCALE_F;
             call_wrapper!(self.wrapper, py, "order_status", (fill.order_id as i64, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining),
                  avg_price, perm_id, parent_id, price,
-                 self.client_id.load(Ordering::Acquire) as i64, "", 0.0f64));
+                 // The client the order was placed under, as the other surface
+                 // reports it. Read off this client instead, a status about an
+                 // order this one did not place named whoever happened to be
+                 // watching.
+                 self.core.placing_client(shared, fill.order_id) as i64, "", 0.0f64));
 
             // Track execution for req_executions.
             //
@@ -456,7 +460,7 @@ impl EClient {
 
             call_wrapper!(self.wrapper, py, "order_status", (update.order_id as i64, status, update.filled_qty,
                  update.remaining_qty, avg, update.perm_id, parent_id, 0.0f64,
-                 self.client_id.load(Ordering::Acquire) as i64, "", 0.0f64));
+                 self.core.placing_client(shared, update.order_id) as i64, "", 0.0f64));
 
             // Track open orders
             self.core.update_order_status(shared, update.order_id, update.status, update.filled_qty, update.remaining_qty, update.instrument);

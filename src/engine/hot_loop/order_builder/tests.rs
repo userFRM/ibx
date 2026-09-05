@@ -3615,4 +3615,12 @@ fn a_replacement_that_cannot_be_named_leaves_the_order_standing() {
         said.iter().any(|(id, _, why)| *id == 42 && why.contains("named")),
         "and the caller is told why the replace did not go: {said:?}",
     );
+    // And on the channel a refusal travels on, so the record the surfaces
+    // read goes back to the terms the venue holds. Said only in the message
+    // above, they kept the terms of an attempt that never left this process.
+    let refusals = shared.orders.drain_cancel_rejects();
+    assert!(
+        refusals.iter().any(|r| r.order_id == 42 && r.reject_type == 2),
+        "the surfaces are told the change did not go: {refusals:?}",
+    );
 }
