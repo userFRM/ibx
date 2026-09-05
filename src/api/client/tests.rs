@@ -1360,6 +1360,47 @@ fn a_cancelled_order_stops_being_tracked() {
     );
 }
 
+/// A withdrawal names an order this client is working, and one the venue
+/// named at connect counts.
+///
+/// A withdrawal of a number naming nothing was sent anyway, under an order
+/// name this client invented, and the caller learnt from the venue rather than
+/// from the number. Answered here instead. The dangerous half is the other
+/// one: the account's working set arrives asynchronously after connect, so a
+/// withdrawal read before it lands must not refuse an order that is genuinely
+/// live -- a refusal there leaves a real order working.
+#[test]
+fn a_withdrawal_names_an_order_this_client_is_working() {
+    let (client, rx, _shared) = test_client();
+
+    let refused = client.cancel_order(42, "");
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 135),
+        "no order is working under that number: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was sent under it");
+
+    // An order this session placed.
+    client.core.track_order(42, spy(), Order::default(), 0);
+    client.cancel_order(42, "").expect("the withdrawal goes");
+    rx.try_recv().expect("and it reaches the engine");
+
+    // And one carried over from a previous session, which this client learns
+    // of only from the connect-time replay. Refusing this is the failure that
+    // leaves a live order standing.
+    let (client, rx, shared) = test_client();
+    shared.orders.push_order_info(77, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: Order { order_id: 77, ..Default::default() },
+        order_state: crate::types::model::OrderState {
+            status: "Submitted".into(), ..Default::default()
+        },
+        last_exec: Default::default(),
+    });
+    client.cancel_order(77, "").expect("an order the venue named is withdrawable");
+    rx.try_recv().expect("and that withdrawal reaches the engine too");
+}
+
 /// A number the venue has finished an order under does not place another.
 ///
 /// A status can arrive without the fill that ended the order, and while the
@@ -3125,6 +3166,9 @@ fn an_order_numbered_at_or_below_zero_is_refused_not_renumbered() {
 #[test]
 fn cancel_order_sends_cancel_command() {
     let (client, rx, _shared) = test_client();
+    // A withdrawal names an order this client is working, or it is answered
+    // rather than sent under a number the venue never gave out.
+    client.core.track_order(42, spy(), Order::default(), 0);
     client.cancel_order(42, "").unwrap();
     let cmd = rx.try_recv().unwrap();
     match cmd {
@@ -3149,6 +3193,7 @@ fn a_cancel_time_note_names_the_order_it_belongs_to() {
     );
 
     let (client, rx, shared) = test_client();
+    client.core.track_order(17, spy(), Order::default(), 0);
     client.cancel_order(17, "20260904 12:00:00").unwrap();
     let notes = shared.orders.drain_order_inactive();
     assert_eq!(notes.len(), 1, "the note is recorded once");

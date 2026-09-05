@@ -2459,20 +2459,29 @@ fn build_tbt_query(
     /// The same one message as the news withdrawal beside it: the historical
     /// envelope, the subtype that names this withdrawal, and the id the query
     /// went out under.
+    ///
+    /// Answers whether there was one to withdraw, and says nothing itself: the
+    /// bar withdrawal calls this to sweep up the actions query an adjusted
+    /// series may have out under the same number, and an ordinary series has
+    /// none -- so reporting from in here would answer every bar withdrawal
+    /// with a refusal beside its own. The caller's own arm decides.
     pub(crate) fn send_adjustments_cancel(
         &mut self,
         req_id: u32,
         hmds_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
-    ) {
+    ) -> bool {
         let named = self.pending_adjustments.iter()
             .position(|(_, rid, _)| *rid == req_id)
             .map(|pos| self.pending_adjustments.remove(pos).0);
-        let Some(conn) = hmds_conn.as_mut() else { return };
+        // Whether anything was held is answered before the connection is
+        // looked at, as the two withdrawals beside this one do: this client
+        // holds nothing under that number whether or not there is a socket.
         let Some(query_id) = named else {
             log::debug!("corporate-actions withdrawal for req_id={req_id}, which is not waiting");
-            return;
+            return false;
         };
+        let Some(conn) = hmds_conn.as_mut() else { return true };
         let xml = crate::control::xml::cancel_query(&query_id);
         let ts = chrono_free_timestamp();
         let _ = conn.send_fix(&[
@@ -2483,6 +2492,7 @@ fn build_tbt_query(
         ]);
         hb.last_hmds_sent = Instant::now();
         log::info!("Sent corporate actions cancel: req_id={req_id}");
+        true
     }
 
     /// Withdraw a news query the venue is still serving.

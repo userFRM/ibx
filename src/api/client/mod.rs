@@ -992,6 +992,11 @@ mod readonly_tests {
         for absurd in [-1_i64, 0, i64::MIN] {
             assert!(client.cancel_order(absurd, "").is_err(), "{absurd} was sent");
         }
+        // A withdrawal names an order this client is working, or it is
+        // answered rather than sent.
+        client.core.track_order(
+            1, crate::types::model::Contract { con_id: 756733, symbol: "SPY".into(), ..Default::default() }, crate::types::model::Order::default(), 0,
+        );
         assert!(client.cancel_order(1, "").is_ok(), "an ordinary one still goes");
     }
 

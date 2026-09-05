@@ -166,13 +166,22 @@ fn cancel_tick_by_tick_under_a_number_that_holds_nothing_says_so() {
     assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
 }
 
+/// A withdrawal naming an order this client is not working is answered rather
+/// than sent under a name this client invented.
+///
+/// It used to go to the venue regardless, with the order name composed here,
+/// so the caller learnt from the venue rather than from the number. Read after
+/// the connect-time replay of the account's working set, so an order carried
+/// over from a previous session is never refused.
 #[test]
-fn cancel_order_nonexistent_sends_cancel_anyway() {
-    // cancel_order doesn't validate — it sends the command and lets engine deal with it
+fn cancel_order_naming_nothing_is_answered_rather_than_sent() {
     let (client, rx, _shared) = test_client();
-    client.cancel_order(999999, "").unwrap();
-    let cmd = rx.try_recv().unwrap();
-    assert!(matches!(cmd, ControlCommand::Order(OrderRequest::Cancel { order_id: 999999 })));
+    let refused = client.cancel_order(999999, "");
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 135),
+        "no order is working under that number: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was sent under it");
 }
 
 #[test]

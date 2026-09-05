@@ -2,7 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::error_codes::{DUPLICATE_ORDER_ID, Refusal};
+use crate::error_codes::{DUPLICATE_ORDER_ID, NO_SUCH_ORDER, Refusal};
 use crate::types::model::ExecutionFilter;
 use crate::api::wrapper::Wrapper;
 use crate::client_core::ClientCore;
@@ -433,6 +433,21 @@ impl EClient {
         if self.core.withdraw_held_placement(order_id) {
             return Ok(());
         }
+        // A withdrawal naming an order this client is not working is answered
+        // rather than sent under a number the venue never gave out.
+        //
+        // Read after the replay of the account's working set, which is what
+        // makes it safe: an order carried over from a previous session is not
+        // known here until that lands, and refusing a withdrawal of a live
+        // order is worse than the silence this replaces. One bounded wait per
+        // connection, as the global withdrawal beside this already makes.
+        self.shared.orders.wait_for_replay();
+        if !self.core.a_withdrawal_names_something(order_id, &self.shared) {
+            return Err(Refusal::stated(
+                NO_SUCH_ORDER,
+                format!("no order is working under {order_id}"),
+            ));
+        }
         self.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
     }
 
@@ -456,7 +471,10 @@ impl EClient {
             .into_iter()
             .find(|(_, tracked)| tracked.order.perm_id == perm_id)
             .map(|(oid, _)| oid)
-            .ok_or_else(|| format!("cancel_order_by_perm_id: permId {perm_id} not found in open orders"))?;
+            .ok_or_else(|| Refusal::stated(
+                NO_SUCH_ORDER,
+                format!("cancel_order_by_perm_id: permId {perm_id} not found in open orders"),
+            ))?;
         self.cancel_order(order_id as i64, "")
     }
 

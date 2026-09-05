@@ -1352,6 +1352,23 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelHistorical { req_id } => {
+                    // Everything the arm below withdraws, so a request kept up
+                    // to date -- whose batch is filed but whose stream is
+                    // still running -- is not refused as though it had ended.
+                    let held = self.hmds.pending_historical.iter().any(|(_, rid)| *rid == req_id)
+                        || self.hmds.held.iter().any(|a| a.req_id == req_id)
+                        || self.hmds.keep_up_to_date_reqs.contains(&req_id)
+                        || self.hmds.rtbar_subs.iter().any(|(_, rid, ..)| *rid == req_id)
+                        || self.ccp.pending_named.iter()
+                            .any(|(_, cmd, _)| ccp::request_id(cmd) == Some(req_id));
+                    if !held {
+                        push_hmds_refusal(
+                            &self.shared, req_id,
+                            crate::error_codes::NO_SUCH_HISTORICAL_QUERY,
+                            format!("no historical query is answering under request {req_id}"),
+                            false,
+                        );
+                    }
                     self.ccp.withdraw_named(req_id);
                     // What the venue already sent and nobody has read yet
                     // goes with the request. Left queued, the next request
@@ -1430,6 +1447,12 @@ impl HotLoop {
                     if let Some(pos) = self.hmds.pending_head_ts.iter().position(|(_, rid)| *rid == req_id) {
                         let (query_id, _) = self.hmds.pending_head_ts.remove(pos);
                         self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
+                    } else {
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::NO_SUCH_SUBSCRIPTION,
+                            format!("no head timestamp is awaited under request {req_id}"),
+                            false,
+                        );
                     }
                 }
                 ControlCommand::FetchMatchingSymbols { req_id, pattern } => {
@@ -1545,7 +1568,13 @@ impl HotLoop {
                     self.hmds.send_news_cancel(req_id, &mut self.hmds_conn, &mut self.hb, &self.shared);
                 }
                 ControlCommand::CancelCorporateActions { req_id } => {
-                    self.hmds.send_adjustments_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
+                    if !self.hmds.send_adjustments_cancel(req_id, &mut self.hmds_conn, &mut self.hb) {
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::NO_SUCH_SUBSCRIPTION,
+                            format!("no corporate-actions query is waiting under request {req_id}"),
+                            false,
+                        );
+                    }
                 }
                 ControlCommand::FetchHistogramData { req_id, con_id, sec_type, exchange, use_rth, period } => {
                     if self.hmds_conn.is_none() {
@@ -1560,6 +1589,12 @@ impl HotLoop {
                     if let Some(pos) = self.hmds.pending_histogram.iter().position(|(_, rid)| *rid == req_id) {
                         let (query_id, _) = self.hmds.pending_histogram.remove(pos);
                         self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
+                    } else {
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::NO_SUCH_SUBSCRIPTION,
+                            format!("no histogram is awaited under request {req_id}"),
+                            false,
+                        );
                     }
                 }
                 ControlCommand::FetchHistoricalTicks { contract, req_id, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth, include_expired, .. } => {
@@ -1589,6 +1624,12 @@ impl HotLoop {
                         let (query_id, _, ticker_id, ..) = self.hmds.rtbar_subs.remove(pos);
                         let cancel_id = ticker_id.map(|t| t.to_string()).unwrap_or(query_id);
                         self.hmds.send_historical_cancel(&cancel_id, &mut self.hmds_conn, &mut self.hb);
+                    } else {
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::NO_SUCH_SUBSCRIPTION,
+                            format!("no live bar stream is running under request {req_id}"),
+                            false,
+                        );
                     }
                 }
                 ControlCommand::FetchHistoricalSchedule { contract, req_id, end_date_time, duration, use_rth, .. } => {
@@ -6390,6 +6431,59 @@ mod queued_cancel_all_slot_tests {
 #[cfg(test)]
 mod withdrawal_tests {
     use super::*;
+
+    /// Every withdrawal in the client answers when it names nothing.
+    ///
+    /// Five said nothing at all, which reads exactly like a withdrawal that
+    /// acted -- so a caller whose record disagrees with this client's had no
+    /// way to learn it, and the inconsistency was inside one client: six
+    /// request kinds answered and five did not.
+    #[test]
+    fn every_withdrawal_says_when_it_names_nothing() {
+        for (what, cmd, code) in [
+            ("bars", crate::types::ControlCommand::CancelHistorical { req_id: 9 }, 366),
+            ("a head timestamp", crate::types::ControlCommand::CancelHeadTimestamp { req_id: 9 }, 300),
+            ("corporate actions", crate::types::ControlCommand::CancelCorporateActions { req_id: 9 }, 300),
+            ("a histogram", crate::types::ControlCommand::CancelHistogramData { req_id: 9 }, 300),
+            ("live bars", crate::types::ControlCommand::CancelRealTimeBar { req_id: 9 }, 300),
+        ] {
+            let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+            let (tx, rx) = std::sync::mpsc::sync_channel(4);
+            hl.set_control_rx(rx);
+
+            tx.send(cmd).unwrap();
+            hl.poll_control_commands();
+
+            let told = hl.shared.reference.drain_historical_errors();
+            assert_eq!(told.len(), 1, "{what}: the caller is told: {told:?}");
+            assert_eq!(
+                (told[0].0, told[0].1), (9, code),
+                "{what}: under the number that names it",
+            );
+        }
+    }
+
+    /// And a withdrawal that does name something says nothing beside it.
+    ///
+    /// The bar withdrawal sweeps up the corporate-actions query an adjusted
+    /// series may have out under the same number, and an ordinary series has
+    /// none -- so reporting from inside that sweep would answer every
+    /// ordinary bar withdrawal with a refusal it did not earn.
+    #[test]
+    fn withdrawing_bars_says_nothing_about_the_actions_query_it_sweeps() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        hl.hmds.keep_up_to_date_reqs.insert(9);
+
+        tx.send(crate::types::ControlCommand::CancelHistorical { req_id: 9 }).unwrap();
+        hl.poll_control_commands();
+
+        assert!(
+            hl.shared.reference.drain_historical_errors().is_empty(),
+            "a withdrawal that named something is answered with nothing",
+        );
+    }
 
     /// Withdrawing a news or fundamentals query this client is not waiting on
     /// is answered too, and under the number that says nothing was waiting

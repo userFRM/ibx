@@ -531,6 +531,22 @@ impl EClient {
         if self.core.withdraw_held_placement(oid) {
             return Ok(());
         }
+        // A withdrawal naming an order this client is not working is answered
+        // rather than sent under a number the venue never gave out.
+        //
+        // Read after the replay of the account's working set, which is what
+        // makes it safe: an order carried over from a previous session is not
+        // known here until that lands, and refusing a withdrawal of a live
+        // order is worse than the silence this replaces. The wait releases the
+        // interpreter, so the first withdrawal of a session does not hold it.
+        self.wait_for_the_replay(py);
+        let Ok(shared) = self.shared_state() else { return Ok(()) };
+        if !self.core.a_withdrawal_names_something(oid, &shared) {
+            return self.report_refusal(py, order_id, Refusal::stated(
+                crate::error_codes::NO_SUCH_ORDER,
+                format!("no order is working under {oid}"),
+            ));
+        }
         Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: oid }))
     }
 
@@ -564,7 +580,8 @@ impl EClient {
             .find(|(_, tracked)| tracked.order.perm_id == perm_id)
             .map(|(oid, _)| oid);
         let Some(order_id) = found else {
-            return self.report_refusal(py, -1, Refusal::validation(
+            return self.report_refusal(py, -1, Refusal::stated(
+                crate::error_codes::NO_SUCH_ORDER,
                 format!("cancel_order_by_perm_id: permId {perm_id} not found in open orders"),
             ));
         };
@@ -1288,6 +1305,19 @@ w = W()",
             let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(4);
             *client.control_tx.lock().unwrap() = Some(tx);
 
+            // A withdrawal names an order this client is working, or it is
+            // answered rather than sent under a number the venue never gave.
+            for order_id in [11, 12] {
+                client.core.track_order(
+                    order_id,
+                    crate::types::model::Contract {
+                        con_id: 756733, symbol: "SPY".into(), ..Default::default()
+                    },
+                    Default::default(),
+                    0,
+                );
+            }
+
             shared.reference.set_session_over("the market data farm");
             client.cancel_order(py, 11, None).unwrap();
             assert!(
@@ -1331,6 +1361,10 @@ w = W()",
         *client.shared.lock().unwrap() = Some(shared.clone());
         *client.account_id.lock().unwrap() = Some("DU123".into());
         client.connected.store(true, Ordering::Release);
+        // No venue behind a test session, so the replay of what the account
+        // already has on is over before it starts. A withdrawal reads that
+        // replay before deciding whether it names anything.
+        shared.orders.set_replay_done();
         (client, shared, wrapper)
     }
 

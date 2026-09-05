@@ -30,6 +30,11 @@ def _client():
     heard = Heard()
     client = ibx.EClient(heard)
     client._test_connect("DU0000000")
+    # A withdrawal names an order this client is working, or it is answered
+    # rather than sent. What is under test here is the annotation the
+    # withdrawal carries, so the orders it names are placed first.
+    for order_id in (1, 2):
+        client._test_track_order(order_id, 0, "SPY", "BUY", 1.0, 100.0)
     return client, heard
 
 

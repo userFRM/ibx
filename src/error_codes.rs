@@ -104,6 +104,18 @@ pub const GOOD_TILL_DATE_INVALID: i32 = 334;
 /// restate is refused under.
 pub const CHANGE_CANNOT_CHANGE_TYPE: i32 = 329;
 
+/// The code a withdrawal naming an order this client is not working is
+/// answered under.
+///
+/// The same number the change path already uses for a number it holds no
+/// record of: the two are the same fact under two keys, and answered
+/// differently they read as different failures.
+pub const NO_SUCH_ORDER: i32 = 135;
+
+/// The code a withdrawal naming a historical query this client is not
+/// answering is answered under.
+pub const NO_SUCH_HISTORICAL_QUERY: i32 = 366;
+
 /// The code an order type this exchange and security type do not support is
 /// refused under.
 pub const ORDER_TYPE_UNSUPPORTED: i32 = 387;

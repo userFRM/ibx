@@ -2417,6 +2417,17 @@ impl ClientCore {
             && !self.holds_a_submission(order_id)
     }
 
+    /// Whether a withdrawal under this number names anything.
+    ///
+    /// Read after the connect-time replay of the account's working set, which
+    /// is what makes it safe: an order carried over from a previous session is
+    /// not known here until that replay lands, and refusing a withdrawal of a
+    /// live order is worse than the silence this replaces. A held placement
+    /// has already been taken by the time this is asked.
+    pub fn a_withdrawal_names_something(&self, order_id: u64, venue: &SharedState) -> bool {
+        self.is_working_at_the_venue(order_id, Some(venue))
+    }
+
     /// Whether this id names an order built and kept rather than sent.
     pub fn is_held(&self, order_id: u64) -> bool {
         self.held_orders.lock().unwrap().iter().any(|h| h.order_id == order_id)
