@@ -26,6 +26,11 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
     // The venue states which currency a figure is in, and it is not always the
     // account's own. Read per group, and carried rather than assumed.
     let mut currency: &str = "";
+    // Whether this frame stated anything at all. A frame that named no figure
+    // must not publish the account: the flag that publishing raises is what
+    // every "is this connection's data" gate reads, so raising it on an empty
+    // frame marks a pre-drop snapshot current.
+    let mut stated_a_figure = false;
     for part in text.split('\x01') {
         if let Some(val) = part.strip_prefix("15=") {
             currency = val;
@@ -37,6 +42,7 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
                 // named is still a figure about the account, and dropping it
                 // left no trace that the venue had stated it.
                 shared.portfolio.note_account_value(k, val, currency);
+                stated_a_figure = true;
                 match k {
                     "NetLiquidation" => { if let Ok(v) = val.parse::<f64>() { context.account.net_liquidation = crate::types::price_from_f64(v); } }
                     "BuyingPower" => { if let Ok(v) = val.parse::<f64>() { context.account.buying_power = crate::types::price_from_f64(v); } }
@@ -62,7 +68,9 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
                 key = None;
             }
     }
-    shared.portfolio.set_account(context.account());
+    if stated_a_figure {
+        shared.portfolio.set_account(context.account());
+    }
 }
 
 /// Handle 6040=143, the venue's daily P&L seeds.
@@ -200,7 +208,13 @@ pub(crate) fn handle_position_elsewhere(
         .unwrap_or_else(|| {
             shared.portfolio.positions_elsewhere()
                 .iter()
-                .find(|row| row.con_id == con_id && row.held == held)
+                // On the contract alone, which is what the map is keyed on:
+                // a second set restates the row rather than adding one, so
+                // matching the set as well found nothing and wrote the basis
+                // away as zero -- and the next frame without one then found
+                // the zero and kept it, which is the loss this carry exists
+                // to prevent.
+                .find(|row| row.con_id == con_id)
                 .map_or(0, |row| row.avg_cost)
         });
     let row = crate::types::PositionElsewhere {

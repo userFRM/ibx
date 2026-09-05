@@ -60,6 +60,9 @@ def test_the_kind_of_account_is_the_one_the_venue_stated():
     w, c = _connected()
     c._test_note_account_value("AccountType", "ADVISOR", "")
     c._test_note_account_value("NetLiquidation", "1.00", "USD")
+    # A summary waits for the download to finish rather than answering on the
+    # first figure, which used to hand back the tags parsed so far.
+    c._test_finish_account_download()
     c.req_account_summary(5, "All", "")
     c._test_dispatch_once()
     kinds = [(tag, value) for tag, value, _ in w.summary if tag == "AccountType"]

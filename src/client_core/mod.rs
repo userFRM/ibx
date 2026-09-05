@@ -3567,8 +3567,17 @@ impl ClientCore {
         // of a quiet spell instead, an account still arriving was called fully
         // stated because it paused, and one that finished early waited on a
         // clock for permission to say so.
-        let finished = shared.portfolio.account_download_complete()
-            && !self.account_end_sent.swap(true, Ordering::AcqRel);
+        // On the rising edge, not once for the life of the client. A rebuilt
+        // connection states the account again and ends that batch too, and a
+        // subscriber that had already been told once was never told again --
+        // the second download completed in silence, so a caller waiting on the
+        // end to know the book is whole waited for ever.
+        // The swap runs whichever way the flag reads, so the falling edge is
+        // observed: written with the test first, `&&` short-circuits while a
+        // download is running, the latch is never cleared, and the end is
+        // still said only once for the life of the client.
+        let complete = shared.portfolio.account_download_complete();
+        let finished = !self.account_end_sent.swap(complete, Ordering::AcqRel) && complete;
         Some(AccountUpdateBatch { fields, delivered, finished })
     }
 
@@ -3578,7 +3587,14 @@ impl ClientCore {
         if !self.account_updates_subscribed.load(Ordering::Acquire) {
             return Vec::new();
         }
-        if !shared.portfolio.account_data_received() {
+        // On the download being finished, not on anything having been heard.
+        // A drop zeroes every row's marks deliberately, and the first figure
+        // of the rebuilt connection raised the older flag -- so every holding
+        // went out at a price of nothing, a value of nothing and no profit,
+        // including any the account had closed while the connection was down.
+        // A caller summing what it was worth read zero exposure until the
+        // venue got round to pricing them again.
+        if !shared.portfolio.account_download_complete() {
             return Vec::new();
         }
 
@@ -3620,7 +3636,12 @@ impl ClientCore {
     /// Prepare account summary response (one-shot, consumes the request).
     pub fn prepare_account_summary(&self, shared: &SharedState, _account_id: &str) -> Option<AccountSummaryBatch> {
         // Wait for gateway account data before delivering summary.
-        if !shared.portfolio.account_data_received() {
+        // As above: on the download being finished. Answered on the first
+        // figure, a summary asked for right after connecting -- which is the
+        // ordinary idiom -- was handed the few tags parsed so far and its end,
+        // and the request is one-shot, so the tags it actually asked for never
+        // came.
+        if !shared.portfolio.account_download_complete() {
             return None;
         }
         let req = self.account_summary_req.lock().unwrap().take();

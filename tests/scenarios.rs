@@ -1140,6 +1140,13 @@ fn account_summary_one_shot_delivery() {
     ] {
         shared.portfolio.note_account_value(key, value, "USD");
     }
+    // The venue has finished stating the account, which is what a summary
+    // waits on: answered on the first figure instead, one asked for right
+    // after connecting was handed the few tags parsed so far and its end, and
+    // the request is one-shot, so the tags it asked for never came.
+    shared.portfolio.holdings_restated_under("AR.1");
+    shared.portfolio.set_account_download_complete("AR.1");
+    shared.portfolio.account_download_is_settled();
 
     client.req_account_summary(5, "All", "NetLiquidation,BuyingPower,AvailableFunds");
 
@@ -1192,6 +1199,13 @@ fn account_summary_empty_tags_returns_all() {
     ] {
         shared.portfolio.note_account_value(key, value, "USD");
     }
+    // The venue has finished stating the account, which is what a summary
+    // waits on: answered on the first figure instead, one asked for right
+    // after connecting was handed the few tags parsed so far and its end, and
+    // the request is one-shot, so the tags it asked for never came.
+    shared.portfolio.holdings_restated_under("AR.1");
+    shared.portfolio.set_account_download_complete("AR.1");
+    shared.portfolio.account_download_is_settled();
 
     // Empty tags string → everything the venue has stated
     client.req_account_summary(7, "All", "");

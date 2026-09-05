@@ -7153,6 +7153,7 @@ fn subscribing_to_account_updates_reports_the_portfolio() {
     let mut heard = Heard::default();
 
     client.req_account_updates(true, "DU123");
+    shared.portfolio.holdings_restated_under("AR.1");
     shared.portfolio.set_position_info(crate::types::PositionInfo {
         con_id: 756733,
         position: 100.0,
@@ -7162,6 +7163,14 @@ fn subscribing_to_account_updates_reports_the_portfolio() {
         ..Default::default()
     });
     shared.portfolio.note_account_value("NetLiquidation", "100000.00", "USD");
+    // The venue has finished stating the account, which is what the portfolio
+    // and summary reads wait on: answered on the first figure instead, every
+    // holding went out at a price of nothing after a reconnect. The holding
+    // above is one the download stated, so the download opens before it and
+    // ends after it -- opened afterwards, its own end would square it away as
+    // one the venue had stopped naming.
+    shared.portfolio.set_account_download_complete("AR.1");
+    shared.portfolio.account_download_is_settled();
     client.process_msgs(&mut heard);
 
     assert!(heard.values.contains(&"NetLiquidation".to_string()), "the values still arrive");

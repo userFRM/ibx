@@ -637,7 +637,7 @@ impl CcpState {
                             // arrived. The venue ends the batch itself, below.
                             self.handle_position_feed(msg, ccp_conn, context, shared, event_tx, hb);
                         }
-                        "77" => self.handle_account_summary(&parsed, context, shared),
+                        "77" => self.handle_account_summary(&parsed, shared),
                         "143" => {
                             // P&L midnight seed — store for client-side daily P&L
                             // computation
@@ -1207,14 +1207,18 @@ impl CcpState {
     /// Which selector means net liquidation is not established, and the one
     /// this session is sent is demonstrably not it, so nothing is written from
     /// here. The selector is recorded as an unread wire rather than guessed at.
-    fn handle_account_summary(&mut self, parsed: &std::collections::HashMap<u32, String>, context: &mut Context, shared: &SharedState) {
+    fn handle_account_summary(&mut self, parsed: &std::collections::HashMap<u32, String>, shared: &SharedState) {
         if let Some(selector) = parsed.get(&6566) {
             shared.market.note_unread_wire(
                 "trading",
                 format!("account figure of kind {selector} (6040=77), kind not established"),
             );
         }
-        shared.portfolio.set_account(context.account());
+        // Nothing is written from here, so nothing is published from here
+        // either. Writing the unchanged snapshot back had one effect: it
+        // raised the flag that says this connection has stated the account.
+        // A frame this function's own doc records as unread then marked a
+        // pre-drop snapshot current on a rebuilt connection.
     }
 
     /// Subscribe to the schedule paired with a secdef reply, joined on tag 6256.

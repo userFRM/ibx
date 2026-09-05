@@ -635,6 +635,20 @@ impl EClient {
         Ok(())
     }
 
+    /// Say the venue has finished stating the account, which is what the
+    /// portfolio and summary reads wait on.
+    ///
+    /// Opened and ended around whatever the test has already stated, so a
+    /// holding set before this is one the download named rather than one the
+    /// venue has stopped naming.
+    #[doc(hidden)]
+    fn _test_finish_account_download(&self) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.portfolio.set_account_download_complete("AR.1");
+        shared.portfolio.account_download_is_settled();
+        Ok(())
+    }
+
     /// Push a position into SharedState.
     #[doc(hidden)]
     fn _test_set_position(&self, con_id: i64, position: f64, avg_cost: f64) -> PyResult<()> {

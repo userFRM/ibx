@@ -163,6 +163,12 @@ impl PortfolioState {
         self.stated_account_values.lock().unwrap().clone()
     }
 
+    /// Publish the account as this connection has stated it, and record that
+    /// it has.
+    ///
+    /// Called only where figures were actually read: a frame that carried
+    /// none must not reach here, because the flag it raises is what every
+    /// "is this connection's data" gate reads.
     #[doc(hidden)] pub fn set_account(&self, account: &AccountState) {
         *self.account.lock().unwrap() = *account;
         self.account_data_received.store(true, Ordering::Release);

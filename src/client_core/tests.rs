@@ -1030,6 +1030,12 @@ fn an_account_summary_reports_every_figure_the_venue_stated() {
     ] {
         shared.portfolio.note_account_value(key, value, currency);
     }
+    // The venue has finished stating the account, which is what the reads
+    // below wait on: answered on the first figure instead, a summary asked for
+    // right after connecting was handed the few tags parsed so far.
+    shared.portfolio.holdings_restated_under("AR.1");
+    shared.portfolio.set_account_download_complete("AR.1");
+    shared.portfolio.account_download_is_settled();
 
     core.subscribe_account_summary(3, "All").unwrap();
     let batch = core.prepare_account_summary(&shared, "DU1").expect("a summary");
@@ -1064,6 +1070,12 @@ fn a_second_pnl_or_summary_subscription_is_refused_not_silenced() {
     let core = ClientCore::new();
     let shared = SharedState::new();
     shared.portfolio.set_account(&crate::types::AccountState::default());
+    // The venue has finished stating the account, which is what the reads
+    // below wait on: answered on the first figure instead, a summary asked for
+    // right after connecting was handed the few tags parsed so far.
+    shared.portfolio.holdings_restated_under("AR.1");
+    shared.portfolio.set_account_download_complete("AR.1");
+    shared.portfolio.account_download_is_settled();
 
     core.subscribe_pnl(7).unwrap();
     let second = core.subscribe_pnl(8);
@@ -1873,5 +1885,68 @@ fn a_refusal_the_catalogue_names_carries_its_own_number() {
     assert_eq!(
         ClientCore::validate_order(&unpriced, "").expect_err("not a price").code,
         Refusal::VALIDATION,
+    );
+}
+
+/// The account reads wait for the download to finish, not for the first thing
+/// heard, and each download ends where the caller can see it.
+///
+/// A drop zeroes every holding's marks deliberately and keeps the quantities.
+/// Gated on anything having been heard, the first figure of the rebuilt
+/// connection let the whole pre-drop book out at a price of nothing, a value
+/// of nothing and no profit -- including any holding closed while the
+/// connection was down. A summary asked for in the same window was answered
+/// with the few tags parsed so far, and the request is one-shot, so the tags
+/// it asked for never came. And the end that says the book is whole was said
+/// once for the life of the client, so the second download completed in
+/// silence.
+#[test]
+fn the_account_reads_wait_for_the_download_and_every_download_ends() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    core.subscribe_account_updates(true);
+    core.subscribe_account_summary(3, "All").unwrap();
+
+    // A figure has arrived, and the download has not finished.
+    shared.portfolio.holdings_restated_under("AR.1");
+    shared.portfolio.note_account_value("NetLiquidation", "75425.51", "USD");
+    shared.portfolio.set_position_info(crate::types::PositionInfo {
+        con_id: 756733, position: 100.0, avg_cost: 150 * crate::types::PRICE_SCALE,
+        ..Default::default()
+    });
+
+    assert!(
+        core.prepare_portfolio_updates(&shared).is_empty(),
+        "no holding goes out priced at nothing while the download is still running",
+    );
+    assert!(
+        core.prepare_account_summary(&shared, "DU1").is_none(),
+        "and no summary is answered from the figures parsed so far",
+    );
+
+    // The download ends.
+    shared.portfolio.set_account_download_complete("AR.1");
+    shared.portfolio.account_download_is_settled();
+
+    assert!(!core.prepare_portfolio_updates(&shared).is_empty(), "now the holdings go out");
+    assert!(core.prepare_account_summary(&shared, "DU1").is_some(), "and the summary is answered");
+    let first = core.prepare_account_updates(&shared).expect("a batch");
+    assert!(first.finished, "the end that says the book is whole");
+
+    // A second download, as a rebuilt connection makes.
+    shared.portfolio.account_download_is_pending();
+    assert!(
+        !core.prepare_account_updates(&shared).is_some_and(|b| b.finished),
+        "which is not said again while the second download is running",
+    );
+    shared.portfolio.holdings_restated_under("AR.2");
+    shared.portfolio.note_account_value("NetLiquidation", "75000.00", "USD");
+    shared.portfolio.set_account_download_complete("AR.2");
+    shared.portfolio.account_download_is_settled();
+
+    let second = core.prepare_account_updates(&shared).expect("a second batch");
+    assert!(
+        second.finished,
+        "and the second download ends where the caller can see it, not in silence",
     );
 }

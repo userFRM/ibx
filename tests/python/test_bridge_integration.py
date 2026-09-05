@@ -914,6 +914,9 @@ class TestAccountDispatch:
         w, c = make_test_client()
         c.req_account_summary(1, "All", "NetLiquidation,BuyingPower")
         c._test_set_account(net_liquidation=100000.0, buying_power=200000.0)
+        # A summary waits for the download to finish rather than answering on
+        # the first figure, which used to hand back the tags parsed so far.
+        c._test_finish_account_download()
         c._test_dispatch_once()
 
         events = [e for e in w.events if e[0] == "account_summary"]

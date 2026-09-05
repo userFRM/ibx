@@ -158,7 +158,7 @@ impl EClient {
                        so what follows is what this session already held rather than what \
                        the account holds";
             log::warn!("{why}");
-            self.report_refusal(py, -1, Refusal::validation(why))?;
+            self.report_refusal(py, -1, Refusal::no_answer(why))?;
         }
         // A position feed names a holding by id and leaves the rest to the
         // definition, which the engine asks for as the feed is read. That
@@ -318,17 +318,32 @@ impl EClient {
                        so what follows is what this session already held rather than what \
                        the account holds";
             log::warn!("{why}");
+            self.report_refusal(py, req_id, Refusal::no_answer(why))?;
+        }
+        // A figure the venue stated about another account is not something
+        // this session was told, so naming one is answered rather than taken.
+        if !account.is_empty() && account != self.account() {
+            let why = format!(
+                "account {account} was named and the figures that follow are {}'s, which \
+                 is the account this session opened under",
+                self.account(),
+            );
+            log::warn!("{why}");
             self.report_refusal(py, req_id, Refusal::validation(why))?;
         }
-        let acct_default = self.account();
-        let acct_name = if !account.is_empty() { account } else { acct_default.as_str() };
+        // Labelled with the account they belong to, not with the one that was
+        // asked about. Echoing the caller's own put another account's name on
+        // this account's net liquidation and buying power, which a caller
+        // keeping a book per account files as that account's balance sheet.
+        // The holdings answer beside this already says so.
+        let acct_name = self.account();
         // Every figure the venue stated, in the currency it stated it in.
         // Rebuilding from this client's typed copy reports an account held in
         // any other currency as dollars, and drops every figure outside the
         // handful that copy carries.
         for (key, value, currency) in shared.portfolio.stated_account_values() {
             self.deliver(py, "account_update_multi",
-                (req_id, acct_name, model_code, key.as_str(), value.as_str(), currency.as_str()))?;
+                (req_id, acct_name.as_str(), model_code, key.as_str(), value.as_str(), currency.as_str()))?;
         }
         self.deliver(py, "account_update_multi_end", (req_id,))?;
         Ok(())
@@ -350,6 +365,18 @@ impl EClient {
         // As above.
         let Some(_connected) = self.tx_or_report(req_id)? else { return Ok(()) };
         let shared = self.shared_state()?;
+        // What moved before this asked is in the answer that follows, so it is
+        // dropped from the queue rather than fired as a change as well. Left
+        // standing, a caller whose first position call was this one was handed
+        // every holding, and then handed every holding again as a move that
+        // did not happen. Only where nobody was watching: a queue somebody
+        // else owns is not this call's to empty. The other surface does the
+        // same, in the same shape.
+        if !self.positions_requested.load(Ordering::Acquire)
+            && self.positions_multi_requested.lock().unwrap().is_empty()
+        {
+            shared.portfolio.drain_position_changes();
+        }
         // The same wait and the same warning the plain answer makes, and on
         // the same flag. Waiting on whether anything had been heard at all,
         // this was satisfied by the first account figure of a new connection —
@@ -364,7 +391,7 @@ impl EClient {
                        so what follows is what this session already held rather than what \
                        the account holds";
             log::warn!("{why}");
-            self.report_refusal(py, req_id, Refusal::validation(why))?;
+            self.report_refusal(py, req_id, Refusal::no_answer(why))?;
         }
         // Watching before reading, as on the other surface: the queue of moves
         // is drained once for everyone watching, so a holding that moves while

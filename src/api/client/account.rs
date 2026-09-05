@@ -78,7 +78,7 @@ impl EClient {
                        so what follows is what this session already held rather than what \
                        the account holds";
             log::warn!("{why}");
-            wrapper.error(NO_REQUEST, Refusal::VALIDATION as i64, why, "");
+            wrapper.error(NO_REQUEST, Refusal::NO_ANSWER as i64, why, "");
         }
         // What moved before this asked is answered by the read below, which
         // states what the holdings are now; fired as change events as well it
@@ -285,6 +285,22 @@ impl EClient {
             log::warn!("{why}");
             wrapper.error(req_id, Refusal::VALIDATION as i64, &why, "");
         }
+        // The same wait the holdings answer beside this makes, and for the
+        // same reason: an account that has said nothing since the connection
+        // dropped reads exactly like one holding nothing, and this path
+        // answered at once from the pre-drop figures without so much as a
+        // warning.
+        for _ in 0..1000 {
+            if self.shared.portfolio.account_download_complete() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !self.shared.portfolio.account_download_complete() {
+            let why = "the account had not finished stating its figures within the wait, \
+                       so what follows is what this session already held rather than what \
+                       the account holds";
+            log::warn!("{why}");
+            wrapper.error(req_id, Refusal::NO_ANSWER as i64, why, "");
+        }
         // As the venue stated them, in the currency it stated them in. Eight
         // of them were worked out here instead, rounded to two decimals and
         // labelled US dollars whatever the account is held in: an account in
@@ -347,7 +363,7 @@ impl EClient {
                        so what follows is what this session already held rather than what \
                        the account holds";
             log::warn!("{why}");
-            wrapper.error(req_id, Refusal::VALIDATION as i64, why, "");
+            wrapper.error(req_id, Refusal::NO_ANSWER as i64, why, "");
         }
         self.positions_multi_requested.lock().unwrap().insert(req_id);
         let held: Vec<_> = self.shared.portfolio.position_infos()
