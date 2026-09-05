@@ -5740,6 +5740,84 @@ fn a_connection_that_dies_takes_the_download_with_it() {
     );
 }
 
+/// A connection that dies takes every lookup waiting on it with it, and
+/// says so now.
+///
+/// The connection that replaces it is asked nothing this one was asked, so
+/// a lookup outstanding at the drop could only run its deadline out — and it
+/// was then reported as a request the venue never answered, or a contract it
+/// does not know, ten to twenty seconds after the connection went. The
+/// historical connection has failed its own at once all along.
+#[test]
+fn a_connection_that_dies_takes_the_lookups_waiting_on_it_with_it() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let later = Instant::now() + Duration::from_secs(30);
+    ccp.pending_secdef.push((7, false, later));
+    ccp.pending_fanout.push(PendingFanout {
+        api_req_id: 8,
+        fanout_req_ids: vec!["ibxfan-8-0".into(), "ibxfan-8-1".into()],
+        answered: vec!["ibxfan-8-0".into()],
+        deadline: later,
+    });
+    ccp.details_delivered.entry(8).or_default().insert(756_733);
+    ccp.pending_matching_symbols.push((9, later));
+    ccp.pending_option_params.push((10, "AAPL".into(), 265_598, later));
+    ccp.pending_schedule_pair.push(PendingSchedulePair {
+        api_req_id: 11,
+        join_key: "AAPL-NASDAQ".into(),
+        def: crate::control::contracts::ContractDefinition { con_id: 265_598, ..Default::default() },
+        is_last: true,
+        deadline: later,
+    });
+    // A lookup of the engine's own for a holding, and a subscription and a
+    // request each waiting on the naming of their contract.
+    ccp.pending_secdef.push((0xF000_0001, true, later));
+    ccp.auto_fetched_conids.insert(4_762, 0xF000_0001);
+    ccp.resolve_for_subscribe(PendingSubscribe {
+        con_id: 0, instrument: 4, symbol: "SPY".into(), exchange: "SMART".into(),
+        sec_type: "STK".into(), currency: "USD".into(), last_trade_date: String::new(),
+        strike: 0.0, right: String::new(), multiplier: String::new(),
+        mode_9887: 0, regulatory_snapshot: false,
+    }, &mut None, &mut HeartbeatState::new(), &shared);
+    let bars = crate::types::ControlCommand::FetchHistorical {
+        contract: crate::types::ContractRef { con_id: 0, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(), ..Default::default() },
+        req_id: 12, end_date_time: String::new(), duration: "1 D".into(), bar_size: "1 hour".into(),
+        what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: false, include_expired: false,
+        filters: Default::default(),
+    };
+    assert!(ccp.hold_until_named(bars, &mut None, &mut HeartbeatState::new(), &shared).is_none());
+    assert_eq!((ccp.pending_md_subscribe.len(), ccp.pending_named.len()), (1, 1));
+
+    ccp.handle_disconnect(&mut None, &mut context, &shared, &None);
+
+    assert!(
+        ccp.pending_secdef.is_empty() && ccp.pending_fanout.is_empty()
+            && ccp.pending_matching_symbols.is_empty() && ccp.pending_option_params.is_empty()
+            && ccp.pending_schedule_pair.is_empty() && ccp.pending_md_subscribe.is_empty()
+            && ccp.pending_named.is_empty() && ccp.auto_fetched_conids.is_empty()
+            && ccp.details_delivered.is_empty(),
+        "nothing waits on a connection that is gone",
+    );
+    let gone = crate::error_codes::Refusal::NOT_CONNECTED;
+    let mut told: Vec<(u32, i32)> = shared.reference.drain_historical_errors().into_iter()
+        .inspect(|(_, _, why)| assert!(why.contains("trading connection"), "{why}"))
+        .map(|(rid, code, _)| (rid, code)).collect();
+    told.sort_unstable();
+    assert_eq!(
+        told, [(7, gone), (8, gone), (9, gone), (10, gone), (12, gone)],
+        "each caller told now, and the engine's own lookup told to nobody",
+    );
+    let mut ended = shared.reference.drain_contract_details_end();
+    ended.sort_unstable();
+    assert_eq!(ended, [7, 8, 11], "each details request ended");
+    let paired: Vec<_> = shared.reference.drain_contract_details().into_iter()
+        .map(|(rid, d)| (rid, d.con_id, d.trading_hours.is_none())).collect();
+    assert_eq!(paired, [(11, 265_598, true)], "a contract the venue did name is delivered, without the hours it did not");
+    let failed = shared.market.drain_subscription_failures();
+    assert!(failed.len() == 1 && failed[0].0 == 4 && failed[0].1.contains("trading connection"), "{failed:?}");
+    assert_eq!(context.slots_to_reconsider, [4], "and the slot goes back");
+}
+
 /// The end that squares the account is the end of the request that was asked
 /// to state it.
 ///

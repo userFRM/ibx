@@ -2448,6 +2448,10 @@ impl CcpState {
     /// through the outage, the reconnect competes with a session this client
     /// is still holding open. On a hard error it is a descriptor held for as
     /// long as the outage lasts.
+    ///
+    /// Every lookup waiting on the connection is failed here, as the
+    /// historical connection fails its own: the connection that replaces this
+    /// one is asked nothing this one was asked.
     pub(crate) fn handle_disconnect(
         &mut self,
         ccp_conn: &mut Option<Connection>,
@@ -2474,9 +2478,72 @@ impl CcpState {
             shared.orders.push_order_update(update);
             emit(event_tx, Event::OrderUpdate(update));
         }
+        self.fail_pending_lookups(context, shared, event_tx);
         // Don't emit Event::Disconnected — auto-reconnect handles CCP drops
         // transparently.
         // Python is only notified if reconnect exhausts retries.
+    }
+
+    /// Report every lookup still waiting on the connection as failed, and
+    /// forget it.
+    ///
+    /// The connection that replaces this one is asked nothing this one was
+    /// asked, so a lookup outstanding at the drop could only run its deadline
+    /// out — and it was then reported as a request the venue never answered,
+    /// or a contract the venue does not know, ten to twenty seconds after the
+    /// connection went. The historical connection has failed its own at once
+    /// all along.
+    fn fail_pending_lookups(&mut self, context: &mut Context, shared: &SharedState, event_tx: &Option<EventSink>) {
+        const WHY: &str = "the trading connection went away before the venue answered";
+        // A caller's details request is failed and ended, as one that ran its
+        // deadline out is. A fetch of the engine's own is forgotten, so the
+        // next report naming that contract asks again.
+        let mut ended: Vec<u32> = Vec::new();
+        let mut lost_auto_fetch: Vec<u32> = Vec::new();
+        for (req_id, _, _) in self.pending_secdef.drain(..) {
+            if req_id < crate::bridge::ENGINE_ID_BASE { ended.push(req_id) } else { lost_auto_fetch.push(req_id) }
+        }
+        self.auto_fetched_conids.retain(|_, rid| !lost_auto_fetch.contains(rid));
+        ended.extend(self.pending_fanout.drain(..).map(|p| p.api_req_id));
+        // A contract the venue did name, whose trading hours it now will not
+        // state: delivered without them, the way the pairing's own deadline
+        // delivers it.
+        for p in &mut self.pending_schedule_pair { p.deadline = Instant::now(); }
+        self.sweep_pending_schedule_pairs(shared, event_tx);
+        self.details_delivered.clear();
+        let mut refused: Vec<u32> = self.pending_matching_symbols.drain(..).map(|(rid, _)| rid).collect();
+        refused.extend(self.pending_option_params.drain(..).map(|(rid, ..)| rid));
+        // A subscription waiting on the naming of its contract is told, and
+        // the slot its registration took is offered back; a request waiting on
+        // the same is refused under its own number.
+        for (_, p, _) in self.pending_md_subscribe.drain(..) {
+            shared.market.push_subscription_failure(p.instrument, WHY.to_string());
+            context.slots_to_reconsider.push(p.instrument);
+        }
+        let named: Vec<(u32, bool)> = self.pending_named.drain(..)
+            .filter_map(|(_, cmd, _)| request_id(&cmd).map(|rid| {
+                (rid, matches!(cmd, crate::types::ControlCommand::FetchHistorical { .. }))
+            }))
+            .collect();
+        if ended.is_empty() && refused.is_empty() && named.is_empty() {
+            return;
+        }
+        log::warn!(
+            "{} lookup(s) were still unanswered when the trading connection went",
+            ended.len() + refused.len() + named.len(),
+        );
+        let code = crate::error_codes::Refusal::NOT_CONNECTED;
+        for req_id in ended {
+            shared.reference.push_historical_error(req_id, code, WHY.to_string());
+            shared.reference.push_contract_details_end(req_id);
+            emit(event_tx, Event::ContractDetailsEnd(req_id));
+        }
+        for req_id in refused {
+            shared.reference.push_historical_error(req_id, code, WHY.to_string());
+        }
+        for (req_id, bars) in named {
+            super::push_hmds_refusal(shared, req_id, code, WHY.to_string(), bars);
+        }
     }
 
     /// Report the orders the recovery push did not account for.
