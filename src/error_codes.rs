@@ -76,6 +76,13 @@ impl Refusal {
 /// under.
 pub const DUPLICATE_TICKER_ID: i32 = 102;
 
+/// The code a request number already answering a historical query is refused
+/// under.
+///
+/// A separate number from the one a live quote subscription is refused under:
+/// the two are different requests and a caller branches on which it made.
+pub const DUPLICATE_HISTORICAL_QUERY: i32 = 386;
+
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)

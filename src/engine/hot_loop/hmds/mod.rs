@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use crate::error_codes::DUPLICATE_HISTORICAL_QUERY;
 use crate::bridge::{Event, SharedState};
 use crate::protocol::datetime::chrono_free_timestamp;
 use crate::protocol::connection::{Connection, Frame};
@@ -1686,6 +1687,40 @@ fn build_tbt_query(
             end_date_time.to_string()
         };
         let end_date_time = end_date_time.as_str();
+        // A number already answering a historical request cannot take a
+        // second one.
+        //
+        // Both the pages a caller is handed and the series they are held in
+        // are resolved by this number, and the held series is a list searched
+        // by first match. A second request under a live one put two entries
+        // under one number: the second request's pages extended the first
+        // request's series, the two contracts were sorted together and folded
+        // on the first contract's actions, and the caller was handed one
+        // series under one number with two contracts in it and two ends. The
+        // second request's own series was never completed and nothing sweeps
+        // it, so it waited for the life of the session, and a withdrawal
+        // dropped every series held under the number while leaving the second
+        // query in flight -- whose pages then reached the caller that had
+        // cancelled.
+        //
+        // Refused here, which is the one place both surfaces and a raw
+        // control-channel caller pass through, and before the query id is
+        // drawn so nothing is left behind.
+        if self.held.iter().any(|held| held.req_id == req_id)
+            || self.pending_historical.iter().any(|(_, id)| *id == req_id)
+        {
+            super::push_hmds_refusal(
+                shared,
+                req_id,
+                DUPLICATE_HISTORICAL_QUERY,
+                format!(
+                    "request {req_id} is already answering a historical query: \
+                     withdraw it before asking for another under the same number",
+                ),
+                true,
+            );
+            return;
+        }
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
 

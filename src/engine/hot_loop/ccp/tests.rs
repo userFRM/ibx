@@ -5898,3 +5898,58 @@ fn an_id_the_venue_only_mentions_still_counts() {
         "but the id it spent is counted past all the same",
     );
 }
+
+/// A withdrawal reaches a request still waiting to be named.
+///
+/// A request naming its contract by symbol is parked whole while the venue is
+/// asked what that contract is, and in that window it is in neither the
+/// in-flight record nor the held one. The withdrawal found nothing, sent
+/// nothing and returned; the naming answer then arrived, the request was
+/// re-injected and sent, and the caller was served a full answer -- bars and
+/// an end -- to a request it had cancelled.
+#[test]
+fn a_request_waiting_to_be_named_is_withdrawn_with_the_rest() {
+    let shared = SharedState::new();
+    let mut ccp = CcpState::new();
+
+    let named_by_symbol = |req_id: u32| crate::types::ControlCommand::FetchHistorical {
+        contract: crate::types::ContractRef {
+            con_id: 0,
+            symbol: "AAPL".into(),
+            sec_type: "STK".into(),
+            exchange: "SMART".into(),
+            currency: "USD".into(),
+            ..Default::default()
+        },
+        req_id,
+        end_date_time: String::new(),
+        duration: "1 D".into(),
+        bar_size: "1 hour".into(),
+        what_to_show: "TRADES".into(),
+        use_rth: true,
+        keep_up_to_date: false,
+        include_expired: false,
+        filters: Default::default(),
+    };
+
+    ccp.hold_until_named(named_by_symbol(7), &mut None, &mut HeartbeatState::new(), &shared);
+    ccp.hold_until_named(named_by_symbol(8), &mut None, &mut HeartbeatState::new(), &shared);
+    assert_eq!(ccp.pending_named.len(), 2, "both are waiting on a name");
+    // And one whose name already came back, waiting to be read this pass.
+    ccp.resolved_named.push(named_by_symbol(7));
+
+    ccp.withdraw_named(7);
+
+    assert!(
+        !ccp.pending_named.iter().any(|(_, cmd, _)| request_id(cmd) == Some(7)),
+        "the withdrawn request does not go out once its contract is named",
+    );
+    assert!(
+        !ccp.resolved_named.iter().any(|cmd| request_id(cmd) == Some(7)),
+        "nor does one already named and waiting to be read",
+    );
+    assert_eq!(
+        ccp.pending_named.len(), 1,
+        "and the request the caller did not withdraw is still waiting",
+    );
+}

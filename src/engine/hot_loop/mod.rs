@@ -1345,6 +1345,7 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelHistorical { req_id } => {
+                    self.ccp.withdraw_named(req_id);
                     // What the venue already sent and nobody has read yet
                     // goes with the request. Left queued, the next request
                     // under this number is answered with this one's.
@@ -1416,6 +1417,7 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelHeadTimestamp { req_id } => {
+                    self.ccp.withdraw_named(req_id);
                     // As above: the answers already queued go with it.
                     self.shared.reference.purge_head_timestamp_for(req_id);
                     if let Some(pos) = self.hmds.pending_head_ts.iter().position(|(_, rid)| *rid == req_id) {
@@ -1551,6 +1553,7 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelRealTimeBar { req_id } => {
+                    self.ccp.withdraw_named(req_id);
                     // What already arrived and nobody has read goes with it,
                     // or the next request under this number is served this
                     // stream's bars.
@@ -1603,6 +1606,7 @@ impl HotLoop {
                     );
                 }
                 ControlCommand::UnsubscribeDepth { req_id } => {
+                    self.ccp.withdraw_named(req_id);
                     // Includes a subscription still awaiting the exchange
                     // list, which would otherwise be sent once it arrives.
                     self.depth_awaiting_venues.retain(|held| !matches!(
@@ -3312,11 +3316,22 @@ fn con_id_beyond_the_wire(cmd: &ControlCommand) -> Option<i64> {
 /// the terminal completion sentinel so a blocked wait unblocks.
 pub(crate) fn push_hmds_error(shared: &SharedState, req_id: u32, message: String, from_historical: bool) {
     const HMDS_ERROR_CODE: i32 = 162;
-    shared.reference.push_historical_error(
-        req_id,
-        HMDS_ERROR_CODE,
-        message,
-    );
+    push_hmds_refusal(shared, req_id, HMDS_ERROR_CODE, message, from_historical);
+}
+
+/// The same, under a number of its own rather than the service's.
+///
+/// A request refused before it is sent is not the service reporting a
+/// difficulty with one it answered, and a caller branching on the number reads
+/// the two apart.
+pub(crate) fn push_hmds_refusal(
+    shared: &SharedState,
+    req_id: u32,
+    code: i32,
+    message: String,
+    from_historical: bool,
+) {
+    shared.reference.push_historical_error(req_id, code, message);
     if from_historical {
         shared.reference.push_historical_data(
             req_id,

@@ -1864,6 +1864,24 @@ impl CcpState {
         None
     }
 
+    /// Withdraw a request that is still waiting to be named.
+    ///
+    /// A request naming its contract by symbol is parked whole while the
+    /// venue is asked what that contract is, and at that moment it is in
+    /// neither the in-flight record nor the held one -- so a cancel arriving
+    /// in that window found nothing, sent nothing, and returned. The naming
+    /// answer then arrived, the request was re-injected and sent, and the
+    /// caller was served a full answer to a request it had withdrawn.
+    ///
+    /// Called from the cancel of every request that can be parked this way.
+    /// The second list covers a naming answer re-injected in a pass before the
+    /// cancel was read; once the request has been sent it is in the in-flight
+    /// record and the ordinary withdrawal reaches it.
+    pub(crate) fn withdraw_named(&mut self, req_id: u32) {
+        self.pending_named.retain(|(_, cmd, _)| request_id(cmd) != Some(req_id));
+        self.resolved_named.retain(|cmd| request_id(cmd) != Some(req_id));
+    }
+
     /// A held request whose contract the venue never named. Told to the caller
     /// rather than left waiting.
     pub(crate) fn sweep_pending_named(&mut self, shared: &SharedState) {

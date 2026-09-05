@@ -1819,3 +1819,47 @@ fn a_disconnect_does_not_resurrect_a_failed_request_s_stream() {
         "and the wanted one was",
     );
 }
+
+/// A number already answering a historical query does not take a second one.
+///
+/// Both the pages a caller is handed and the series they are held in are
+/// resolved by this number, and the held series is a list searched by first
+/// match. A second request under a live one put two entries under one number:
+/// the second request's pages extended the first request's series, two
+/// contracts were sorted together and folded on the first contract's actions,
+/// and the caller was handed one series with two contracts in it and two ends.
+/// The second request's own series was never completed and nothing sweeps it.
+#[test]
+fn a_number_already_answering_a_historical_query_is_not_given_another() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let (conn, _peer) = Connection::for_test();
+    let mut conn = Some(conn);
+
+    hmds.send_historical_request_ex(9, 756733, "", "2 D", "1 hour", "TRADES",
+        true, false, false, "AAPL", "STK", "SMART", &mut conn, &mut hb, &shared);
+    assert_eq!(hmds.held.len(), 1, "the first request is held for its pages");
+    let _ = shared.reference.drain_historical_errors();
+
+    hmds.send_historical_request_ex(9, 320227571, "", "2 D", "1 hour", "TRADES",
+        true, false, false, "QQQ", "STK", "SMART", &mut conn, &mut hb, &shared);
+
+    assert_eq!(hmds.held.len(), 1, "the second contract does not join the first's series");
+    assert_eq!(
+        hmds.held[0].con_id, 756733,
+        "and the series still holds only the contract that was asked for",
+    );
+    assert_eq!(
+        hmds.pending_historical.iter().filter(|(_, rid)| *rid == 9).count(), 1,
+        "only one query is in flight under the number",
+    );
+    let errors = shared.reference.drain_historical_errors();
+    assert_eq!(errors.len(), 1, "the caller is told: {errors:?}");
+    assert_eq!(errors[0], (9, 386, errors[0].2.clone()), "under the number that names it");
+    let hist = shared.reference.drain_historical_data();
+    assert!(
+        hist.iter().any(|(rid, resp)| *rid == 9 && resp.is_complete && resp.bars.is_empty()),
+        "and a caller waiting on the refused request is released",
+    );
+}
