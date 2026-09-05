@@ -76,6 +76,14 @@ impl Refusal {
 /// under.
 pub const DUPLICATE_TICKER_ID: i32 = 102;
 
+/// The code a placement under a number the venue has already worked an order
+/// under is refused under.
+///
+/// The venue refuses a repeated number only while it is still working one, so
+/// after a fill it takes the placement as a new order -- which is how a caller
+/// retrying what it thought had failed ends up holding two.
+pub const DUPLICATE_ORDER_ID: i32 = 103;
+
 /// The code a request number already running a scan is refused under.
 ///
 /// Its own number rather than the one a quote subscription is refused under,

@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use crate::types::model::{
     ExecutionFilter,
 };
-use crate::error_codes::Refusal;
+use crate::error_codes::{DUPLICATE_ORDER_ID, Refusal};
 use crate::client_core::ClientCore;
 use crate::types::*;
 use super::EClient;
@@ -247,6 +247,20 @@ impl EClient {
             self.core.forget_released_slots(shared);
         }
         let replacing = self.core.is_working_at_the_venue(oid, venue.as_deref());
+        // A number the venue has already worked an order under names nothing
+        // now, so this placement is not a revision -- and the venue refuses a
+        // repeated number only while it is still working one, so after a fill
+        // it takes it as a new order. A caller retrying what it believed had
+        // failed was given a second live order.
+        if !replacing && self.core.the_number_is_spent(oid) {
+            return self.report_refusal(py, oid as i64, Refusal::stated(
+                DUPLICATE_ORDER_ID,
+                format!(
+                    "order {oid} has already been worked and finished: place a new \
+                     order under a number of its own",
+                ),
+            ));
+        }
         // A replace carries the order id and its fields, not the contract, so
         // the order stays on the instrument it was placed on. A contract
         // naming a different instrument is refused rather than recorded.

@@ -2559,7 +2559,17 @@ impl HotLoop {
                 // Notify once after three straight failures; retries continue
                 // on the backoff ladder — the old 3-attempt hard cap gave up
                 // sooner than the gateway would.
-                if self.farm_reconnect_attempt == 3 {
+                //
+                // On the count reaching three or passing it, and only while no
+                // loss stands. The count is not reset by a recovery — it is
+                // what the backoff ladder climbs, and resetting it on a venue
+                // that flaps would restart the ladder every time — so a second
+                // outage within the stable window continued from four and the
+                // test for exactly three was never true again. Both surfaces
+                // read connected for the whole of it. `loss_announced` is the
+                // per-outage latch, cleared only once both transports are
+                // back, so this still speaks once per outage.
+                if self.farm_reconnect_attempt >= 3 && !self.loss_announced {
                     log::error!("Farm auto-reconnect failed 3 times — notifying (retries continue)");
                     self.loss_announced = true;
                     self.shared.set_connection_lost();
@@ -2581,7 +2591,7 @@ impl HotLoop {
                 self.farm_next_attempt_at = Some(
                     Instant::now() + reconnect_backoff(self.farm_reconnect_attempt),
                 );
-                if self.farm_reconnect_attempt == 3 {
+                if self.farm_reconnect_attempt >= 3 && !self.loss_announced {
                     log::error!("Farm auto-reconnect failed 3 times — notifying (retries continue)");
                     self.loss_announced = true;
                     self.shared.set_connection_lost();
@@ -2688,7 +2698,7 @@ impl HotLoop {
                 );
                 self.pending_ccp_reconnect = None;
                 // See the farm path: notify once, keep retrying.
-                if self.ccp_reconnect_attempt == 3 {
+                if self.ccp_reconnect_attempt >= 3 && !self.loss_announced {
                     log::error!("CCP auto-reconnect failed 3 times — notifying (retries continue)");
                     self.loss_announced = true;
                     self.shared.set_connection_lost();
@@ -2704,7 +2714,7 @@ impl HotLoop {
                 self.ccp_next_attempt_at = Some(
                     Instant::now() + reconnect_backoff(self.ccp_reconnect_attempt),
                 );
-                if self.ccp_reconnect_attempt == 3 {
+                if self.ccp_reconnect_attempt >= 3 && !self.loss_announced {
                     log::error!("CCP auto-reconnect failed 3 times — notifying (retries continue)");
                     self.loss_announced = true;
                     self.shared.set_connection_lost();
@@ -3110,6 +3120,14 @@ impl HotLoop {
     /// Test-only: poll pending farm reconnect.
     pub fn poll_farm_reconnect_for_test(&mut self) {
         self.poll_farm_reconnect();
+    }
+
+    /// Test-only: hand the farm reconnect an answer to read on the next poll.
+    pub fn answer_farm_reconnect_for_test(&mut self, attempt: u32, answer: io::Result<Connection>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(answer).unwrap();
+        self.farm_reconnect_attempt = attempt;
+        self.pending_farm_reconnect = Some(rx);
     }
 
     /// Mutably access heartbeat state for testing (e.g., setting timestamps).
@@ -4770,8 +4788,10 @@ mod tests {
         );
         assert!(shared.take_connection_lost(), "and a caller without an event channel too");
 
-        // And the quote feed's own, which failed the same way and was told the
-        // same way.
+        // And the quote feed's own, which failed the same way. Both transports
+        // answer to the one notice, so the loss already standing is not said
+        // again -- a handler that reconnected on the first would take the
+        // second into the session it had just built.
         hl.farm.disconnected = true;
         hl.farm_reconnect_attempt = 3;
         let (worker, rx) = std::sync::mpsc::sync_channel::<io::Result<Connection>>(1);
@@ -4785,9 +4805,10 @@ mod tests {
             "the next attempt is on the ladder rather than at once, and at once again",
         );
         assert!(
-            matches!(heard.try_recv(), Ok(Event::Disconnected)),
-            "and the caller is told the connection is gone",
+            heard.try_recv().is_err(),
+            "one outage, one notice",
         );
+        assert!(!shared.take_connection_lost(), "and the same on the other channel");
     }
 
     /// A reconnect worker that has finished is let go of, rather than held to
@@ -4929,6 +4950,42 @@ mod tests {
 
         hl.announce_reconnected();
         assert!(!shared.take_connection_restored(), "and reaches it once");
+    }
+
+    /// A second outage is announced too, not only the first.
+    ///
+    /// The notice was sent when the attempt count reached exactly three. That
+    /// count is what the backoff ladder climbs and is not reset by a recovery
+    /// -- resetting it on a venue that flaps would restart the ladder every
+    /// time -- so a second outage inside the stable window continued from four
+    /// and the test was never true again. Both surfaces read connected for the
+    /// whole of the second outage, however long it lasted, and orders were
+    /// buffered behind a session the caller believed was up.
+    #[test]
+    fn an_outage_after_a_recovery_is_announced_as_well() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let refused = || io::Error::new(io::ErrorKind::ConnectionRefused, "no answer");
+
+        // The first outage, announced on the third straight failure.
+        hl.answer_farm_reconnect_for_test(3, Err(refused()));
+        hl.poll_farm_reconnect_for_test();
+        assert!(shared.take_connection_lost(), "the first outage is announced");
+        assert!(hl.loss_announced);
+
+        // It comes back, and the count is left where it is for the ladder.
+        hl.announce_reconnected();
+        assert!(shared.take_connection_restored(), "the recovery is announced");
+        assert!(!hl.loss_announced);
+
+        // It goes again before the count is old enough to reset, so the next
+        // failed dial is the fourth rather than the first.
+        hl.answer_farm_reconnect_for_test(4, Err(refused()));
+        hl.poll_farm_reconnect_for_test();
+        assert!(
+            shared.take_connection_lost(),
+            "the second outage reaches the caller too",
+        );
     }
 
     /// The servers go down for maintenance most nights and come back on their

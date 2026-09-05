@@ -584,6 +584,18 @@ impl EClient {
         *self._thread.lock().unwrap() = Some(handle);
         self.session_ended.store(false, Ordering::Release);
         self.close_notified.store(false, Ordering::Release);
+        // Stated again here, where the session exists, and not only where the
+        // claim was taken above.
+        //
+        // The claim is taken before the previous engine is stopped, and
+        // stopping it raises the old session's loss flag. A dispatch running
+        // on another thread -- the ordinary shape, `run()` on one thread and
+        // the reconnect on another -- reads that flag and stores this client
+        // disconnected, seconds before the new session is installed here.
+        // Nothing put it back: the new session was live with the client
+        // reading disconnected, `run()` refused to start, and the next
+        // reconnect tore a working session down to build another.
+        self.connected.store(true, Ordering::Release);
         claim.kept = true;
 
         let _ = port; // kept for the reference client's signature

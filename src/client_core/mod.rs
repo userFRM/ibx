@@ -781,6 +781,15 @@ pub struct ClientCore {
     /// Every order this client placed and the venue has not finished.
     pub open_orders: Mutex<HashMap<u64, TrackedOrder>>,
 
+    /// Every number the venue has already worked an order under this session.
+    ///
+    /// An order that finishes leaves the book, so its number stops naming
+    /// anything -- and a placement under it read as a new order rather than
+    /// as the duplicate it is. The venue refuses a repeated number only while
+    /// it is still working one, so a caller retrying after a fill was given a
+    /// second live order instead of a refusal.
+    pub spent_order_ids: Mutex<HashSet<u64>>,
+
     // Market data type callback tracking
     /// Which feed subscriptions default to.
     pub market_data_type: AtomicI32,
@@ -957,6 +966,7 @@ impl ClientCore {
             last_portfolio: Mutex::new(None),
             executions: Mutex::new(Vec::new()),
             open_orders: Mutex::new(HashMap::new()),
+            spent_order_ids: Mutex::new(HashSet::new()),
             market_data_type: AtomicI32::new(1),
             mdt_sent: Mutex::new(HashSet::new()),
             mdt_by_req: Mutex::new(HashMap::new()),
@@ -1311,6 +1321,9 @@ impl ClientCore {
         *self.last_portfolio.lock().unwrap() = None;
         self.executions.lock().unwrap().clear();
         self.open_orders.lock().unwrap().clear();
+        // A new session draws its numbers from the venue again, so what the
+        // last one spent says nothing about this one.
+        self.spent_order_ids.lock().unwrap().clear();
         self.market_data_type.store(1, Ordering::Relaxed);
         self.mdt_sent.lock().unwrap().clear();
         self.mdt_by_req.lock().unwrap().clear();
@@ -2684,11 +2697,28 @@ impl ClientCore {
             .insert(order_id, tracked_as_placed(contract, order, instrument));
     }
 
+    /// Note that the venue has finished with a number.
+    ///
+    /// Recorded where an order reaches a state it cannot leave, so a later
+    /// placement under the number is read as the duplicate it is rather than
+    /// as a new order. Not recorded where a placement never left this client:
+    /// nothing at the venue ever carried that number, and it is the caller's
+    /// to use again.
+    pub fn note_the_number_is_spent(&self, order_id: u64) {
+        self.spent_order_ids.lock().unwrap().insert(order_id);
+    }
+
+    /// Whether the venue has already worked an order under this number.
+    pub fn the_number_is_spent(&self, order_id: u64) -> bool {
+        self.spent_order_ids.lock().unwrap().contains(&order_id)
+    }
+
     /// Update a tracked order after a fill. Removes the order if fully filled.
     pub fn update_order_fill(&self, order_id: u64, status: &str, filled: f64, remaining: f64) {
         // Through the one place an order leaves the book, so what was staged
         // against it goes with it here as on every other path.
         if remaining == 0.0 {
+            self.note_the_number_is_spent(order_id);
             return self.untrack_order(order_id);
         }
         if let Some(o) = self.open_orders.lock().unwrap().get_mut(&order_id) {
@@ -2858,6 +2888,7 @@ impl ClientCore {
         // answered by status, and these are not open. `Inactive` is not among
         // them: it returns to working when whatever holds the order clears.
         if matches!(status, OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Rejected) {
+            self.note_the_number_is_spent(order_id);
             self.untrack_order(order_id);
         }
     }

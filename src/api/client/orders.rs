@@ -2,7 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::error_codes::Refusal;
+use crate::error_codes::{DUPLICATE_ORDER_ID, Refusal};
 use crate::types::model::ExecutionFilter;
 use crate::api::wrapper::Wrapper;
 use crate::client_core::ClientCore;
@@ -184,6 +184,20 @@ impl EClient {
         // contract is cached under: the engine may have given that slot back.
         self.core.forget_released_slots(&self.shared);
         let replacing = self.core.is_working_at_the_venue(oid, Some(&self.shared));
+        // A number the venue has already worked an order under names nothing
+        // now, so this placement is not a revision -- and the venue refuses a
+        // repeated number only while it is still working one, so after a fill
+        // it takes it as a new order. A caller retrying what it believed had
+        // failed was given a second live order.
+        if !replacing && self.core.the_number_is_spent(oid) {
+            return Err(Refusal::stated(
+                DUPLICATE_ORDER_ID,
+                format!(
+                    "order {oid} has already been worked and finished: place a new \
+                     order under a number of its own",
+                ),
+            ));
+        }
         // Where a replace names a contract other than the one the order is
         // working on, that is settled before anything is registered: asking
         // for a slot first spent one of the table's on a contract this call

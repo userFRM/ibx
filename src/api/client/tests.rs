@@ -1360,14 +1360,17 @@ fn a_cancelled_order_stops_being_tracked() {
     );
 }
 
-/// An order the venue states as filled is done whatever record accompanies it.
+/// A number the venue has finished an order under does not place another.
 ///
 /// A status can arrive without the fill that ended the order, and while the
 /// record stood the id was read as a working order's: the next order placed
 /// under it went down the modify path, answered Ok, and nothing was
-/// submitted.
+/// submitted. Freed instead, it went the other way -- the placement was sent
+/// as a new order, and the venue refuses a repeated number only while it is
+/// still working one, so a caller retrying what it believed had failed was
+/// given a second live order. Refused now, under the number that names it.
 #[test]
-fn an_order_stated_filled_frees_its_id_even_without_a_fill() {
+fn a_number_the_venue_has_finished_an_order_under_places_no_other() {
     let (client, rx, shared) = test_client();
     let order = Order {
         action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
@@ -1383,13 +1386,15 @@ fn an_order_stated_filled_frees_its_id_even_without_a_fill() {
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
 
-    client.place_order(83, &spy(), &order).expect("placed again under the same id");
-    match rx.try_recv().expect("the second order goes out") {
-        ControlCommand::Order(OrderRequest::SubmitEx { order_id, .. }) => {
-            assert_eq!(order_id, 83, "the id places a new order");
-        }
-        other => panic!("expected a fresh submit, got {other:?}"),
-    }
+    let refused = client.place_order(83, &spy(), &order);
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 103),
+        "the number has already been worked: {refused:?}",
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "and nothing was sent under it, neither a second order nor a revision",
+    );
 }
 
 /// A refusal that answers no request is reported as answering no request.
