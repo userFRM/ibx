@@ -3662,3 +3662,31 @@ fn a_cancel_that_does_not_go_leaves_the_change_outstanding() {
         "the change still outstanding keeps what it falls back to",
     );
 }
+
+/// A request that names a slot and puts nothing in the book offers it back
+/// when it drains.
+///
+/// A submit is in the book from the moment it is built, so retiring it offers
+/// the slot back. A cancel-all names a slot and puts nothing in it, so once it
+/// has drained nothing would ever ask about that slot again. Asked from the
+/// reclaim instead, the question was put once per lap for as long as the
+/// request sat in the buffer.
+#[test]
+fn a_request_that_names_a_slot_offers_it_back_when_it_drains() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.pending_orders.push(crate::types::OrderRequest::CancelAll { instrument });
+
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+
+    assert_eq!(
+        context.slots_to_reconsider, vec![instrument],
+        "the slot it named is offered back once, as it leaves the buffer",
+    );
+}

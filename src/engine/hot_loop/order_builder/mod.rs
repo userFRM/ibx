@@ -103,6 +103,13 @@ pub(crate) fn drain_and_send_orders(
             unsent.push(order_req);
             continue;
         }
+        // The slot this request named, for the loop to reconsider once the
+        // request is gone. A submit is in the book by then and the reclaim's
+        // own guard refuses it; a cancel-all is not, and nothing else would
+        // ever ask about its slot again. Taken here rather than in the reclaim
+        // itself, which would ask once per lap for as long as the request sat
+        // in the buffer.
+        let named_slot = order_req.instrument();
         let oid = order_req.order_id();
         // Every leg this request writes. A bracket sends three and reports one
         // outcome, so a failure names the whole set rather than the first id.
@@ -713,6 +720,9 @@ pub(crate) fn drain_and_send_orders(
                     report_uncertain(context, shared, event_tx, id);
                 }
             }
+        }
+        if let Some(instrument) = named_slot {
+            context.slots_to_reconsider.push(instrument);
         }
     }
     context.pending_orders.requeue_front(unsent);

@@ -5507,7 +5507,10 @@ fn a_holding_the_new_statement_never_names_is_closed() {
     let mut ccp_conn: Option<Connection> = None;
     ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &context.market, &shared);
 
-    let asked_under = ccp.account_request_key.clone().expect("the reconnect asked");
+    // The download a rebuilt connection carries arrives under the key its own
+    // opening asked with, which the handshake sent before this loop saw the
+    // connection.
+    let asked_under = OPENING_ACCOUNT_REQUEST;
 
     // Another request's end says nothing about what this one has stated. A
     // caller can ask for a refresh at any moment, and reconciling against
@@ -5826,4 +5829,38 @@ fn an_end_that_squares_nothing_does_not_end_the_download() {
         shared.portfolio.position_info(756733).map(|i| i.position), Some(300.0),
         "and nothing was closed on the strength of it",
     );
+}
+
+/// A rebuilt connection's download arrives under the key its own opening asked
+/// with, which is the key a first logon uses.
+///
+/// The handshake sends that opening before the loop is handed the connection,
+/// so the reconnect drawing a key from its counter and recording that one left
+/// the end that carries the account belonging to neither: the account was
+/// never squared, and — where the venue ends the counter's key with nothing,
+/// because the first is already serving — every holding the account has would
+/// have been closed against a request that stated none of them.
+#[test]
+fn a_rebuilt_connection_settles_under_the_key_its_opening_asked_with() {
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+    let market = crate::engine::market_state::MarketState::new();
+    let mut hb = HeartbeatState::new();
+    shared.portfolio.set_position_info(crate::types::PositionInfo {
+        con_id: 756733, position: 300.0, ..Default::default()
+    });
+
+    let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp_conn: Option<Connection> = None;
+    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &market, &shared);
+
+    assert_eq!(
+        shared.portfolio.set_account_download_complete(OPENING_ACCOUNT_REQUEST),
+        Some(vec![756733]),
+        "the end of the opening request is the one that squares the account",
+    );
+    // And the counter's second subscribe measures nothing, so its own end
+    // cannot square an account it was never asked to state.
+    let counter_key = ccp.account_request_key.clone().expect("a second key was drawn");
+    assert_ne!(counter_key, OPENING_ACCOUNT_REQUEST);
 }

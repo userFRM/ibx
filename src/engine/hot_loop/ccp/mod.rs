@@ -2501,8 +2501,15 @@ impl CcpState {
             // already been used, and the account and position pushes this asks
             // for simply do not resume. Recorded too, so the unsubscribe that
             // follows closes the key this connection is actually served under.
+            // The download a rebuilt connection carries arrives under the key
+            // its own opening asked with, which is the one a first logon uses
+            // — the handshake sends it before this loop is handed the
+            // connection. Recorded before the counter is drawn, so the end
+            // that squares the account is the end of the request carrying it;
+            // the counter's key below is a second subscribe on the same
+            // account, and first-wins leaves it measuring nothing.
+            shared.portfolio.holdings_restated_under(OPENING_ACCOUNT_REQUEST);
             let key = self.next_account_request_key();
-            shared.portfolio.holdings_restated_under(&key);
             let _ = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, "U"), (fix::TAG_SENDING_TIME, &ts),
                 (6040, "6"), (6036, "1"), (6095, account_id), (6529, &key),

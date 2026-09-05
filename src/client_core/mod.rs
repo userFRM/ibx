@@ -1115,11 +1115,10 @@ impl ClientCore {
     /// The family an order that transmits would release, in the order it
     /// goes, each still held under the id it was placed under.
     ///
-    /// The same gathering as `release_before`, without taking anything out of
-    /// the hold: a sender has to say what reached the engine and what did
-    /// not, and can only say it if what has not gone yet is still there to
-    /// be withdrawn or sent again. Each member leaves the hold by its id,
-    /// once its send is accounted for.
+    /// Gathered without taking anything out of the hold: a sender has to say
+    /// what reached the engine and what did not, and can only say it if what
+    /// has not gone yet is still there to be withdrawn or sent again. Each
+    /// member leaves the hold by its id, once its send is accounted for.
     pub fn family_before(&self, order_id: u64, parent_id: i64) -> Vec<HeldOrder> {
         let held = self.held_orders.lock().unwrap();
         let mut going: Vec<HeldOrder> = Vec::new();
@@ -1133,10 +1132,8 @@ impl ClientCore {
             });
         }
         for h in held.iter() {
-            // The same family test as `release_before`: beside it under the
-            // same parent, or hanging from this one. The parent already
-            // gathered cannot also count as a sibling, which it could not
-            // there because it was taken out first.
+            // Beside it under the same parent, or hanging from this one. The
+            // parent already gathered cannot also count as a sibling.
             let same_family = (parent_id != 0 && h.parent_id == parent_id)
                 || h.parent_id == order_id as i64;
             let same_family = same_family
@@ -1272,41 +1269,6 @@ impl ClientCore {
                 name(&reached), name(&missed),
             )
         })
-    }
-
-    /// The held orders an order that transmits releases, in the order they go.
-    ///
-    /// Its own parent first, then anything else held that hangs from the same
-    /// parent, then the caller sends the transmitting order itself. Only the
-    /// family it belongs to: an order that transmits says nothing about a
-    /// bracket somebody else is still building, and sending those too would
-    /// put orders on the venue that nobody asked to send yet.
-    pub fn release_before(&self, order_id: u64, parent_id: i64) -> Vec<ControlCommand> {
-        let mut held = self.held_orders.lock().unwrap();
-        let mut going: Vec<ControlCommand> = Vec::new();
-        if parent_id != 0
-            && let Some(at) = held.iter().position(|h| h.order_id == parent_id as u64)
-        {
-            going.push(held.remove(at).command);
-        }
-        let mut siblings = Vec::new();
-        held.retain(|h| {
-            // Beside it under the same parent, or hanging from this one: a
-            // parent placed again to transmit is what releases its own
-            // children, and collecting only siblings left them held until the
-            // session ended.
-            let same_family = (parent_id != 0 && h.parent_id == parent_id)
-                || h.parent_id == order_id as i64;
-            let same_family = same_family && h.order_id != order_id;
-            if same_family {
-                siblings.push(h.command.clone());
-            }
-            !same_family
-        });
-        going.extend(siblings);
-        // And the order itself, where it was held before and now transmits.
-        held.retain(|h| h.order_id != order_id);
-        going
     }
 
     /// Forget everything this session held, so the next one starts clean.

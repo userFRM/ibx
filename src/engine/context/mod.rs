@@ -106,6 +106,19 @@ impl Default for Context {
     }
 }
 
+/// Whether an order is on this slot and in a state the venue may still act on.
+///
+/// Stated once because two callers ask it — one wanting the orders, one only
+/// wanting to know whether there are any — and a slot given back while one of
+/// these is on it goes to another contract.
+fn holds_the_slot(order: &Order, id: InstrumentId) -> bool {
+    order.instrument == id
+        && matches!(order.status,
+            OrderStatus::PendingSubmit | OrderStatus::PreSubmitted | OrderStatus::Submitted |
+            OrderStatus::PendingCancel | OrderStatus::PendingReplace |
+            OrderStatus::PartiallyFilled | OrderStatus::Uncertain | OrderStatus::Inactive)
+}
+
 impl Context {
     pub fn new() -> Self {
         Self {
@@ -202,13 +215,17 @@ impl Context {
     /// cancel for one the venue has finished with returns an unknown-order
     /// reject, which the reject handler retires.
     pub fn open_orders_for(&self, id: InstrumentId) -> Vec<&Order> {
-        self.open_orders
-            .values()
-            .filter(|o| o.instrument == id && matches!(o.status,
-                OrderStatus::PendingSubmit | OrderStatus::PreSubmitted | OrderStatus::Submitted |
-                OrderStatus::PendingCancel | OrderStatus::PendingReplace |
-                OrderStatus::PartiallyFilled | OrderStatus::Uncertain | OrderStatus::Inactive))
-            .collect()
+        self.open_orders.values().filter(|o| holds_the_slot(o, id)).collect()
+    }
+
+    /// Whether anything the venue may still act on is on this slot.
+    ///
+    /// The same question [`open_orders_for`](Self::open_orders_for) answers,
+    /// asked where only the answer is wanted: it is the first guard on every
+    /// attempt to give a slot back, and building a list to ask it allocated on
+    /// the loop's own path.
+    pub fn has_open_orders_for(&self, id: InstrumentId) -> bool {
+        self.open_orders.values().any(|o| holds_the_slot(o, id))
     }
 
     pub fn order(&self, order_id: OrderId) -> Option<&Order> {

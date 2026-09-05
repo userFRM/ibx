@@ -201,7 +201,12 @@ impl EClient {
                 // rather than the contract — so one naming another contract is
                 // refused rather than recorded against it, and rather than
                 // spending a slot on a contract nothing needs.
+                // A combination is not one contract, and the id on it after
+                // the naming above is a single leg's underlying rather than
+                // the combination's — nothing to compare against what the
+                // venue states for the order.
                 if replacing
+                    && contract.combo_legs.is_empty()
                     && contract.con_id != 0
                     && let Some(known) = self.shared.orders.get_order_info(oid)
                     && known.contract.con_id != 0
