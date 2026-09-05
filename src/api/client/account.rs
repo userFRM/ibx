@@ -12,23 +12,6 @@ use super::{Contract, EClient};
 impl EClient {
     // ── Positions ──
 
-    /// Drop the moves recorded while nothing was watching.
-    ///
-    /// The venue keeps the account current whether or not anyone is listening,
-    /// so moves queue from the moment the session opens. A request answers
-    /// with what the account holds now, which already says what those moves
-    /// came to; fired again as change events they would have a caller act
-    /// again on what it was just told. The first ask drops them. Where a
-    /// watch already stands the queue is on its way to that watcher and is
-    /// left alone.
-    fn drop_unwatched_position_moves(&self) {
-        if self.positions_requested.load(Ordering::Acquire)
-            || !self.positions_multi_requested.lock().unwrap().is_empty()
-        {
-            return;
-        }
-        self.shared.portfolio.drain_position_changes();
-    }
 
     /// The contract a holding is in, named as fully as this client can.
     ///
@@ -66,10 +49,7 @@ impl EClient {
         // with several would otherwise answer with whichever arrived first. An
         // account holding nothing is complete when the batch ends, so this does
         // not wait on rows that are not coming.
-        for _ in 0..1000 {
-            if self.shared.portfolio.account_download_complete() { break; }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        if !self.wait_for_the_download(NO_REQUEST) { return; }
         if !self.shared.portfolio.account_download_complete() {
             // Reported to the caller as well as the log. A caller reading
             // holdings has no other way to tell a truncated answer from a
@@ -82,8 +62,10 @@ impl EClient {
         }
         // What moved before this asked is answered by the read below, which
         // states what the holdings are now; fired as change events as well it
-        // would arrive twice.
-        self.drop_unwatched_position_moves();
+        // would arrive twice. Taken whether or not a watch stands, as the other
+        // surface takes it: left in the queue for a standing watcher, the next
+        // pass fired every holding again on `position` as well.
+        let already_stated = self.shared.portfolio.drain_position_changes();
         // Watching before reading: see `req_positions_multi`. Read first and
         // registered after, a holding that moved while the answer was being
         // assembled was taken by a watcher that already existed — the queue is
@@ -113,6 +95,39 @@ impl EClient {
             wrapper.position(&self.account_id, &c, pi.position, avg_cost);
         }
         wrapper.position_end();
+        // What was taken above belongs to the per-request watchers too, and
+        // they were not answered here. Handed over now rather than dropped, or
+        // a holding that moved before this ask would reach them never.
+        let watching: Vec<i64> = {
+            let asked = self.positions_multi_requested.lock().unwrap();
+            let mut ids: Vec<i64> = asked.iter().copied().collect();
+            ids.sort_unstable();
+            ids
+        };
+        for pi in &already_stated {
+            let c = self.position_contract(pi);
+            let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
+            for req_id in &watching {
+                wrapper.position_multi(*req_id, &self.account_id, "", &c, pi.position, avg_cost);
+            }
+        }
+    }
+
+    /// Wait for the account to finish stating itself, up to ten seconds, and
+    /// say whether the session is still there to answer. The session may end
+    /// inside the wait, and what this would answer from afterwards is the
+    /// pre-drop book: checked at entry alone, ten seconds of that book went
+    /// out under a refusal for silence.
+    fn wait_for_the_download(&self, req_id: i64) -> bool {
+        for _ in 0..1000 {
+            if self.shared.portfolio.account_download_complete() { break; }
+            if self.session_over() {
+                self.report_reason(req_id, &Refusal::not_connected("Not connected"));
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        true
     }
 
     // ── PnL ──
@@ -174,9 +189,18 @@ impl EClient {
     ///
     /// `account` and `model_code` are taken and not applied, as on
     /// [`req_pnl`](EClient::req_pnl): the figures are for the account this
-    /// session opened under.
-    pub fn req_pnl_single(&self, req_id: i64, _account: &str, _model_code: &str, con_id: i64) {
+    /// session opened under, and a caller naming another is told so.
+    pub fn req_pnl_single(&self, req_id: i64, account: &str, _model_code: &str, con_id: i64) {
         if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
+        if !account.is_empty() && account != self.account_id {
+            let why = format!(
+                "account {account} was named and the profit that follows is {}'s, which \
+                 is the account this session opened under",
+                self.account_id,
+            );
+            log::warn!("{why}");
+            self.report_reason(req_id, &Refusal::validation(why));
+        }
         self.core.subscribe_pnl_single(req_id, con_id);
     }
 
@@ -290,10 +314,7 @@ impl EClient {
         // dropped reads exactly like one holding nothing, and this path
         // answered at once from the pre-drop figures without so much as a
         // warning.
-        for _ in 0..1000 {
-            if self.shared.portfolio.account_download_complete() { break; }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        if !self.wait_for_the_download(req_id) { return; }
         if !self.shared.portfolio.account_download_complete() {
             let why = "the account had not finished stating its figures within the wait, \
                        so what follows is what this session already held rather than what \
@@ -339,10 +360,15 @@ impl EClient {
         if self.session_over() {
             return self.report_reason(req_id, &Refusal::not_connected("Not connected"));
         }
-        // As for `req_positions`: what moved before this asked is in the
-        // answer that follows, and fired as change events as well it would
-        // arrive twice.
-        self.drop_unwatched_position_moves();
+        // What moved before this asked is in the answer that follows, and
+        // fired as change events as well it would arrive twice. Only where
+        // nobody was watching: a queue somebody else owns is not this call's
+        // to empty. The other surface does the same, in the same shape.
+        if !self.positions_requested.load(Ordering::Acquire)
+            && self.positions_multi_requested.lock().unwrap().is_empty()
+        {
+            self.shared.portfolio.drain_position_changes();
+        }
         // Watching before reading, so nothing moves into the gap between the
         // two. Read first and registered after, a holding that moved while the
         // answer was being assembled was taken by a watcher that already
@@ -354,10 +380,7 @@ impl EClient {
         // account that has said nothing since the connection dropped reads
         // exactly like one holding nothing, and this path answered from the
         // pre-drop book without so much as a warning.
-        for _ in 0..1000 {
-            if self.shared.portfolio.account_download_complete() { break; }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        if !self.wait_for_the_download(req_id) { return; }
         if !self.shared.portfolio.account_download_complete() {
             let why = "the account had not finished stating its holdings within the wait, \
                        so what follows is what this session already held rather than what \
@@ -428,8 +451,12 @@ impl EClient {
         self.shared.portfolio.values_elsewhere(held)
     }
 
-    /// Read account state snapshot.
-    pub fn account(&self) -> AccountState {
-        self.shared.portfolio.account()
+    /// The account as the venue last stated it whole, or nothing while a
+    /// download is running. Answered from the struct alone, a caller read all
+    /// zeros before the first download and the pre-drop figures after a drop,
+    /// with nothing to say so; the other surface answers `None` for both.
+    pub fn account(&self) -> Option<AccountState> {
+        self.shared.portfolio.account_download_complete()
+            .then(|| self.shared.portfolio.account())
     }
 }

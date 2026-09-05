@@ -768,8 +768,6 @@ pub struct ClientCore {
     // Account updates subscription
     /// Whether the account's own figures were asked for.
     pub account_updates_subscribed: AtomicBool,
-    /// The account as last stated.
-    pub last_account: Mutex<Option<AccountState>>,
     /// What has already been delivered of what the venue stated, by figure and
     /// currency, so each is delivered once and again when it changes.
     pub last_stated_account: Mutex<HashMap<(String, String), String>>,
@@ -971,7 +969,6 @@ impl ClientCore {
             account_summary_req: Mutex::new(None),
             bulletin_subscribed: AtomicBool::new(false),
             account_updates_subscribed: AtomicBool::new(false),
-            last_account: Mutex::new(None),
             last_stated_account: Mutex::new(HashMap::new()),
             account_end_sent: AtomicBool::new(false),
             last_portfolio: Mutex::new(None),
@@ -1327,7 +1324,6 @@ impl ClientCore {
         *self.account_summary_req.lock().unwrap() = None;
         self.bulletin_subscribed.store(false, Ordering::Relaxed);
         self.account_updates_subscribed.store(false, Ordering::Relaxed);
-        *self.last_account.lock().unwrap() = None;
         self.last_stated_account.lock().unwrap().clear();
         self.account_end_sent.store(false, Ordering::Release);
         *self.last_portfolio.lock().unwrap() = None;
@@ -2233,15 +2229,18 @@ impl ClientCore {
 
     // ── Account updates subscription management ──
 
-    /// Ask for the account updates.
+    /// Ask for the account updates, or stop asking.
+    ///
+    /// What was last stated is forgotten either way: asked again, the account
+    /// is restated in full and its end said again, as the reference client
+    /// answers a second request. Forgotten on the withdrawal alone, a second
+    /// ask found every figure already stated and answered with nothing, and
+    /// the end a caller was waiting on never came.
     pub fn subscribe_account_updates(&self, subscribe: bool) {
         self.account_updates_subscribed.store(subscribe, Ordering::Release);
-        if !subscribe {
-            *self.last_account.lock().unwrap() = None;
         self.last_stated_account.lock().unwrap().clear();
         self.account_end_sent.store(false, Ordering::Release);
-            *self.last_portfolio.lock().unwrap() = None;
-        }
+        *self.last_portfolio.lock().unwrap() = None;
     }
 
     // ── Market data type tracking ──
@@ -3367,13 +3366,15 @@ impl ClientCore {
         // by construction, so one unpriceable position sends the whole account
         // to them rather than reporting a partial sum as if it were the total.
         if priced == 0 || unpriceable > 0 {
-            // And only where the venue has stated them on this connection. A
-            // connection that has gone away leaves these standing at what they
-            // were before it, and after a drop nothing can be priced — so the
-            // fallback reported the pre-drop account as the current one, and
-            // the change-check below then found it unchanged and said nothing
-            // at all. Silence and a figure that has not moved read the same.
-            if !shared.portfolio.account_data_received() {
+            // And only where the venue has stated them whole on this
+            // connection. A connection that has gone away leaves these
+            // standing at what they were before it, and after a drop nothing
+            // can be priced — so the fallback reported the pre-drop account as
+            // the current one, and the change-check below then found it
+            // unchanged and said nothing at all. Gated on whether anything had
+            // been heard instead, the first figure of the new connection let
+            // the rest of the pre-drop struct through.
+            if !shared.portfolio.account_download_complete() {
                 return None;
             }
             let acct = shared.portfolio.account();

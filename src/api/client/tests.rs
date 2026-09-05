@@ -5265,12 +5265,27 @@ fn account_reads_shared_state() {
     let (_client, _rx, shared) = test_client();
     let a = AccountState { net_liquidation: 100_000 * PRICE_SCALE, ..Default::default() };
     shared.portfolio.set_account(&a);
+    shared.portfolio.account_download_is_settled();
     let (client2, _rx2, _) = {
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let handle = std::thread::spawn(|| {});
         (EClient::from_parts(shared.clone(), tx, handle, "DU123".into()), rx, shared.clone())
     };
-    assert_eq!(client2.account().net_liquidation, 100_000 * PRICE_SCALE);
+    assert_eq!(client2.account().map(|a| a.net_liquidation), Some(100_000 * PRICE_SCALE));
+}
+
+/// The account is read only once the venue has stated it whole. Answered
+/// from the struct alone, a caller read all zeros before the first download
+/// and the pre-drop figures after a drop, with nothing to say so.
+#[test]
+fn the_account_is_read_only_once_the_download_has_finished() {
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.set_account(&AccountState { net_liquidation: 100_000 * PRICE_SCALE, ..Default::default() });
+    assert!(client.account().is_none(), "figures the download has not finished stating are not the account");
+    shared.portfolio.account_download_is_settled();
+    assert_eq!(client.account().map(|a| a.net_liquidation), Some(100_000 * PRICE_SCALE));
+    shared.portfolio.account_download_is_pending();
+    assert!(client.account().is_none(), "nor are the pre-drop figures, after a drop");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -8862,5 +8877,77 @@ fn a_book_reset_is_delivered_before_the_levels_that_follow_it() {
     let mut w = Sequence::default();
     client.process_msgs(&mut w);
     assert_eq!(w.0, ["reset", "level"], "the order to empty the book comes first");
+}
+
+/// A wait for the download ends with the session. Checked at entry alone, a
+/// session that ended inside the wait had the caller sit out the ten seconds
+/// and then read the pre-drop book under a refusal for silence, where the
+/// refusal for no connection was three lines away.
+#[test]
+fn a_wait_for_the_download_ends_with_the_session() {
+    type Ask = fn(&EClient, &mut RecordingWrapper);
+    let asks: [(&str, Ask); 3] = [
+        ("req_positions", |c, w| c.req_positions(w)),
+        ("req_positions_multi", |c, w| c.req_positions_multi(9, "", "", w)),
+        ("req_account_updates_multi", |c, w| c.req_account_updates_multi(9, "", "", true, w)),
+    ];
+    for (name, ask) in asks {
+        let (client, _rx, shared) = test_client();
+        let s = Arc::clone(&shared);
+        let ender = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            s.reference.set_session_over("the test ended it");
+        });
+        let started = std::time::Instant::now();
+        let mut w = RecordingWrapper::default();
+        ask(&client, &mut w);
+        client.process_msgs(&mut w);
+        ender.join().unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{name}: the wait ended with the session, not with the clock",
+        );
+        assert!(
+            w.events.iter().any(|e| e.starts_with("error:") && e.contains(":504:")),
+            "{name}: and the caller was told: {:?}", w.events,
+        );
+    }
+}
+
+/// A watch on the per-request feed does not make the plain answer replay the
+/// book. The moves that landed before the ask are answered by the ask itself
+/// and handed to the watchers; left in the queue, the next pass fired every
+/// holding again on `position`.
+#[test]
+fn a_standing_watch_does_not_make_the_plain_answer_replay_the_book() {
+    let (client, _rx, shared) = test_client();
+    shared.portfolio.account_download_is_settled();
+    let mut w = RecordingWrapper::default();
+    client.req_positions_multi(9, "", "", &mut w);
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 756733, position: -50.0, symbol: "SPY".into(), ..Default::default()
+    });
+    client.req_positions(&mut w);
+    client.process_msgs(&mut w);
+    let plain: Vec<_> = w.events.iter()
+        .filter(|e| e.starts_with("position:") && e.contains(":756733:")).collect();
+    let watched: Vec<_> = w.events.iter()
+        .filter(|e| e.starts_with("position_multi:9:") && e.contains(":SPY:")).collect();
+    assert_eq!(plain.len(), 1, "the holding is stated once, by the ask: {plain:?}");
+    assert_eq!(watched.len(), 1, "and the watcher hears the move once: {watched:?}");
+}
+
+/// A single-position profit request naming another account is told what the
+/// account-level one is told: the figures are this session's account's.
+#[test]
+fn req_pnl_single_says_whose_figures_it_answers_with() {
+    let (client, _rx, _shared) = test_client();
+    let mut w = RecordingWrapper::default();
+    client.req_pnl_single(7, "DU999", "", 265598);
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:7:321:") && e.contains("DU999")),
+        "told under its own number: {:?}", w.events,
+    );
 }
 

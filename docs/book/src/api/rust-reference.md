@@ -635,10 +635,10 @@ pub fn cancel_pnl(&self, req_id: i64)
 
 #### `req_pnl_single`
 
-Subscribe to single-position PnL updates. `account` and `model_code` are taken and not applied, as on `req_pnl`: the figures are for the account this session opened under.
+Subscribe to single-position PnL updates. `account` and `model_code` are taken and not applied, as on `req_pnl`: the figures are for the account this session opened under, and a caller naming another is told so.
 
 ```rust
-pub fn req_pnl_single(&self, req_id: i64, _account: &str, _model_code: &str, con_id: i64)
+pub fn req_pnl_single(&self, req_id: i64, account: &str, _model_code: &str, con_id: i64)
 ```
 
 | Parameter | Type | Description |
@@ -824,13 +824,13 @@ pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String
 
 #### `account`
 
-Read account state snapshot.
+The account as the venue last stated it whole, or nothing while a download is running. Answered from the struct alone, a caller read all zeros before the first download and the pre-drop figures after a drop, with nothing to say so; the other surface answers `None` for both.
 
 ```rust
-pub fn account(&self) -> AccountState
+pub fn account(&self) -> Option<AccountState>
 ```
 
-**Returns:** `AccountState`
+**Returns:** `Option<AccountState>`
 
 ---
 

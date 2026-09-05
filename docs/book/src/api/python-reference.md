@@ -495,7 +495,7 @@ def cancel_pnl(req_id)
 
 #### `req_pnl_single`
 
-Request P&L for a single position.  `account` and `model_code` are taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
+Request P&L for a single position.  `account` and `model_code` are taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name; a caller naming another account is told so, as `req_pnl` tells it.
 
 ```python
 def req_pnl_single(req_id, account, model_code, con_id)

@@ -2,6 +2,7 @@
 
 use pyo3::prelude::*;
 
+use crate::bridge::SharedState;
 use crate::error_codes::Refusal;
 use crate::types::*;
 use std::sync::atomic::Ordering;
@@ -95,14 +96,25 @@ impl EClient {
     /// `account` and `model_code` are taken and not applied. One session holds
     /// one account here, and the venue states its figures for that account
     /// without being asked which, so there is no second account or model
-    /// portfolio to name.
+    /// portfolio to name; a caller naming another account is told so, as
+    /// `req_pnl` tells it.
     #[pyo3(signature = (req_id, account, model_code, con_id))]
-    fn req_pnl_single(&self, req_id: i64, account: &str, model_code: &str, con_id: i64) -> PyResult<()> {
+    fn req_pnl_single(&self, py: Python<'_>, req_id: i64, account: &str, model_code: &str, con_id: i64) -> PyResult<()> {
         let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
+        if !account.is_empty() && account != self.account() {
+            let why = format!(
+                "account {account} was named and the profit that follows is {}'s, which \
+                 is the account this session opened under",
+                self.account(),
+            );
+            log::warn!("{why}");
+            self.report_refusal(py, req_id, Refusal::validation(why))?;
+        }
         self.core.subscribe_pnl_single(req_id, con_id);
-        let _ = (account, model_code);
+        let _ = model_code;
         Ok(())
     }
+
 
     /// Cancel single-position P&L subscription.
     fn cancel_pnl_single(&self, req_id: i64) -> PyResult<()> {
@@ -145,10 +157,7 @@ impl EClient {
         let Some(_connected) = self.tx_or_report(-1)? else { return Ok(()) };
         let shared = self.shared_state()?;
         // Wait for CCP init burst to complete (up to 10s).
-        for _ in 0..1000 {
-            if shared.portfolio.account_download_complete() { break; }
-            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
-        }
+        if !self.wait_for_the_download(py, &shared, -1)? { return Ok(()); }
         if !shared.portfolio.account_download_complete() {
             // Reported to the caller as well as the log, as on the other
             // surface. A caller reading holdings has no other way to tell a
@@ -309,10 +318,7 @@ impl EClient {
         // first account message of the session and cleared nowhere, so the
         // loop meant nothing after that and this path answered from the
         // pre-drop book without a warning.
-        for _ in 0..1000 {
-            if shared.portfolio.account_download_complete() { break; }
-            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
-        }
+        if !self.wait_for_the_download(py, &shared, req_id)? { return Ok(()); }
         if !shared.portfolio.account_download_complete() {
             let why = "the account had not finished stating its holdings within the wait, \
                        so what follows is what this session already held rather than what \
@@ -382,10 +388,7 @@ impl EClient {
         // this was satisfied by the first account figure of a new connection —
         // tens of rows before a holding was restated — so it answered from the
         // book as it stood before the drop, and said nothing about it.
-        for _ in 0..1000 {
-            if shared.portfolio.account_download_complete() { break; }
-            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
-        }
+        if !self.wait_for_the_download(py, &shared, req_id)? { return Ok(()); }
         if !shared.portfolio.account_download_complete() {
             let why = "the account had not finished stating its holdings within the wait, \
                        so what follows is what this session already held rather than what \
@@ -444,11 +447,13 @@ impl EClient {
             Some(s) => s,
             None => return Ok(None),
         };
-        // Nothing where the venue has not stated the account on this
+        // Nothing where the venue has not stated the account whole on this
         // connection. Answered from what it last said instead, a caller
         // sizing an order after a drop read the buying power and the excess
-        // liquidity from before it, with nothing to say so.
-        if !shared.portfolio.account_data_received() {
+        // liquidity from before it, with nothing to say so — and gated on
+        // whether anything had been heard, the first figure of the new
+        // connection let the rest of the pre-drop struct through.
+        if !shared.portfolio.account_download_complete() {
             return Ok(None);
         }
         let acct = shared.portfolio.account();
@@ -474,5 +479,25 @@ impl EClient {
             dict.set_item("day_trades_remaining", acct.day_trades_remaining)?;
             Ok(Some(dict.into_any().unbind()))
         })
+    }
+}
+
+// Not a Python method: a helper the calls above share.
+impl EClient {
+    /// Wait for the account to finish stating itself, up to ten seconds, and
+    /// say whether the session is still there to answer — as on the other
+    /// surface. The session may end inside the wait, and what this would
+    /// answer from afterwards is the pre-drop book: checked at entry alone,
+    /// ten seconds of that book went out under a refusal for silence.
+    fn wait_for_the_download(&self, py: Python<'_>, shared: &SharedState, req_id: i64) -> PyResult<bool> {
+        for _ in 0..1000 {
+            if shared.portfolio.account_download_complete() { return Ok(true); }
+            if shared.reference.session_over().is_some() {
+                self.report_refusal(py, req_id, Refusal::not_connected("Not connected"))?;
+                return Ok(false);
+            }
+            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
+        }
+        Ok(true)
     }
 }

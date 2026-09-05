@@ -548,15 +548,16 @@ fn account_state_via_eclient() {
         ..AccountState::default()
     };
     shared.portfolio.set_account(&acct);
+    shared.portfolio.account_download_is_settled();
 
-    let state = client.account();
+    let state = client.account().expect("the account has been stated whole");
     assert_eq!(state.net_liquidation, 100_000 * PRICE_SCALE);
     assert_eq!(state.buying_power, 200_000 * PRICE_SCALE);
 
     // Update after activity
     acct.net_liquidation = 99_500 * PRICE_SCALE;
     shared.portfolio.set_account(&acct);
-    let state2 = client.account();
+    let state2 = client.account().expect("the account has been stated whole");
     assert_eq!(state2.net_liquidation, 99_500 * PRICE_SCALE);
 }
 
@@ -1042,6 +1043,7 @@ fn pnl_subscription_fires_on_change() {
         ..AccountState::default()
     };
     shared.portfolio.set_account(&acct);
+    shared.portfolio.account_download_is_settled();
 
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -1070,6 +1072,7 @@ fn cancel_pnl_stops_dispatch() {
         ..AccountState::default()
     };
     shared.portfolio.set_account(&acct);
+    shared.portfolio.account_download_is_settled();
 
     // First call should fire
     let mut w = RecordingWrapper::default();

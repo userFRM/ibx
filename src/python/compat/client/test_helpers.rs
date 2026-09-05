@@ -594,6 +594,13 @@ impl EClient {
         Ok(())
     }
 
+    /// End the session the way the engine ends one it has given up on.
+    #[doc(hidden)]
+    fn _test_end_session(&self) -> PyResult<()> {
+        self.shared_state()?.reference.set_session_over("the test ended it");
+        Ok(())
+    }
+
     /// Say the venue has finished naming the orders already working.
     #[doc(hidden)]
     fn _test_finish_order_replay(&self) -> PyResult<()> {

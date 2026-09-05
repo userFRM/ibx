@@ -32,6 +32,7 @@ fn an_account_with_no_positions_still_reports_its_pnl() {
     let core = ClientCore::new();
     let shared = SharedState::new();
     shared.portfolio.set_account(&crate::types::AccountState::default());
+    shared.portfolio.account_download_is_settled();
 
     core.subscribe_pnl(7).unwrap();
     let update = core.poll_pnl(&shared).expect("a subscription is answered");
@@ -277,6 +278,7 @@ fn one_unpriceable_position_sends_the_whole_account_to_the_gateway() {
         unrealized_pnl: (351.0 * PRICE_SCALE_F) as i64,
         ..Default::default()
     });
+    shared.portfolio.account_download_is_settled();
 
     let update = core.poll_pnl(&shared).expect("callback must fire");
     assert!(
@@ -352,6 +354,7 @@ fn an_unsizeable_overnight_position_is_not_priced_as_sold() {
         unrealized_pnl: (350.0 * PRICE_SCALE_F) as i64,
         ..Default::default()
     });
+    shared.portfolio.account_download_is_settled();
 
     let update = core.poll_pnl(&shared).expect("callback must fire");
     assert!(
@@ -386,6 +389,7 @@ fn a_seed_without_a_quantity_is_not_read_as_opened_today() {
         unrealized_pnl: (350.0 * PRICE_SCALE_F) as i64,
         ..Default::default()
     });
+    shared.portfolio.account_download_is_settled();
 
     let update = core.poll_pnl(&shared).expect("callback must fire");
     assert!(
@@ -536,6 +540,7 @@ fn poll_pnl_falls_back_to_account_level_without_market_data() {
         ..Default::default()
     };
     shared.portfolio.set_account(&acct);
+    shared.portfolio.account_download_is_settled();
 
     let update = core.poll_pnl(&shared).expect("callback must fire from account-level P&L");
     assert_eq!(update.req_id, 21);
@@ -654,6 +659,7 @@ fn a_mark_that_does_not_read_as_a_number_sends_the_account_to_the_venue() {
         realized_pnl: (9.0 * PRICE_SCALE_F) as i64,
         ..Default::default()
     });
+    shared.portfolio.account_download_is_settled();
 
     let update = core.poll_pnl(&shared).expect("callback must fire");
     assert!((update.daily_pnl - 12.0).abs() < 1e-6,
@@ -1140,6 +1146,7 @@ fn an_option_holding_is_not_valued_from_a_per_unit_price() {
         unrealized_pnl: (200.0 * PRICE_SCALE_F) as i64,
         ..Default::default()
     });
+    shared.portfolio.account_download_is_settled();
 
     let update = core.poll_pnl(&shared).expect("callback must fire");
     assert!((update.daily_pnl - 200.0).abs() < 1e-6,
@@ -1950,3 +1957,46 @@ fn the_account_reads_wait_for_the_download_and_every_download_ends() {
         "and the second download ends where the caller can see it, not in silence",
     );
 }
+
+/// Figures parsed before the download has ended are not the account. After a
+/// drop the struct still holds the pre-drop figures and the first frame of the
+/// new connection restates one of them; the fallback read the rest as the
+/// account's current profit.
+#[test]
+fn the_account_fallback_waits_for_the_download() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.portfolio.set_account(&crate::types::AccountState::default());
+    core.subscribe_pnl(7).unwrap();
+    assert!(
+        core.poll_pnl(&shared).is_none(),
+        "nothing is answered from figures the download has not finished stating",
+    );
+    shared.portfolio.account_download_is_settled();
+    assert!(core.poll_pnl(&shared).is_some(), "answered once the account has stated itself whole");
+}
+
+/// Asking for the account again restates it. The reference client answers a
+/// second request with every figure and the end again; here the second ask
+/// was answered with nothing at all, and a caller blocking on the end waited
+/// for ever.
+#[test]
+fn asking_for_the_account_again_restates_it() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    core.subscribe_account_updates(true);
+    shared.portfolio.holdings_restated_under("AR.1");
+    shared.portfolio.note_account_value("NetLiquidation", "75425.51", "USD");
+    shared.portfolio.set_account_download_complete("AR.1");
+    shared.portfolio.account_download_is_settled();
+    let first = core.prepare_account_updates(&shared).expect("a batch");
+    assert!(first.finished, "the end that says the book is whole");
+    let quiet = core.prepare_account_updates(&shared).expect("a batch");
+    assert!(!quiet.delivered && !quiet.finished, "nothing new, nothing said");
+
+    core.subscribe_account_updates(true);
+    let again = core.prepare_account_updates(&shared).expect("a batch");
+    assert!(again.delivered, "asked again, every figure is restated");
+    assert!(again.finished, "and the end is said again");
+}
+

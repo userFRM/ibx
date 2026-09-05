@@ -16,8 +16,6 @@ pub struct PortfolioState {
     /// many more than any client names, and a figure nobody named is still a
     /// figure about the account.
     stated_account_values: Mutex<Vec<(String, String, String)>>,
-    /// True once the first gateway account message ("UT"/"UM"/"RL") has been received.
-    account_data_received: AtomicBool,
     /// True once the CCP init burst has been fully processed.
     account_download_complete: AtomicBool,
     /// Position info (conId -> PositionInfo) for reqPositions and P&L.
@@ -67,7 +65,6 @@ impl PortfolioState {
         Self {
             account: Mutex::new(AccountState::default()),
             stated_account_values: Mutex::new(Vec::new()),
-            account_data_received: AtomicBool::new(false),
             account_download_complete: AtomicBool::new(false),
             position_infos: Mutex::new(HashMap::new()),
             awaiting_restatement: Mutex::new(std::collections::HashSet::new()),
@@ -134,28 +131,15 @@ impl PortfolioState {
 
     // ── Hot-loop-side writers ──
 
-    /// True once at least one gateway account message has been processed.
-    pub fn account_data_received(&self) -> bool {
-        self.account_data_received.load(Ordering::Acquire)
-    }
-
     /// Record a figure the venue stated, replacing any earlier statement of
     /// the same name in the same currency.
     #[doc(hidden)]
     pub fn note_account_value(&self, key: &str, value: &str, currency: &str) {
-        // A figure the venue stated is account data having arrived. Marked
-        // only when the typed copy was built, a summary asked for in between
-        // was answered with nothing at all — and marked before the figure is
-        // recorded, a summary asked for in between is answered with the same
-        // nothing. The flag goes up once what it announces is readable.
-        {
-            let mut all = self.stated_account_values.lock().unwrap();
-            match all.iter_mut().find(|(k, _, c)| k == key && c == currency) {
-                Some(slot) => slot.1 = value.to_string(),
-                None => all.push((key.to_string(), value.to_string(), currency.to_string())),
-            }
+        let mut all = self.stated_account_values.lock().unwrap();
+        match all.iter_mut().find(|(k, _, c)| k == key && c == currency) {
+            Some(slot) => slot.1 = value.to_string(),
+            None => all.push((key.to_string(), value.to_string(), currency.to_string())),
         }
-        self.account_data_received.store(true, Ordering::Release);
     }
 
     /// Every figure the venue has stated about the account, as it stated them.
@@ -163,15 +147,13 @@ impl PortfolioState {
         self.stated_account_values.lock().unwrap().clone()
     }
 
-    /// Publish the account as this connection has stated it, and record that
-    /// it has.
+    /// Publish the account as this connection has stated it.
     ///
-    /// Called only where figures were actually read: a frame that carried
-    /// none must not reach here, because the flag it raises is what every
-    /// "is this connection's data" gate reads.
+    /// Whether what is published is the account's is decided by the download
+    /// having finished, not by anything having been published: a flag raised
+    /// on the first figure let the pre-drop struct through behind it.
     #[doc(hidden)] pub fn set_account(&self, account: &AccountState) {
         *self.account.lock().unwrap() = *account;
-        self.account_data_received.store(true, Ordering::Release);
     }
 
     /// Mark account download as complete (init burst processed).
@@ -250,10 +232,6 @@ impl PortfolioState {
     /// connection was down is handed back as though it still stood.
     #[doc(hidden)] pub fn account_download_is_pending(&self) {
         self.account_download_complete.store(false, Ordering::Release);
-        // And whether anything has been heard at all. Stored once at the first
-        // account message of the session and cleared nowhere, every wait that
-        // reads it stopped meaning anything after that.
-        self.account_data_received.store(false, Ordering::Release);
         // Nothing has been asked to restate anything yet, and what the last
         // request was measuring belongs to the connection that is gone.
         self.awaiting_restatement.lock().unwrap().clear();
