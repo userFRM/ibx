@@ -4261,6 +4261,7 @@ fn price_management_is_read_from_its_own_field() {
 #[test]
 fn an_identifier_this_client_cannot_carry_refuses_the_lookup() {
     let mut ccp = CcpState::new();
+    let shared = SharedState::new();
     let mut hb = HeartbeatState::new();
     let mut no_conn: Option<Connection> = None;
     let filters = crate::types::SecDefFilters {
@@ -4269,7 +4270,7 @@ fn an_identifier_this_client_cannot_carry_refuses_the_lookup() {
         ..Default::default()
     };
     let reason = ccp.send_secdef_request_by_symbol(
-        9, "AAPL", "STK", "SMART", "USD", &filters, &mut no_conn, &mut hb,
+        9, "AAPL", "STK", "SMART", "USD", &filters, &mut no_conn, &mut hb, &shared,
     ).expect_err("a kind this client cannot carry is not looked up by symbol");
     assert!(reason.contains("SEDOL"), "the refusal names the kind: {reason}");
     assert!(ccp.pending_secdef.is_empty(), "nothing was queued to be answered");
@@ -4289,6 +4290,7 @@ fn a_public_identifier_rides_the_tags_its_own_kind_uses() {
     ] {
         let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
         let mut ccp = CcpState::new();
+        let shared = SharedState::new();
         let mut hb = HeartbeatState::new();
         let mut conn = Some(conn);
         let filters = crate::types::SecDefFilters {
@@ -4297,7 +4299,7 @@ fn a_public_identifier_rides_the_tags_its_own_kind_uses() {
             ..Default::default()
         };
         let sent = ccp.send_secdef_request_by_symbol(
-            9, "AAPL", "STK", "SMART", "USD", &filters, &mut conn, &mut hb,
+            9, "AAPL", "STK", "SMART", "USD", &filters, &mut conn, &mut hb, &shared,
         );
         sent.expect("a CUSIP lookup is one this client can ask");
 
@@ -4324,6 +4326,7 @@ fn an_identifier_of_an_unknown_kind_is_refused_not_asked_by_symbol() {
     use std::io::Read;
     let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
     let mut ccp = CcpState::new();
+    let shared = SharedState::new();
     let mut hb = HeartbeatState::new();
     let mut conn = Some(conn);
     let filters = crate::types::SecDefFilters {
@@ -4332,7 +4335,7 @@ fn an_identifier_of_an_unknown_kind_is_refused_not_asked_by_symbol() {
         ..Default::default()
     };
     let why = ccp.send_secdef_request_by_symbol(
-        16, "AAPL", "STK", "SMART", "USD", &filters, &mut conn, &mut hb,
+        16, "AAPL", "STK", "SMART", "USD", &filters, &mut conn, &mut hb, &shared,
     ).expect_err("the lookup is refused, and says what it could not ask");
     assert!(why.contains("SEDOL"), "the refusal names what it could not carry: {why}");
     assert!(ccp.pending_secdef.is_empty(), "and nothing is queued for an answer");
@@ -4351,6 +4354,7 @@ fn a_lookup_states_both_the_symbol_and_the_local_symbol() {
     use std::io::Read;
     let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
     let mut ccp = CcpState::new();
+    let shared = SharedState::new();
     let mut hb = HeartbeatState::new();
     let mut conn = Some(conn);
     let filters = crate::types::SecDefFilters {
@@ -4358,7 +4362,7 @@ fn a_lookup_states_both_the_symbol_and_the_local_symbol() {
         ..Default::default()
     };
     ccp.send_secdef_request_by_symbol(
-        11, "ES", "FUT", "CME", "USD", &filters, &mut conn, &mut hb,
+        11, "ES", "FUT", "CME", "USD", &filters, &mut conn, &mut hb, &shared,
     ).expect("a symbol lookup is one this client can ask");
 
     let mut buf = [0u8; 4096];
@@ -4380,6 +4384,7 @@ fn a_news_feed_states_its_provider_not_a_venue() {
     for (exchange, wanted) in [("BRFG", "BRFG"), ("BRF", "BRF"), ("BZ:BZ_ALL", "BZ_ALL")] {
         let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
         let mut ccp = CcpState::new();
+        let shared = SharedState::new();
         let mut hb = HeartbeatState::new();
         let mut conn = Some(conn);
         let filters = crate::types::SecDefFilters {
@@ -4387,7 +4392,7 @@ fn a_news_feed_states_its_provider_not_a_venue() {
             ..Default::default()
         };
         ccp.send_secdef_request_by_symbol(
-            13, "BRF:BRF_ALL", "NEWS", exchange, "USD", &filters, &mut conn, &mut hb,
+            13, "BRF:BRF_ALL", "NEWS", exchange, "USD", &filters, &mut conn, &mut hb, &shared,
         ).expect("a news lookup is one this client can ask");
 
         let mut buf = [0u8; 4096];
@@ -4414,6 +4419,7 @@ fn a_continuous_future_is_a_future_that_names_its_lead_month() {
     for stated in ["CONTFUT", "FUT+CONTFUT"] {
         let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
         let mut ccp = CcpState::new();
+        let shared = SharedState::new();
         let mut hb = HeartbeatState::new();
         let mut conn = Some(conn);
         let filters = crate::types::SecDefFilters {
@@ -4422,7 +4428,7 @@ fn a_continuous_future_is_a_future_that_names_its_lead_month() {
             ..Default::default()
         };
         ccp.send_secdef_request_by_symbol(
-            14, "GBL", stated, "EUREX", "EUR", &filters, &mut conn, &mut hb,
+            14, "GBL", stated, "EUREX", "EUR", &filters, &mut conn, &mut hb, &shared,
         ).expect("a continuous future lookup is one this client can ask");
 
         let mut buf = [0u8; 4096];
@@ -4447,13 +4453,14 @@ fn a_contract_named_by_its_issuer_is_asked_for_as_fixed_income() {
     use std::io::Read;
     let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
     let mut ccp = CcpState::new();
+    let shared = SharedState::new();
     let mut hb = HeartbeatState::new();
     let mut conn = Some(conn);
     let filters = crate::types::SecDefFilters {
         issuer_id: "e1453318".to_string(),
         ..Default::default()
     };
-    ccp.send_secdef_request_by_symbol(15, "", "", "", "", &filters, &mut conn, &mut hb)
+    ccp.send_secdef_request_by_symbol(15, "", "", "", "", &filters, &mut conn, &mut hb, &shared)
         .expect("an issuer lookup is one this client can ask");
 
     let mut buf = [0u8; 4096];
@@ -6014,4 +6021,246 @@ fn a_holding_the_venue_closes_keeps_no_value_and_no_profit() {
     assert_eq!(gone.market_price, 0, "with no price standing against it");
     assert_eq!(gone.unrealized_pnl, 0, "and no profit on stock nobody owns");
     assert!(!gone.unrealized_stated, "which is unstated rather than stated as zero");
+}
+
+// ---------------------------------------------------------------------------
+// Lookups the engine makes on its own account, and lookups that did not
+// reach the venue.
+
+fn spy_by_symbol(instrument: crate::types::InstrumentId) -> PendingSubscribe {
+    PendingSubscribe {
+        con_id: 0, instrument,
+        symbol: "SPY".into(), exchange: "SMART".into(), sec_type: "STK".into(), currency: "USD".into(),
+        last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(),
+        mode_9887: 0, regulatory_snapshot: false,
+    }
+}
+
+fn head_timestamp_by_symbol(req_id: u32) -> crate::types::ControlCommand {
+    crate::types::ControlCommand::FetchHeadTimestamp {
+        req_id,
+        contract: crate::types::ContractRef {
+            symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(),
+            ..Default::default()
+        },
+        what_to_show: "TRADES".into(), use_rth: true, filters: Default::default(),
+    }
+}
+
+/// One definition, naming the venues the contract trades on: the reply a
+/// lookup by symbol draws, which a caller's lookup follows with one lookup
+/// per venue named.
+fn named_on_many_venues(req_id: &str) -> Vec<u8> {
+    crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "d"),
+        (crate::control::contracts::TAG_SECURITY_REQ_ID, req_id),
+        (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
+        (55, "SPY"), (167, "CS"),
+        (crate::control::contracts::TAG_IB_CON_ID, "756733"),
+        (crate::control::contracts::TAG_IB_VALID_EXCHANGES, "ISLAND,ARCA,NYSE"),
+    ], 1)
+}
+
+/// One reply naming two listings of a symbol: what a symbol stated without a
+/// currency draws.
+fn named_twice(req_id: &str) -> Vec<u8> {
+    crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "d"),
+        (crate::control::contracts::TAG_SECURITY_REQ_ID, req_id),
+        (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
+        (55, "SPY"), (167, "CS"), (crate::control::contracts::TAG_IB_CON_ID, "756733"), (15, "USD"),
+        (55, "SPY"), (167, "CS"), (crate::control::contracts::TAG_IB_CON_ID, "90016213"), (15, "MXN"),
+    ], 1)
+}
+
+fn named_by_id(req_id: &str) -> Vec<u8> {
+    crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "d"),
+        (crate::control::contracts::TAG_SECURITY_REQ_ID, req_id),
+        (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
+        (55, "SPY"), (167, "CS"),
+        (crate::control::contracts::TAG_IB_CON_ID, "756733"),
+    ], 1)
+}
+
+/// A naming lookup of the engine's own — for a subscription or a request
+/// that stated its contract by symbol — needs the one definition that names
+/// the contract, and nothing after it. Followed up as a caller's lookup is,
+/// every venue the contract trades on was asked in turn, and the rows and
+/// the end that came back reached the wrapper under a number nobody asked
+/// with.
+#[test]
+fn a_naming_lookup_of_the_engines_own_neither_fans_out_nor_reaches_the_wrapper() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let mut hb = HeartbeatState::new();
+    ccp.resolve_for_subscribe(spy_by_symbol(3), &mut None, &mut hb, &shared);
+    let many = ccp.pending_md_subscribe[0].0;
+    ccp.resolve_for_subscribe(spy_by_symbol(4), &mut None, &mut hb, &shared);
+    let one = ccp.pending_md_subscribe[1].0;
+
+    ccp.process_ccp_message(&named_on_many_venues(&many.to_string()), &mut None, &mut context, &shared,
+        &None, &mut hb, "DU1");
+    ccp.process_ccp_message(&secdef_frame_by_symbol(&one.to_string()), &mut None, &mut context, &shared,
+        &None, &mut hb, "DU1");
+
+    assert_eq!(ccp.resolved_md_subscribe.len(), 2, "both subscriptions are named");
+    assert!(ccp.pending_fanout.is_empty(), "no venue is asked in turn on the engine's account");
+    assert!(ccp.pending_secdef.is_empty(), "and both lookups are over");
+    assert!(shared.reference.drain_contract_details().is_empty(), "no row reaches the wrapper");
+    let ended = shared.reference.drain_contract_details_end();
+    assert!(ended.is_empty(), "and no end, under a number nobody asked with: {ended:?}");
+}
+
+fn secdef_frame_by_symbol(req_id: &str) -> Vec<u8> {
+    crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "d"),
+        (crate::control::contracts::TAG_SECURITY_REQ_ID, req_id),
+        (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
+        (55, "SPY"),
+        (crate::control::contracts::TAG_IB_CON_ID, "756733"),
+    ], 1)
+}
+
+/// A symbol stated without a currency is answered with every listing that
+/// carries it. A subscription or request naming its contract that way named
+/// several, and was sent for whichever listing the reply stated last, with
+/// no word to the caller; a lookup of the same description is refused as
+/// naming none on both surfaces.
+#[test]
+fn a_naming_that_matches_several_listings_is_refused_rather_than_sent_for_the_last() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let mut hb = HeartbeatState::new();
+    let mut parked = spy_by_symbol(3);
+    parked.currency.clear();
+    ccp.resolve_for_subscribe(parked, &mut None, &mut hb, &shared);
+    let sub = ccp.pending_md_subscribe[0].0;
+    assert!(ccp.hold_until_named(head_timestamp_by_symbol(7), &mut None, &mut hb, &shared).is_none());
+    let held = ccp.pending_named[0].0;
+
+    ccp.process_ccp_message(&named_twice(&sub.to_string()), &mut None, &mut context, &shared, &None, &mut hb, "DU1");
+    ccp.process_ccp_message(&named_twice(&held.to_string()), &mut None, &mut context, &shared, &None, &mut hb, "DU1");
+
+    assert!(ccp.pending_md_subscribe.is_empty() && ccp.resolved_md_subscribe.is_empty(),
+        "the subscription is neither waiting nor sent");
+    let failures = shared.market.drain_subscription_failures();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0].0, 3);
+    assert!(failures[0].1.contains("2 contracts"), "told how many it named: {}", failures[0].1);
+    assert_eq!(context.slots_to_reconsider, [3], "and the slot goes back");
+
+    assert!(ccp.pending_named.is_empty() && ccp.resolved_named.is_empty(),
+        "the request is neither waiting nor sent");
+    let told = shared.reference.drain_historical_errors();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!((told[0].0, told[0].1), (7, crate::error_codes::Refusal::NO_DEFINITION));
+    assert!(told[0].2.contains("2 contracts"), "{}", told[0].2);
+}
+
+/// A caller's lookup made while the venue is unreachable is told so now.
+/// Queued as if sent, it was reported twenty seconds later as a request the
+/// venue did not answer — which it never received — while the sibling
+/// lookups, matching symbols and option chains, refuse at once.
+#[test]
+fn a_lookup_that_cannot_reach_the_venue_is_refused_now() {
+    let (mut ccp, _context, shared) = u186_test_state();
+    let mut hb = HeartbeatState::new();
+    ccp.send_secdef_request(7, 756733, &mut None, &mut hb, &shared);
+    ccp.send_secdef_request_by_symbol(8, "SPY", "STK", "SMART", "USD", &Default::default(), &mut None, &mut hb, &shared)
+        .expect("nothing is wrong with the request itself");
+
+    assert!(ccp.pending_secdef.is_empty(), "nothing waits on a reply that cannot come");
+    let told = shared.reference.drain_historical_errors();
+    assert_eq!(
+        told.iter().map(|(rid, code, _)| (*rid, *code)).collect::<Vec<_>>(),
+        [(7, crate::error_codes::Refusal::NOT_CONNECTED), (8, crate::error_codes::Refusal::NOT_CONNECTED)],
+        "{told:?}",
+    );
+    assert_eq!(shared.reference.drain_contract_details_end(), [7, 8], "and each is ended");
+}
+
+/// A number reused for a contract it was already handed, while any other
+/// lookup is in flight, found the row delivered and got neither the row nor
+/// the end: the end sat inside the check that keeps a row single, and the
+/// record of what a number was handed outlived the lookup that was sent
+/// afresh under it.
+#[test]
+fn a_lookup_repeated_under_its_number_is_ended_and_sent_afresh() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let mut hb = HeartbeatState::new();
+    // Another lookup in flight keeps the record of what was handed over.
+    ccp.pending_secdef.push((9, true, Instant::now() + SECDEF_TIMEOUT));
+    for _ in 0..2 {
+        ccp.pending_secdef.push((7, true, Instant::now() + SECDEF_TIMEOUT));
+        ccp.process_ccp_message(&named_by_id("7"), &mut None, &mut context, &shared, &None, &mut hb, "DU1");
+        ccp.sweep_contract_details(&shared, &None);
+    }
+    assert_eq!(shared.reference.drain_contract_details().len(), 1, "the row is handed over once");
+    assert_eq!(shared.reference.drain_contract_details_end(), [7, 7], "and each lookup ends");
+
+    let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+    ccp.send_secdef_request(7, 756733, &mut Some(conn), &mut hb, &shared);
+    assert!(!ccp.details_delivered.contains_key(&7), "a lookup sent afresh forgets what its number was handed");
+}
+
+/// The venue's "no definition" for a naming lookup of the engine's own ends
+/// what waited on it now. Dropped with the lookup alone, the subscription or
+/// request learnt of it only when its own twelve-second wait ran out.
+#[test]
+fn the_venues_no_definition_ends_what_waited_on_the_naming_now() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let mut hb = HeartbeatState::new();
+    ccp.resolve_for_subscribe(spy_by_symbol(3), &mut None, &mut hb, &shared);
+    let sub = ccp.pending_md_subscribe[0].0;
+    assert!(ccp.hold_until_named(head_timestamp_by_symbol(7), &mut None, &mut hb, &shared).is_none());
+    let held = ccp.pending_named[0].0;
+
+    ccp.process_ccp_message(&secdef_not_found(&sub.to_string()), &mut None, &mut context, &shared, &None, &mut hb, "DU1");
+    ccp.process_ccp_message(&secdef_not_found(&held.to_string()), &mut None, &mut context, &shared, &None, &mut hb, "DU1");
+
+    assert!(ccp.pending_md_subscribe.is_empty(), "the subscription no longer waits");
+    let failures = shared.market.drain_subscription_failures();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0].0, 3);
+    assert_eq!(context.slots_to_reconsider, [3], "and its slot goes back");
+    assert!(ccp.pending_named.is_empty(), "the request no longer waits");
+    let told = shared.reference.drain_historical_errors();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!((told[0].0, told[0].1), (7, crate::error_codes::Refusal::NO_DEFINITION));
+}
+
+/// The venue's reject of a lookup the engine made for itself frees the
+/// contract to be asked for again on the next report naming it. Held in the
+/// record of what was asked, the contract stayed unnamed for the session:
+/// the deadline sweep frees it, the reject did not.
+#[test]
+fn a_rejected_lookup_of_the_engines_own_leaves_the_contract_askable_again() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let mut hb = HeartbeatState::new();
+    ccp.auto_fetch_secdef_if_cold(756733, &mut None, &shared, &mut hb);
+    let req_id = ccp.auto_fetched_conids[&756733].to_string();
+
+    let reject = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "3"), (320, &req_id), (58, "Invalid request"), (371, "6008"),
+    ], 1);
+    ccp.process_ccp_message(&reject, &mut None, &mut context, &shared, &None, &mut hb, "DU1");
+
+    assert!(ccp.pending_secdef.is_empty(), "the lookup is over");
+    assert!(!ccp.auto_fetched_conids.contains_key(&756733), "and the contract can be asked for again");
+    assert!(shared.reference.drain_historical_errors().is_empty(), "nothing reaches a caller");
+}
+
+/// The venue names the exchanges that offer a book once, unprompted, after
+/// logon. An ask for that list made before it lands was answered with
+/// nothing and spent, so the directory landing later answered nobody.
+#[test]
+fn an_ask_for_the_book_venues_is_answered_when_the_directory_lands() {
+    let shared = SharedState::new();
+    shared.reference.notify_depth_exchanges();
+    assert!(shared.reference.drain_depth_exchanges().is_empty(), "nothing to answer with yet");
+    shared.reference.push_depth_exchanges(vec![crate::types::DepthMktDataDescription {
+        exchange: "ISLAND".into(), sec_type: "STK".into(), listing_exch: "NASDAQ".into(),
+        service_data_type: String::new(), agg_group: 0,
+    }]);
+    assert_eq!(shared.reference.drain_depth_exchanges().len(), 1, "the ask that waited is answered");
+    assert!(shared.reference.drain_depth_exchanges().is_empty(), "once");
 }

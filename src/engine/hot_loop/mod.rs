@@ -1085,6 +1085,12 @@ impl HotLoop {
                             let _ = tx.try_send(Err(told));
                         }
                     }
+                    ControlCommand::FetchContractDetails { req_id, .. } => {
+                        self.shared.reference.push_historical_error(
+                            *req_id, crate::error_codes::Refusal::VALIDATION, told,
+                        );
+                        self.shared.reference.push_contract_details_end(*req_id);
+                    }
                     _ => {
                         if let Some(req_id) = ccp::request_id(&cmd) {
                             // The request is malformed, not a difficulty the
@@ -1458,8 +1464,8 @@ impl HotLoop {
                 ControlCommand::FetchContractDetails { contract, req_id, filters } => {
                     let ContractRef { con_id, symbol, sec_type, exchange, currency, .. } = contract;
                     if con_id > 0 {
-                        self.ccp.send_secdef_request(req_id, con_id, &mut self.ccp_conn, &mut self.hb);
-                    } else if let Err(reason) = self.ccp.send_secdef_request_by_symbol(req_id, &symbol, &sec_type, &exchange, &currency, &filters, &mut self.ccp_conn, &mut self.hb) {
+                        self.ccp.send_secdef_request(req_id, con_id, &mut self.ccp_conn, &mut self.hb, &self.shared);
+                    } else if let Err(reason) = self.ccp.send_secdef_request_by_symbol(req_id, &symbol, &sec_type, &exchange, &currency, &filters, &mut self.ccp_conn, &mut self.hb, &self.shared) {
                         // A lookup this client cannot ask is refused rather
                         // than made: ended like a definition the venue did
                         // not hold, so no caller waits on rows that nothing
@@ -1720,11 +1726,10 @@ impl HotLoop {
                 }
                 ControlCommand::SubscribeDepth { contract, req_id, num_rows, is_smart_depth, filters, .. } => {
                     let ContractRef { con_id, exchange, sec_type, .. } = contract;
-                    // Which venues offer a book is the server's to say, and it
-                    // is asked once. Asked here rather than at logon so a
-                    // session that never wants a book never asks.
+                    // Which venues offer a book is the server's to say, and
+                    // it says so once, unprompted, after logon.
                     //
-                    // A book on no particular venue waits for the answer
+                    // A book on no particular venue waits for that list
                     // rather than going out to the one venue the contract is
                     // listed on: sent early it gathers from one venue where it
                     // was meant to gather from all of them, and a caller sees
@@ -1732,9 +1737,6 @@ impl HotLoop {
                     let on_no_venue =
                         is_smart_depth || matches!(exchange.as_str(), "SMART" | "BEST" | "");
                     if on_no_venue && self.shared.reference.depth_exchanges().is_empty() {
-                        self.ccp.send_mkt_depth_exchanges_request(
-                            &mut self.ccp_conn, &mut self.hb, &self.shared,
-                        );
                         self.depth_awaiting_venues.push(ControlCommand::SubscribeDepth {
                             req_id, num_rows, is_smart_depth, filters,
                             contract: ContractRef { con_id, exchange, sec_type, ..Default::default() },
@@ -3478,6 +3480,8 @@ fn con_id_beyond_the_wire(cmd: &ControlCommand) -> Option<i64> {
         | ControlCommand::SubscribeTbt { contract, .. }
         | ControlCommand::RegisterInstrument { contract, .. } => contract.con_id,
         ControlCommand::SubscribeNews { con_id, .. } => *con_id,
+        // Names its contract itself: it is the lookup the rest wait on.
+        ControlCommand::FetchContractDetails { contract, .. } => contract.con_id,
         other => ccp::contract_of(other)?.con_id,
     };
     u32::try_from(con_id).is_err().then_some(con_id)
@@ -6350,6 +6354,29 @@ mod tests {
         assert!(hl.ccp.pending_named.is_empty(), "the parked request is withdrawn");
         let told = shared.reference.drain_historical_errors();
         assert!(told.is_empty(), "and a withdrawal that acted says nothing beside it: {told:?}");
+    }
+
+    /// A contract numbered beyond what a request carries is refused on a
+    /// details request as it is on every other request naming one, rather
+    /// than sent under the number that survives the narrowing.
+    #[test]
+    fn a_details_request_for_a_contract_numbered_beyond_the_wire_is_refused() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(ControlCommand::FetchContractDetails {
+            req_id: 7, contract: stock(1 << 32, "SPY"), filters: Default::default(),
+        })
+        .unwrap();
+        hl.poll_control_commands();
+        assert!(hl.ccp.pending_secdef.is_empty(), "nothing is asked");
+        let told = shared.reference.drain_historical_errors();
+        assert!(
+            told.iter().any(|(rid, code, _)| *rid == 7 && *code == crate::error_codes::Refusal::VALIDATION),
+            "{told:?}",
+        );
+        assert_eq!(shared.reference.drain_contract_details_end(), [7], "and the request is ended");
     }
 
     /// A chargeable snapshot is a request of its own, not a share of a stream

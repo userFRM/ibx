@@ -883,15 +883,23 @@ impl ReferenceState {
         }
     }
 
-    /// Take every depth exchanges waiting, leaving none.
+    /// The depth exchanges an ask is waiting for, once the venue has named
+    /// them.
+    ///
+    /// The venue names the directory once, unprompted, after logon, so an ask
+    /// made before it lands stays open until it does: spent on the empty list,
+    /// the ask was answered with nothing and the directory answered nobody.
     pub fn drain_depth_exchanges(&self) -> Vec<DepthMktDataDescription> {
         let mut pending = self.depth_exchanges_pending.lock().unwrap();
-        if *pending {
-            *pending = false;
-            self.depth_exchanges_cache.lock().unwrap().clone()
-        } else {
-            Vec::new()
+        if !*pending {
+            return Vec::new();
         }
+        let cache = self.depth_exchanges_cache.lock().unwrap();
+        if cache.is_empty() {
+            return Vec::new();
+        }
+        *pending = false;
+        cache.clone()
     }
 
     /// Every exchange the venue named at logon, as it named them.

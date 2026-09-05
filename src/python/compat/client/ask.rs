@@ -540,6 +540,17 @@ impl EClient {
         underlying_sec_type: &str,
         underlying_con_id: i64,
     ) -> PyResult<Vec<crate::python::compat::contract::OptionChain>> {
+        // Asked for by the underlying's id, as the other surface requires too:
+        // sent with none, the venue's answer names the real id and matches
+        // nothing waiting here, and the caller waits out the answer instead
+        // of being told.
+        if underlying_con_id == 0 {
+            return Err(PyRuntimeError::new_err(format!(
+                "the chain is asked for by the id of the contract the options are on, and \
+                 {underlying_symbol} carries none: qualify it first ({})",
+                crate::error_codes::Refusal::VALIDATION,
+            )));
+        }
         let shared = self.connected_shared()?;
         // Numbered in the band reserved for these calls, which the request
         // surface refuses to anyone else. Marked here because this is where

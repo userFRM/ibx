@@ -248,6 +248,19 @@ pub(crate) struct PendingSubscribe {
     pub(crate) regulatory_snapshot: bool,
 }
 
+/// Why a contract described by symbol is not served: the venue named none
+/// for the description, or several, and what could not be done for it.
+fn unnamed(sec_type: &str, symbol: &str, exchange: &str, listings: usize, so: &str) -> String {
+    if listings > 1 {
+        format!(
+            "{sec_type} {symbol} on {exchange} matches {listings} contracts, so it names none and \
+             {so}: state the currency or the exchange",
+        )
+    } else {
+        format!("no security definition has been found for {sec_type} {symbol} on {exchange}, so {so}")
+    }
+}
+
 /// The contract a request names, when it carries one.
 ///
 /// Only the requests that must be sent under an id are listed: everything else
@@ -623,6 +636,11 @@ impl CcpState {
                         );
                         shared.reference.push_contract_details_end(req_id);
                         emit(event_tx, Event::ContractDetailsEnd(req_id));
+                    } else {
+                        // A lookup the engine made for itself: forgotten, so
+                        // the next report naming that contract asks again, as
+                        // the deadline sweep already arranges.
+                        self.auto_fetched_conids.retain(|_, rid| *rid != req_id);
                     }
                 }
             }
@@ -798,7 +816,7 @@ impl CcpState {
                 // rest are lost before anything can see them. Deliver them all
                 // here; the row the path below delivers is deduplicated
                 // against these by contract id.
-                {
+                let listings = {
                     // What a definition carried that nothing here reads. The
                     // point of asking about a contract is to be told about it,
                     // and a field that arrives and is dropped is a fact about
@@ -812,6 +830,7 @@ impl CcpState {
                         );
                     }
                     let all = crate::control::contracts::parse_secdef_responses(msg, shared.island_for_nasdaq());
+                    let listings = all.len();
                     // The venue states which venues SMART routes to, in the
                     // order a quote's exchange bitmask refers to. Taking it
                     // replaces this client's own list, whose order was its own
@@ -830,7 +849,7 @@ impl CcpState {
                         );
                         shared.reference.note_smart_components_provisional(false);
                     }
-                    if all.len() > 1
+                    if listings > 1
                         && let Some(rid) = response_req_id.as_ref().and_then(|r| r.parse::<u32>().ok())
                         && rid < 0xF000_0000
                     {
@@ -854,7 +873,8 @@ impl CcpState {
                             }
                         }
                     }
-                }
+                    listings
+                };
 
                 let fanout_idx = response_req_id.as_ref().and_then(|rid| {
                     self.pending_fanout.iter().position(|p| {
@@ -955,15 +975,29 @@ impl CcpState {
                             && let Some(at) = self.pending_md_subscribe.iter().position(|(pid, ..)| *pid == rid)
                         {
                             let (_, pending, _) = self.pending_md_subscribe.remove(at);
-                            self.resolved_md_subscribe.push((def.con_id as i64, pending));
+                            // A symbol stated without a currency is answered
+                            // with every listing that carries it. Sent for the
+                            // one this reply happened to state last, the caller
+                            // was subscribed to a contract it did not name and
+                            // told nothing; a lookup of the same description is
+                            // refused as naming none.
+                            if listings > 1 {
+                                Self::abandon_subscribe(pending, listings, context, shared);
+                            } else {
+                                self.resolved_md_subscribe.push((def.con_id as i64, pending));
+                            }
                         }
                         // And a request held for the same reason.
                         if let Some(rid) = response_req_id.as_ref().and_then(|r| r.parse::<u32>().ok())
                             && let Some(at) = self.pending_named.iter().position(|(pid, ..)| *pid == rid)
                         {
                             let (_, mut cmd, _) = self.pending_named.remove(at);
-                            name_the_contract(&mut cmd, def.con_id as i64);
-                            self.resolved_named.push(cmd);
+                            if listings > 1 {
+                                Self::abandon_named(&cmd, listings, shared);
+                            } else {
+                                name_the_contract(&mut cmd, def.con_id as i64);
+                                self.resolved_named.push(cmd);
+                            }
                         }
                     }
                     // Match the response to its originating pending_secdef entry
@@ -1041,17 +1075,23 @@ impl CcpState {
                                 // a caller blocked on it would wait forever.
                                 shared.reference.push_contract_details_end(req_id);
                                 emit(event_tx, Event::ContractDetailsEnd(req_id));
+                            } else {
+                                self.abandon_holders_of(req_id, context, shared);
                             }
                         } else if join_key.is_empty() {
                             // No join key — emit immediately without schedule data.
-                            if !is_internal
-                                && self.details_delivered.entry(req_id).or_default().insert(def.con_id as i64)
-                            {
-                                let for_event = clone_for_event(event_tx, &def);
-                                shared.reference.push_contract_details(req_id, def);
-                                if let Some(details) = for_event {
-                                    emit(event_tx, Event::ContractDetails { req_id, details: Box::new(details) });
+                            if !is_internal {
+                                if self.details_delivered.entry(req_id).or_default().insert(def.con_id as i64) {
+                                    let for_event = clone_for_event(event_tx, &def);
+                                    shared.reference.push_contract_details(req_id, def);
+                                    if let Some(details) = for_event {
+                                        emit(event_tx, Event::ContractDetails { req_id, details: Box::new(details) });
+                                    }
                                 }
+                                // The end is the lookup's, not the row's: a
+                                // number reused for a contract it was already
+                                // handed got neither, and waited out its
+                                // deadline.
                                 if is_last {
                                     shared.reference.push_contract_details_end(req_id);
                                     emit(event_tx, Event::ContractDetailsEnd(req_id));
@@ -1075,7 +1115,14 @@ impl CcpState {
                         // nothing to fan out to).
                         if is_by_symbol && !is_last_wire && con_id != 0 {
                             self.pending_secdef.retain(|(rid, ss, _)| *rid != req_id || *ss);
-                            if fanout_exchanges.is_empty() {
+                            if is_internal {
+                                // A naming lookup of the engine's own needed
+                                // the one definition that names the contract,
+                                // released above, and nothing after it. Asked
+                                // per venue as a caller's lookup is, its rows
+                                // and its end reached the wrapper under a
+                                // number nobody asked with.
+                            } else if fanout_exchanges.is_empty() {
                                 // The master row may be parked awaiting its
                                 // schedule pair; firing end now would order
                                 // end BEFORE the row. Defer it to
@@ -1286,19 +1333,56 @@ impl CcpState {
             false
         });
         for p in gave_up {
-            let reason = format!(
-                "no security definition has been found for {} {} on {}, so no market \
-                 data subscription could be made for it",
-                p.sec_type, p.symbol, p.exchange,
+            Self::abandon_subscribe(p, 0, context, shared);
+        }
+    }
+
+    /// A subscription that cannot be made for the contract described, with
+    /// how many listings the venue named for it: the caller told why, and the
+    /// slot the registration took offered back. Nothing else will ask for it:
+    /// a caller told the venue knows no such contract has no reason to
+    /// withdraw a subscription that never opened, and until now a chain
+    /// naming a few dead strikes spent one slot on each until the table ran
+    /// out.
+    fn abandon_subscribe(p: PendingSubscribe, listings: usize, context: &mut Context, shared: &SharedState) {
+        let reason = unnamed(
+            &p.sec_type, &p.symbol, &p.exchange, listings,
+            "no market data subscription could be made for it",
+        );
+        log::warn!("Subscription abandoned: {reason}");
+        shared.market.push_subscription_failure(p.instrument, reason);
+        context.slots_to_reconsider.push(p.instrument);
+    }
+
+    /// A held request that cannot be sent for the contract described, told to
+    /// its caller under its own number. Nothing the venue holds matches the
+    /// contract described, which is what the code says word for word.
+    fn abandon_named(cmd: &crate::types::ControlCommand, listings: usize, shared: &SharedState) {
+        let Some(named) = contract_named(cmd) else { return };
+        let reason = unnamed(
+            &named.sec_type, &named.symbol, &named.exchange, listings,
+            "the request could not be sent",
+        );
+        log::warn!("Request abandoned: {reason}");
+        if let Some(req_id) = request_id(cmd) {
+            super::push_hmds_refusal(
+                shared, req_id, crate::error_codes::Refusal::NO_DEFINITION, reason,
+                matches!(cmd, crate::types::ControlCommand::FetchHistorical { .. }),
             );
-            log::warn!("Subscription abandoned: {reason}");
-            shared.market.push_subscription_failure(p.instrument, reason);
-            // The slot the registration took goes back. Nothing else will ask
-            // for it: a caller told the venue knows no such contract has no
-            // reason to withdraw a subscription that never opened, and until
-            // now a chain naming a few dead strikes spent one slot on each
-            // until the table ran out.
-            context.slots_to_reconsider.push(p.instrument);
+        }
+    }
+
+    /// End what waited on a naming lookup of the engine's own that the venue
+    /// answered with no definition. Dropped with the lookup alone, the
+    /// subscription or request learnt of it only when its own wait ran out.
+    fn abandon_holders_of(&mut self, req_id: u32, context: &mut Context, shared: &SharedState) {
+        if let Some(at) = self.pending_md_subscribe.iter().position(|(pid, ..)| *pid == req_id) {
+            let (_, p, _) = self.pending_md_subscribe.remove(at);
+            Self::abandon_subscribe(p, 0, context, shared);
+        }
+        if let Some(at) = self.pending_named.iter().position(|(pid, ..)| *pid == req_id) {
+            let (_, cmd, _) = self.pending_named.remove(at);
+            Self::abandon_named(&cmd, 0, shared);
         }
     }
 
@@ -1765,28 +1849,60 @@ impl CcpState {
         Some(req_id)
     }
 
-    pub(crate) fn send_secdef_request(&mut self, req_id: u32, con_id: i64, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
-        if let Some(conn) = ccp_conn.as_mut() {
-            let con_id_str = con_id.to_string();
-            let req_id_str = req_id.to_string();
-            let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
-                (fix::TAG_MSG_TYPE, "c"),
-                (fix::TAG_SENDING_TIME, &ts),
-                (crate::control::contracts::TAG_SECURITY_REQ_ID, &req_id_str),
-                (crate::control::contracts::TAG_SECURITY_REQ_TYPE, "2"),
-                (crate::control::contracts::TAG_IB_CON_ID, &con_id_str),
-                (crate::control::contracts::TAG_IB_SOURCE, "Socket"),
-            ]);
-            log::info!("Sent secdef request: req_id={req_id} con_id={con_id}");
-            hb.last_ccp_sent = Instant::now();
-        } else {
-            // No CCP socket: the entry still gets a deadline, so the caller
-            // receives error 200 + end via the sweep instead of silence.
-            log::warn!("secdef request req_id={req_id} queued with no CCP socket");
+    pub(crate) fn send_secdef_request(&mut self, req_id: u32, con_id: i64, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
+        // A lookup sent afresh under a number forgets what that number was
+        // handed before, as the lookup by symbol does.
+        self.details_delivered.remove(&req_id);
+        let sent = match ccp_conn.as_mut() {
+            Some(conn) => {
+                let con_id_str = con_id.to_string();
+                let req_id_str = req_id.to_string();
+                let ts = chrono_free_timestamp();
+                conn.send_fix(&[
+                    (fix::TAG_MSG_TYPE, "c"),
+                    (fix::TAG_SENDING_TIME, &ts),
+                    (crate::control::contracts::TAG_SECURITY_REQ_ID, &req_id_str),
+                    (crate::control::contracts::TAG_SECURITY_REQ_TYPE, "2"),
+                    (crate::control::contracts::TAG_IB_CON_ID, &con_id_str),
+                    (crate::control::contracts::TAG_IB_SOURCE, "Socket"),
+                ])
+                .map_err(|e| e.to_string())
+            }
+            None => Err("no connection to the venue".to_string()),
+        };
+        match sent {
+            Ok(()) => {
+                log::info!("Sent secdef request: req_id={req_id} con_id={con_id}");
+                hb.last_ccp_sent = Instant::now();
+            }
+            Err(why) => {
+                if Self::refuse_unsent_lookup(req_id, &why, shared) {
+                    return;
+                }
+            }
         }
         // Known-conId lookup: single record, no paginated terminator.
         self.pending_secdef.push((req_id, true, Instant::now() + unanswered_after(req_id)));
+    }
+
+    /// A caller's lookup that did not reach the venue, refused now rather
+    /// than queued. Queued as if sent, it was reported twenty seconds later as
+    /// a request the venue did not answer, when the venue never received it,
+    /// while a matching-symbols or option-chain request in the same state is
+    /// refused at once. A lookup of the engine's own is queued all the same
+    /// and answers `false`: what waits on it is told by its own sweep.
+    fn refuse_unsent_lookup(req_id: u32, why: &str, shared: &SharedState) -> bool {
+        if req_id >= crate::bridge::ENGINE_ID_BASE {
+            log::warn!("secdef request req_id={req_id:#x} queued unsent: {why}");
+            return false;
+        }
+        log::warn!("Contract details request req_id={req_id} not sent: {why}");
+        shared.reference.push_historical_error(
+            req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+            format!("contract details request could not be sent: {why}"),
+        );
+        shared.reference.push_contract_details_end(req_id);
+        true
     }
 
     /// Ask the venue to name a contract so a subscription can be sent for it.
@@ -1813,11 +1929,11 @@ impl CcpState {
         let con_id = pending.con_id;
         let instrument = pending.instrument;
         let outcome = if con_id != 0 {
-            self.send_secdef_request(req_id, con_id, ccp_conn, hb);
+            self.send_secdef_request(req_id, con_id, ccp_conn, hb, shared);
             Ok(())
         } else {
             self.send_secdef_request_by_symbol(
-                req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb,
+                req_id, &symbol, &sec_type, &exchange, &currency, &filters, ccp_conn, hb, shared,
             )
         };
         match outcome {
@@ -1852,7 +1968,7 @@ impl CcpState {
         self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
         if let Err(reason) = self.send_secdef_request_by_symbol(
             req_id, &named.symbol, &named.sec_type, &named.exchange, &named.currency,
-            &filters, ccp_conn, hb,
+            &filters, ccp_conn, hb, shared,
         ) {
             // The lookup it would be held for cannot be made, so it is not
             // held: told the reason under its own number, the way the sweep
@@ -1909,25 +2025,11 @@ impl CcpState {
             false
         });
         for cmd in gave_up {
-            let Some(named) = contract_named(&cmd) else { continue };
-            let reason = format!(
-                "no security definition has been found for {} {} on {}, so the \
-                 request could not be sent",
-                named.sec_type, named.symbol, named.exchange,
-            );
-            log::warn!("Request abandoned: {reason}");
-            if let Some(req_id) = request_id(&cmd) {
-                // Nothing the venue holds matches the contract described, which
-                // is what this text says word for word.
-                super::push_hmds_refusal(
-                    shared, req_id, crate::error_codes::Refusal::NO_DEFINITION, reason,
-                    matches!(cmd, crate::types::ControlCommand::FetchHistorical { .. }),
-                );
-            }
+            Self::abandon_named(&cmd, 0, shared);
         }
     }
 
-    pub(crate) fn send_secdef_request_by_symbol(&mut self, req_id: u32, symbol: &str, sec_type: &str, exchange: &str, currency: &str, filters: &crate::types::SecDefFilters, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) -> Result<(), String> {
+    pub(crate) fn send_secdef_request_by_symbol(&mut self, req_id: u32, symbol: &str, sec_type: &str, exchange: &str, currency: &str, filters: &crate::types::SecDefFilters, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) -> Result<(), String> {
         // A public identifier and the tags it rides on. Each kind has its
         // own: a CUSIP goes out as 454=1|455=<id>|456=1, and 22/48 carry an
         // ISIN or a FIGI under the character that names the source rather
@@ -2085,12 +2187,16 @@ impl CcpState {
                 fields.push((6454, issuer_id));
             }
             fields.push((6088, "Socket"));
-            let _ = conn.send_fix(&fields);
-            log::info!("Sent secdef lookup: req_id={req_id} symbol={symbol} sec_type={sec_type} identifier={identifier_lookup}");
-            hb.last_ccp_sent = Instant::now();
-        } else {
-            // See send_secdef_request: sweep converts this to a visible error.
-            log::warn!("secdef-by-symbol request req_id={req_id} queued with no CCP socket");
+            if let Err(e) = conn.send_fix(&fields) {
+                if Self::refuse_unsent_lookup(req_id, &e.to_string(), shared) {
+                    return Ok(());
+                }
+            } else {
+                log::info!("Sent secdef lookup: req_id={req_id} symbol={symbol} sec_type={sec_type} identifier={identifier_lookup}");
+                hb.last_ccp_sent = Instant::now();
+            }
+        } else if Self::refuse_unsent_lookup(req_id, "no connection to the venue", shared) {
+            return Ok(());
         }
         // By-symbol lookup: master reply carries `6046={exch_list}`. The
         // server never emits a 323=5/6 terminator; completion is detected
@@ -2655,7 +2761,7 @@ impl CcpState {
         let req_id = self.next_internal_secdef_id;
         self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
         self.auto_fetched_conids.insert(con_id, req_id);
-        self.send_secdef_request(req_id, con_id, ccp_conn, hb);
+        self.send_secdef_request(req_id, con_id, ccp_conn, hb, shared);
     }
 
     /// Park a scanner result and dispatch concurrent secdef requests for every cache-
@@ -2693,7 +2799,7 @@ impl CcpState {
                 let req_id = self.next_internal_secdef_id;
                 self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
                 self.auto_fetched_conids.insert(con_id, req_id);
-                self.send_secdef_request(req_id, con_id, ccp_conn, hb);
+                self.send_secdef_request(req_id, con_id, ccp_conn, hb, shared);
             }
         }
         self.pending_scanner_enrichment.push(PendingScannerEnrichment {
