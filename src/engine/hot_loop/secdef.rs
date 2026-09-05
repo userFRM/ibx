@@ -85,7 +85,7 @@ impl SecDefState {
         let Some(conn) = conn.as_mut() else {
             shared.reference.push_historical_error(
                 req_id,
-                321,
+                crate::error_codes::Refusal::NOT_CONNECTED,
                 "the calendar is carried on a connection this session does not have"
                     .to_string(),
             );
@@ -149,7 +149,7 @@ impl SecDefState {
         let Some(conn) = conn.as_mut() else {
             shared.reference.push_historical_error(
                 req_id,
-                321,
+                crate::error_codes::Refusal::NOT_CONNECTED,
                 "the calendar is carried on a connection this session does not have"
                     .to_string(),
             );
@@ -284,7 +284,7 @@ impl SecDefState {
         for req_id in expired {
             shared.reference.push_historical_error(
                 req_id,
-                321,
+                crate::error_codes::Refusal::NO_ANSWER,
                 "the calendar did not answer".to_string(),
             );
         }
@@ -433,6 +433,7 @@ mod tests {
         let told = shared.reference.drain_historical_errors();
         assert_eq!(told.len(), 1);
         assert!(told[0].2.contains("does not have"), "{:?}", told[0]);
+        assert_eq!(told[0].1, 504, "no connection is not a malformed request");
     }
 
     /// Events are asked for whether or not the event types have been.
@@ -545,6 +546,7 @@ mod tests {
         state.sweep(&shared);
         let told = shared.reference.drain_historical_errors();
         assert_eq!(told.len(), 1, "the caller was left waiting");
+        assert_eq!(told[0].1, -1, "silence is not a malformed request");
         assert!(state.pending.is_empty());
     }
 

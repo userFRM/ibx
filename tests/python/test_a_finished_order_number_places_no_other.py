@@ -58,3 +58,21 @@ def test_placing_again_under_a_finished_number_is_refused():
     assert w.seen == [(83, 103)], (
         f"the number has already been worked: {w.seen}"
     )
+
+
+def test_a_withdrawal_of_a_finished_number_is_not_cancellable():
+    """This client saw the order finish, so a withdrawal of it is refused as not
+    cancellable rather than as a number nobody has heard of."""
+    w = Errors()
+    c = ibx.EClient(w)
+    c._test_connect("T")
+    c._test_map_con_id(756733, 0)
+    c.placeOrder(84, spy(), limit_order())
+    c._test_push_order_update(84, 0, "Filled", 1, 0)
+    c._test_dispatch_once()
+    c._test_take_commands()
+    w.seen.clear()
+    c.cancelOrder(84, "")
+    assert w.seen == [(84, 161)], f"the order finished under this client's eyes: {w.seen}"
+    assert not c._test_take_commands(), "and nothing was sent under it"
+

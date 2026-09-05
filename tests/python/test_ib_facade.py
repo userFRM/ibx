@@ -74,7 +74,16 @@ def test_a_name_that_is_no_method_is_still_refused():
 def test_a_read_only_session_refuses_to_change_a_position():
     """The reference client carries the same control. A research program wants
     the guarantee at the client rather than in its own discipline."""
-    c = ibx.EClient(ibx.EWrapper())
+    class Errors(ibx.EWrapper):
+        def __init__(self):
+            super().__init__()
+            self.seen = []
+
+        def error(self, req_id, error_time, code, msg, advanced_order_reject_json=""):
+            self.seen.append((req_id, code, msg))
+
+    w = Errors()
+    c = ibx.EClient(w)
     c._test_connect("DU0000000", readonly=True)
 
     order = ibx.Order()
@@ -82,13 +91,19 @@ def test_a_read_only_session_refuses_to_change_a_position():
     order.orderType = "MKT"
     order.totalQuantity = 1
 
-    for call in (
-        lambda: c.placeOrder(1, spy(), order),
-        lambda: c.cancelOrder(1, ""),
-        lambda: c.reqGlobalCancel(),
+    # Answered on the error callback, as the reference client answers a
+    # request it refuses, and under the same number the other surface gives.
+    for under, call in (
+        (1, lambda: c.placeOrder(1, spy(), order)),
+        (1, lambda: c.cancelOrder(1, "")),
+        (7, lambda: c.exerciseOptions(7, spy(), 1, 1, "", 1, "", "", False)),
+        (-1, lambda: c.reqGlobalCancel()),
     ):
-        with pytest.raises(RuntimeError, match="read-only"):
-            call()
+        w.seen.clear()
+        call()
+        assert [(r, code) for r, code, _ in w.seen] == [(under, 321)], w.seen
+        assert "read-only" in w.seen[0][2]
+        assert not c._test_take_commands(), "and nothing was sent"
 
 
 def test_a_session_that_is_not_read_only_does_not_refuse():

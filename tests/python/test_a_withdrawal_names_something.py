@@ -70,3 +70,16 @@ def test_a_withdrawal_of_an_order_this_session_placed_goes():
     assert any("Cancel" in cmd for cmd in c._test_take_commands()), (
         "and it reaches the engine"
     )
+
+
+def test_a_withdrawal_before_the_replay_has_landed_is_sent():
+    """The account's working set arrives after connect. A withdrawal read before
+    it lands is sent rather than refused: the order may be live, and once the
+    bounded wait has passed nobody waits again on this connection."""
+    w = Errors()
+    c = ibx.EClient(w)
+    c._test_connect("T", replay_done=False)
+    c.cancelOrder(42, "")
+    assert w.seen == [], f"nothing is refused before the venue has said: {w.seen}"
+    assert c._test_take_commands(), "and the withdrawal went out"
+

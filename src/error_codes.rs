@@ -120,6 +120,14 @@ pub const NO_SUCH_HISTORICAL_QUERY: i32 = 366;
 /// refused under.
 pub const ORDER_TYPE_UNSUPPORTED: i32 = 387;
 
+/// The code a replace naming a contract other than the order's is refused
+/// under.
+pub const ORDER_DOES_NOT_MATCH: i32 = 105;
+
+/// The code a withdrawal of an order no longer in a cancellable state is
+/// refused under.
+pub const NOT_CANCELLABLE: i32 = 161;
+
 /// The code a log level outside the range the client carries is refused under.
 pub const LOG_LEVEL_INVALID: i32 = 319;
 

@@ -1416,7 +1416,8 @@ fn an_account_read_after_the_session_ended_is_refused() {
 /// live -- a refusal there leaves a real order working.
 #[test]
 fn a_withdrawal_names_an_order_this_client_is_working() {
-    let (client, rx, _shared) = test_client();
+    let (client, rx, shared) = test_client();
+    shared.orders.set_replay_done();
 
     let refused = client.cancel_order(42, "");
     assert!(
@@ -2786,8 +2787,9 @@ fn place_order_unsupported_type_returns_error() {
         action: "BUY".into(), total_quantity: 100.0, order_type: "FANTASY".into(), ..Default::default()
     };
     let result = client.place_order(1, &spy(), &order);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().message.contains("Unsupported order type"));
+    let err = result.unwrap_err();
+    assert!(err.message.contains("Unsupported order type"));
+    assert_eq!(err.code, 387, "one refusal, one number, wherever it is raised");
 }
 
 /// A preview states the order type it asks about. An unrecognised type is
@@ -8749,3 +8751,85 @@ fn a_refused_contract_is_refused_to_everyone_watching_it() {
         "and so is the one sharing it: {:?}", w.events,
     );
 }
+
+/// A withdrawal read before the venue has named the working set is sent.
+///
+/// An order carried over from a previous session is not known here until the
+/// replay lands. Where the wait for it gives up, nothing is known either way,
+/// and refusing then would leave a live order working: the bound is one per
+/// connection, so once it had passed every later withdrawal of a carried-over
+/// order was refused for the life of the connection.
+#[test]
+fn a_withdrawal_before_the_replay_has_landed_is_sent() {
+    let (client, rx, _shared) = test_client();
+    let sent = client.cancel_order(42, "");
+    assert!(sent.is_ok(), "not refused on what is not yet known: {sent:?}");
+    assert!(rx.try_recv().is_ok(), "and the withdrawal went out");
+}
+
+/// A withdrawal after the trading connection has ended is answered as not
+/// connected, which is what it is, rather than as a malformed request.
+#[test]
+fn a_withdrawal_after_the_trading_connection_ended_is_not_connected() {
+    let (client, rx, shared) = test_client();
+    shared.reference.set_trading_over("the test ended it");
+    let refused = client.cancel_order(1, "");
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 504),
+        "no connection to carry it: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was sent");
+}
+
+/// A withdrawal naming an order this client saw finish is refused as not
+/// cancellable — this client has the record — and not as unknown.
+#[test]
+fn a_withdrawal_of_a_finished_order_is_not_cancellable() {
+    let (client, rx, shared) = test_client();
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+    client.place_order(84, &spy(), &order).expect("placed");
+    rx.try_recv().expect("the order goes out");
+    shared.orders.push_order_update(OrderUpdate {
+        order_id: 84, instrument: 0, status: OrderStatus::Filled,
+        filled_qty: 1.0, remaining_qty: 0.0, avg_price: 0, perm_id: 0, parent_id: 0, timestamp_ns: 0,
+    });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+
+    let refused = client.cancel_order(84, "");
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 161),
+        "the order finished under this client's eyes: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was sent under it");
+}
+
+/// A replace names the order, not the contract. One naming another contract
+/// is refused under the number the venue gives that mismatch, so a caller
+/// branching on it withdraws and places anew rather than re-sending.
+#[test]
+fn a_replace_naming_another_contract_is_refused_as_a_mismatch() {
+    let (client, rx, _shared) = test_client();
+    client.core.con_id_to_instrument.lock().unwrap().insert(265598, 1);
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+    client.place_order(85, &spy(), &order).expect("placed");
+    rx.try_recv().expect("the order goes out");
+
+    let aapl = Contract {
+        con_id: 265598, symbol: "AAPL".into(), sec_type: "STK".into(),
+        exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+    };
+    let refused = client.place_order(85, &aapl, &order);
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 105),
+        "the replace names another contract: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was sent under it");
+}
+

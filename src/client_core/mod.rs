@@ -4068,7 +4068,10 @@ impl ClientCore {
             | "MIDPX" | "MIDPRICE"
             | "SNAP MKT" | "SNAP MID" | "SNAP MIDPT" | "SNAP PRI" | "SNAP PRIM"
             | "PEG BENCH" | "PEGBENCH" | "BOX TOP" => {}
-            _ => return Err(format!("Unsupported order type: '{}'", order.order_type).into()),
+            _ => return Err(Refusal::stated(
+                ORDER_TYPE_UNSUPPORTED,
+                format!("Unsupported order type: '{}'", order.order_type),
+            )),
         }
         if order.what_if {
             return Ok(());

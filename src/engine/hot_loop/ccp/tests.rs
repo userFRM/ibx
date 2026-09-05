@@ -1636,6 +1636,7 @@ fn an_unanswered_chain_request_is_given_up_on() {
     let refused = shared.reference.drain_historical_errors();
     assert_eq!(refused.len(), 1, "the caller of the expired one is told it is over");
     assert_eq!(refused[0].0, 7);
+    assert_eq!(refused[0].1, -1, "as no answer, not as an empty chain");
 }
 
 /// Nothing expired an unanswered request, so it stayed queued for the life
@@ -1653,6 +1654,9 @@ fn an_unanswered_matching_symbols_request_is_given_up_on() {
 
     assert_eq!(ccp.pending_matching_symbols.len(), 1, "the expired one is dropped");
     assert_eq!(ccp.pending_matching_symbols[0].0, 8, "and the live one is kept");
+    let refused = shared.reference.drain_historical_errors();
+    assert_eq!(refused.len(), 1, "the caller of the expired one is told");
+    assert_eq!((refused[0].0, refused[0].1), (7, -1), "as no answer, not as an empty search");
 }
 /// Tag 583 is the link id the engine sends the OCA group on. Reading it
 /// back as a parent produced a stable non-zero value shared by every order
@@ -2628,7 +2632,9 @@ fn sweep_times_out_pending_secdef_with_error_and_end() {
     let errors = shared.reference.drain_historical_errors();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].0, 7);
-    assert_eq!(errors[0].1, 200);
+    // Silence is not the venue's empty answer: 200 says the search ran and
+    // matched nothing, and a caller branching on it stops asking.
+    assert_eq!(errors[0].1, -1, "no reply is reported as no answer");
     assert_eq!(shared.reference.drain_contract_details_end(), vec![7],
         "end must fire so a blocked wait unblocks");
 }
@@ -2666,7 +2672,7 @@ fn sweep_times_out_incomplete_fanout() {
     let errors = shared.reference.drain_historical_errors();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].0, 9);
-    assert_eq!(errors[0].1, 200);
+    assert_eq!(errors[0].1, -1, "a leg that never answered is no answer, not an empty one");
     assert_eq!(shared.reference.drain_contract_details_end(), vec![9]);
 }
 

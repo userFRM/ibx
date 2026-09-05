@@ -2,7 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::error_codes::{DUPLICATE_ORDER_ID, NO_SUCH_ORDER, Refusal};
+use crate::error_codes::{DUPLICATE_ORDER_ID, NOT_CANCELLABLE, NO_SUCH_ORDER, ORDER_DOES_NOT_MATCH, Refusal};
 use crate::types::model::ExecutionFilter;
 use crate::api::wrapper::Wrapper;
 use crate::client_core::ClientCore;
@@ -70,7 +70,7 @@ impl EClient {
     /// and the caller is told it did something the venue never saw.
     fn refuse_if_trading_is_over(&self, what: &str) -> Result<(), Refusal> {
         match self.shared.reference.trading_over() {
-            Some(why) => Err(Refusal::validation(format!(
+            Some(why) => Err(Refusal::not_connected(format!(
                 "the trading connection has ended and is not being retried ({why}), so \
                  {what} given here would be recorded and never sent: open a session again",
             ))),
@@ -202,7 +202,7 @@ impl EClient {
         // for a slot first spent one of the table's on a contract this call
         // then refused, and the table does not grow.
         let placed_on = if replacing { self.core.tracked_instrument(oid) } else { None };
-        let wrong_contract = || Refusal::validation(format!(
+        let wrong_contract = || Refusal::stated(ORDER_DOES_NOT_MATCH, format!(
             "order {oid} is working on another contract, and a replace names \
              the order rather than the contract: withdraw it and place a new \
              order to trade {}",
@@ -441,8 +441,23 @@ impl EClient {
         // known here until that lands, and refusing a withdrawal of a live
         // order is worse than the silence this replaces. One bounded wait per
         // connection, as the global withdrawal beside this already makes.
-        self.shared.orders.wait_for_replay();
-        if !self.core.a_withdrawal_names_something(order_id, &self.shared) {
+        //
+        // An order this client saw finish is not one it has never heard of:
+        // the record is here, and the venue's own answer for it is that it is
+        // no longer cancellable.
+        if self.core.the_number_is_spent(order_id) {
+            return Err(Refusal::stated(
+                NOT_CANCELLABLE,
+                format!(
+                    "Cancel attempted when order is not in a cancellable state. Order permId = {}",
+                    self.shared.orders.get_order_info(order_id).map_or(0, |info| info.order.perm_id),
+                ),
+            ));
+        }
+        // Bound, and read: where the wait gave up nothing is known either way,
+        // and a withdrawal sent for the venue to answer is the safe side.
+        let named = self.shared.orders.wait_for_replay();
+        if named && !self.core.a_withdrawal_names_something(order_id, &self.shared) {
             return Err(Refusal::stated(
                 NO_SUCH_ORDER,
                 format!("no order is working under {order_id}"),

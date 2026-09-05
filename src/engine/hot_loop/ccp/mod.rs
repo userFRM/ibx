@@ -1365,7 +1365,7 @@ impl CcpState {
                     format!("the session is over: {reason}"),
                 ),
                 None => (
-                    200,
+                    crate::error_codes::Refusal::NO_ANSWER,
                     "contract details request timed out — no reply from the gateway".to_string(),
                 ),
             };
@@ -2177,7 +2177,7 @@ impl CcpState {
                 // search the venue ran and nothing matched, and the venue
                 // never answered this one at all.
                 shared.reference.push_historical_error(
-                    *req_id, 200,
+                    *req_id, crate::error_codes::Refusal::NO_ANSWER,
                     "matching symbols request timed out — no reply from the gateway".to_string(),
                 );
                 false
@@ -2331,7 +2331,7 @@ impl CcpState {
         // these at all.
         for req_id in expired {
             shared.reference.push_historical_error(
-                req_id, 200,
+                req_id, crate::error_codes::Refusal::NO_ANSWER,
                 "option chain request timed out — no reply from the gateway".to_string(),
             );
         }

@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use crate::types::model::{
     ExecutionFilter,
 };
-use crate::error_codes::{DUPLICATE_ORDER_ID, Refusal};
+use crate::error_codes::{DUPLICATE_ORDER_ID, NOT_CANCELLABLE, ORDER_DOES_NOT_MATCH, Refusal};
 use crate::client_core::ClientCore;
 use crate::types::*;
 use super::EClient;
@@ -69,7 +69,9 @@ impl EClient {
     /// same way, stating what has already reached the engine and what has
     /// not.
     fn place_order(&self, py: Python<'_>, order_id: i64, contract: &Contract, order: &Order) -> PyResult<()> {
-        self.core.refuse_if_readonly("an order").map_err(PyRuntimeError::new_err)?;
+        if let Err(why) = self.core.refuse_if_readonly("an order") {
+            return self.report_refusal(py, order_id, Refusal::validation(why));
+        }
         let Some(tx) = self.tx_or_report_for_trading(order_id)? else { return Ok(()) };
 
         if let Err(why) = ClientCore::validate_order_destination(&contract.exchange) {
@@ -266,7 +268,7 @@ impl EClient {
         // naming a different instrument is refused rather than recorded.
         let placed_on = if replacing { self.core.tracked_instrument(oid) } else { None };
         let venue_now = venue.as_deref();
-        let wrong_contract = || Refusal::validation(format!(
+        let wrong_contract = || Refusal::stated(ORDER_DOES_NOT_MATCH, format!(
             "order {oid} is working on another contract, and a replace names \
              the order rather than the contract: withdraw it and place a new \
              order to trade {}",
@@ -434,7 +436,9 @@ impl EClient {
         exercise_quantity: i32, account: &str, _override: i32,
         manual_order_time: &str, customer_account: &str, professional_customer: bool,
     ) -> PyResult<()> {
-        self.core.refuse_if_readonly("an exercise").map_err(PyRuntimeError::new_err)?;
+        if let Err(why) = self.core.refuse_if_readonly("an exercise") {
+            return self.report_refusal(py, req_id, Refusal::validation(why));
+        }
         if _override == 0 {
             log::warn!(
                 "exercise of {} asked to stop short of an option out of the money, and \
@@ -471,8 +475,10 @@ impl EClient {
         } else {
             self.take_order_id(py)
         };
-        let instrument = self.find_or_register_instrument(py, contract)
-            .map_err(|why| PyRuntimeError::new_err(why.message))?;
+        let instrument = match self.find_or_register_instrument(py, contract) {
+            Ok(instrument) => instrument,
+            Err(why) => return self.report_refusal(py, req_id, why),
+        };
         Self::send_control(py, &tx, ControlCommand::Order(
             ClientCore::build_exercise_request(
                 oid, instrument, action, crate::types::qty_from_wire(qty as i64),
@@ -501,7 +507,9 @@ impl EClient {
     /// nobody's name while the caller had given one, so it is said.
     #[pyo3(signature = (order_id, order_cancel=None))]
     fn cancel_order(&self, py: Python<'_>, order_id: i64, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
-        self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
+        if let Err(why) = self.core.refuse_if_readonly("a cancel") {
+            return self.report_refusal(py, order_id, Refusal::validation(why));
+        }
         let uncarried = withdrawal_states(py, order_cancel.as_ref());
         let Some(tx) = self.tx_or_report_for_trading(order_id)? else { return Ok(()) };
         // As `place_order`. A negative id read as unsigned is a number above
@@ -539,9 +547,23 @@ impl EClient {
         // known here until that lands, and refusing a withdrawal of a live
         // order is worse than the silence this replaces. The wait releases the
         // interpreter, so the first withdrawal of a session does not hold it.
-        self.wait_for_the_replay(py);
         let Ok(shared) = self.shared_state() else { return Ok(()) };
-        if !self.core.a_withdrawal_names_something(oid, &shared) {
+        // An order this client saw finish is not one it has never heard of:
+        // the record is here, and the venue's own answer for it is that it is
+        // no longer cancellable.
+        if self.core.the_number_is_spent(oid) {
+            return self.report_refusal(py, order_id, Refusal::stated(
+                NOT_CANCELLABLE,
+                format!(
+                    "Cancel attempted when order is not in a cancellable state. Order permId = {}",
+                    shared.orders.get_order_info(oid).map_or(0, |info| info.order.perm_id),
+                ),
+            ));
+        }
+        // Bound, and read: where the wait gave up nothing is known either way,
+        // and a withdrawal sent for the venue to answer is the safe side.
+        let named = self.wait_for_the_replay(py);
+        if named && !self.core.a_withdrawal_names_something(oid, &shared) {
             return self.report_refusal(py, order_id, Refusal::stated(
                 crate::error_codes::NO_SUCH_ORDER,
                 format!("no order is working under {oid}"),
@@ -567,7 +589,9 @@ impl EClient {
     /// the local order id. The cancel frame is orderId-only, so the local id is
     /// looked up from the open-order cache; fails if `perm_id` is not tracked.
     fn cancel_order_by_perm_id(&self, py: Python<'_>, perm_id: i64) -> PyResult<()> {
-        self.core.refuse_if_readonly("a cancel").map_err(PyRuntimeError::new_err)?;
+        if let Err(why) = self.core.refuse_if_readonly("a cancel") {
+            return self.report_refusal(py, -1, Refusal::validation(why));
+        }
         if perm_id == 0 {
             return self.report_refusal(py, -1, Refusal::validation(
                 "cancel_order_by_perm_id: perm_id must be non-zero",
@@ -606,7 +630,9 @@ impl EClient {
     /// working at the venue.
     #[pyo3(signature = (order_cancel=None))]
     fn req_global_cancel(&self, py: Python<'_>, order_cancel: Option<Py<PyAny>>) -> PyResult<()> {
-        self.core.refuse_if_readonly("a global cancel").map_err(PyRuntimeError::new_err)?;
+        if let Err(why) = self.core.refuse_if_readonly("a global cancel") {
+            return self.report_refusal(py, -1, Refusal::validation(why));
+        }
         if let Some(stated) = withdrawal_states(py, order_cancel.as_ref()) {
             self.say_the_annotation_did_not_travel(py, -1, stated)?;
         }
@@ -1612,6 +1638,33 @@ w = W()",
             let errors = error_calls(py, &wrapper);
             let (id, code, message) = errors.last().expect("the caller is told on the error callback");
             assert_eq!(*id, 3);
+            assert_eq!(*code, Refusal::NO_ANSWER as i64);
+            assert!(message.contains("Registration timed out"), "{message}");
+        });
+    }
+
+    /// The same silence, on an exercise. Its registration refusal was raised
+    /// where every other call reports it, so a caller written against the
+    /// reference client had nowhere to catch it, and the number went with it.
+    #[test]
+    fn an_exercise_whose_registration_times_out_is_reported_and_the_call_returns() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _shared, wrapper) = placed_client(py);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(8);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            client.core.set_registration_timeout(std::time::Duration::from_millis(20));
+            let engine = std::thread::spawn(move || {
+                if let Ok(cmd) = rx.recv() {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    drop(cmd);
+                }
+            });
+            client.exercise_options(py, 7, &bracket_contract(), 1, 1, "", 1, "", "", false).unwrap();
+            engine.join().unwrap();
+            let errors = error_calls(py, &wrapper);
+            let (id, code, message) = errors.last().expect("the caller is told on the error callback");
+            assert_eq!(*id, 7);
             assert_eq!(*code, Refusal::NO_ANSWER as i64);
             assert!(message.contains("Registration timed out"), "{message}");
         });

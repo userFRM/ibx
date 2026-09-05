@@ -175,7 +175,8 @@ fn cancel_tick_by_tick_under_a_number_that_holds_nothing_says_so() {
 /// over from a previous session is never refused.
 #[test]
 fn cancel_order_naming_nothing_is_answered_rather_than_sent() {
-    let (client, rx, _shared) = test_client();
+    let (client, rx, shared) = test_client();
+    shared.orders.set_replay_done();
     let refused = client.cancel_order(999999, "");
     assert!(
         refused.as_ref().is_err_and(|why| why.code == 135),
