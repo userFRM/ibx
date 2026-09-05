@@ -1504,8 +1504,6 @@ impl ClientCore {
             .unwrap_or_default()
     }
 
-    /// Find instrument ID for a contract, registering if needed.
-    /// Returns `Err` if the control channel is closed.
     /// Forget the slots the engine has given back.
     ///
     /// The cache below answers "which slot does this contract hold" without
@@ -1525,6 +1523,8 @@ impl ClientCore {
         }
     }
 
+    /// Find instrument ID for a contract, registering if needed.
+    /// Returns `Err` if the control channel is closed.
     pub fn find_or_register_instrument(
         &self,
         shared: &SharedState,

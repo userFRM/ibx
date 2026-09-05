@@ -4200,9 +4200,6 @@ mod tests {
         );
     }
 
-    /// The time the caller allowed recovery bounds the attempt being spent on
-    /// it, not only the ones that have not started yet.
-    ///
     /// A connection that comes up after the caller gave up on it is not taken.
     ///
     /// What a worker answered was taken before the elapsed limit was read, and
@@ -4239,6 +4236,9 @@ mod tests {
         );
     }
 
+    /// The time the caller allowed recovery bounds the attempt being spent on
+    /// it, not only the ones that have not started yet.
+    ///
     /// The schedulers return as soon as they find an attempt in flight, so the
     /// elapsed limit was read between attempts and nowhere else. One attempt
     /// outlasts a short limit easily — a handshake that asks for a second

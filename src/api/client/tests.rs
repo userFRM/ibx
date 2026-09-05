@@ -4375,13 +4375,6 @@ fn a_move_is_kept_while_no_request_stands() {
     );
 }
 
-/// A watcher's first answer and its registration are one moment.
-///
-/// The answer states what the account holds and the registration is what
-/// hears about it moving afterwards. Taken apart, a holding that moves between
-/// the two is in neither: not in the answer, which was read before it moved,
-/// and not in the moves, which the dispatch pass took while this watcher was
-/// still being registered. Nothing repeats it, so that watcher never hears of
 /// A watcher is watching before its first answer is read.
 ///
 /// The queue of moves is drained once and given to everyone watching, so a
@@ -4427,6 +4420,13 @@ fn a_joining_watcher_is_watching_before_its_answer_is_read() {
     );
 }
 
+/// A watcher's first answer and its registration are one moment.
+///
+/// The answer states what the account holds and the registration is what
+/// hears about it moving afterwards. Taken apart, a holding that moves between
+/// the two is in neither: not in the answer, which was read before it moved,
+/// and not in the moves, which the dispatch pass took while this watcher was
+/// still being registered. Nothing repeats it, so that watcher never hears of
 /// that holding again until it moves once more.
 #[test]
 fn a_watchers_first_answer_and_its_registration_are_one_moment() {
