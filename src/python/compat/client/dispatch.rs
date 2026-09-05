@@ -263,6 +263,16 @@ impl EClient {
             }
         }
 
+        // Taken before the fills below, and reported after them.
+        //
+        // The engine pushes a fill and then, off a message of its own, the
+        // charge that names it. Taken after the fills, a charge whose fill was
+        // pushed between the two drains arrives with nothing stored under its
+        // execution: the charge is dropped by a caller that reads its fills
+        // first, and the fill is filed for a replay with its cost unknown for
+        // ever. Taken first, every charge in hand has its fill either already
+        // stored by an earlier pass or in the batch below.
+        let charges = shared.orders.drain_charges();
         // Drain fills -> execDetails + orderStatus
         let fills = shared.orders.drain_fills();
         for (fill, booked_off) in fills {
@@ -426,7 +436,7 @@ impl EClient {
         // What the venue says its fills cost, each naming the execution it
         // belongs to. Reported after the executions above, which is the order
         // they arrive in and the order a caller reads them in.
-        for charge in shared.orders.drain_charges() {
+        for charge in charges {
             self.core.record_charge(&charge);
             let report = CommissionAndFeesReport {
                 exec_id: charge.exec_id.clone(),

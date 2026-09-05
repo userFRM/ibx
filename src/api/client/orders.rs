@@ -790,6 +790,9 @@ impl EClient {
     /// Replays stored executions (optionally filtered), firing `exec_details` +
     /// `commission_and_fees_report` for each, then `exec_details_end`.
     pub fn req_executions(&self, req_id: i64, filter: &ExecutionFilter, wrapper: &mut impl Wrapper) {
+        if let Some(why) = self.shared.reference.session_over() {
+            return wrapper.error(req_id, Refusal::NOT_CONNECTED as i64, why, "");
+        }
         // Snapshot first: a callback may re-enter a path that locks
         // `executions`, and the dispatch thread pushes fills through the same
         // mutex — holding it across user code deadlocks one and stalls the

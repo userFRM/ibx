@@ -208,6 +208,16 @@ impl EClient {
         }
         let mut paired: Vec<crate::types::OrderUpdate> =
             self.shared.orders.drain_order_updates();
+        // Taken before the fills below, and reported after them.
+        //
+        // The engine pushes a fill and then, off a message of its own, the
+        // charge that names it. Taken after the fills, a charge whose fill was
+        // pushed between the two drains arrives with nothing stored under its
+        // execution: the charge is dropped by a caller that reads its fills
+        // first, and the fill is filed for a replay with its cost unknown for
+        // ever. Taken first, every charge in hand has its fill either already
+        // stored by an earlier pass or in the batch below.
+        let charges = self.shared.orders.drain_charges();
         for (fill, booked_off) in self.shared.orders.drain_fills() {
             let price_f = fill.price as f64 / PRICE_SCALE_F;
             // Paired on the report, not the order: one pass can carry both an
@@ -281,15 +291,18 @@ impl EClient {
             // Unsolicited executions carry request id -1. A market-data
             // subscription id does not identify a `reqExecutions` request.
             let req_id = NO_REQUEST;
-            wrapper.exec_details(req_id, &c, &exec);
-
+            // Stored before it is announced, not after. A caller that asks for
+            // its executions from inside this callback -- which is ordinary --
+            // was answered without the fill it was being told about.
+            //
             // What it cost is not stated here. It arrives on a record of its
-            // own, after this, and is reported from there — see the drain
-            // below. Stored unstated so a replay of this execution says the
-            // charge is unknown rather than that it was nothing.
+            // own and is reported from the drain below. Stored unstated so a
+            // replay of this execution says the charge is unknown rather than
+            // that it was nothing.
             self.core.push_execution(
-                req_id, c, exec, CommissionAndFeesReport::default(),
+                req_id, c.clone(), exec.clone(), CommissionAndFeesReport::default(),
             );
+            wrapper.exec_details(req_id, &c, &exec);
 
             // Update open order tracking
             self.core.update_order_fill(fill.order_id, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining));
@@ -303,7 +316,7 @@ impl EClient {
         // What the venue says its fills cost, each naming the execution it
         // belongs to. Reported after the executions above, which is the order
         // they arrive in and the order a caller reads them in.
-        for charge in self.shared.orders.drain_charges() {
+        for charge in charges {
             self.core.record_charge(&charge);
             wrapper.commission_and_fees_report(&charge);
         }

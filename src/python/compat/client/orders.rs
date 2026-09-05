@@ -843,14 +843,10 @@ impl EClient {
                 symbol: get("symbol"),
                 sec_type: get("secType"),
                 exchange: get("exchange"),
-                // Stored executions carry the venue's word for the side, and a
-                // filter states the order action. Compared as written, a filter
-                // for buys matches nothing.
-                side: match get("side").to_ascii_uppercase().as_str() {
-                    "BUY" => "BOT".to_string(),
-                    "SELL" | "SSHORT" => "SLD".to_string(),
-                    other => other.to_string(),
-                },
+                // Either vocabulary: the comparison reads the order action
+                // and the venue's word for the side alike, so this surface
+                // sends what it was given.
+                side: get("side"),
                 acct_code: get("acctCode"),
                 // Dropping these silently replayed executions the caller had
                 // filtered out — another client's fills, or ones before the

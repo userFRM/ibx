@@ -500,8 +500,20 @@ fn execution_matches(se: &StoredExecution, filter: &ExecutionFilter) -> bool {
     if !filter.exchange.is_empty() && !se.execution.exchange.eq_ignore_ascii_case(&filter.exchange) {
         return false;
     }
-    if !filter.side.is_empty() && !se.execution.side.eq_ignore_ascii_case(&filter.side) {
-        return false;
+    // A stored execution carries the venue's word for the side, and a filter
+    // states the order action. Compared as written, a filter for buys matched
+    // nothing and the caller read an empty answer as "no fills". Both
+    // vocabularies are accepted here, in the one place both surfaces compare,
+    // rather than mapped on the way in by one of them and not the other.
+    if !filter.side.is_empty() {
+        let wanted = match filter.side.to_ascii_uppercase().as_str() {
+            "BUY" | "BOT" => "BOT",
+            "SELL" | "SSHORT" | "SLD" => "SLD",
+            _ => &filter.side,
+        };
+        if !se.execution.side.eq_ignore_ascii_case(wanted) {
+            return false;
+        }
     }
     if !filter.acct_code.is_empty() && !se.execution.acct_number.eq_ignore_ascii_case(&filter.acct_code) {
         return false;

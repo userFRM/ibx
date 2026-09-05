@@ -4258,6 +4258,115 @@ fn a_pattern_carrying_the_field_separator_is_refused() {
 //  Positions
 // ═══════════════════════════════════════════════════════════════════
 
+/// An executions filter naming a side is read in either vocabulary.
+///
+/// A stored execution carries the venue's word for the side and a filter
+/// states the order action. Compared as written, a filter for buys matched
+/// nothing at all and the caller read an empty answer as "no fills" -- and one
+/// surface mapped the words on the way in while the other did not, so the same
+/// filter answered differently depending on which was used.
+#[test]
+fn an_executions_filter_reads_a_side_in_either_vocabulary() {
+    let (client, _rx, _shared) = test_client();
+    for (exec_id, side) in [("bought", "BOT"), ("sold", "SLD")] {
+        client.core.push_execution(
+            -1,
+            ApiContract { con_id: 265598, symbol: "AAPL".into(), ..Default::default() },
+            crate::types::model::Execution {
+                exec_id: exec_id.into(), side: side.into(), ..Default::default()
+            },
+            Default::default(),
+        );
+    }
+
+    let matching = |side: &str| {
+        let filter = crate::types::model::ExecutionFilter {
+            side: side.into(), ..Default::default()
+        };
+        client.core.snapshot_executions(&filter)
+            .into_iter().map(|se| se.execution.exec_id).collect::<Vec<_>>()
+    };
+
+    assert_eq!(matching("BUY"), vec!["bought".to_string()], "the order action");
+    assert_eq!(matching("BOT"), vec!["bought".to_string()], "the venue's word");
+    assert_eq!(matching("SELL"), vec!["sold".to_string()], "the order action");
+    assert_eq!(matching("SSHORT"), vec!["sold".to_string()], "a short is a sale");
+    assert_eq!(matching("SLD"), vec!["sold".to_string()], "the venue's word");
+    assert_eq!(matching("").len(), 2, "and no side named is every fill");
+}
+
+/// A charge whose fill lands mid-pass is not read before the fill it names.
+///
+/// The engine pushes a fill and then, off a message of its own, the charge
+/// that names it. The charges were taken after the fills, so a pair written
+/// while the dispatcher was inside a callback split: the charge was in that
+/// pass and its fill was not. The charge then named an execution nothing had
+/// stored, so it updated nothing -- the fill was filed for a replay with its
+/// cost unknown for ever -- and a caller that files fills first and costs
+/// second dropped it.
+#[test]
+fn a_charge_is_never_read_before_the_fill_it_names() {
+    let (client, _rx, shared) = test_client();
+    let info = |order_id: i64, exec_id: &str| crate::bridge::RichOrderInfo {
+        contract: ApiContract {
+            con_id: 265598, symbol: "AAPL".into(), sec_type: "STK".into(),
+            exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+        },
+        order: Order { order_id, ..Default::default() },
+        order_state: Default::default(),
+        last_exec: crate::types::model::Execution {
+            exec_id: exec_id.into(), ..Default::default()
+        },
+    };
+    let fill = |order_id: u64| Fill {
+        instrument: 0, order_id, side: Side::Buy,
+        price: 150 * PRICE_SCALE, qty: 10 * crate::types::QTY_SCALE, remaining: 0,
+        commission: 0, timestamp_ns: 0,
+        cum_qty: 10 * crate::types::QTY_SCALE, avg_price: 150 * PRICE_SCALE,
+    };
+
+    shared.orders.push_order_info(77, info(77, "first"));
+    shared.orders.push_order_info(78, info(78, "second"));
+    shared.orders.push_fill(fill(77));
+
+    // The engine writing while the dispatcher is inside a caller's callback,
+    // which is the moment the two drains straddle.
+    struct WritesMidPass(std::sync::Arc<crate::bridge::SharedState>, bool);
+    impl crate::api::wrapper::Wrapper for WritesMidPass {
+        fn exec_details(
+            &mut self, _req_id: i64, _contract: &Contract,
+            _execution: &crate::types::model::Execution,
+        ) {
+            if std::mem::replace(&mut self.1, false) {
+                self.0.orders.push_fill(Fill {
+                    instrument: 0, order_id: 78, side: Side::Buy,
+                    price: 150 * PRICE_SCALE, qty: 10 * crate::types::QTY_SCALE,
+                    remaining: 0, commission: 0, timestamp_ns: 0,
+                    cum_qty: 10 * crate::types::QTY_SCALE, avg_price: 150 * PRICE_SCALE,
+                });
+                self.0.orders.push_charge(crate::types::model::CommissionAndFeesReport {
+                    exec_id: "second".into(), commission_and_fees: 1.25,
+                    currency: "USD".into(), ..Default::default()
+                });
+            }
+        }
+    }
+
+    let mut w = WritesMidPass(shared.clone(), true);
+    client.process_msgs(&mut w);
+    client.process_msgs(&mut w);
+
+    let replayed = client.core.snapshot_executions(&crate::types::model::ExecutionFilter::default());
+    let second = replayed.iter()
+        .find(|se| se.execution.exec_id == "second")
+        .expect("the fill written mid-pass is stored");
+    assert_eq!(
+        second.commission_and_fees.commission_and_fees, 1.25,
+        "its charge was read before it and updated nothing: {:?}",
+        second.commission_and_fees,
+    );
+}
+
 /// Reading the completed orders discards the record each order was tracked
 /// by. A fill still queued is read against that record, so discarding it
 /// first delivered an execution with no contract and no execution id — and

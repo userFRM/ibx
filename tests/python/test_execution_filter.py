@@ -78,3 +78,13 @@ def test_a_side_filter_states_the_order_action():
     c.req_executions(2, _Filter(side="SELL"))
     c._test_dispatch_once()
     assert w.rows == 0, f"a sell filter must replay nothing, got {w.rows}"
+    # And the venue's own word, which is what a caller reading a stored
+    # execution back sees and may hand straight to the next filter.
+    w.rows = 0
+    c.req_executions(3, _Filter(side="BOT"))
+    c._test_dispatch_once()
+    assert w.rows == 1, f"the venue's word for a buy must replay it, got {w.rows}"
+    w.rows = 0
+    c.req_executions(4, _Filter(side="SLD"))
+    c._test_dispatch_once()
+    assert w.rows == 0, f"the venue's word for a sale must replay nothing, got {w.rows}"
