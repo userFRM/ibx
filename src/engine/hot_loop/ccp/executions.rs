@@ -329,6 +329,11 @@ fn status_of(
         "D" => crate::types::OrderStatus::PendingCancel,
         "8" => crate::types::OrderStatus::Rejected,
         "I" => crate::types::OrderStatus::Inactive,
+        // The record that closes the replay of the working set carries no
+        // status at all, and no symbol and no order: it is dropped a step
+        // later as the sentinel it is. Read as unknown, it was warned about
+        // on every connect for the life of the client.
+        "" => crate::types::OrderStatus::Uncertain,
         other => {
             // A status this does not know is not a reason to drop the
             // report: it may carry a fill, and returning here threw the
