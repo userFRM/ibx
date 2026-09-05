@@ -1705,6 +1705,30 @@ impl FarmState {
             self.depth_rows.push((req_id, num_rows));
         }
 
+        // At most one live wire subscription per caller, whatever put a
+        // previous one there.
+        //
+        // The three records below are what a row is routed by, and nothing
+        // deduped them on the caller's number. Two ways in: a caller asking
+        // twice without withdrawing, which left two contracts' rows arriving
+        // interleaved under one number with nothing to tell them apart and a
+        // withdrawal that named only the later contract; and a book asked for
+        // while this connection was down, which recorded a wire id nothing
+        // ever sent -- so when the reconnect asked properly and the venue
+        // refused, the refusal saw the phantom still asking and was swallowed,
+        // and the caller waited for ever.
+        //
+        // Cleared here rather than refused, because the reconnect below asks
+        // again under the same number by design and must not be refused for
+        // it. A caller asking twice is refused at the surface, before this.
+        self.depth_subs.retain(|(under, _)| {
+            !self.depth_fanout_map.iter().any(|(u, user)| u == under && *user == req_id)
+        });
+        self.depth_fanout_exchange.retain(|(under, _)| {
+            !self.depth_fanout_map.iter().any(|(u, user)| u == under && *user == req_id)
+        });
+        self.depth_fanout_map.retain(|(_, user)| *user != req_id);
+
         let mut asked_under = Vec::with_capacity(venues.len());
         for venue in &venues {
             let under = self.next_md_req_id;
@@ -2371,6 +2395,24 @@ impl FarmState {
             // the book back on the wire and every update is discarded at the
             // guard, silently and for the life of the session.
             shared.market.purge_depth_updates(req_id);
+            // The venue restarts the book from the top on the new connection,
+            // and every level of that restart is delivered as a level the
+            // caller does not already hold. Told nothing, a caller keyed on
+            // position refreshed the levels the new book reaches and kept
+            // every level the old one held below them, for the life of the
+            // session; a caller that inserts got the new book stacked on top
+            // of the old. This says to empty it first, which is the only way a
+            // book that shrank can shrink on the caller's side -- nothing on
+            // this wire states a level has gone.
+            //
+            // The queue purge above clears what is queued here, not what the
+            // caller holds.
+            shared.reference.push_historical_error(
+                req_id,
+                crate::error_codes::DEPTH_BOOK_RESET,
+                "Market depth data has been RESET. Please empty deep book contents \
+                 before applying any new entries.".to_string(),
+            );
             self.send_depth_subscribe(
                 req_id, con_id, &exchange, &listed_on, &sec_type, num_rows, is_smart_depth,
                 farm_conn, hb, shared,

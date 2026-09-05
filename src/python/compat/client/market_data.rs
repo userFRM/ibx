@@ -334,9 +334,16 @@ impl EClient {
         // only an id was subscribed here to a US stock on SMART: a book for an
         // instrument nobody asked about, under their own request id.
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
+        // The number is checked before the book slot is taken: a number the
+        // wire cannot carry holds nothing, and taking the slot first left it
+        // held against a request that was then refused.
+        let wire = wire_req_id(req_id)?;
+        if let Err(why) = self.core.hold_the_book(req_id) {
+            return self.report_refusal(py, req_id, why);
+        }
         Self::send_control(py, &tx, ControlCommand::SubscribeDepth {
             contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), exchange: contract.exchange.clone(), sec_type: contract.sec_type.clone(), currency: contract.currency.clone(), ..Default::default() },
-            req_id: wire_req_id(req_id)?,
+            req_id: wire,
             num_rows,
             is_smart_depth,
             filters: contract.lookup_filters(),
@@ -353,7 +360,14 @@ impl EClient {
     fn cancel_mkt_depth(&self, py: Python<'_>, req_id: i64, is_smart_depth: bool) -> PyResult<()> {
         let _ = is_smart_depth;
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::UnsubscribeDepth { req_id: wire_req_id(req_id)? })?;
+        // A caller withdrawing a book this client does not hold branches on
+        // being told so, under the number the catalogue gives depth rather
+        // than the one a quote subscription is withdrawn under.
+        let wire = wire_req_id(req_id)?;
+        if let Err(why) = self.core.release_the_book(req_id) {
+            return self.report_refusal(py, req_id, why);
+        }
+        Self::send_control(py, &tx, ControlCommand::UnsubscribeDepth { req_id: wire })?;
         Ok(())
     }
 

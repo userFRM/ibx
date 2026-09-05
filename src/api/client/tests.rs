@@ -4094,7 +4094,12 @@ fn an_unwireable_req_id_is_refused() {
         ("req_historical_ticks", |c, id| c.req_historical_ticks(id, &spy(), "", "20260101 16:00:00", 100, "TRADES", true)),
         ("req_historical_schedule", |c, id| c.req_historical_schedule(id, &spy(), "", "1 D", true)),
         ("req_mkt_depth", |c, id| c.req_mkt_depth(id, &spy(), 5, false)),
-        ("cancel_mkt_depth", |c, id| c.cancel_mkt_depth(id)),
+        // Asks for the book first: a withdrawal now says when it holds none,
+        // and that refusal is not the one this test is about.
+        ("cancel_mkt_depth", |c, id| {
+            let _ = c.req_mkt_depth(id, &spy(), 5, false);
+            c.cancel_mkt_depth(id)
+        }),
         ("req_real_time_bars", |c, id| c.req_real_time_bars(id, &spy(), 5, "TRADES", true)),
         ("cancel_real_time_bars", |c, id| c.cancel_real_time_bars(id)),
     ];
@@ -4298,6 +4303,41 @@ fn an_executions_filter_reads_a_side_in_either_vocabulary() {
     assert_eq!(matching("SSHORT"), vec!["sold".to_string()], "a short is a sale");
     assert_eq!(matching("SLD"), vec!["sold".to_string()], "the venue's word");
     assert_eq!(matching("").len(), 2, "and no side named is every fill");
+}
+
+/// One request number holds one book, and a withdrawal says when it holds none.
+///
+/// Depth is routed by records the engine keeps, so neither surface could see
+/// that a number already held a book: two contracts' rows arrived interleaved
+/// under one number with nothing to tell them apart, the withdrawal named only
+/// the later contract and left the earlier one being served, and a reconnect
+/// brought back one book where there had been two.
+#[test]
+fn a_request_number_holds_one_book_and_says_when_it_holds_none() {
+    let (client, rx, _shared) = test_client();
+
+    let withdrawn = client.cancel_mkt_depth(7);
+    assert!(
+        withdrawn.as_ref().is_err_and(|why| why.code == 310),
+        "nothing is held under that number: {withdrawn:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
+
+    client.req_mkt_depth(7, &spy(), 5, false).expect("the first book is asked for");
+    rx.try_recv().expect("and it reaches the engine");
+
+    let elsewhere = Contract { symbol: "QQQ".into(), con_id: 320227571, ..spy() };
+    let refused = client.req_mkt_depth(7, &elsewhere, 5, false);
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 102),
+        "the number already holds a book: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and the second contract was not asked for");
+
+    // Withdrawn, the number is the caller's again.
+    client.cancel_mkt_depth(7).expect("the book is withdrawn");
+    rx.try_recv().expect("and the withdrawal reaches the engine");
+    client.req_mkt_depth(7, &elsewhere, 5, false).expect("the number is free again");
 }
 
 /// A replay says nothing about what a fill cost until the venue has.

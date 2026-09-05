@@ -230,6 +230,11 @@ impl EClient {
         &self, req_id: i64, contract: &Contract,
         num_rows: i32, is_smart_depth: bool,
     ) -> Result<(), Refusal> {
+        // The number is checked before the book slot is taken: a number the
+        // wire cannot carry holds nothing, and taking the slot first left it
+        // held against a request that was then refused.
+        let wire = wire_req_id(req_id)?;
+        self.core.hold_the_book(req_id)?;
         self.send(ControlCommand::SubscribeDepth {
             contract: ContractRef {
                 con_id: contract.con_id,
@@ -239,7 +244,7 @@ impl EClient {
                 currency: contract.currency.clone(),
                 ..Default::default()
             },
-            req_id: wire_req_id(req_id)?,
+            req_id: wire,
             filters: contract.lookup_filters(),
             num_rows,
             is_smart_depth,
@@ -248,7 +253,12 @@ impl EClient {
 
     /// Cancel market depth. Matches `cancelMktDepth` in C++.
     pub fn cancel_mkt_depth(&self, req_id: i64) -> Result<(), Refusal> {
-        self.send(ControlCommand::UnsubscribeDepth { req_id: wire_req_id(req_id)? })
+        let wire = wire_req_id(req_id)?;
+        // A caller withdrawing a book this client does not hold branches on
+        // being told so, under the number the catalogue gives depth rather
+        // than the one a quote subscription is withdrawn under.
+        self.core.release_the_book(req_id)?;
+        self.send(ControlCommand::UnsubscribeDepth { req_id: wire })
     }
 
     // ── Real-Time Bars ──

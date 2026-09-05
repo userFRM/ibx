@@ -1241,6 +1241,72 @@ mod depth_identity_tests {
         assert!(farm.depth_fanout_exchange.is_empty());
         assert!(farm.depth_resub_info.is_empty(), "and no reconnect asks again");
     }
+
+    /// A caller's number never carries two live wire subscriptions.
+    ///
+    /// The three records a row is routed by deduped on nothing, so a book
+    /// asked for while this connection was down recorded a wire id nothing
+    /// ever sent -- and when the reconnect asked properly and the venue
+    /// refused, the refusal saw the phantom still asking and was swallowed:
+    /// the caller waited for ever for a book that had been refused. The
+    /// withdrawal then named the later contract only, leaving the earlier one
+    /// served at the venue.
+    #[test]
+    fn a_book_asked_for_while_the_connection_is_down_leaves_no_second_record() {
+        let mut farm = FarmState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+
+        // Asked for with no socket: recorded so the reconnect can ask, and
+        // nothing goes out.
+        let mut down: Option<Connection> = None;
+        farm.send_depth_subscribe(7, 756733, "SMART", "", "STK", 10, true, &mut down, &mut hb, &shared);
+        let while_down = farm.depth_fanout_map.clone();
+
+        // The reconnect asks again under the same number, as it must.
+        let (conn, _peer) = Connection::for_test();
+        let mut up = Some(conn);
+        farm.send_depth_subscribe(7, 756733, "SMART", "", "STK", 10, true, &mut up, &mut hb, &shared);
+
+        assert_eq!(
+            farm.depth_fanout_map.iter().filter(|(_, user)| *user == 7).count(), 1,
+            "one live subscription per caller: {:?} then {:?}",
+            while_down, farm.depth_fanout_map,
+        );
+        assert_eq!(farm.depth_subs.len(), 1, "and one wire record for it");
+        assert_eq!(farm.depth_fanout_exchange.len(), 1, "and one venue against it");
+    }
+
+    /// A reconnect tells every book's caller to empty it before what follows.
+    ///
+    /// The venue restarts the book from the top on the new connection, and
+    /// every level of that restart is delivered as a level the caller does not
+    /// already hold. Told nothing, a caller keyed on position refreshed the
+    /// levels the new book reaches and kept every level the old one held below
+    /// them, for the life of the session.
+    #[test]
+    fn a_rebuilt_connection_tells_a_book_to_start_again() {
+        let mut farm = FarmState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut context = Context::new();
+        let (conn, _peer) = Connection::for_test();
+        let mut up = Some(conn);
+
+        farm.send_depth_subscribe(7, 756733, "SMART", "", "STK", 10, true, &mut up, &mut hb, &shared);
+        let _ = shared.reference.drain_historical_errors();
+
+        let (fresh, _peer2) = Connection::for_test();
+        farm.reconnect(
+            fresh, &mut up, &mut context, &mut hb, Default::default(), &shared,
+        );
+
+        let told = shared.reference.drain_historical_errors();
+        assert!(
+            told.iter().any(|(rid, code, _)| *rid == 7 && *code == 317),
+            "the caller is told to empty its book: {told:?}",
+        );
+    }
 }
 
 mod depth_position_tests {

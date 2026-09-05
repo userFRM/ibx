@@ -126,6 +126,21 @@ pub const DUPLICATE_SCANNER_SUBSCRIPTION: i32 = 385;
 /// under.
 pub const NO_SUCH_SCANNER_SUBSCRIPTION: i32 = 365;
 
+/// The code a withdrawal naming a book this client does not hold is answered
+/// under.
+///
+/// Its own number rather than the one a quote subscription is withdrawn under:
+/// the catalogue names depth separately, and a caller branches on which of the
+/// two it asked for.
+pub const NO_SUCH_BOOK: i32 = 310;
+
+/// The code the venue's restart of a book is reported under.
+///
+/// Not a refusal: it tells a caller holding a book to empty it before applying
+/// what follows, which is the only way a book that shrank can shrink on the
+/// caller's side.
+pub const DEPTH_BOOK_RESET: i32 = 317;
+
 /// The code a withdrawal naming a subscription this client does not hold is
 /// answered under.
 ///

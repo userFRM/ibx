@@ -152,7 +152,7 @@ impl EClient {
         // exists to compare against.
         let connected = self.account_id.lock().unwrap().clone().unwrap_or_default();
         if let Err(why) = ClientCore::validate_order(&api_order, &connected) {
-            return self.report_refusal(py, order_id, why.into());
+            return self.report_refusal(py, order_id, why);
         }
         if let Err(why) = ClientCore::validate_supported_instructions(&api_order) {
             return self.report_refusal(py, order_id, why.into());
@@ -160,7 +160,7 @@ impl EClient {
         if let Err(why) = ClientCore::validate_combo_legs(
             &contract.sec_type, api_contract.combo_legs.len(),
         ) {
-            return self.report_refusal(py, order_id, why.into());
+            return self.report_refusal(py, order_id, why);
         }
         for (at, leg) in api_contract.combo_legs.iter().enumerate() {
             if let Err(why) = ClientCore::validate_leg(at, leg) {
@@ -185,7 +185,7 @@ impl EClient {
                 &shared.reference.order_permissions(), &contract.sec_type,
             )
         {
-            return self.report_refusal(py, order_id, why.into());
+            return self.report_refusal(py, order_id, why);
         }
 
         // An order names its contract by venue contract id. A caller who

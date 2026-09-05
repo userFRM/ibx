@@ -12,7 +12,8 @@ pub use crate::types::order_status::{is_open_or_reactivatable, is_open_status, o
 use std::collections::{HashMap, HashSet};
 use crate::error_codes::{
     CHANGE_CANNOT_CHANGE_TYPE, COMBINATION_LEG_INVALID, COMBINATION_NEEDS_LEGS,
-    CONDITION_CONTRACT_INCOMPLETE, DUPLICATE_TICKER_ID, GOOD_TILL_DATE_INVALID, Refusal,
+    CONDITION_CONTRACT_INCOMPLETE, DUPLICATE_TICKER_ID, GOOD_TILL_DATE_INVALID, NO_SUCH_BOOK,
+    Refusal,
     SECURITY_NOT_PERMITTED, TRIGGER_METHOD_INVALID, TRIGGER_PRICE_MISSING,
 };
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -785,6 +786,12 @@ pub struct ClientCore {
     /// Every order this client placed and the venue has not finished.
     pub open_orders: Mutex<HashMap<u64, TrackedOrder>>,
 
+    /// Every number holding a book.
+    ///
+    /// Kept here rather than in the engine because the refusal has to reach
+    /// the caller before anything is sent, and because both surfaces read it.
+    pub depth_reqs: Mutex<HashSet<i64>>,
+
     /// Every number the venue has already worked an order under this session.
     ///
     /// An order that finishes leaves the book, so its number stops naming
@@ -971,6 +978,7 @@ impl ClientCore {
             executions: Mutex::new(Vec::new()),
             open_orders: Mutex::new(HashMap::new()),
             spent_order_ids: Mutex::new(HashSet::new()),
+            depth_reqs: Mutex::new(HashSet::new()),
             market_data_type: AtomicI32::new(1),
             mdt_sent: Mutex::new(HashSet::new()),
             mdt_by_req: Mutex::new(HashMap::new()),
@@ -1328,6 +1336,7 @@ impl ClientCore {
         // A new session draws its numbers from the venue again, so what the
         // last one spent says nothing about this one.
         self.spent_order_ids.lock().unwrap().clear();
+        self.depth_reqs.lock().unwrap().clear();
         self.market_data_type.store(1, Ordering::Relaxed);
         self.mdt_sent.lock().unwrap().clear();
         self.mdt_by_req.lock().unwrap().clear();
@@ -1831,6 +1840,37 @@ impl ClientCore {
         // Named by the instrument, which is what a withdrawal states. Known by
         // now: nothing is withdrawn that was never registered.
         self.cached_instrument(shared, emptied)
+    }
+
+    /// Take a request number for a book, or say it already holds one.
+    ///
+    /// Depth is routed by records the engine keeps, so neither surface could
+    /// see that a number already held a book: two contracts' rows arrived
+    /// interleaved under one number with nothing to tell them apart, the
+    /// withdrawal named only the later contract and left the earlier one being
+    /// served, and a reconnect brought back one book where there had been two.
+    pub fn hold_the_book(&self, req_id: i64) -> Result<(), Refusal> {
+        if !self.depth_reqs.lock().unwrap().insert(req_id) {
+            return Err(Refusal::stated(
+                DUPLICATE_TICKER_ID,
+                format!(
+                    "request {req_id} is already holding a book: withdraw it before \
+                     asking for another under the same number",
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Give the number back, or say it was holding no book.
+    pub fn release_the_book(&self, req_id: i64) -> Result<(), Refusal> {
+        if !self.depth_reqs.lock().unwrap().remove(&req_id) {
+            return Err(Refusal::stated(
+                NO_SUCH_BOOK,
+                format!("no book is held under request {req_id}"),
+            ));
+        }
+        Ok(())
     }
 
     /// Whether this number is watching a contract at all.
