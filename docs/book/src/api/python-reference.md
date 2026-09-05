@@ -933,7 +933,7 @@ def cancel_mkt_data(req_id)
 
 #### `req_tick_by_tick_data`
 
-Request tick-by-tick data.  `ignore_size` is refused rather than dropped. The query the venue answers carries a filter and the filter carries this term, so the protocol is not the reason — what is not settled is how to make the venue apply it: asked for two ways, the stream came back with the size-only changes still in it. Taken and sent regardless, a caller would be told the changes were filtered and be reading a stream that was not.  `number_of_ticks` is refused rather than dropped. The query states no count of past ticks anywhere, so a caller that asked for a prelude and was answered anyway would be reading a stream that began where it was asked for rather than where they wanted. Ask for those with `reqHistoricalTicks`. Its default is none, so an ordinary call is unaffected.
+Request tick-by-tick data.  `number_of_ticks` and `ignore_size` are sent as stated: a count of past ticks goes out as the length of the run the stream opens with, and the size filter as the query's filter term. Neither goes out at its default — no prelude, sizes included — which is what the venue does on its own. Whether the venue honours the size filter is the venue's: one session saw size-only changes still arrive on a stream that asked to leave them out.
 
 ```python
 def req_tick_by_tick_data(req_id, contract, tick_type, number_of_ticks=0, ignore_size=False)

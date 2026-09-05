@@ -53,6 +53,11 @@ pub(crate) struct HmdsState {
     /// this venue does not act on sends ticks for the rest of the session, and
     /// several hundred identical warnings bury whatever else is in the log.
     pub(crate) tbt_withdrawn: std::collections::HashSet<u64>,
+    /// Streams withdrawn before the venue had numbered them, by the name this
+    /// client asked under. The withdrawal by name is accepted and does
+    /// nothing, so each is withdrawn again by number when its acknowledgement
+    /// states one.
+    pub(crate) tbt_withdrawn_unnumbered: std::collections::HashSet<String>,
     /// Streams already spoken about, so each is spoken about once.
     pub(crate) tbt_reported: std::collections::HashSet<u64>,
     pub(crate) next_hmds_query_id: u32,
@@ -110,10 +115,11 @@ pub(crate) struct HmdsState {
     /// running and cannot rebuild a request, so a reconnect had nothing to
     /// send and the bars stopped for good.
     pub(crate) rtbar_resub: Vec<RtBarRequest>,
-    /// Scanner results parked for contract-detail enrichment before dispatch.
-    /// Drained by the engine top-level after each hmds.poll, then handed to
-    /// `CcpState::start_scanner_enrichment`.
-    pub(crate) cold_scanner_results: Vec<(u32, crate::control::scanner::ScannerResult)>,
+    /// Every scan batch, for the engine to hand over: drained after each poll
+    /// and given to `CcpState::start_scanner_enrichment`, which resolves the
+    /// rows whose contracts are not yet held and releases a scan's batches in
+    /// the order they arrived.
+    pub(crate) scanner_batches: Vec<(u32, crate::control::scanner::ScannerResult)>,
     /// Every in-flight bar request's pages, held until the last is in so the
     /// series is delivered oldest first and on one zone; one that is to be
     /// folded also waits there for the contract's actions.
@@ -327,6 +333,7 @@ impl HmdsState {
             next_tbt_req_id: 1,
             tbt_subscriptions: Vec::new(),
             tbt_withdrawn: std::collections::HashSet::new(),
+            tbt_withdrawn_unnumbered: std::collections::HashSet::new(),
             tbt_reported: std::collections::HashSet::new(),
             next_hmds_query_id: 1000,
             disconnected: false,
@@ -348,7 +355,7 @@ impl HmdsState {
             keep_up_to_date_reqs: std::collections::HashSet::new(),
             forming_bars: Vec::new(),
             rtbar_resub: Vec::new(),
-            cold_scanner_results: Vec::new(),
+            scanner_batches: Vec::new(),
             held: Vec::new(),
         }
     }
@@ -455,6 +462,7 @@ impl HmdsState {
         // with them — a stream the last connection would not stop is a question
         // the new one answers for itself.
         self.tbt_withdrawn.clear();
+        self.tbt_withdrawn_unnumbered.clear();
         self.tbt_reported.clear();
         let stale = std::mem::take(&mut self.tbt_subscriptions);
         let wanted = stale.len();
@@ -655,6 +663,15 @@ impl HmdsState {
                     // subscription that a caller need not have made, and the
                     // number the venue gave was never learned at all.
                     if let Some(ack) = parse_tick_subscription_ack(xml_tag) {
+                        // Withdrawn before it was numbered: the withdrawal by
+                        // name did nothing, so it is withdrawn by the number
+                        // stated now, and its ticks are known for what they
+                        // are.
+                        if self.tbt_withdrawn_unnumbered.remove(&ack.query_id) {
+                            self.tbt_withdrawn.insert(ack.venue_id);
+                            Self::send_tbt_cancel(&ack.venue_id.to_string(), hmds_conn, hb);
+                            return;
+                        }
                         if let Some(pos) = self
                             .tbt_subscriptions
                             .iter()
@@ -1072,18 +1089,16 @@ impl HmdsState {
                                         // measured on the wire, not assumed — so
                                         // everything a caller reads about the
                                         // contract is resolved on the trading
-                                        // connection. Results whose ids are not
-                                        // cached are parked for the engine to
-                                        // enrich before they are handed over.
-                                        let any_cold = result.entries.iter().any(|e| {
-                                            e.con_id != 0
-                                                && shared.reference.get_contract(e.con_id as i64).is_none()
-                                        });
-                                        if any_cold {
-                                            self.cold_scanner_results.push((req_id, result));
-                                        } else {
-                                            shared.reference.push_scanner_data(req_id, result);
-                                        }
+                                        // connection. Every batch goes through
+                                        // the engine, which resolves the rows
+                                        // whose contracts it does not yet hold
+                                        // and hands a scan's batches over in
+                                        // the order they arrived: one that
+                                        // needed nothing went straight through
+                                        // ahead of an earlier one still
+                                        // waiting, and the caller ended on the
+                                        // older list.
+                                        self.scanner_batches.push((req_id, result));
                                     }
                         }
                         "10032" => {
@@ -1611,28 +1626,18 @@ fn build_tbt_query(
         hmds_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        let idx = match self
+        // The stream it names and no other. Falling back on "the one stream
+        // on this contract" where the name matched nothing, this withdrew
+        // somebody else's: the caller's own stream was already gone, refused
+        // by the venue, and the one left on the contract was the other
+        // caller's, who was told nothing because nothing had gone wrong for
+        // them.
+        let Some(idx) = self
             .tbt_subscriptions
             .iter()
             .position(|sub| sub.caller_req_id == caller_req_id && sub.instrument == instrument)
-            // A caller that opened one stream on this contract and names it by
-            // something else still gets that one withdrawn — but only where
-            // there is no doubt which. Where two callers hold streams on one
-            // contract, this took whichever came first, so a caller tidying up
-            // after its own refused stream stopped somebody else's, and that
-            // caller was told nothing because nothing had gone wrong for it.
-            .or_else(|| {
-                let mut here = self.tbt_subscriptions.iter()
-                    .enumerate()
-                    .filter(|(_, sub)| sub.instrument == instrument);
-                match (here.next(), here.next()) {
-                    (Some((only, _)), None) => Some(only),
-                    _ => None,
-                }
-            })
-        {
-            Some(i) => i,
-            None => return,
+        else {
+            return;
         };
         let gone = self.tbt_subscriptions.remove(idx);
         // The venue's own number for the stream, which its records are stamped
@@ -1647,30 +1652,38 @@ fn build_tbt_query(
         // records after one, and four hundred and sixty-nine after another,
         // arriving until the session ended. The bar stream beside this already
         // withdraws by the venue's number. Falls back to the name only where
-        // the subscription was never acknowledged and there is no number yet.
+        // the subscription was never acknowledged and there is no number yet,
+        // and withdraws again by number when the acknowledgement brings one.
         let ticker_id = if gone.venue_id != 0 {
             gone.venue_id.to_string()
         } else {
+            self.tbt_withdrawn_unnumbered.insert(gone.query_id.clone());
             gone.query_id
         };
-        if let Some(conn) = hmds_conn.as_mut() {
-            let xml = format!(
-                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
-                 <ListOfCancelQueries>\
-                 <CancelQuery>\
-                 <id>ticker:{ticker_id}</id>\
-                 </CancelQuery>\
-                 </ListOfCancelQueries>",
-            );
-            let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
-                (fix::TAG_MSG_TYPE, "Z"),
-                (fix::TAG_SENDING_TIME, &ts),
-                (6118, &xml),
-            ]);
-            log::info!("Sent TBT unsubscribe: instrument={instrument} ticker_id={ticker_id}");
-            hb.last_hmds_sent = Instant::now();
-        }
+        log::info!("Withdrawing TBT stream: instrument={instrument} ticker_id={ticker_id}");
+        Self::send_tbt_cancel(&ticker_id, hmds_conn, hb);
+    }
+
+    /// Withdraw a tick stream by the id the venue reads: its own number for
+    /// the stream, or the name this client gave it before it had one.
+    fn send_tbt_cancel(ticker_id: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+        let Some(conn) = hmds_conn.as_mut() else { return };
+        let xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <ListOfCancelQueries>\
+             <CancelQuery>\
+             <id>ticker:{ticker_id}</id>\
+             </CancelQuery>\
+             </ListOfCancelQueries>",
+        );
+        let ts = chrono_free_timestamp();
+        let _ = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "Z"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6118, &xml),
+        ]);
+        log::info!("Sent TBT unsubscribe: ticker_id={ticker_id}");
+        hb.last_hmds_sent = Instant::now();
     }
 
     /// Whether the query went out. A refusal — a second query under a live

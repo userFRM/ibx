@@ -775,10 +775,10 @@ impl HotLoop {
                 &self.event_tx, &mut self.hb,
             );
 
-            // 1c. Hand off any scanner results with cache-miss con_ids to CCP for
-            // contract-detail fan-out. Mirrors what the gateway does
-            // internally for binary-API scanner clients.
-            for (req_id, result) in std::mem::take(&mut self.hmds.cold_scanner_results) {
+            // 1c. Hand every scan batch to CCP, which resolves the rows whose
+            // contracts are not yet held and releases a scan's batches in the
+            // order they arrived.
+            for (req_id, result) in std::mem::take(&mut self.hmds.scanner_batches) {
                 self.ccp.start_scanner_enrichment(
                     req_id, result, &mut self.ccp_conn, &self.shared, &mut self.hb,
                 );
@@ -1252,6 +1252,17 @@ impl HotLoop {
                         );
                         if let Some(tx) = reply_tx.as_ref() {
                             let _ = tx.try_send(Err(reason));
+                        }
+                        continue;
+                    }
+                    // With no data connection the stream is refused now, on
+                    // both channels the caller reads, as a scan or a bar
+                    // stream is. Accepted, the caller held a stream that would
+                    // begin only if a reconnect re-sent it, and nothing said so.
+                    if self.hmds_conn.is_none() {
+                        self.emit_hmds_unavailable(req_id.max(0) as u32, false);
+                        if let Some(tx) = reply_tx.as_ref() {
+                            let _ = tx.try_send(Err(HMDS_UNAVAILABLE.to_string()));
                         }
                         continue;
                     }
@@ -3445,8 +3456,11 @@ pub(crate) fn reconnect_backoff(failures: u32) -> std::time::Duration {
     std::time::Duration::from_millis((2_000 + ladder + jitter).min(82_000))
 }
 
+/// What a request made with no historical-data connection is told.
+pub(crate) const HMDS_UNAVAILABLE: &str = "Historical data service connection is not available";
+
 /// Surface an "HMDS unavailable" error for `req_id` when the historical-data
-/// socket isn't connected. Mirrors the QueryError surface: code 162
+/// socket isn't connected. Told under the not-connected code
 /// via `push_historical_error` for the consumer's `error()` callback, plus —
 /// for historical-bar requests only — a terminal empty-bars response so
 /// `historical_data_end` fires. Without this, requests issued while HMDS is
@@ -3462,7 +3476,7 @@ pub(crate) fn push_hmds_unavailable(shared: &SharedState, req_id: u32, from_hist
     push_hmds_refusal(
         shared, req_id,
         crate::error_codes::Refusal::NOT_CONNECTED,
-        "Historical data service connection is not available".to_string(),
+        HMDS_UNAVAILABLE.to_string(),
         from_historical,
     );
 }
@@ -6377,6 +6391,31 @@ mod tests {
             "{told:?}",
         );
         assert_eq!(shared.reference.drain_contract_details_end(), [7], "and the request is ended");
+    }
+
+    /// A tick stream asked for while the data connection is down is refused
+    /// now, as a scan or a bar stream is. Accepted, the caller held a stream
+    /// that would begin only if a reconnect re-sent it, and nothing said so.
+    #[test]
+    fn a_tick_stream_asked_for_with_no_data_connection_is_refused() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(ControlCommand::SubscribeTbt {
+            req_id: 7, contract: stock(756733, "SPY"), tbt_type: crate::types::TbtType::AllLast,
+            number_of_ticks: 0, ignore_size: false, reply_tx: Some(reply_tx),
+        })
+        .unwrap();
+        hl.poll_control_commands();
+        assert!(matches!(reply_rx.try_recv(), Ok(Err(_))), "refused on the channel the caller waits on");
+        assert!(hl.hmds.tbt_subscriptions.is_empty(), "and nothing is left to be sent later");
+        let told = shared.reference.drain_historical_errors();
+        assert!(
+            told.iter().any(|(rid, code, _)| *rid == 7 && *code == crate::error_codes::Refusal::NOT_CONNECTED),
+            "{told:?}",
+        );
     }
 
     /// A chargeable snapshot is a request of its own, not a share of a stream

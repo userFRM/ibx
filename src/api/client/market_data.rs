@@ -138,13 +138,13 @@ impl EClient {
     /// involved. A missing entitlement arrives as the venue's refusal
     /// rather than as silence.
     ///
-    /// `number_of_ticks` and `ignore_size` are refused rather than dropped.
-    /// This protocol's subscription states the contract and the kind of stream
-    /// and nothing else: there is no field for a prelude of past ticks, and
-    /// none for suppressing size-only changes. A caller that set either and
-    /// was answered anyway would be reading a stream it did not ask for,
-    /// with nothing to say so. Their defaults — no prelude, sizes included —
-    /// are what the venue does, so an ordinary call is unaffected.
+    /// `number_of_ticks` and `ignore_size` are sent as stated: a count of past
+    /// ticks goes out as the length of the run the stream opens with, and the
+    /// size filter as the query's filter term. Neither goes out at its default
+    /// — no prelude, sizes included — which is what the venue does on its own.
+    /// Whether the venue honours the size filter is the venue's: one session
+    /// saw size-only changes still arrive on a stream that asked to leave
+    /// them out.
     pub fn req_tick_by_tick_data(
         &self, req_id: i64, contract: &Contract, tick_type: &str,
         number_of_ticks: i32, ignore_size: bool,

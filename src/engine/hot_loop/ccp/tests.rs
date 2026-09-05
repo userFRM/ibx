@@ -6264,3 +6264,29 @@ fn an_ask_for_the_book_venues_is_answered_when_the_directory_lands() {
     assert_eq!(shared.reference.drain_depth_exchanges().len(), 1, "the ask that waited is answered");
     assert!(shared.reference.drain_depth_exchanges().is_empty(), "once");
 }
+
+/// A scan's batches reach the caller in the order the venue sent them, and
+/// one scan's wait holds up no other. A batch needing no enrichment went
+/// straight through while an earlier one waited on a definition, so the
+/// caller ended on the older list.
+#[test]
+fn a_scans_batches_are_handed_over_in_the_order_they_arrived() {
+    let (mut ccp, _context, shared) = u186_test_state();
+    let mut hb = HeartbeatState::new();
+    let batch = |con_ids: &[u32]| crate::control::scanner::ScannerResult {
+        con_ids: con_ids.to_vec(),
+        entries: con_ids.iter().map(|&con_id| crate::control::scanner::ScannerEntry { con_id }).collect(),
+        scan_time: String::new(),
+        error_text: String::new(),
+    };
+    ccp.start_scanner_enrichment(7, batch(&[111]), &mut None, &shared, &mut hb);
+    ccp.start_scanner_enrichment(7, batch(&[]), &mut None, &shared, &mut hb);
+    ccp.start_scanner_enrichment(8, batch(&[]), &mut None, &shared, &mut hb);
+    let first: Vec<u32> = shared.reference.drain_scanner_data().into_iter().map(|(rid, _)| rid).collect();
+    assert_eq!(first, [8], "the other scan goes through; the later batch of the first waits behind its earlier one");
+
+    ccp.try_release_scanner_enrichments(111, &shared);
+    let got: Vec<(u32, Vec<u32>)> = shared.reference.drain_scanner_data().into_iter()
+        .map(|(rid, r)| (rid, r.con_ids)).collect();
+    assert_eq!(got, [(7, vec![111]), (7, vec![])], "both, in the order they arrived");
+}

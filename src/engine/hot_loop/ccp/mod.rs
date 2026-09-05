@@ -2786,7 +2786,12 @@ impl CcpState {
             if shared.reference.get_contract(con_id).is_some() { continue; }
             awaiting.insert(con_id);
         }
-        if awaiting.is_empty() {
+        // A batch needing nothing still waits behind an earlier batch of its
+        // scan that does: handed over at once, it overtook the older list and
+        // the caller ended on that one.
+        if awaiting.is_empty()
+            && !self.pending_scanner_enrichment.iter().any(|p| p.api_req_id == api_req_id)
+        {
             shared.reference.push_scanner_data(api_req_id, result);
             return;
         }
@@ -2812,15 +2817,27 @@ impl CcpState {
 
     /// Called from the 35=d reply path after the contract cache has been
     /// populated for `con_id`. Removes `con_id` from any pending scanner
-    /// enrichment's awaiting set; entries whose set becomes empty are
-    /// dispatched to the scanner_data queue.
+    /// enrichment's awaiting set; entries whose set becomes empty are handed
+    /// over, each once every earlier batch of its scan has been.
     pub(crate) fn try_release_scanner_enrichments(&mut self, con_id: i64, shared: &SharedState) {
         if self.pending_scanner_enrichment.is_empty() { return; }
+        for pe in &mut self.pending_scanner_enrichment {
+            pe.awaiting.remove(&con_id);
+        }
+        self.release_scanner_batches(shared);
+    }
+
+    /// Hand over every batch that waits on nothing and has no earlier batch of
+    /// its scan still waiting, in the order the batches arrived.
+    fn release_scanner_batches(&mut self, shared: &SharedState) {
         let mut idx = 0;
         while idx < self.pending_scanner_enrichment.len() {
-            self.pending_scanner_enrichment[idx].awaiting.remove(&con_id);
-            if self.pending_scanner_enrichment[idx].awaiting.is_empty() {
-                let pe = self.pending_scanner_enrichment.swap_remove(idx);
+            let pe = &self.pending_scanner_enrichment[idx];
+            let behind_its_own = self.pending_scanner_enrichment[..idx]
+                .iter()
+                .any(|earlier| earlier.api_req_id == pe.api_req_id);
+            if pe.awaiting.is_empty() && !behind_its_own {
+                let pe = self.pending_scanner_enrichment.remove(idx);
                 shared.reference.push_scanner_data(pe.api_req_id, pe.result);
             } else {
                 idx += 1;
@@ -2834,20 +2851,17 @@ impl CcpState {
     pub(crate) fn sweep_scanner_enrichments(&mut self, shared: &SharedState) {
         if self.pending_scanner_enrichment.is_empty() { return; }
         let now = Instant::now();
-        let mut idx = 0;
-        while idx < self.pending_scanner_enrichment.len() {
-            if self.pending_scanner_enrichment[idx].deadline <= now {
-                let pe = self.pending_scanner_enrichment.swap_remove(idx);
-                log::warn!(
-                    "scanner enrichment timeout: req_id={} missing={} con_ids; dispatching partial",
-                    pe.api_req_id,
-                    pe.awaiting.len(),
-                );
-                shared.reference.push_scanner_data(pe.api_req_id, pe.result);
-            } else {
-                idx += 1;
-            }
+        let late = self.pending_scanner_enrichment.iter_mut()
+            .filter(|pe| pe.deadline <= now && !pe.awaiting.is_empty());
+        for pe in late {
+            log::warn!(
+                "scanner enrichment timeout: req_id={} missing={} con_ids; dispatching partial",
+                pe.api_req_id,
+                pe.awaiting.len(),
+            );
+            pe.awaiting.clear();
         }
+        self.release_scanner_batches(shared);
     }
 }
 

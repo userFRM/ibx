@@ -1091,14 +1091,47 @@ mod withdrawing_one_stream_tests {
         assert!(belongs_on(TbtType::Last, false));
     }
 
-    /// A caller that opened one stream and names it by something else still
-    /// gets that one withdrawn, rather than nothing happening.
+    /// A withdrawal reaches the stream it names and no other. Where the name
+    /// matched nothing it fell back on "the one stream on this contract",
+    /// which was never the caller's: the venue had refused the caller's
+    /// stream and it was already gone, so the fallback took the other
+    /// caller's stream on the contract, and that caller was told nothing.
     #[test]
-    fn one_stream_named_loosely_is_still_withdrawn() {
+    fn a_withdrawal_naming_nothing_leaves_the_other_stream_on_the_contract() {
         let mut hmds = HmdsState::new();
-        hmds.tbt_subscriptions.push(stream(1, 7, TbtType::Last));
-        hmds.send_tbt_unsubscribe(99, 7, &mut None, &mut HeartbeatState::new());
-        assert!(hmds.tbt_subscriptions.is_empty());
+        hmds.tbt_subscriptions.push(stream(2, 7, TbtType::BidAsk));
+        hmds.send_tbt_unsubscribe(1, 7, &mut None, &mut HeartbeatState::new());
+        assert_eq!(hmds.tbt_subscriptions.len(), 1, "the other caller's stream stands");
+    }
+
+    /// A stream withdrawn before the venue has numbered it is withdrawn by
+    /// that number when the acknowledgement arrives. Withdrawn by name alone,
+    /// the form the venue accepts and does nothing with, its number was never
+    /// learned, no second withdrawal was possible, and its ticks arrived until
+    /// the session ended.
+    #[test]
+    fn a_stream_withdrawn_before_its_acknowledgement_is_withdrawn_at_it() {
+        let mut hmds = HmdsState::new();
+        let shared = crate::bridge::SharedState::new();
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        peer.set_read_timeout(Some(std::time::Duration::from_millis(500))).unwrap();
+        let mut conn = Some(conn);
+        let mut hb = HeartbeatState::new();
+        let mut unnumbered = stream(1, 7, TbtType::Last);
+        unnumbered.venue_id = 0;
+        hmds.tbt_subscriptions.push(unnumbered);
+
+        hmds.send_tbt_unsubscribe(1, 7, &mut conn, &mut hb);
+        let by_name = String::from_utf8_lossy(&super::read_frame(&mut peer)).into_owned();
+        assert!(by_name.contains("ticker:tbt_1"), "withdrawn by name for now: {by_name}");
+
+        let ack = b"35=W\x016118=<ResultSetTickerId><id>tbt_1</id><rtTickerId>41</rtTickerId>\
+                    <minTick>0.01</minTick><sizeMinTick>1</sizeMinTick></ResultSetTickerId>\x01";
+        hmds.process_hmds_message(ack, &mut conn, &shared, &None, &mut hb);
+        let by_number = String::from_utf8_lossy(&super::read_frame(&mut peer)).into_owned();
+        assert!(by_number.contains("ticker:41"), "withdrawn by the venue's number: {by_number:?}");
+        assert!(hmds.tbt_withdrawn.contains(&41), "and its ticks are known as withdrawn");
+        assert!(hmds.tbt_subscriptions.is_empty(), "nothing is reopened by the acknowledgement");
     }
 }
 mod counted_size_range_tests {
