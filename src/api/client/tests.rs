@@ -1360,6 +1360,51 @@ fn a_cancelled_order_stops_being_tracked() {
     );
 }
 
+/// An account read after the session ended is refused, not answered from the
+/// book the session left behind.
+///
+/// The shutdown does not clear the download flag, so every one of these passed
+/// its own gate at once and handed back the last book, the last figures or the
+/// account list with nothing to say the session had gone. The compat surface
+/// refuses all four; this one answered all four.
+#[test]
+fn an_account_read_after_the_session_ended_is_refused() {
+    let (client, _rx, shared) = test_client();
+    shared.reference.set_session_over("the trading connection");
+
+    #[derive(Default)]
+    struct Heard(Vec<i64>, usize);
+    impl crate::api::wrapper::Wrapper for Heard {
+        fn error(&mut self, _req_id: i64, code: i64, _msg: &str, _json: &str) {
+            self.0.push(code);
+        }
+        fn position(&mut self, _a: &str, _c: &Contract, _p: f64, _avg: f64) { self.1 += 1; }
+        fn position_end(&mut self) { self.1 += 1; }
+        fn managed_accounts(&mut self, _accounts: &str) { self.1 += 1; }
+        fn position_multi(
+            &mut self, _r: i64, _a: &str, _m: &str, _c: &Contract, _p: f64, _avg: f64,
+        ) { self.1 += 1; }
+        fn account_update_multi(
+            &mut self, _r: i64, _a: &str, _m: &str, _k: &str, _v: &str, _c: &str,
+        ) { self.1 += 1; }
+    }
+
+    let mut w = Heard::default();
+    client.req_positions(&mut w);
+    client.req_managed_accts(&mut w);
+    client.req_account_updates_multi(1, "", "", false, &mut w);
+    client.req_positions_multi(2, "", "", &mut w);
+    // The refusals are queued and handed over on the next pass, as every
+    // refusal this surface makes is.
+    client.process_msgs(&mut w);
+
+    assert_eq!(
+        w.0, vec![504, 504, 504, 504],
+        "each says the session is over: {:?}", w.0,
+    );
+    assert_eq!(w.1, 0, "and none answers from the book the session left behind");
+}
+
 /// A withdrawal names an order this client is working, and one the venue
 /// named at connect counts.
 ///

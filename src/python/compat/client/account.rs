@@ -172,6 +172,26 @@ impl EClient {
         // The set is read inside the wait and delivered as read. Waiting on
         // one set and delivering another hands back a holding that arrives
         // between the two, which no lookup has named.
+        // Watching before reading, as the other surface does and for the
+        // reason its own comment gives.
+        //
+        // Read first and registered after, a holding that moved while the
+        // answer was being assembled was taken by a watcher that already
+        // existed -- the queue is drained once for everyone -- and reached
+        // this caller nowhere: not in its answer, which had already been read,
+        // and not afterwards, because nothing here was yet watching. The
+        // window is real rather than theoretical: the naming wait below
+        // releases the interpreter for up to two seconds, and every delivery
+        // runs a caller's own code.
+        //
+        // The cost is the one that surface already accepts: the same holding
+        // may be stated twice. A holding states what it is rather than what
+        // changed, so a second statement of it is the same answer again.
+        //
+        // Not covered by a test: the window closes before this call returns,
+        // so nothing a single thread can drive tells the two orderings apart.
+        // Written here rather than pinned by a check that passes either way.
+        self.positions_requested.store(true, Ordering::Release);
         // What moved before this answer is in the answer. Left standing, the
         // pass that hands the answer over replays every one of them as a move,
         // so a caller asking once is told about a holding twice — and the
@@ -219,8 +239,6 @@ impl EClient {
                 )?;
             }
         }
-        // Reported from here, on the next holding to move.
-        self.positions_requested.store(true, Ordering::Release);
         Ok(())
     }
 

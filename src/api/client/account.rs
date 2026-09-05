@@ -55,6 +55,13 @@ impl EClient {
     /// same as an account holding nothing. Said in the log rather than left to
     /// be inferred, because the two are not the same answer.
     pub fn req_positions(&self, wrapper: &mut impl Wrapper) {
+        // Answered from a session that has ended, this hands back the last
+        // book with nothing to say it is stale: the shutdown does not clear
+        // the download flag, so the gate below passes at once. The other
+        // surface refuses, and this now does too.
+        if self.session_over() {
+            return self.report_reason(-1, &Refusal::not_connected("Not connected"));
+        }
         // Waits for the batch-end signal, not for the first holding: an account
         // with several would otherwise answer with whichever arrived first. An
         // account holding nothing is complete when the batch ends, so this does
@@ -240,6 +247,9 @@ impl EClient {
     /// the shape the reference client answers in. A login with one account is
     /// answered with that one account and no comma.
     pub fn req_managed_accts(&self, wrapper: &mut impl Wrapper) {
+        if self.session_over() {
+            return self.report_reason(-1, &Refusal::not_connected("Not connected"));
+        }
         wrapper.managed_accounts(&self.accounts.join(","));
     }
 
@@ -263,6 +273,9 @@ impl EClient {
         &self, req_id: i64, account: &str, model_code: &str, _ledger_and_nlv: bool,
         wrapper: &mut impl Wrapper,
     ) {
+        if self.session_over() {
+            return self.report_reason(req_id, &Refusal::not_connected("Not connected"));
+        }
         if !account.is_empty() && account != self.account_id {
             let why = format!(
                 "account {account} was named and the figures that follow are {}'s, which \
@@ -307,6 +320,9 @@ impl EClient {
         &self, req_id: i64, account: &str, model_code: &str,
         wrapper: &mut impl Wrapper,
     ) {
+        if self.session_over() {
+            return self.report_reason(req_id, &Refusal::not_connected("Not connected"));
+        }
         // As for `req_positions`: what moved before this asked is in the
         // answer that follows, and fired as change events as well it would
         // arrive twice.
