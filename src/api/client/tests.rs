@@ -1360,6 +1360,26 @@ fn a_cancelled_order_stops_being_tracked() {
     );
 }
 
+/// A question asked on an ended session is answered with the end at once,
+/// not after its whole wait. The waits tested only their own deadline, so a
+/// caller retrying on "no answer" paid the wait per call for ever while the
+/// session had been over the whole time; the streams and the other surface
+/// return at once.
+#[test]
+fn a_question_on_an_ended_session_is_refused_without_the_wait() {
+    let (client, _rx, shared) = test_client();
+    shared.reference.set_session_over("the trading connection");
+    let started = std::time::Instant::now();
+    let refused = client
+        .contract_details(&Contract {
+            symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(),
+            currency: "USD".into(), ..Default::default()
+        })
+        .expect_err("the session is over");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "answered at once, not after the wait");
+    assert_eq!(refused.code, 504, "{refused:?}");
+}
+
 /// A profit subscription on an ended session takes no slot. Taken before the
 /// session was checked, a refused request held the one slot there is: the
 /// next request under another number was refused as a duplicate of one that

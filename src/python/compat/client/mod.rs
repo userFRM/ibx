@@ -637,9 +637,14 @@ impl EClient {
 
     /// Disconnect from IB.
     fn disconnect(&self, py: Python<'_>) -> PyResult<()> {
+        // A session that was held has ended; a client that never connected
+        // has no session to be told the close of.
+        let had_a_session = self.shared.lock().unwrap().is_some();
         self.stop_engine(py);
         self.connected.store(false, Ordering::Release);
-        self.session_ended.store(true, Ordering::Release);
+        if had_a_session {
+            self.session_ended.store(true, Ordering::Release);
+        }
         // Reset per-session state so connect() can be called again.
         *self.shared.lock().unwrap() = None;
         *self.control_tx.lock().unwrap() = None;
@@ -868,12 +873,18 @@ impl EClient {
         // came back arrives on this same pump — so a pump that stopped at the
         // loss could never deliver it, and the caller stayed stood down on a
         // session that had recovered.
-        let Some(shared) = self.shared.lock().unwrap().clone() else {
-            return Ok(());
-        };
         // A pass an interrupt ended is over, as it is in `run`: no more of the
         // caller's code runs on it, and the close is said on the next pass.
-        self.dispatch_once(py, &shared)?;
+        // Said whether or not a session stands: `disconnect()` takes the
+        // session away, and a program driving its own loop is told the close
+        // on the pass after, as the reference client tells it.
+        // The session taken out from under its lock before the pass runs:
+        // the pass locks the same mutex to check the session is still the
+        // client's, and a guard kept alive across it deadlocked every poll.
+        let held = self.shared.lock().unwrap().clone();
+        if let Some(shared) = held {
+            self.dispatch_once(py, &shared)?;
+        }
         self.tell_the_caller_it_closed(py)
     }
 
@@ -1760,6 +1771,27 @@ w = W()",
         *client.account_id.lock().unwrap() = Some("DU123".into());
         client.connected.store(true, Ordering::Release);
         (Py::new(py, client).unwrap(), rx, shared, w)
+    }
+
+    /// A pass that began on one session does not write the client's
+    /// connection flag from it once another session has taken its place. A
+    /// handler answering the loss with `disconnect()` then `connect()` had
+    /// installed a live session by the time the pass read the old one's
+    /// loss, and the new session was marked disconnected on the spot.
+    #[test]
+    fn a_pass_on_a_replaced_session_leaves_the_new_sessions_flag_alone() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, old, _w) = wired_client(py);
+            let client = client.borrow(py);
+            old.set_connection_lost();
+            // Another session is the client's by the time the pass runs.
+            *client.shared.lock().unwrap() = Some(Arc::new(SharedState::new()));
+            client.connected.store(true, Ordering::Release);
+            client.dispatch_once(py, &old).unwrap();
+            assert!(client.connected.load(Ordering::Relaxed), "the live session is not marked lost by the old one's pass");
+            assert!(!client.session_ended.load(Ordering::Relaxed));
+        });
     }
 
     /// The engine writes down why a session finished; the notice saying so

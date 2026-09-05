@@ -105,12 +105,22 @@ impl EClient {
         // connecting again leaves a session whose state is not this one's.
         // The events stay the announcement: a loss the caller asked for sets
         // the flag too, and is not something to report as connectivity gone.
+        // Whether this is still the session the client holds. A handler
+        // answering a loss with `disconnect()` then `connect()` installs a
+        // new session before this pass reads the old one's flags, and every
+        // store below would otherwise mark the live session lost.
+        let still_current = self
+            .shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, shared));
         let went = shared.take_connection_lost();
         let came_back = shared.take_connection_restored();
-        if went {
+        if went && still_current {
             self.connected.store(false, Ordering::Release);
         }
-        if came_back {
+        if came_back && still_current {
             self.connected.store(true, Ordering::Release);
         }
         // Whether the session is down as of this pass, by the flags rather
@@ -123,23 +133,25 @@ impl EClient {
         // event meant a handler that reconnected on the first would then take a
         // stale second 1100 into the new session, marking it disconnected.
         if events.iter().any(|e| matches!(e, Event::Disconnected)) {
-            // Mark disconnected BEFORE the callback. A handler that answers
-            // 1100 with disconnect() then connect() establishes a new session
-            // and sets connected=true; storing false afterwards would clobber
-            // the new session's state.
-            self.connected.store(false, Ordering::Release);
-            // A loss the engine is still working on and one it has abandoned
-            // are the same event; only the second records why the session
-            // finished. Taken as the end either way, a caller lost the
-            // recovery the engine was in the middle of.
-            if shared.reference.session_over().is_some() {
-                self.session_ended.store(true, Ordering::Release);
-                // A question kept for a model belongs to the session that
-                // asked it, and this session is finished. `connect()` may be
-                // called again without `disconnect()`, so a question left here
-                // would be answered in the next one under a request id nobody
-                // there ever used.
-                self.pending_option_calcs.lock().unwrap().clear();
+            // Marked before the callback, and only on the session the client
+            // still holds: a handler that answers 1100 with disconnect() then
+            // connect() establishes a new session and sets connected=true, and
+            // a store from this pass would clobber the new session's state.
+            if still_current {
+                self.connected.store(false, Ordering::Release);
+                // A loss the engine is still working on and one it has
+                // abandoned are the same event; only the second records why
+                // the session finished. Taken as the end either way, a caller
+                // lost the recovery the engine was in the middle of.
+                if shared.reference.session_over().is_some() {
+                    self.session_ended.store(true, Ordering::Release);
+                    // A question kept for a model belongs to the session that
+                    // asked it, and this session is finished. `connect()` may
+                    // be called again without `disconnect()`, so a question
+                    // left here would be answered in the next one under a
+                    // request id nobody there ever used.
+                    self.pending_option_calcs.lock().unwrap().clear();
+                }
             }
             call_wrapper!(self.wrapper, py, "error", (-1i64, 0i64, 1100i64, "Connectivity between client and server has been lost", ""));
         }
@@ -148,7 +160,7 @@ impl EClient {
         // `connection_closed`, which is what the reference client answers
         // `disconnect()` with. Reported as 1100 as well, a program that stands
         // down on connectivity loss stood down on the session it had closed.
-        if events.iter().any(|e| matches!(e, Event::Stopped)) {
+        if still_current && events.iter().any(|e| matches!(e, Event::Stopped)) {
             self.connected.store(false, Ordering::Release);
             self.session_ended.store(true, Ordering::Release);
         }
@@ -163,12 +175,6 @@ impl EClient {
         // leaves a new session in place by the time this runs, and the
         // finished one read here would otherwise end it before it had done
         // anything at all.
-        let still_current = self
-            .shared
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|held| Arc::ptr_eq(held, shared));
         if still_current
             && !self.session_ended.load(Ordering::Relaxed)
             && shared.reference.session_over().is_some()

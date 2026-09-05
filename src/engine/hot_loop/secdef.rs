@@ -182,7 +182,7 @@ impl SecDefState {
         hb: &mut HeartbeatState,
     ) {
         if let Err(lost) = self.read(conn, shared, event_tx, hb) {
-            self.give_up_with(conn, shared, &lost.to_string());
+            self.give_up_with(conn, shared, event_tx, &lost.to_string());
         }
     }
 
@@ -193,17 +193,23 @@ impl SecDefState {
     /// this session has no connection for the calendar — and the reconnect,
     /// which declines to build one while a connection is installed, is free to
     /// build another.
-    pub(crate) fn give_up(&mut self, conn: &mut Option<Connection>, shared: &SharedState) {
-        self.give_up_with(conn, shared, "it can no longer be written to");
+    pub(crate) fn give_up(&mut self, conn: &mut Option<Connection>, shared: &SharedState, event_tx: &Option<EventSink>) {
+        self.give_up_with(conn, shared, event_tx, "it can no longer be written to");
     }
 
     /// Give it up because it stopped answering.
-    pub(crate) fn give_up_silent(&mut self, conn: &mut Option<Connection>, shared: &SharedState) {
-        self.give_up_with(conn, shared, "it stopped answering");
+    pub(crate) fn give_up_silent(&mut self, conn: &mut Option<Connection>, shared: &SharedState, event_tx: &Option<EventSink>) {
+        self.give_up_with(conn, shared, event_tx, "it stopped answering");
     }
 
-    fn give_up_with(&mut self, conn: &mut Option<Connection>, shared: &SharedState, why: &str) {
+    fn give_up_with(&mut self, conn: &mut Option<Connection>, shared: &SharedState, event_tx: &Option<EventSink>, why: &str) {
         *conn = None;
+        // Announced as the other two data connections' losses are, under the
+        // venue's own numbers for this one; its recovery is announced where
+        // the socket is installed again.
+        crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::VenueData {
+            which: crate::bridge::VenueDataConnection::SecurityDefinition, up: false,
+        });
         for (_, req_id, ..) in self.pending.drain(..) {
             shared.reference.push_historical_error(
                 req_id,
@@ -598,7 +604,7 @@ mod tests {
 
         state.pending.push((String::new(), 77, false, Instant::now()));
 
-        state.give_up(&mut conn, &shared);
+        state.give_up(&mut conn, &shared, &None);
 
         assert!(conn.is_none(), "the connection is put down, so another can be built");
         assert!(state.pending.is_empty(), "and nothing is left waiting on it");

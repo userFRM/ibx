@@ -320,8 +320,15 @@ impl EClient {
     ) -> Result<Vec<T>, Refusal> {
         let _notice = LeaveTheCloseNoticeForTheCaller::new(self);
         let deadline = Instant::now() + ANSWER_TIMEOUT;
+        // Ended with the session, not at the end of the wait: a caller
+        // retrying on "no answer" otherwise paid the wait per call for ever
+        // while the session had been over the whole time. The streams and
+        // the other surface return at once.
         while Instant::now() < deadline {
             self.pump_for_ask(collector);
+            if let Some(why) = self.shared.reference.session_over() {
+                return Err(Refusal::not_connected(format!("the session is over: {why}")));
+            }
             if state.lock().unwrap().done {
                 break;
             }
@@ -473,6 +480,9 @@ impl EClient {
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         while Instant::now() < deadline {
             self.pump_for_ask(&mut refused);
+            if let Some(why) = self.shared.reference.session_over() {
+                return Err(Refusal::not_connected(format!("the session is over: {why}")));
+            }
             if let Some(refusal) = why.lock().unwrap().take() {
                 return Err(refusal);
             }
@@ -1062,6 +1072,9 @@ impl EClient {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             self.pump_for_ask(&mut watch);
+            if let Some(why) = self.shared.reference.session_over() {
+                return Err(Refusal::not_connected(format!("the session is over: {why}")));
+            }
             if *done.lock().unwrap() {
                 break;
             }
@@ -1105,6 +1118,9 @@ impl EClient {
         let mut had = 0usize;
         while quiet_since.elapsed() < LOOKUP_TIMEOUT {
             self.pump_for_ask(&mut collector);
+            if let Some(why) = self.shared.reference.session_over() {
+                return Err(Refusal::not_connected(format!("the session is over: {why}")));
+            }
             let a = answer.lock().unwrap();
             if a.done {
                 break;

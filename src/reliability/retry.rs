@@ -40,6 +40,9 @@ pub enum DisconnectReason {
     NotReady,
     /// The client asked to stop.
     ByDesign,
+    /// The recovery limits the caller set ran out before a connection came
+    /// back. Nobody asked for the stop; the limits did.
+    RecoveryExhausted,
     /// The engine stopped on its own. Nothing brings it back, and there is no
     /// session without it.
     EngineStopped,
@@ -121,7 +124,7 @@ impl DisconnectReason {
             // the retrying is the thing that stopped.
             Self::EngineStopped => Recovery::Stop,
             Self::NotReady => Recovery::RetrySlowly,
-            Self::AuthorizationFailed | Self::Unsupported | Self::ByDesign => Recovery::Stop,
+            Self::AuthorizationFailed | Self::Unsupported | Self::ByDesign | Self::RecoveryExhausted => Recovery::Stop,
         }
     }
 
@@ -140,6 +143,7 @@ impl DisconnectReason {
             Self::TakenOver => "another login took the session",
             Self::NotReady => "the server is not ready",
             Self::ByDesign => "the client asked to stop",
+            Self::RecoveryExhausted => "the recovery limits the caller set are spent",
             Self::EngineStopped => "the engine stopped",
         }
     }
