@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::error_codes::{DUPLICATE_HISTORICAL_QUERY, DUPLICATE_SCANNER_SUBSCRIPTION};
+use crate::error_codes::{DUPLICATE_HISTORICAL_QUERY, DUPLICATE_SCANNER_SUBSCRIPTION, NO_SUCH_SUBSCRIPTION};
 use crate::bridge::{Event, SharedState};
 use crate::protocol::datetime::chrono_free_timestamp;
 use crate::protocol::connection::{Connection, Frame};
@@ -1110,10 +1110,6 @@ impl HmdsState {
                                             ),
                                         }
                                     }
-                                // Matched on the id the response names, as a
-                                // bar response is. Falls back to the oldest
-                                // pending request only when the response names
-                                // none.
                                 // Matched on the id the venue echoes, as the
                                 // article above it is and for the same reason.
                                 } else if let Some(pos) = self.pending_news.iter()
@@ -2416,6 +2412,7 @@ fn build_tbt_query(
         req_id: u32,
         hmds_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
+        shared: &SharedState,
     ) {
         // Sent whether or not this client still has the request on its own
         // list. That list is emptied by the first response the venue sends,
@@ -2430,11 +2427,19 @@ fn build_tbt_query(
                     .position(|(_, rid)| *rid == req_id)
                     .map(|pos| self.answered_fundamental.remove(pos).0)
             });
-        let Some(conn) = hmds_conn.as_mut() else { return };
+        // As above: this client holds nothing under that number whether or
+        // not there is a connection to say it on.
         let Some(query_id) = named else {
-            log::debug!("fundamentals withdrawal for req_id={req_id}, which is not waiting");
+            super::push_hmds_refusal(
+                shared,
+                req_id,
+                NO_SUCH_SUBSCRIPTION,
+                format!("no fundamentals query is waiting under request {req_id}"),
+                false,
+            );
             return;
         };
+        let Some(conn) = hmds_conn.as_mut() else { return };
         let xml = crate::control::xml::cancel_query(&query_id);
         let ts = chrono_free_timestamp();
         let _ = conn.send_fix(&[
@@ -2490,6 +2495,7 @@ fn build_tbt_query(
         req_id: u32,
         hmds_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
+        shared: &SharedState,
     ) {
         let named = self.pending_news.iter()
             .position(|(_, rid)| *rid == req_id)
@@ -2499,11 +2505,21 @@ fn build_tbt_query(
                     .position(|(_, rid)| *rid == req_id)
                     .map(|pos| self.answered_news.remove(pos).0)
             });
-        let Some(conn) = hmds_conn.as_mut() else { return };
+        // Said whether or not there is a connection to send the withdrawal
+        // on: what the caller is being told is that this client holds nothing
+        // under that number, which is true either way. A withdrawal that
+        // returns in silence reads exactly like one that acted.
         let Some(query_id) = named else {
-            log::debug!("news withdrawal for req_id={req_id}, which is not waiting");
+            super::push_hmds_refusal(
+                shared,
+                req_id,
+                NO_SUCH_SUBSCRIPTION,
+                format!("no news query is waiting under request {req_id}"),
+                false,
+            );
             return;
         };
+        let Some(conn) = hmds_conn.as_mut() else { return };
         let xml = crate::control::xml::cancel_query(&query_id);
         let ts = chrono_free_timestamp();
         let _ = conn.send_fix(&[

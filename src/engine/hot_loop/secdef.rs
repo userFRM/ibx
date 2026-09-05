@@ -13,6 +13,7 @@
 use crate::engine::hot_loop::EventSink;
 use std::time::Instant;
 
+use crate::error_codes::DUPLICATE_TICKER_ID;
 use crate::bridge::SharedState;
 use crate::protocol::datetime::chrono_free_timestamp;
 use crate::control::calendar as cal;
@@ -61,6 +62,26 @@ impl SecDefState {
         hb: &mut HeartbeatState,
         shared: &SharedState,
     ) {
+        // A number already waiting on the calendar does not take a second.
+        //
+        // The name this client gives a calendar query is built from the
+        // caller's number, so two requests under one number share it: the
+        // first answer to arrive is handed over as the answer to whichever
+        // entry sits first, and the other is answered with content it did not
+        // ask for and then told the calendar never answered. And a withdrawal
+        // names a number and no kind, so a caller running both kinds under one
+        // number cancelled one and silently lost the other.
+        if self.pending.iter().any(|(_, waiting, ..)| *waiting == req_id) {
+            shared.reference.push_historical_error(
+                req_id,
+                DUPLICATE_TICKER_ID,
+                format!(
+                    "request {req_id} is already waiting on the calendar: withdraw it \
+                     before asking for another under the same number",
+                ),
+            );
+            return;
+        }
         let Some(conn) = conn.as_mut() else {
             shared.reference.push_historical_error(
                 req_id,
@@ -98,6 +119,26 @@ impl SecDefState {
         hb: &mut HeartbeatState,
         shared: &SharedState,
     ) {
+        // A number already waiting on the calendar does not take a second.
+        //
+        // The name this client gives a calendar query is built from the
+        // caller's number, so two requests under one number share it: the
+        // first answer to arrive is handed over as the answer to whichever
+        // entry sits first, and the other is answered with content it did not
+        // ask for and then told the calendar never answered. And a withdrawal
+        // names a number and no kind, so a caller running both kinds under one
+        // number cancelled one and silently lost the other.
+        if self.pending.iter().any(|(_, waiting, ..)| *waiting == req_id) {
+            shared.reference.push_historical_error(
+                req_id,
+                DUPLICATE_TICKER_ID,
+                format!(
+                    "request {req_id} is already waiting on the calendar: withdraw it \
+                     before asking for another under the same number",
+                ),
+            );
+            return;
+        }
         let json = match cal::event_data_request(query) {
             Ok(json) => json,
             Err(why) => {
@@ -565,4 +606,37 @@ mod tests {
         );
     }
 
+    /// A number already waiting on the calendar does not take a second.
+    ///
+    /// The name this client gives a calendar query is built from the caller's
+    /// number, so two requests under one number shared it: the first answer to
+    /// arrive was handed over as the answer to whichever entry sat first, the
+    /// other was answered with content it did not ask for, and the survivor
+    /// was then told the calendar never answered about a query the venue had
+    /// answered. And a withdrawal names a number and no kind, so a caller
+    /// running both kinds under one number cancelled one and silently lost the
+    /// other.
+    #[test]
+    fn a_number_already_waiting_on_the_calendar_is_not_given_another() {
+        let (conn, _peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let mut state = SecDefState::new();
+
+        state.send_calendar_meta_data_request(7, &mut conn, &mut hb, &shared);
+        assert_eq!(state.pending.len(), 1, "the first request is waiting");
+
+        // The other kind, under the same number, which is the case a caller
+        // running both reaches without meaning to.
+        state.send_calendar_events_request(
+            7, &crate::types::CalendarQuery::default(), &mut conn, &mut hb, &shared,
+        );
+
+        assert_eq!(state.pending.len(), 1, "the second does not join it");
+        assert!(state.pending[0].2, "and the one waiting is the one that was asked for");
+        let told = shared.reference.drain_historical_errors();
+        assert_eq!(told.len(), 1, "the caller is told: {told:?}");
+        assert_eq!((told[0].0, told[0].1), (7, 102), "under the number that names it");
+    }
 }

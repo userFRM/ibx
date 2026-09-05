@@ -1442,9 +1442,14 @@ impl HotLoop {
                     // As above: the answers already queued go with it.
                     self.shared.reference.purge_calendar_for(req_id);
                     if !self.secdef.withdraw_calendar_request(req_id) {
-                        push_hmds_error(
+                        // Under the number that says nothing was waiting, not
+                        // the data service's own: a withdrawal naming nothing
+                        // is not the service reporting a difficulty with a
+                        // request it answered.
+                        push_hmds_refusal(
                             &self.shared, req_id,
-                            "no calendar request is waiting under this id".to_string(),
+                            crate::error_codes::NO_SUCH_SUBSCRIPTION,
+                            format!("no calendar request is waiting under request {req_id}"),
                             false,
                         );
                     }
@@ -1527,10 +1532,10 @@ impl HotLoop {
                 ControlCommand::CancelFundamentalData { req_id } => {
                     // As above: the answers already queued go with it.
                     self.shared.reference.purge_fundamental_for(req_id);
-                    self.hmds.send_fundamental_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
+                    self.hmds.send_fundamental_cancel(req_id, &mut self.hmds_conn, &mut self.hb, &self.shared);
                 }
                 ControlCommand::CancelHistoricalNews { req_id } => {
-                    self.hmds.send_news_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
+                    self.hmds.send_news_cancel(req_id, &mut self.hmds_conn, &mut self.hb, &self.shared);
                 }
                 ControlCommand::CancelCorporateActions { req_id } => {
                     self.hmds.send_adjustments_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
@@ -6305,8 +6310,40 @@ mod queued_cancel_all_slot_tests {
 }
 
 #[cfg(test)]
-mod scanner_withdrawal_tests {
+mod withdrawal_tests {
     use super::*;
+
+    /// Withdrawing a news or fundamentals query this client is not waiting on
+    /// is answered too, and under the number that says nothing was waiting
+    /// rather than the data service's own.
+    ///
+    /// Both returned in silence, while the calendar withdrawal beside them
+    /// reported -- three withdrawals in one area, two behaviours. And the
+    /// calendar reported under the service's number, which says the service
+    /// reported a difficulty with a request it answered. Nothing was waiting;
+    /// that is a different thing.
+    #[test]
+    fn withdrawing_a_query_that_is_not_waiting_says_so() {
+        for (what, cmd) in [
+            ("news", crate::types::ControlCommand::CancelHistoricalNews { req_id: 9 }),
+            ("fundamentals", crate::types::ControlCommand::CancelFundamentalData { req_id: 9 }),
+            ("the calendar", crate::types::ControlCommand::CancelCalendar { req_id: 9 }),
+        ] {
+            let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+            let (tx, rx) = std::sync::mpsc::sync_channel(4);
+            hl.set_control_rx(rx);
+
+            tx.send(cmd).unwrap();
+            hl.poll_control_commands();
+
+            let told = hl.shared.reference.drain_historical_errors();
+            assert_eq!(told.len(), 1, "{what}: the caller is told: {told:?}");
+            assert_eq!(
+                (told[0].0, told[0].1), (9, 300),
+                "{what}: under the number that says nothing was waiting",
+            );
+        }
+    }
 
     /// Withdrawing a scan this client is not running is answered, not passed
     /// over.

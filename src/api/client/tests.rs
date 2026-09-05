@@ -1642,11 +1642,20 @@ fn cancel_mkt_data_sends_unsubscribe() {
     assert!(client.core.req_to_instrument.lock().unwrap().get(&1).is_none());
 }
 
+/// Withdrawing a subscription this client does not hold is answered, not
+/// waved through.
+///
+/// Said nothing, the withdrawal reads exactly like one that worked, and a
+/// caller whose record disagrees with this client's has no way to learn it.
 #[test]
-fn cancel_mkt_data_unknown_req_id_no_panic() {
+fn cancel_mkt_data_under_a_number_that_holds_nothing_says_so() {
     let (client, rx, _shared) = test_client();
-    client.cancel_mkt_data(999).unwrap();
-    assert!(rx.try_recv().is_err()); // no commands sent
+    let refused = client.cancel_mkt_data(999);
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 300),
+        "nothing is being watched under that number: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
 }
 
 /// Nothing about a session reaches the disk unless the caller asks for it. A

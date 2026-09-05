@@ -142,6 +142,18 @@ impl EClient {
     /// Cancel market data.
     pub fn cancel_mkt_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
+        // A caller withdrawing a subscription this client does not hold
+        // branches on being told so. Said nothing, the withdrawal reads
+        // exactly like one that worked. Reported here rather than in the body
+        // below, which this client also calls for withdrawals nobody asked
+        // for -- a snapshot that has ended, the watch behind an option
+        // calculation -- and those must stay silent.
+        if !self.core.holds_mkt_data(req_id) {
+            return self.report_refusal(py, req_id, Refusal::stated(
+                NO_SUCH_SUBSCRIPTION,
+                format!("no contract is being watched under request {req_id}"),
+            ));
+        }
         self.withdraw_mkt_data(py, &tx, req_id)
     }
 

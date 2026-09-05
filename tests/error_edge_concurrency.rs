@@ -139,18 +139,31 @@ fn place_order_zero_con_id_asks_the_venue_to_name_it() {
 //  ERROR PATHS — cancel operations on non-existent targets
 // ═══════════════════════════════════════════════════════════════════════
 
+/// Withdrawing something this client does not hold is answered, not waved
+/// through.
+///
+/// Said nothing, the withdrawal reads exactly like one that worked, and a
+/// caller whose record disagrees with this client's has no way to learn it.
 #[test]
-fn cancel_mkt_data_unknown_req_id_no_panic() {
+fn cancel_mkt_data_under_a_number_that_holds_nothing_says_so() {
     let (client, rx, _shared) = test_client();
-    client.cancel_mkt_data(999).unwrap();
-    assert!(rx.try_recv().is_err()); // no command sent
+    let refused = client.cancel_mkt_data(999);
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 300),
+        "nothing is being watched under that number: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
 }
 
 #[test]
-fn cancel_tick_by_tick_unknown_req_id_no_panic() {
+fn cancel_tick_by_tick_under_a_number_that_holds_nothing_says_so() {
     let (client, rx, _shared) = test_client();
-    client.cancel_tick_by_tick_data(999).unwrap();
-    assert!(rx.try_recv().is_err());
+    let refused = client.cancel_tick_by_tick_data(999);
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 300),
+        "nothing is held under that number: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
 }
 
 #[test]

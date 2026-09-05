@@ -109,6 +109,15 @@ impl EClient {
         // chose was never held, and releasing one that was not held does
         // nothing.
         self.shared.reference.forget_ours(crate::bridge::RecordKind::Answer, req_id);
+        // A caller withdrawing a subscription this client does not hold
+        // branches on being told so. Said nothing, the withdrawal reads
+        // exactly like one that worked.
+        if !self.core.holds_mkt_data(req_id) {
+            return Err(Refusal::stated(
+                NO_SUCH_SUBSCRIPTION,
+                format!("no contract is being watched under request {req_id}"),
+            ));
+        }
         let (instrument, stop_news) = self.core.unregister_mkt_data(&self.shared, req_id);
         // Asked separately, because the quotes stay up for another caller
         // while the headlines this one asked for stop. Withdrawn only

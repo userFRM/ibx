@@ -1804,6 +1804,15 @@ impl ClientCore {
         self.cached_instrument(shared, emptied)
     }
 
+    /// Whether this number is watching a contract at all.
+    ///
+    /// Read before a withdrawal, which cannot tell "nothing was held" from
+    /// "a follower stopped following" by what it returns -- both are nothing
+    /// to send.
+    pub fn holds_mkt_data(&self, req_id: i64) -> bool {
+        self.req_to_instrument.lock().unwrap().contains_key(&req_id)
+    }
+
     /// Unregister a market data subscription.
     ///
     /// Answers with the subscription to withdraw, and separately with the
