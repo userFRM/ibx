@@ -330,10 +330,40 @@ fn engine_rejects_unknown_bar_size_with_error_and_sentinel() {
     assert!(hmds.pending_historical.is_empty(), "rejected request must not go pending");
     let errors = shared.reference.drain_historical_errors();
     assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].1, 162);
+    assert_eq!(
+        errors[0].1, 321,
+        "the request is malformed, not a difficulty the service had with one it answered",
+    );
     assert!(errors[0].2.contains("bar_size"), "got: {}", errors[0].2);
     let hist = shared.reference.drain_historical_data();
     assert_eq!(hist.len(), 1, "terminal sentinel must unblock waiters");
+    assert!(hist[0].1.is_complete);
+}
+
+/// The same for a series this client cannot name.
+///
+/// Its sibling above covers the bar size; this covers the other argument the
+/// same function reads, and pins both numbers so neither drifts back onto the
+/// data service's own.
+#[test]
+fn engine_rejects_unknown_what_to_show_with_error_and_sentinel() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+
+    hmds.send_historical_request_ex(9, 756733, "", "2 D", "1 hour", "GRAVITY",
+        true, false, false, "SPY", "STK", "SMART", &mut conn, &mut hb, &shared);
+
+    assert!(hmds.pending_historical.is_empty(), "a refused request does not go pending");
+    let errors = shared.reference.drain_historical_errors();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0].1, 321,
+        "the request is malformed, not a difficulty the service had with one it answered",
+    );
+    let hist = shared.reference.drain_historical_data();
+    assert_eq!(hist.len(), 1, "and a caller waiting on it is released");
     assert!(hist[0].1.is_complete);
 }
 

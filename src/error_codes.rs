@@ -104,6 +104,10 @@ pub const GOOD_TILL_DATE_INVALID: i32 = 334;
 /// restate is refused under.
 pub const CHANGE_CANNOT_CHANGE_TYPE: i32 = 329;
 
+/// The code an order type this exchange and security type do not support is
+/// refused under.
+pub const ORDER_TYPE_UNSUPPORTED: i32 = 387;
+
 /// The code a log level outside the range the client carries is refused under.
 pub const LOG_LEVEL_INVALID: i32 = 319;
 
@@ -178,12 +182,6 @@ impl From<&str> for Refusal {
     }
 }
 
-impl From<Refusal> for String {
-    fn from(refusal: Refusal) -> String {
-        refusal.message
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,8 +220,14 @@ mod tests {
         assert!(quiet.code < 0, "not a number the venue can state");
         assert_ne!(quiet.code, Refusal::VALIDATION, "silence is not a bad request");
 
-        // And it still reads as prose wherever a caller wants prose.
-        assert_eq!(String::from(refused), "no market data during competing session");
+        // And it still reads as prose wherever a caller wants prose -- through
+        // Display, which is the only way. A refusal does not convert to a
+        // string on its own: it did, and a refusal handed to a constructor
+        // that takes prose was flattened onto the general number in silence,
+        // discarding the one the validator had just stated. Two call sites
+        // were doing exactly that. Without the conversion each is a compile
+        // error instead.
+        assert_eq!(refused.to_string(), "no market data during competing session");
     }
 
     #[test]

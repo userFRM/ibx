@@ -1853,8 +1853,11 @@ impl CcpState {
             // tells a request the venue never named.
             log::warn!("Request abandoned: {reason}");
             if let Some(caller_req_id) = request_id(&cmd) {
-                super::push_hmds_error(
-                    shared, caller_req_id, reason,
+                // The lookup this request needs could not be made, which is a
+                // fault in the request rather than one the data service had
+                // with a query it answered.
+                super::push_hmds_refusal(
+                    shared, caller_req_id, crate::error_codes::Refusal::VALIDATION, reason,
                     matches!(cmd, crate::types::ControlCommand::FetchHistorical { .. }),
                 );
             }
@@ -1906,8 +1909,10 @@ impl CcpState {
             );
             log::warn!("Request abandoned: {reason}");
             if let Some(req_id) = request_id(&cmd) {
-                super::push_hmds_error(
-                    shared, req_id, reason,
+                // Nothing the venue holds matches the contract described, which
+                // is what this text says word for word.
+                super::push_hmds_refusal(
+                    shared, req_id, crate::error_codes::Refusal::NO_DEFINITION, reason,
                     matches!(cmd, crate::types::ControlCommand::FetchHistorical { .. }),
                 );
             }

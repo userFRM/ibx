@@ -104,8 +104,7 @@ impl EClient {
         // be placed as asked is a programming error, and answering it with a
         // fifteen-second lookup for a contract it was never going to trade is
         // slower and says less.
-        crate::client_core::ClientCore::validate_order(order, &self.account_id)
-            .map_err(Refusal::validation)?;
+        crate::client_core::ClientCore::validate_order(order, &self.account_id)?;
 
         // Resolved before the turn is taken, not during it. `place_order` looks
         // a contract up when it carries no id, and a lookup is a question of
@@ -206,8 +205,7 @@ impl EClient {
             order_type: "LMT".into(), lmt_price: entry, tif: "DAY".into(),
             ..Default::default()
         };
-        crate::client_core::ClientCore::validate_order(&entering, &self.account_id)
-            .map_err(Refusal::validation)?;
+        crate::client_core::ClientCore::validate_order(&entering, &self.account_id)?;
         // The exits are prices and are range-checked as the entry is. Scaling
         // saturates a value the wire cannot carry, which the ordering check below
         // would then read as a valid price.

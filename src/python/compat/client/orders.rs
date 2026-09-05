@@ -331,7 +331,7 @@ impl EClient {
         } else {
             match ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract)) {
                 Ok(built) => built,
-                Err(why) => return self.report_refusal(py, order_id, why.into()),
+                Err(why) => return self.report_refusal(py, order_id, why),
             }
         };
         // As on the other surface: an order that does not transmit is built

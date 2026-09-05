@@ -431,7 +431,7 @@ impl HmdsState {
             stranded.len(),
         );
         for (req_id, from_historical) in stranded {
-            super::push_hmds_error(shared, req_id, why.to_string(), from_historical);
+            super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::NOT_CONNECTED, why.to_string(), from_historical);
         }
     }
 
@@ -1738,7 +1738,7 @@ fn build_tbt_query(
                 Ok(dt) => dt,
                 Err(e) => {
                     log::error!("historical req_id={req_id}: {e}");
-                    super::push_hmds_error(shared, req_id, e, true);
+                    super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::VALIDATION, e, true);
                     return;
                 }
             }
@@ -1761,7 +1761,7 @@ fn build_tbt_query(
             Ok(bs) => bs,
             Err(e) => {
                 log::error!("historical req_id={req_id}: {e}");
-                super::push_hmds_error(shared, req_id, e, true);
+                super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::VALIDATION, e, true);
                 return;
             }
         };
@@ -2031,7 +2031,7 @@ fn build_tbt_query(
             Ok(dt) => dt,
             Err(e) => {
                 log::error!("head timestamp req_id={req_id}: {e}");
-                super::push_hmds_error(shared, req_id, e, false);
+                super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::VALIDATION, e, false);
                 return;
             }
         };
@@ -2049,7 +2049,7 @@ fn build_tbt_query(
                  states the contract's own type and venue"
             );
             log::warn!("{told}");
-            super::push_hmds_error(shared, req_id, told, false);
+            super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::NO_DEFINITION, told, false);
             return;
         };
         let req = crate::control::historical::HeadTimestampRequest {
@@ -2092,8 +2092,9 @@ fn build_tbt_query(
             (fix::TAG_SENDING_TIME, &ts),
             (crate::control::scanner::TAG_SUB_PROTOCOL, "10001"),
         ]) {
-            super::push_hmds_error(
+            super::push_hmds_refusal(
                 shared, crate::bridge::ReferenceState::NO_REQUEST,
+                crate::error_codes::Refusal::NOT_CONNECTED,
                 format!("scanner parameters request could not be sent: {e}"),
                 false,
             );
@@ -2299,9 +2300,10 @@ fn build_tbt_query(
     /// series waits until the connection is torn down and the caller is then
     /// told a second time, with the end it should have had here.
     fn the_actions_did_not_go_out(&mut self, req_id: u32, why: &str, shared: &SharedState) {
-        crate::engine::hot_loop::push_hmds_error(
+        crate::engine::hot_loop::push_hmds_refusal(
             shared,
             req_id,
+            crate::error_codes::Refusal::NOT_CONNECTED,
             format!("the request for this contract's corporate actions could not be sent: {why}"),
             false,
         );
@@ -2356,7 +2358,7 @@ fn build_tbt_query(
                      ReportSnapshot, RESC or CalendarReport"
                 );
                 log::warn!("{told}");
-                super::push_hmds_error(shared, req_id, told, false);
+                super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::VALIDATION, told, false);
                 return;
             }
         };
@@ -2372,7 +2374,7 @@ fn build_tbt_query(
                  request states the contract's own type and currency"
             );
             log::warn!("{told}");
-            super::push_hmds_error(shared, req_id, told, false);
+            super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::NO_DEFINITION, told, false);
             return;
         };
         // Its own name, which the venue echoes on the answer. The name was

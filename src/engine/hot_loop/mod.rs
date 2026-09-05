@@ -1087,8 +1087,10 @@ impl HotLoop {
                     }
                     _ => {
                         if let Some(req_id) = ccp::request_id(&cmd) {
-                            push_hmds_error(
-                                &self.shared, req_id, told,
+                            // The request is malformed, not a difficulty the
+                            // data service had with one it answered.
+                            push_hmds_refusal(
+                                &self.shared, req_id, crate::error_codes::Refusal::VALIDATION, told,
                                 matches!(cmd, ControlCommand::FetchHistorical { .. }),
                             );
                         }
@@ -1236,7 +1238,12 @@ impl HotLoop {
                              venue's id for the contract, which is what a stream is asked for by",
                         );
                         log::error!("{reason}");
-                        push_hmds_error(&self.shared, req_id.max(0) as u32, reason.clone(), false);
+                        // Malformed rather than answered badly: the stream
+                        // names no contract, so nothing was ever asked.
+                        push_hmds_refusal(
+                            &self.shared, req_id.max(0) as u32, crate::error_codes::Refusal::VALIDATION,
+                            reason.clone(), false,
+                        );
                         if let Some(tx) = reply_tx.as_ref() {
                             let _ = tx.try_send(Err(reason));
                         }

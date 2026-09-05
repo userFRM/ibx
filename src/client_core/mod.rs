@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::error_codes::{
     CHANGE_CANNOT_CHANGE_TYPE, COMBINATION_LEG_INVALID, COMBINATION_NEEDS_LEGS,
     CONDITION_CONTRACT_INCOMPLETE, DUPLICATE_TICKER_ID, GOOD_TILL_DATE_INVALID, NO_SUCH_BOOK,
-    Refusal,
+    ORDER_TYPE_UNSUPPORTED, Refusal,
     SECURITY_NOT_PERMITTED, TRIGGER_METHOD_INVALID, TRIGGER_PRICE_MISSING,
 };
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -4445,7 +4445,7 @@ impl ClientCore {
         order_id: u64,
         instrument: InstrumentId,
         contract: Option<&crate::types::model::Contract>,
-    ) -> Result<ControlCommand, String> {
+    ) -> Result<ControlCommand, Refusal> {
         let side = order.side()?;
         let qty = crate::types::qty_from_f64(order.total_quantity);
         let order_type = order.order_type.to_uppercase();
@@ -4535,7 +4535,9 @@ impl ClientCore {
                 "STP LMT" => AdjustedOrderType::StopLimit,
                 "TRAIL" => AdjustedOrderType::Trail,
                 "TRAIL LIMIT" => AdjustedOrderType::TrailLimit,
-                other => return Err(format!("unknown adjustedOrderType '{other}'")),
+                other => return Err(Refusal::validation(
+                    format!("unknown adjustedOrderType '{other}'"),
+                )),
             };
             let scale = |v: f64| crate::types::price_from_f64(v);
             // adjusted_trailing_amount defaults to f64::MAX when unset.
@@ -4702,7 +4704,12 @@ impl ClientCore {
                 let offset = crate::types::price_from_f64(order.aux_price);
                 ex(OrderKind::SnapPri { offset })
             }
-            _ => return Err(format!("Unsupported order type: '{}'", order.order_type)),
+            // The catalogue names this: a type this client cannot state is a
+            // type this exchange and security type do not support.
+            _ => return Err(Refusal::stated(
+                ORDER_TYPE_UNSUPPORTED,
+                format!("Unsupported order type: '{}'", order.order_type),
+            )),
         };
 
         Ok(ControlCommand::Order(req))

@@ -8,14 +8,14 @@
 use ibx::api::client::{EClient, EClientConfig};
 use ibx::api::types::{Contract, Order};
 
-fn main() -> Result<(), String> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = EClient::connect(&EClientConfig {
         username: std::env::var("IB_USERNAME").unwrap_or_default(),
         password: std::env::var("IB_PASSWORD").unwrap_or_default(),
         paper: true,
         ..Default::default()
     })
-    .map_err(|e| e.to_string())?;
+    ?;
 
     let spy = client.qualify_contract(&Contract {
         symbol: "SPY".into(),
