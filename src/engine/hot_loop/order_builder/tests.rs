@@ -3774,3 +3774,57 @@ fn an_order_whose_slot_changed_hands_is_not_sent() {
         "and the caller is told which contract it named and which the place now holds: {said:?}",
     );
 }
+
+/// A bracket leg replaced keeps its group and its parent.
+///
+/// The bracket's three legs went out as raw messages and none was recorded as
+/// placed. A replace is a full statement of the order and restates from that
+/// record, so a leg's replace carried no group and no parent: the venue took
+/// the replacement as stated and the leg left its bracket -- a stop-loss that
+/// no longer cancels when its take-profit fills.
+#[test]
+fn a_replaced_bracket_leg_keeps_its_group_and_its_parent() {
+    use std::io::Read;
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut conn = Some(conn);
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.set_routing(instrument, "STK", "SMART");
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    context.pending_orders.push(crate::types::OrderRequest::SubmitBracket {
+        con_id: 756733, parent_id: 10, tp_id: 11, sl_id: 12, instrument,
+        side: Side::Buy, qty: 100 * crate::types::QTY_SCALE,
+        entry_price: 150 * crate::types::PRICE_SCALE,
+        take_profit: 155 * crate::types::PRICE_SCALE,
+        stop_loss: 145 * crate::types::PRICE_SCALE,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    // The three legs, read and set aside.
+    let mut buf = vec![0u8; 65536];
+    let n = peer.read(&mut buf).unwrap();
+    let placed = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(placed.contains("|583=OCA_10|"), "the legs were placed in a group: {placed}");
+
+    // The stop-loss is moved.
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 12, price: 0,
+        qty: 100 * crate::types::QTY_SCALE, outside_rth: false,
+        ord_type: 0, tif: 0, stop_price: 144 * crate::types::PRICE_SCALE,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let n = peer.read(&mut buf).unwrap();
+    let replaced = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+
+    assert!(replaced.contains("|35=G|"), "a replace went out: {replaced}");
+    assert!(
+        replaced.contains("|583=OCA_10|"),
+        "the replacement restates the group the leg was placed in: {replaced}",
+    );
+    assert!(
+        replaced.contains("|6107=10.0|"),
+        "and the parent it was placed under: {replaced}",
+    );
+}

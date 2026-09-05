@@ -246,6 +246,33 @@ pub(crate) fn drain_and_send_orders(
                     b'0',
                     0,
                 ));
+                // Each leg is recorded as it was placed, as the ordinary submit
+                // records its own. A replace is a full statement of the order
+                // and restates from this record, so a leg placed without one
+                // was replaced with no group and no parent: the venue took the
+                // replacement as stated, and the leg left its bracket -- a
+                // stop that no longer cancels when its take-profit fills.
+                let bracket_leg = |kind: crate::types::OrderKind, linked: bool| {
+                    Box::new(crate::types::OrderSpec {
+                        kind,
+                        attrs: if linked {
+                            crate::types::OrderAttrs {
+                                parent_id,
+                                oca_group_str: oca_group.clone(),
+                                // The gateway's default, which is what the
+                                // messages below state.
+                                oca_type: 3,
+                                ..Default::default()
+                            }
+                        } else {
+                            Default::default()
+                        },
+                    })
+                };
+                context.submitted.insert(
+                    parent_id,
+                    bracket_leg(crate::types::OrderKind::Limit { price: entry_price }, false),
+                );
                 let now = chrono_free_timestamp();
                 let mut parent_fields = vec![
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
@@ -279,6 +306,10 @@ pub(crate) fn drain_and_send_orders(
                     b'1',
                     0,
                 ));
+                context.submitted.insert(
+                    tp_id,
+                    bracket_leg(crate::types::OrderKind::Limit { price: take_profit }, true),
+                );
                 let now = chrono_free_timestamp();
                 let mut tp_fields = vec![
                     (fix::TAG_MSG_TYPE, fix::MSG_NEW_ORDER),
@@ -308,6 +339,10 @@ pub(crate) fn drain_and_send_orders(
                 context.insert_order(crate::types::Order::new(
                     sl_id, instrument, exit_side, qty, stop_loss, b'3', b'1', stop_loss,
                 ));
+                context.submitted.insert(
+                    sl_id,
+                    bracket_leg(crate::types::OrderKind::Stop { stop_price: stop_loss }, true),
+                );
                 let now = chrono_free_timestamp();
                 // The legs go out as three messages and the arm reports one
                 // outcome. Reporting only the last meant a parent that never
