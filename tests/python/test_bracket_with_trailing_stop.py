@@ -199,6 +199,16 @@ class TestBracketOrder:
             assert self.wrapper.perm_ids[oid] > 0, \
                 f"Order {oid} should have positive permId"
 
+        # Replace the trailing stop. A replace names the order and restates
+        # it whole, so a leg replaced without its group and its parent stands
+        # alone afterwards: a stop that no longer cancels its take-profit. The
+        # open-order read below is what proves both survived.
+        self.wrapper.got_status.clear()
+        sl.trailing_percent = 1.5
+        self.client.place_order(sl_id, qqq, sl)
+        assert self.wrapper.got_status.wait(timeout=30), "the replace was not acknowledged"
+        time.sleep(2)
+
         # Verify via reqOpenOrders
         self.client.req_open_orders()
         self.wrapper.got_open_order_end.wait(timeout=15)
@@ -208,6 +218,16 @@ class TestBracketOrder:
         assert our_orders == {parent_id, tp_id, sl_id}, (
             f"the venue holds {sorted(our_orders)} of "
             f"{sorted((parent_id, tp_id, sl_id))}"
+        )
+        replaced = [o for o in self.wrapper.open_orders_list if o[0] == sl_id][-1][2]
+        assert replaced.parent_id == parent_id, (
+            f"the replaced stop lost its parent: {replaced.parent_id}"
+        )
+        assert replaced.oca_group == oca_group, (
+            f"the replaced stop lost its group: {replaced.oca_group!r}"
+        )
+        assert abs(replaced.trailing_percent - 1.5) < 1e-9, (
+            f"and it carries the new trail: {replaced.trailing_percent}"
         )
 
         # Cancel all
