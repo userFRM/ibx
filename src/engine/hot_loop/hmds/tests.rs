@@ -1863,3 +1863,33 @@ fn a_number_already_answering_a_historical_query_is_not_given_another() {
         "and a caller waiting on the refused request is released",
     );
 }
+
+/// A number already running a scan does not take a second.
+///
+/// Both scans run at the venue and both resolve to that number, so the caller
+/// asked for one scan and read two interleaved with nothing in the sequence
+/// saying so -- each batch ends the way a single scan's does. The withdrawal
+/// takes one entry, so the other stayed running and went on delivering rows
+/// under a number the caller had withdrawn.
+#[test]
+fn a_number_already_running_a_scan_is_not_given_another() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let (conn, _peer) = Connection::for_test();
+    let mut conn = Some(conn);
+
+    hmds.send_scanner_subscribe(9, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 50,
+        Vec::new(), &mut conn, &mut hb, &shared);
+    assert_eq!(hmds.pending_scanner.len(), 1, "the first scan is running");
+    let first = hmds.pending_scanner[0].0.clone();
+
+    hmds.send_scanner_subscribe(9, "STK", "STK.US.MAJOR", "TOP_PERC_LOSE", 50,
+        Vec::new(), &mut conn, &mut hb, &shared);
+
+    assert_eq!(hmds.pending_scanner.len(), 1, "the second scan does not join it");
+    assert_eq!(hmds.pending_scanner[0].0, first, "and the running scan is the one asked for");
+    let errors = shared.reference.drain_historical_errors();
+    assert_eq!(errors.len(), 1, "the caller is told: {errors:?}");
+    assert_eq!(errors[0].1, 385, "under the number that names it");
+}

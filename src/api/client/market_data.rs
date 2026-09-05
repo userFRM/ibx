@@ -1,7 +1,7 @@
 //! Market data request/cancel methods and quote accessors.
 
 use crate::types::*;
-use crate::error_codes::Refusal;
+use crate::error_codes::{NO_SUCH_SUBSCRIPTION, Refusal};
 
 use super::{wire_req_id, Contract, EClient};
 
@@ -195,9 +195,16 @@ impl EClient {
         // another thread opening or withdrawing a different stream, and stops
         // a disconnect resetting at all, for as long as the queue stays full.
         let instrument = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id);
-        if let Some(instrument) = instrument {
-            self.send(ControlCommand::UnsubscribeTbt { req_id, instrument })?;
-        }
+        // A caller withdrawing a stream this client does not hold branches on
+        // being told so. Said nothing, the withdrawal reads exactly like one
+        // that worked.
+        let Some(instrument) = instrument else {
+            return Err(Refusal::stated(
+                NO_SUCH_SUBSCRIPTION,
+                format!("no tick stream is held under request {req_id}"),
+            ));
+        };
+        self.send(ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         Ok(())
     }
 

@@ -1732,11 +1732,48 @@ fn cancel_tick_by_tick_data_sends_unsubscribe_tbt() {
     );
 }
 
+/// A number already carrying a tick stream is not given a second.
+///
+/// Two streams under one number stamp that number on every record, so the
+/// caller was handed one contract's trades and another's quotes with nothing
+/// to tell them apart and the tick kind of whichever asked last. The
+/// withdrawal reads one record, so it reached the second only -- and with that
+/// record gone, a second withdrawal reached nothing and the first stream ran
+/// under a cancelled number for the life of the session.
 #[test]
-fn cancel_tick_by_tick_unknown_req_id_no_panic() {
+fn a_request_already_carrying_a_tick_stream_is_not_given_another() {
     let (client, rx, _shared) = test_client();
-    client.cancel_tick_by_tick_data(999).unwrap();
-    assert!(rx.try_recv().is_err());
+    client.core.tbt_to_instrument.lock().unwrap().insert(5, 3);
+    while rx.try_recv().is_ok() {}
+
+    let elsewhere = Contract { symbol: "QQQ".into(), con_id: 320227571, ..spy() };
+    let refused = client.req_tick_by_tick_data(5, &elsewhere, "BidAsk", 0, false);
+
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 102),
+        "the number is already carrying a stream: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
+    assert_eq!(
+        client.core.tbt_to_instrument.lock().unwrap().get(&5).copied(), Some(3),
+        "the stream it was already carrying is untouched",
+    );
+}
+
+/// Withdrawing a tick stream this client does not hold is answered, not
+/// waved through.
+///
+/// Said nothing, the withdrawal reads exactly like one that worked, and a
+/// caller whose record disagrees with this client's has no way to learn it.
+#[test]
+fn cancel_tick_by_tick_under_a_number_that_holds_nothing_says_so() {
+    let (client, rx, _shared) = test_client();
+    let refused = client.cancel_tick_by_tick_data(999);
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 300),
+        "nothing is held under that number: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
 }
 
 // ═══════════════════════════════════════════════════════════════════

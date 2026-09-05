@@ -1465,13 +1465,27 @@ impl HotLoop {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
-                        self.hmds.send_scanner_subscribe(req_id, &instrument, &location_code, &scan_code, max_items, filters, &mut self.hmds_conn, &mut self.hb);
+                        self.hmds.send_scanner_subscribe(req_id, &instrument, &location_code, &scan_code, max_items, filters, &mut self.hmds_conn, &mut self.hb, &self.shared);
                     }
                 }
                 ControlCommand::CancelScanner { req_id } => {
                     if let Some(pos) = self.hmds.pending_scanner.iter().position(|(_, rid)| *rid == req_id) {
                         let (scan_id, _) = self.hmds.pending_scanner.remove(pos);
                         self.hmds.send_scanner_cancel(&scan_id, &mut self.hmds_conn, &mut self.hb);
+                    } else {
+                        // A caller withdrawing a scan this client is not
+                        // running has a record that disagrees with ours, and
+                        // it branches on being told so. Said nothing, the
+                        // withdrawal is indistinguishable from one that
+                        // worked, and the caller goes on believing it holds
+                        // nothing while a scan it has forgotten runs on.
+                        push_hmds_refusal(
+                            &self.shared,
+                            req_id,
+                            crate::error_codes::NO_SUCH_SCANNER_SUBSCRIPTION,
+                            format!("no scan is running under request {req_id}"),
+                            false,
+                        );
                     }
                     // Rows already found and waiting on their contracts to be
                     // named go with it. They are parked for up to five
@@ -6287,5 +6301,30 @@ mod queued_cancel_all_slot_tests {
             hl.context.slots_to_reconsider.is_empty(),
             "and the reclaim does not ask again every lap while it sits there",
         );
+    }
+}
+
+#[cfg(test)]
+mod scanner_withdrawal_tests {
+    use super::*;
+
+    /// Withdrawing a scan this client is not running is answered, not passed
+    /// over.
+    ///
+    /// Said nothing, the withdrawal is indistinguishable from one that worked,
+    /// and a caller whose record disagrees with this client's has no way to
+    /// learn it.
+    #[test]
+    fn withdrawing_a_scan_that_is_not_running_says_so() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+
+        tx.send(crate::types::ControlCommand::CancelScanner { req_id: 9 }).unwrap();
+        hl.poll_control_commands();
+
+        let errors = hl.shared.reference.drain_historical_errors();
+        assert_eq!(errors.len(), 1, "the caller is told: {errors:?}");
+        assert_eq!((errors[0].0, errors[0].1), (9, 365), "under the number that names it");
     }
 }

@@ -1967,6 +1967,31 @@ impl ClientCore {
         number_of_ticks: u32,
         ignore_size: bool,
     ) -> Result<InstrumentId, Refusal> {
+        // A number already carrying a tick stream cannot carry a second.
+        //
+        // The same shape the quote subscription above refuses: two streams
+        // under one number stamped that number on every record, so a caller
+        // was handed one contract's trades and another's quotes with nothing
+        // to tell them apart and the tick kind of whichever asked last. The
+        // withdrawal reads the one record this keeps, so it reached the second
+        // stream only -- and with that record gone, a second withdrawal
+        // reached nothing at all and the first stream ran under a cancelled
+        // number for the life of the session.
+        //
+        // Refused here rather than where the subscribe is sent: the slot is
+        // registered whether or not the subscribe is refused, so a refusal
+        // downstream would still leave this record overwritten and the first
+        // stream orphaned. Before the send is the only point that leaves
+        // nothing behind.
+        if self.tbt_to_instrument.lock().unwrap().contains_key(&req_id) {
+            return Err(Refusal::stated(
+                DUPLICATE_TICKER_ID,
+                format!(
+                    "request {req_id} is already carrying a tick stream: withdraw it \
+                     before asking for another under the same number",
+                ),
+            ));
+        }
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::SubscribeTbt {
             contract: ContractRef { con_id, symbol: symbol.to_string(), sec_type: sec_type.to_string(), exchange: exchange.to_string(), ..Default::default() },

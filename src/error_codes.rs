@@ -76,6 +76,25 @@ impl Refusal {
 /// under.
 pub const DUPLICATE_TICKER_ID: i32 = 102;
 
+/// The code a request number already running a scan is refused under.
+///
+/// Its own number rather than the one a quote subscription is refused under,
+/// for the same reason a historical query has its own: a caller branches on
+/// which request it made.
+pub const DUPLICATE_SCANNER_SUBSCRIPTION: i32 = 385;
+
+/// The code a withdrawal naming a scan this client is not running is answered
+/// under.
+pub const NO_SUCH_SCANNER_SUBSCRIPTION: i32 = 365;
+
+/// The code a withdrawal naming a subscription this client does not hold is
+/// answered under.
+///
+/// A caller branches on this to learn that its own record and this client's
+/// disagree -- that what it believes it is withdrawing is not something this
+/// client holds. Silence is indistinguishable from a withdrawal that worked.
+pub const NO_SUCH_SUBSCRIPTION: i32 = 300;
+
 /// The code a request number already answering a historical query is refused
 /// under.
 ///

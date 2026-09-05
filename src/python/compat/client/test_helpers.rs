@@ -160,6 +160,15 @@ impl EClient {
         self.core.instrument_to_req.lock().unwrap().insert(instrument, req_id);
     }
 
+    /// Say which slot a tick stream is carried in, under the number the
+    /// caller gave it. Kept apart from the quote mapping: a request for
+    /// trades held in the quote table was handed the contract's quotes, and
+    /// withdrawing it took those away from whoever was watching them.
+    #[doc(hidden)]
+    fn _test_map_tbt(&self, req_id: i64, instrument: u32) {
+        self.core.tbt_to_instrument.lock().unwrap().insert(req_id, instrument);
+    }
+
     /// Set instrument count on SharedState.
     #[doc(hidden)]
     fn _test_set_instrument_count(&self, count: u32) -> PyResult<()> {

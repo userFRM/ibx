@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::error_codes::DUPLICATE_HISTORICAL_QUERY;
+use crate::error_codes::{DUPLICATE_HISTORICAL_QUERY, DUPLICATE_SCANNER_SUBSCRIPTION};
 use crate::bridge::{Event, SharedState};
 use crate::protocol::datetime::chrono_free_timestamp;
 use crate::protocol::connection::{Connection, Frame};
@@ -2108,7 +2108,28 @@ fn build_tbt_query(
         log::info!("Sent scanner params request");
     }
 
-    pub(crate) fn send_scanner_subscribe(&mut self, req_id: u32, instrument: &str, location_code: &str, scan_code: &str, max_items: u32, filters: Vec<(String, String)>, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    pub(crate) fn send_scanner_subscribe(&mut self, req_id: u32, instrument: &str, location_code: &str, scan_code: &str, max_items: u32, filters: Vec<(String, String)>, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
+        // A number already running a scan does not take a second.
+        //
+        // Both scans run at the venue and both resolve to this number, so the
+        // caller asked for one scan and read two interleaved with nothing in
+        // the sequence saying so -- each batch ends the way a single scan's
+        // does. And the withdrawal takes one entry, so the other stayed
+        // running and went on delivering rows under a number the caller had
+        // withdrawn.
+        if self.pending_scanner.iter().any(|(_, id)| *id == req_id) {
+            super::push_hmds_refusal(
+                shared,
+                req_id,
+                DUPLICATE_SCANNER_SUBSCRIPTION,
+                format!(
+                    "request {req_id} is already running a scan: withdraw it before \
+                     asking for another under the same number",
+                ),
+                false,
+            );
+            return;
+        }
         let sub = crate::control::scanner::ScannerSubscription {
             instrument: instrument.to_string(),
             location_code: location_code.to_string(),
@@ -2139,8 +2160,6 @@ fn build_tbt_query(
     /// cannot identify the scan. The payload carries the scan name this client
     /// supplied on subscribe, which does.
     ///
-    /// A response naming a scan this client is not running is delivered to the
-    /// oldest pending request.
     fn scanner_answered(&self, xml: &str) -> Option<u32> {
         let Some(named) = crate::control::xml::tag(xml, "id") else {
             log::warn!(

@@ -1,7 +1,7 @@
 //! Market data request/cancel methods.
 
 use pyo3::prelude::*;
-use crate::error_codes::Refusal;
+use crate::error_codes::{NO_SUCH_SUBSCRIPTION, Refusal};
 
 use crate::types::*;
 use super::{wire_req_id, EClient};
@@ -246,9 +246,16 @@ impl EClient {
         let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
         self.tbt_kind.lock().unwrap().remove(&req_id);
         let instrument = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id);
-        if let Some(instrument) = instrument {
-            Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { req_id, instrument })?;
-        }
+        // A caller withdrawing a stream this client does not hold branches on
+        // being told so. Said nothing, the withdrawal reads exactly like one
+        // that worked.
+        let Some(instrument) = instrument else {
+            return self.report_refusal(py, req_id, Refusal::stated(
+                NO_SUCH_SUBSCRIPTION,
+                format!("no tick stream is held under request {req_id}"),
+            ));
+        };
+        Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { req_id, instrument })?;
         Ok(())
     }
 
