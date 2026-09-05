@@ -1886,9 +1886,11 @@ impl CcpState {
     /// The second list covers a naming answer re-injected in a pass before the
     /// cancel was read; once the request has been sent it is in the in-flight
     /// record and the ordinary withdrawal reaches it.
-    pub(crate) fn withdraw_named(&mut self, req_id: u32) {
+    pub(crate) fn withdraw_named(&mut self, req_id: u32) -> bool {
+        let before = self.pending_named.len() + self.resolved_named.len();
         self.pending_named.retain(|(_, cmd, _)| request_id(cmd) != Some(req_id));
         self.resolved_named.retain(|cmd| request_id(cmd) != Some(req_id));
+        self.pending_named.len() + self.resolved_named.len() != before
     }
 
     /// A held request whose contract the venue never named. Told to the caller

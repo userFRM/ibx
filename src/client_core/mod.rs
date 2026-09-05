@@ -4188,6 +4188,12 @@ impl ClientCore {
     /// Where the stamp cannot be read back to an instant it is handed over as
     /// it came: a time nobody can parse is still what the venue said, and
     /// replacing it with a zero would state an instant in 1970.
+    /// The date form the caller asked for under `req_id`: 1 where none was
+    /// asked, as the reference client takes it.
+    pub fn asked_date_format(&self, req_id: i64) -> i32 {
+        self.historical_asks.lock().unwrap().get(&req_id).map_or(1, |ask| ask.format_date)
+    }
+
     pub fn bar_time_for(&self, req_id: i64, stated: &str, zone: &str) -> String {
         let format_date = self
             .historical_asks

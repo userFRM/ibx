@@ -8988,3 +8988,18 @@ fn a_fill_whose_report_names_no_client_is_filed_under_the_placing_client() {
     assert_eq!(w.0, [5], "filed under the client that placed it");
 }
 
+/// `SCHEDULE` is a series of its own on the reference client's historical
+/// request, and the other surface serves it there; this one refused it as a
+/// bar type it could not send, while carrying a call of its own for it.
+#[test]
+fn a_schedule_asked_for_as_historical_data_is_served() {
+    let (client, rx, _shared) = test_client();
+    client
+        .req_historical_data(7, &spy(), "", "1 D", "1 day", "SCHEDULE", true, 1, false)
+        .expect("served, as the other surface serves it");
+    assert!(
+        matches!(rx.try_recv(), Ok(ControlCommand::FetchHistoricalSchedule { req_id: 7, .. })),
+        "as the schedule request it is",
+    );
+}
+

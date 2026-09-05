@@ -47,6 +47,19 @@ impl EClient {
         // request states the contract's type and its exchange, and both
         // are the venue's to say.
         let contract = &*self.named_by_the_venue(contract)?;
+        // A series of its own on the reference client's historical request,
+        // served there by the other surface too; refused here as a bar type
+        // this client cannot send, while a call of its own carried it.
+        if what_to_show.eq_ignore_ascii_case("SCHEDULE") {
+            return self.send(ControlCommand::FetchHistoricalSchedule {
+                contract: contract.into(),
+                req_id: wire_req_id(req_id)?,
+                end_date_time: end_date_time.into(),
+                duration: duration.into(),
+                use_rth,
+                filters: contract.lookup_filters(),
+            });
+        }
         ClientCore::validate_historical_args(bar_size, what_to_show, keep_up_to_date)?;
         // The adjusted series folds the raw trades with the contract's own
         // corporate actions, which are asked for by the venue's id for the

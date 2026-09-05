@@ -842,8 +842,15 @@ impl EClient {
         // Drain head timestamps -> headTimestamp
         let head_ts = shared.reference.drain_head_timestamps_for_dispatch();
         for (req_id, response) in head_ts {
-            call_wrapper!(self.wrapper, py, "head_timestamp",
-                (req_id as i64, response.head_timestamp.as_str()));
+            // Seconds since the epoch where the caller asked for them: the wire
+            // carries one form, and a caller asking for seconds was handed a
+            // date string. The other form is handed on as the venue wrote it.
+            let stated = if self.core.asked_date_format(req_id as i64) == 2 {
+                self.core.bar_time_for(req_id as i64, &response.head_timestamp, "")
+            } else {
+                response.head_timestamp.clone()
+            };
+            call_wrapper!(self.wrapper, py, "head_timestamp", (req_id as i64, stated.as_str()));
         }
 
         // Drain contract details -> contractDetails + contractDetailsEnd

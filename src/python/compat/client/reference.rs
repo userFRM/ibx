@@ -119,6 +119,10 @@ impl EClient {
         // are the venue's to say.
         let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
         let contract = &*by_venue;
+        // Noted before the request goes out, as on the other surface: an
+        // answer dispatched between the send and the note was written in the
+        // wrong form.
+        self.core.note_date_format(req_id, format_date);
         Self::send_control(py, &tx, ControlCommand::FetchHeadTimestamp {
             contract: contract.into(),
             req_id: wire_req_id(req_id)?,
@@ -126,7 +130,6 @@ impl EClient {
             use_rth: use_rth != 0,
             filters: contract.lookup_filters(),
         })?;
-        self.core.note_date_format(req_id, format_date);
         Ok(())
     }
 

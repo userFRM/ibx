@@ -1325,19 +1325,37 @@ impl HotLoop {
                     // paths require an authed HMDS socket to deliver a completion.
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, true);
+                    } else if keep_up_to_date
+                        && !self.hmds.keep_up_to_date_reqs.contains(&req_id)
+                        && self.hmds.rtbar_subs.iter().any(|(_, rid, ..)| *rid == req_id)
+                    {
+                        // The stream half would run under a number a bar
+                        // stream of its own already runs under, and the two
+                        // would interleave into one queue. A stream that is
+                        // itself the half of a request kept up to date is the
+                        // historical query's, and that query refuses a second
+                        // under its number itself, below.
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::DUPLICATE_TICKER_ID,
+                            format!("a live bar stream is already running under request {req_id}: withdraw it before asking for bars kept up to date under it"),
+                            true,
+                        );
                     } else if keep_up_to_date {
                         // The bars so far, then the stream that keeps them
                         // current. The venue answers a request to keep bars up
                         // to date with the bars and closes the query, on either
                         // connection it can be sent over; what it keeps sending
                         // is five-second bars, and the bar still forming is
-                        // folded from those.
-                        self.hmds.send_historical_request_ex(
+                        // folded from those. Refused, nothing else goes out on
+                        // its account: refused for its batch alone, the stream
+                        // half still went out and fed the live request's
+                        // forming bar a second five-second stream.
+                        let sent = self.hmds.send_historical_request_ex(
                             req_id, con_id, &end_date_time, &duration, &bar_size, &what_to_show,
                             use_rth, false, include_expired, &symbol, &sec_type, &exchange,
                             &mut self.hmds_conn, &mut self.hb, &self.shared,
                         );
-                        if let Ok(size) = crate::control::historical::BarSize::from_api_str(&bar_size) {
+                        if sent && let Ok(size) = crate::control::historical::BarSize::from_api_str(&bar_size) {
                             self.hmds.keep_up_to_date_reqs.insert(req_id);
                             self.hmds.forming_bars.retain(|f| f.req_id != req_id);
                             self.hmds.forming_bars.push(crate::engine::hot_loop::hmds::FormingBar {
@@ -1360,10 +1378,14 @@ impl HotLoop {
                     // Everything the arm below withdraws, so a request kept up
                     // to date -- whose batch is filed but whose stream is
                     // still running -- is not refused as though it had ended.
+                    // A live bar stream under the same number is not one of
+                    // them: it was asked for by another call in another id
+                    // space. Counted as held, a withdrawal naming no historical
+                    // query was not refused, and then took the stream with it
+                    // in silence.
                     let held = self.hmds.pending_historical.iter().any(|(_, rid)| *rid == req_id)
                         || self.hmds.held.iter().any(|a| a.req_id == req_id)
                         || self.hmds.keep_up_to_date_reqs.contains(&req_id)
-                        || self.hmds.rtbar_subs.iter().any(|(_, rid, ..)| *rid == req_id)
                         || self.ccp.pending_named.iter()
                             .any(|(_, cmd, _)| ccp::request_id(cmd) == Some(req_id));
                     if !held {
@@ -1383,28 +1405,31 @@ impl HotLoop {
                     // the live stream as well, under this same number, so
                     // withdrawing it has to take those too — the same thing
                     // the cancel for a live stream does.
-                    self.shared.market.purge_real_time_bars(req_id);
-                    self.hmds.keep_up_to_date_reqs.remove(&req_id);
                     // A keep-up-to-date request rides a five-second bar
                     // stream held as a separate query. Cancelling withdraws
                     // that query as well as the batch query below, and clears
                     // it from the resubscribe record so a reconnect does not
-                    // request it again.
+                    // request it again. Only where the request was kept up to
+                    // date: a bar stream of its own under this number belongs
+                    // to another call.
                     // By the venue's own number for the stream where it has
                     // given one, as the withdrawal below this does: a stream
                     // named by the id this client made up is not one the venue
                     // finds, and it goes on sending.
-                    let rtbar_query: Option<String> = self.hmds.rtbar_subs.iter()
-                        .find(|(_, rid, ..)| *rid == req_id)
-                        .map(|(qid, _, ticker_id, ..)| {
-                            ticker_id.map(|t| t.to_string()).unwrap_or_else(|| qid.clone())
-                        });
-                    self.hmds.rtbar_subs.retain(|(_, rid, ..)| *rid != req_id);
-                    self.hmds.rtbar_resub.retain(|r| r.req_id != req_id);
-                    if let Some(qid) = rtbar_query {
-                        self.hmds.send_historical_cancel(&qid, &mut self.hmds_conn, &mut self.hb);
+                    if self.hmds.keep_up_to_date_reqs.remove(&req_id) {
+                        self.shared.market.purge_real_time_bars(req_id);
+                        let rtbar_query: Option<String> = self.hmds.rtbar_subs.iter()
+                            .find(|(_, rid, ..)| *rid == req_id)
+                            .map(|(qid, _, ticker_id, ..)| {
+                                ticker_id.map(|t| t.to_string()).unwrap_or_else(|| qid.clone())
+                            });
+                        self.hmds.rtbar_subs.retain(|(_, rid, ..)| *rid != req_id);
+                        self.hmds.rtbar_resub.retain(|r| r.req_id != req_id);
+                        if let Some(qid) = rtbar_query {
+                            self.hmds.send_historical_cancel(&qid, &mut self.hmds_conn, &mut self.hb);
+                        }
+                        self.hmds.forming_bars.retain(|f| f.req_id != req_id);
                     }
-                    self.hmds.forming_bars.retain(|f| f.req_id != req_id);
                     // A keep-up-to-date request rides the five-second stream,
                     // and its routing and half-built bar are held apart from
                     // the request itself. Left behind, a later request under
@@ -1446,13 +1471,15 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::CancelHeadTimestamp { req_id } => {
-                    self.ccp.withdraw_named(req_id);
+                    let parked = self.ccp.withdraw_named(req_id);
                     // As above: the answers already queued go with it.
                     self.shared.reference.purge_head_timestamp_for(req_id);
                     if let Some(pos) = self.hmds.pending_head_ts.iter().position(|(_, rid)| *rid == req_id) {
                         let (query_id, _) = self.hmds.pending_head_ts.remove(pos);
                         self.hmds.send_historical_cancel(&query_id, &mut self.hmds_conn, &mut self.hb);
-                    } else {
+                    } else if !parked {
+                        // A withdrawal that took a parked request acted, and
+                        // says nothing beside it.
                         push_hmds_refusal(
                             &self.shared, req_id, crate::error_codes::NO_SUCH_SUBSCRIPTION,
                             format!("no head timestamp is awaited under request {req_id}"),
@@ -1633,12 +1660,37 @@ impl HotLoop {
                     let ContractRef { con_id, symbol, sec_type, exchange, .. } = contract;
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
+                    } else if self.hmds.rtbar_subs.iter().any(|(_, rid, ..)| *rid == req_id) {
+                        // As a second scan, tick stream or bar query under a
+                        // live number is refused: two streams under one number
+                        // interleave into one queue, and a withdrawal reaches
+                        // one of them.
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::DUPLICATE_TICKER_ID,
+                            format!("a live bar stream is already running under request {req_id}: withdraw it before asking for another"),
+                            false,
+                        );
                     } else {
                         self.hmds.send_realtime_bar_subscribe(req_id, con_id, &symbol, &sec_type, &exchange, &what_to_show, use_rth, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::CancelRealTimeBar { req_id } => {
-                    self.ccp.withdraw_named(req_id);
+                    // The stream half of a request kept up to date belongs to
+                    // that request, in the historical id space; a bar
+                    // withdrawal under its number names no stream of its own.
+                    // Taken anyway, the request's updates stopped in silence.
+                    if self.hmds.keep_up_to_date_reqs.contains(&req_id) {
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::NO_SUCH_SUBSCRIPTION,
+                            format!(
+                                "no live bar stream of its own is running under request {req_id}: \
+                                 the bars under it belong to a historical request kept up to date",
+                            ),
+                            false,
+                        );
+                        continue;
+                    }
+                    let parked = self.ccp.withdraw_named(req_id);
                     // What already arrived and nobody has read goes with it,
                     // or the next request under this number is served this
                     // stream's bars.
@@ -1648,7 +1700,9 @@ impl HotLoop {
                         let (query_id, _, ticker_id, ..) = self.hmds.rtbar_subs.remove(pos);
                         let cancel_id = ticker_id.map(|t| t.to_string()).unwrap_or(query_id);
                         self.hmds.send_historical_cancel(&cancel_id, &mut self.hmds_conn, &mut self.hb);
-                    } else {
+                    } else if !parked {
+                        // A withdrawal that took a parked request acted, and
+                        // says nothing beside it.
                         push_hmds_refusal(
                             &self.shared, req_id, crate::error_codes::NO_SUCH_SUBSCRIPTION,
                             format!("no live bar stream is running under request {req_id}"),
@@ -6169,6 +6223,131 @@ mod tests {
         tx.send(ControlCommand::CancelCalendar { req_id: 7 }).unwrap();
         hl.poll_control_commands();
         assert!(shared.reference.drain_calendar_meta_data().is_empty(), "the answer goes with the request");
+        let told = shared.reference.drain_historical_errors();
+        assert!(told.is_empty(), "and a withdrawal that acted says nothing beside it: {told:?}");
+    }
+
+    fn stock(con_id: i64, symbol: &str) -> ContractRef {
+        ContractRef {
+            con_id, symbol: symbol.into(), exchange: "SMART".into(),
+            sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
+        }
+    }
+
+    /// A second keep-up-to-date request under a live number is refused whole.
+    /// Refused for its batch alone, its stream half still went out: two
+    /// five-second streams fed one forming bar, doubling its volume, and the
+    /// reconnect record kept only the second contract.
+    #[test]
+    fn a_second_keep_up_to_date_request_under_a_live_number_takes_no_stream() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+        hl.hmds_conn = Some(conn);
+        let ask = |con_id: i64, symbol: &str| ControlCommand::FetchHistorical {
+            req_id: 7, contract: stock(con_id, symbol),
+            end_date_time: String::new(), duration: "1 D".into(), bar_size: "1 min".into(),
+            what_to_show: "TRADES".into(), use_rth: true, keep_up_to_date: true,
+            include_expired: false, filters: Default::default(),
+        };
+        tx.send(ask(756733, "SPY")).unwrap();
+        tx.send(ask(265598, "AAPL")).unwrap();
+        hl.poll_control_commands();
+        assert_eq!(
+            hl.hmds.rtbar_subs.iter().filter(|(_, rid, ..)| *rid == 7).count(), 1,
+            "one stream under the number",
+        );
+        let resub: Vec<i64> = hl.hmds.rtbar_resub.iter().filter(|r| r.req_id == 7).map(|r| r.con_id).collect();
+        assert_eq!(resub, [756733], "and the reconnect record names the first contract");
+        let told = shared.reference.drain_historical_errors();
+        assert!(told.iter().any(|(rid, code, _)| *rid == 7 && *code == 386), "{told:?}");
+    }
+
+    /// A historical withdrawal does not take a live bar stream that happens to
+    /// run under the same number: the two are asked for by different calls in
+    /// different id spaces. It counted the stream as held, so no refusal was
+    /// answered, and then withdrew the stream in silence.
+    #[test]
+    fn withdrawing_a_historical_query_leaves_a_bar_stream_under_the_same_number() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.hmds.rtbar_subs.push(("rt_4".to_string(), 7, Some(99), 0.01, 1.0));
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(ControlCommand::CancelHistorical { req_id: 7 }).unwrap();
+        hl.poll_control_commands();
+        assert!(hl.hmds.rtbar_subs.iter().any(|(_, rid, ..)| *rid == 7), "the stream is left running");
+        let told = shared.reference.drain_historical_errors();
+        assert!(
+            told.iter().any(|(rid, code, _)| *rid == 7 && *code == 366),
+            "no historical query was answering under the number: {told:?}",
+        );
+    }
+
+    /// A bar-stream withdrawal does not take the stream half of a request
+    /// kept up to date: that stream belongs to the historical request, and a
+    /// caller withdrawing bars under the number is told no stream is running.
+    #[test]
+    fn withdrawing_bars_leaves_a_kept_up_to_date_requests_stream() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.hmds.keep_up_to_date_reqs.insert(7);
+        hl.hmds.rtbar_subs.push(("rt_4".to_string(), 7, Some(99), 0.01, 1.0));
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(ControlCommand::CancelRealTimeBar { req_id: 7 }).unwrap();
+        hl.poll_control_commands();
+        assert!(hl.hmds.rtbar_subs.iter().any(|(_, rid, ..)| *rid == 7), "the stream half is left running");
+        assert!(hl.hmds.keep_up_to_date_reqs.contains(&7), "and the request is still kept up to date");
+        let told = shared.reference.drain_historical_errors();
+        assert!(
+            told.iter().any(|(rid, code, _)| *rid == 7 && *code == 300),
+            "no bar stream of its own runs under the number: {told:?}",
+        );
+    }
+
+    /// A second bar stream under a live number is refused, as a second scan,
+    /// tick stream or bar query is: two streams under one number interleave
+    /// into one queue, and a withdrawal reaches one of them.
+    #[test]
+    fn a_second_bar_stream_under_a_live_number_is_refused() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+        hl.hmds_conn = Some(conn);
+        for (con_id, symbol) in [(756733, "SPY"), (265598, "AAPL")] {
+            tx.send(ControlCommand::SubscribeRealTimeBar {
+                req_id: 7, contract: stock(con_id, symbol), what_to_show: "TRADES".into(),
+                use_rth: true, filters: Default::default(),
+            })
+            .unwrap();
+        }
+        hl.poll_control_commands();
+        assert_eq!(hl.hmds.rtbar_subs.iter().filter(|(_, rid, ..)| *rid == 7).count(), 1);
+        let told = shared.reference.drain_historical_errors();
+        assert!(told.iter().any(|(rid, code, _)| *rid == 7 && *code == 102), "{told:?}");
+    }
+
+    /// Withdrawing a request still parked for its contract's name acted, and
+    /// is not told nothing was awaited: the parked request was removed, then
+    /// refused for not being in the list it had not reached yet.
+    #[test]
+    fn withdrawing_a_parked_head_timestamp_request_is_not_refused() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.ccp.pending_named.push((7, ControlCommand::FetchHeadTimestamp {
+            req_id: 7, contract: stock(0, "SPY"), what_to_show: "TRADES".into(),
+            use_rth: true, filters: Default::default(),
+        }, std::time::Instant::now()));
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(ControlCommand::CancelHeadTimestamp { req_id: 7 }).unwrap();
+        hl.poll_control_commands();
+        assert!(hl.ccp.pending_named.is_empty(), "the parked request is withdrawn");
         let told = shared.reference.drain_historical_errors();
         assert!(told.is_empty(), "and a withdrawal that acted says nothing beside it: {told:?}");
     }

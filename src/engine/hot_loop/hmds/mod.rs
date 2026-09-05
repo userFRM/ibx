@@ -884,6 +884,17 @@ impl HmdsState {
                                 // for a stream the server already refused.
                                 let (_, req_id, ..) = self.rtbar_subs.remove(pos);
                                 self.rtbar_resub.retain(|r| r.req_id != req_id);
+                                // Where the stream was the half of a request
+                                // kept up to date, the request fails whole and
+                                // its number is freed: left flagged, every
+                                // later request under it was refused as a
+                                // duplicate of one the caller was told failed.
+                                if self.keep_up_to_date_reqs.remove(&req_id) {
+                                    self.forming_bars.retain(|f| f.req_id != req_id);
+                                    if !self.held.iter().any(|h| h.req_id == req_id) {
+                                        self.pending_historical.retain(|(_, rid)| *rid != req_id);
+                                    }
+                                }
                                 released_req_id = Some(req_id);
                             } else if let Some(pos) = self.pending_head_ts.iter().position(|(q, _)| q == qid) {
                                 let (_, req_id) = self.pending_head_ts.remove(pos);
@@ -1662,6 +1673,11 @@ fn build_tbt_query(
         }
     }
 
+    /// Whether the query went out. A refusal — a second query under a live
+    /// number, an argument the query cannot state — is reported to the caller
+    /// here and answered false, so the caller sends nothing else on its
+    /// account: a request kept up to date whose batch was refused still sent
+    /// its stream half, and two five-second streams fed one forming bar.
     pub(crate) fn send_historical_request_ex(
         &mut self,
         req_id: u32,
@@ -1679,7 +1695,7 @@ fn build_tbt_query(
         hmds_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
         shared: &SharedState,
-    ) {
+    ) -> bool {
         let duration = crate::control::historical::normalize_duration(duration);
         let duration = duration.as_str();
         let end_date_time = if end_date_time.is_empty() {
@@ -1710,6 +1726,12 @@ fn build_tbt_query(
         if self.held.iter().any(|held| held.req_id == req_id)
             || self.pending_historical.iter().any(|(_, id)| *id == req_id)
         {
+            // Refused without ending anything: the request that is answering
+            // goes on answering. Released with an empty terminal response
+            // under the number, the live request's end fired before its bars
+            // had arrived and every bar after went out as an update. No
+            // waiting call can reach this refusal — they number themselves
+            // apart — so nothing waits on that sentinel.
             super::push_hmds_refusal(
                 shared,
                 req_id,
@@ -1718,9 +1740,9 @@ fn build_tbt_query(
                     "request {req_id} is already answering a historical query: \
                      withdraw it before asking for another under the same number",
                 ),
-                true,
+                false,
             );
-            return;
+            return false;
         }
         let qid = self.next_hmds_query_id;
         self.next_hmds_query_id += 1;
@@ -1744,7 +1766,7 @@ fn build_tbt_query(
                 Err(e) => {
                     log::error!("historical req_id={req_id}: {e}");
                     super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::VALIDATION, e, true);
-                    return;
+                    return false;
                 }
             }
         };
@@ -1767,7 +1789,7 @@ fn build_tbt_query(
             Err(e) => {
                 log::error!("historical req_id={req_id}: {e}");
                 super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::VALIDATION, e, true);
-                return;
+                return false;
             }
         };
 
@@ -1822,6 +1844,7 @@ fn build_tbt_query(
             actions: None,
             complete: false,
         });
+        true
     }
 
     /// Hold one page of a series, and file the series once its last page is

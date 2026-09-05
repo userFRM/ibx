@@ -1514,6 +1514,32 @@ mod hmds_correlation_tests {
         assert_eq!(hmds.pending_head_ts.len(), 1, "and both are still waiting");
         assert_eq!(hmds.pending_histogram.len(), 1);
     }
+/// The venue refusing the stream half of a request kept up to date fails the
+/// whole request, and the number is freed with it. Left flagged, every later
+/// request under the number was refused as a duplicate of one the caller had
+/// been told had failed.
+#[test]
+fn a_refused_stream_half_frees_the_number_it_was_kept_up_to_date_under() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+    hmds.keep_up_to_date_reqs.insert(9);
+    hmds.rtbar_subs.push(("rt_4002".to_string(), 9, None, 0.01, 1.0));
+    hmds.forming_bars.push(FormingBar {
+        req_id: 9, seconds: 60, opened_at: 0, bar: Default::default(), weighted: 0.0,
+    });
+    let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<QueryError>\n\t<id>rt_4002</id>\n\t<error>no</error>\n</QueryError>\n";
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"35=W\x016118=");
+    msg.extend_from_slice(xml.as_bytes());
+    msg.push(0x01);
+    hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+    assert!(hmds.rtbar_subs.iter().all(|(_, rid, ..)| *rid != 9), "the stream is gone");
+    assert!(!hmds.keep_up_to_date_reqs.contains(&9), "and the number is freed");
+    assert!(hmds.forming_bars.iter().all(|f| f.req_id != 9), "and the half-built bar with it");
+}
 }
 
 mod hmds_transport_tests {
@@ -1928,10 +1954,13 @@ fn a_number_already_answering_a_historical_query_is_not_given_another() {
     let errors = shared.reference.drain_historical_errors();
     assert_eq!(errors.len(), 1, "the caller is told: {errors:?}");
     assert_eq!(errors[0], (9, 386, errors[0].2.clone()), "under the number that names it");
-    let hist = shared.reference.drain_historical_data();
+    // Nothing ends the request that is answering. Released with an empty
+    // terminal response under the number, the live request's end fired
+    // before its bars had arrived, and every bar after went out as an update.
+    // No waiting call can be refused here — they number themselves apart.
     assert!(
-        hist.iter().any(|(rid, resp)| *rid == 9 && resp.is_complete && resp.bars.is_empty()),
-        "and a caller waiting on the refused request is released",
+        shared.reference.drain_historical_data().is_empty(),
+        "and the request that is answering is left to answer",
     );
 }
 
