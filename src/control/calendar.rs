@@ -128,8 +128,6 @@ pub fn event_data_request(query: &CalendarQuery) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// The metadata request carries no filters. The answer is the same for
-    /// everybody, so there is nothing to narrow.
     /// A contract the venue does not number is not a scope. Written into the
     /// watchlist as text, "0" asked the calendar about nothing the venue can
     /// find, where the request surface refuses the same id for a headline.
@@ -143,6 +141,8 @@ mod tests {
         assert!(event_data_request(&unscoped).is_ok(), "no contract named is a request with no scope");
     }
 
+    /// The metadata request carries no filters. The answer is the same for
+    /// everybody, so there is nothing to narrow.
     #[test]
     fn the_metadata_request_states_only_what_this_client_can_take() {
         let json = meta_data_request();
