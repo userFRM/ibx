@@ -56,7 +56,7 @@ fn a_replaced_two_part_peg_keeps_its_order_type() {
         mid_offset_at_half: 0.005,
         ..Default::default()
     };
-    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
         order_id: 42,
         instrument,
         side: Side::Buy,
@@ -109,7 +109,7 @@ fn a_replace_does_not_name_an_option_by_its_underlying() {
     let mut hb = crate::engine::hot_loop::HeartbeatState::new();
     let shared = std::sync::Arc::new(SharedState::new());
 
-    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
         order_id: 42,
         instrument,
         side: Side::Buy,
@@ -156,7 +156,7 @@ fn a_replace_restates_the_attributes_the_order_was_placed_with() {
     let shared = std::sync::Arc::new(SharedState::new());
 
     let attrs = crate::types::OrderAttrs { all_or_none: true, ..Default::default() };
-    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
         order_id: 42,
         instrument,
         side: Side::Buy,
@@ -474,7 +474,7 @@ fn a_bracket_whose_write_failed_leaves_no_leg_reported_as_working() {
     let mut context = Context::new();
     let instrument = context.register_instrument(756733);
     context.set_symbol(instrument, "SPY".to_string());
-    context.pending_orders.push(crate::types::OrderRequest::SubmitBracket {
+    context.pending_orders.push(crate::types::OrderRequest::SubmitBracket { con_id: 0,
         parent_id: 10,
         tp_id: 11,
         sl_id: 12,
@@ -689,7 +689,7 @@ fn a_pegged_order_states_its_offset_and_no_limit_price() {
     let mut context = Context::new();
     let instrument = context.register_instrument(756733);
     context.set_symbol(instrument, "SPY".to_string());
-    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
         order_id: 1,
         instrument,
         side: Side::Buy,
@@ -1751,6 +1751,7 @@ mod modify_wire_tests {
         context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
             order_id: 7,
             instrument,
+            con_id: 0,
             side: Side::Buy,
             qty: crate::types::QTY_SCALE,
             kind: crate::types::OrderKind::PegBench {
@@ -1878,7 +1879,7 @@ mod modify_wire_tests {
         let instrument = context.register_instrument(756733);
         context.market.set_routing(instrument, "STK", "SMART");
         // Placed as a limit, so the record describes a limit at 100.
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 7,
             instrument,
             side: Side::Buy,
@@ -1916,7 +1917,7 @@ mod modify_wire_tests {
         let mut context = Context::new();
         let instrument = context.register_instrument(756733);
         context.market.set_routing(instrument, "STK", "SMART");
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 7,
             instrument,
             side: Side::Sell,
@@ -1953,7 +1954,7 @@ mod modify_wire_tests {
         let mut context = Context::new();
         let instrument = context.register_instrument(756733);
         context.market.set_routing(instrument, "STK", "SMART");
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 7,
             instrument,
             side: Side::Buy,
@@ -2087,7 +2088,7 @@ mod modify_wire_tests {
         context.market.set_symbol(instrument, "AAPL".into());
         context.market.set_routing(instrument, "OPT", "SMART");
 
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 7,
             instrument,
             side: Side::Buy,
@@ -2117,7 +2118,7 @@ mod modify_wire_tests {
         context.market.set_symbol(instrument, "AAPL".into());
         context.market.set_routing(instrument, "STK", "SMART");
 
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 9,
             instrument,
             side: Side::Buy,
@@ -2176,7 +2177,7 @@ mod modify_wire_tests {
         context.market.set_symbol(instrument, "MES".into());
         context.market.set_routing(instrument, "FUT", "CME");
 
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 7,
             instrument,
             side: Side::Buy,
@@ -2196,7 +2197,7 @@ mod modify_wire_tests {
         let mut context = Context::new();
         let instrument = context.register_instrument(756733);
         context.market.set_symbol(instrument, "SPY".into());
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 7,
             instrument,
             side: Side::Buy,
@@ -2220,7 +2221,7 @@ mod modify_wire_tests {
         ] {
             let mut context = Context::new();
             let instrument = context.register_instrument(756733);
-            context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
                 order_id: 7,
                 instrument,
                 side: Side::Buy,
@@ -2854,7 +2855,7 @@ mod outside_rth_polarity_tests {
             .try_register_contract(893091670, "MES", "FUT", "CME", "20270917|0||5|MES|MESU7")
             .expect("register a future");
         context.set_symbol(instrument, "MES".to_string());
-        context.pending_orders.push(crate::types::OrderRequest::SubmitBracket {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitBracket { con_id: 0,
             parent_id: 1,
             tp_id: 2,
             sl_id: 3,
@@ -2877,7 +2878,7 @@ mod outside_rth_polarity_tests {
             "all three bracket legs carry the contract id: {sent}",
         );
 
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 4,
             instrument,
             side: Side::Buy,
@@ -2899,7 +2900,7 @@ mod outside_rth_polarity_tests {
         let mut context = Context::new();
         let instrument = context.register_instrument(893091670);
         context.set_symbol(instrument, "MES".to_string());
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 9,
             instrument,
             side: Side::Buy,
@@ -2922,7 +2923,7 @@ mod outside_rth_polarity_tests {
         let mut context = Context::new();
         let instrument = context.register_instrument(756733);
         context.set_symbol(instrument, "SPY".to_string());
-        context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 11,
             instrument,
             side: Side::Buy,
@@ -3185,7 +3186,7 @@ fn an_off_grid_price_reaches_the_venue_as_the_caller_stated_it() {
 
     // 149.03 is off a five-cent grid.
     let off_grid = 149 * crate::types::PRICE_SCALE + 3 * crate::types::PRICE_SCALE / 100;
-    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
         order_id: 7,
         instrument,
         side: Side::Buy,
@@ -3262,7 +3263,7 @@ fn a_replace_naming_a_new_trail_puts_that_trail_on_the_wire() {
     let mut hb = crate::engine::hot_loop::HeartbeatState::new();
     let shared = std::sync::Arc::new(SharedState::new());
 
-    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
         order_id: 42,
         instrument,
         side: Side::Sell,
@@ -3706,7 +3707,7 @@ fn a_placement_does_not_ask_for_its_slot_back() {
     let mut context = Context::new();
     let instrument = context.register_instrument(756733);
     context.set_symbol(instrument, "SPY".to_string());
-    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
         order_id: 42,
         instrument,
         side: Side::Buy,
@@ -3724,5 +3725,52 @@ fn a_placement_does_not_ask_for_its_slot_back() {
     assert!(
         context.slots_to_reconsider.is_empty(),
         "and nothing asks the loop to scan the book for a slot it is holding",
+    );
+}
+
+/// An order naming a contract the slot no longer holds is not sent.
+///
+/// A slot is an index, and a freed one goes to the next contract that needs
+/// it. A caller reads which slot a contract holds from a cache, and between
+/// that read and the request reaching the engine the slot can have been given
+/// away — so the order was built from whatever holds it now: another
+/// contract's symbol, another contract's routing, and a fill that would move
+/// that contract's position.
+#[test]
+fn an_order_whose_slot_changed_hands_is_not_sent() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    // The slot the caller read, holding a different contract by the time the
+    // request is built.
+    let instrument = context.register_instrument(320227571);
+    context.set_symbol(instrument, "QQQ".to_string());
+    context.market.set_routing(instrument, "STK", "SMART");
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        order_id: 42,
+        instrument,
+        con_id: 756733,
+        side: Side::Buy,
+        qty: 100 * crate::types::QTY_SCALE,
+        kind: crate::types::OrderKind::Limit { price: 150 * crate::types::PRICE_SCALE },
+        tif: b'0',
+        attrs: Default::default(),
+    });
+
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+
+    let mut buf = [0u8; 8192];
+    assert!(peer.read(&mut buf).is_err(), "nothing went out on the wrong contract");
+    let said = shared.orders.drain_order_inactive();
+    assert!(
+        said.iter().any(|(id, _, why)| *id == 42
+            && why.contains("756733") && why.contains("320227571")),
+        "and the caller is told which contract it named and which the place now holds: {said:?}",
     );
 }

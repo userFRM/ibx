@@ -1487,14 +1487,14 @@ impl ClientCore {
     /// order was recorded against the new occupant and its fill moved that
     /// contract's position.
     pub fn forget_released_slots(&self, shared: &SharedState) {
-        let released = shared.market.take_released_con_ids();
+        let released = shared.market.take_released_slots();
         if released.is_empty() {
             return;
         }
+        // By the slot, so a contract the venue has not named — which holds a
+        // slot under no id at all — is forgotten with the rest.
         let mut cache = self.con_id_to_instrument.lock().unwrap();
-        for con_id in released {
-            cache.remove(&con_id);
-        }
+        cache.retain(|_, held| !released.contains(held));
     }
 
     /// Find instrument ID for a contract, registering if needed.
@@ -4258,6 +4258,9 @@ impl ClientCore {
         OrderRequest::SubmitEx {
             order_id,
             instrument,
+            // An exercise is instructed on the slot the option holds, and the
+            // caller states no contract id beside it.
+            con_id: 0,
             side: Side::Buy,
             qty,
             kind: OrderKind::Limit { price: 0 },
@@ -4327,8 +4330,11 @@ impl ClientCore {
                     .map(crate::types::price_from_f64),
             }
         }).collect();
+        // The contract the caller named, so the engine can see that the slot
+        // beside it is no longer the one they meant.
+        let con_id = contract.map_or(0, |c| c.con_id);
         let ex = |kind: OrderKind| OrderRequest::SubmitEx {
-            order_id, instrument, side, qty,
+            order_id, instrument, con_id, side, qty,
             kind,
             tif: order.tif_byte(),
             attrs: crate::types::OrderAttrs {

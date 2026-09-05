@@ -101,7 +101,7 @@ fn order_buffer_starts_empty() {
 fn order_buffer_push_and_drain() {
     let mut buf = OrderBuffer::new();
     buf.push(OrderRequest::SubmitEx {
-        order_id: 1, instrument: 0, side: Side::Buy, qty: 100 * crate::types::QTY_SCALE,
+        order_id: 1, instrument: 0, con_id: 0, side: Side::Buy, qty: 100 * crate::types::QTY_SCALE,
         kind: OrderKind::Limit { price: 150 * PRICE_SCALE },
         tif: b'0', attrs: OrderAttrs::default(),
     });
@@ -117,7 +117,7 @@ fn order_buffer_push_and_drain() {
 fn order_buffer_drain_reusable() {
     let mut buf = OrderBuffer::new();
     buf.push(OrderRequest::SubmitEx {
-        order_id: 1, instrument: 0, side: Side::Sell, qty: 50 * crate::types::QTY_SCALE,
+        order_id: 1, instrument: 0, con_id: 0, side: Side::Sell, qty: 50 * crate::types::QTY_SCALE,
         kind: OrderKind::Market,
         tif: b'0', attrs: OrderAttrs::default(),
     });
@@ -282,7 +282,7 @@ fn order_buffer_drain_empty() {
 #[test]
 fn instrument_accessor_covers_submits() {
     let req = OrderRequest::SubmitEx {
-        order_id: 1, instrument: 7, side: Side::Buy, qty: crate::types::QTY_SCALE,
+        order_id: 1, instrument: 7, con_id: 0, side: Side::Buy, qty: crate::types::QTY_SCALE,
         kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default(),
     };
     assert_eq!(req.instrument(), Some(7));

@@ -658,13 +658,13 @@ impl HotLoop {
             return;
         }
         self.pinned_by_position.retain(|id| *id != instrument);
-        if let Some(con_id) = self.context.market.unregister(instrument) {
+        if self.context.market.unregister(instrument).is_some() {
             // Said, so the surfaces stop naming a slot this contract no longer
             // holds. They cache the slot a contract was given, and the slot
             // goes to the next contract that needs one: an order placed on the
             // cached number was recorded against the new occupant, and its
             // fill moved that contract's position.
-            self.shared.market.note_released_con_id(con_id);
+            self.shared.market.note_released_slot(instrument);
             // Zero the shared-side quote so a reused slot cannot serve the
             // previous contract's prices before its first tick.
             self.shared.market.push_quote(instrument, &crate::types::Quote::default());
@@ -682,6 +682,7 @@ impl HotLoop {
             // slot: the next contract handed this one was solved against the
             // previous contract's volatility and price, and answered finite.
             self.shared.market.forget_option_model(instrument);
+            self.shared.market.forget_subscription_failures(instrument);
             log::info!("Reclaimed instrument slot {instrument}");
         }
     }
@@ -806,8 +807,6 @@ impl HotLoop {
             );
             self.send_resolved_subscriptions();
 
-            self.reclaim_slots_no_order_holds();
-
             // A holding that has since been closed releases the slot the
             // caller already asked to free.
             if !self.pinned_by_position.is_empty() {
@@ -841,6 +840,14 @@ impl HotLoop {
 
             // 4. Check control_plane_rx (SPSC) for commands
             self.poll_control_commands();
+
+            // After the commands, not before them. A request a caller has sent
+            // is only in the buffer once the drain above has taken it in, so a
+            // reclaim asked first could not see it — and the order that frees
+            // the slot is retired a few lines earlier in the same pass, which
+            // is the sequence that hands a slot away with a submit for it
+            // still in the channel. A slot freed one pass later costs nothing.
+            self.reclaim_slots_no_order_holds();
 
             // 5. Heartbeat check (auth 10s, farm 30s)
             self.check_heartbeats();
@@ -4027,7 +4034,7 @@ mod tests {
         tx.send(ControlCommand::Shutdown).unwrap();
         tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
             order_id: 41,
-            instrument: 0,
+            instrument: 0, con_id: 0,
             side: Side::Buy,
             qty: QTY_SCALE,
             kind: OrderKind::Limit { price: 5 * PRICE_SCALE },
@@ -4818,7 +4825,7 @@ mod tests {
         hl.ccp.disconnected = true;
         hl.context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
             order_id: 31,
-            instrument: 0,
+            instrument: 0, con_id: 0,
             side: crate::types::Side::Buy,
             qty: 100,
             kind: crate::types::OrderKind::Limit { price: 100_000_000 },
@@ -6127,7 +6134,7 @@ mod slot_reclamation_tests {
             "and the next contract that needs one is given it",
         );
         assert_eq!(
-            hl.shared.market.take_released_con_ids(), vec![756733],
+            hl.shared.market.take_released_slots(), vec![instrument],
             "the surfaces are told, so they stop naming the slot it no longer holds",
         );
         assert_eq!(
@@ -6216,7 +6223,7 @@ mod queued_order_slot_tests {
     fn an_order_waiting_to_be_sent_holds_its_slot() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         let instrument = hl.context.market.register(756733);
-        hl.context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        hl.context.pending_orders.push(crate::types::OrderRequest::SubmitEx { con_id: 0,
             order_id: 42,
             instrument,
             side: crate::types::Side::Buy,

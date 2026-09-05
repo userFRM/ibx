@@ -78,7 +78,7 @@ pub(super) fn phase_account_pnl(conns: Conns) -> Conns {
     hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -166,14 +166,14 @@ pub(super) fn phase_position_tracking(conns: Conns) -> Conns {
                 if phase == 0 && tick_count >= 5 {
                     held_before = Some(shared.portfolio.position(instrument));
                     let buy_oid = next_order_id();
-                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: buy_oid, instrument, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: buy_oid, instrument, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 1;
                 }
             }
             Ok(Event::Fill(fill)) => {
                 if phase == 1 && fill.side == Side::Buy {
                     let sell_order_id = next_order_id();
-                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_order_id, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+                    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: sell_order_id, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 2;
                 } else if phase == 2 && fill.side == Side::Sell {
                     sell_filled = true;
@@ -319,7 +319,7 @@ pub(super) fn phase_completed_orders(conns: Conns) -> Conns {
     hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -426,7 +426,7 @@ pub(super) fn phase_enriched_order_cache(conns: Conns) -> Conns {
     control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 9999, filters: Default::default() }).unwrap();
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -624,7 +624,7 @@ pub(super) fn phase_enriched_open_orders(conns: Conns) -> Conns {
     control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 9998, filters: Default::default() }).unwrap();
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: false, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -857,7 +857,7 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
     control_tx.send(ControlCommand::FetchContractDetails { contract: ibx::types::ContractRef { con_id: 756733, symbol: String::new(), sec_type: "STK".into(), exchange: String::new(), currency: String::new(), ..Default::default() }, req_id: 9997, filters: Default::default() }).unwrap();
 
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 
@@ -911,7 +911,7 @@ pub(super) fn phase_enriched_exec_details(conns: Conns) -> Conns {
 
     // Sell back to flatten
     let sell_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: sell_id, instrument: inst_id, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: sell_id, instrument: inst_id, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -975,7 +975,7 @@ pub(super) fn phase_pnl_subscription(conns: Conns) -> Conns {
 
     // Submit a far-from-market order to trigger account updates
     let order_id = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id, instrument: inst_id, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
 
     let join = run_hot_loop(hot_loop);
 

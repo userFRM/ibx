@@ -41,6 +41,34 @@ fn the_change_did_not_go(
     crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::CancelReject(reject));
 }
 
+/// Whether the slot a request names still holds the contract the caller meant.
+///
+/// A slot is an index, and a freed one goes to the next contract that needs it.
+/// A caller reads which slot a contract holds from a cache that the engine
+/// empties as it frees them — but the read and the request are two moments, and
+/// between them the slot can be given away. Built anyway, the order goes out on
+/// whatever holds the slot now: another contract's symbol, another contract's
+/// routing, and a fill that moves that contract's position.
+///
+/// A caller that named no contract id states nothing to check, and a slot with
+/// none registered against it is one the venue has not yet named — neither is a
+/// disagreement.
+fn the_slot_is_not_that_contract(
+    context: &Context, instrument: crate::types::InstrumentId, con_id: i64,
+) -> Option<String> {
+    if con_id == 0 {
+        return None;
+    }
+    match context.market.con_id(instrument) {
+        Some(holds) if holds != con_id => Some(format!(
+            "this order names contract {con_id} and the place it was given now holds \
+             {holds}, so it was not sent: ask for the contract again and place it afresh",
+        )),
+        _ => None,
+    }
+}
+
+
 pub(crate) fn drain_and_send_orders(
     ccp_conn: &mut Option<Connection>,
     context: &mut Context,
@@ -135,13 +163,23 @@ pub(crate) fn drain_and_send_orders(
         // contract's tick grid rather than adjusting it, so snapping here would
         // substitute a price the caller never gave.
         let result = match order_req {
-            OrderRequest::SubmitEx { order_id, instrument, side, qty, kind, tif, attrs } => {
+            OrderRequest::SubmitEx {
+                order_id, instrument, con_id, side, qty, kind, tif, attrs,
+            } => {
+                if let Some(refusal) = the_slot_is_not_that_contract(context, instrument, con_id) {
+                    shared.orders.push_order_inactive(
+                        order_id, ORDER_NOT_FOUND_ERROR_CODE, refusal,
+                    );
+                    report_uncertain(context, shared, event_tx, order_id);
+                    continue;
+                }
                 send_order_ex(
                     conn, context, shared, account_id, order_id, instrument, side, qty, kind, tif,
                     &attrs,
                 )
             }
             OrderRequest::SubmitBracket {
+                con_id,
                 parent_id,
                 tp_id,
                 sl_id,
@@ -152,6 +190,15 @@ pub(crate) fn drain_and_send_orders(
                 take_profit,
                 stop_loss,
             } => {
+                if let Some(refusal) = the_slot_is_not_that_contract(context, instrument, con_id) {
+                    for id in [parent_id, tp_id, sl_id] {
+                        shared.orders.push_order_inactive(
+                            id, ORDER_NOT_FOUND_ERROR_CODE, refusal.clone(),
+                        );
+                        report_uncertain(context, shared, event_tx, id);
+                    }
+                    continue;
+                }
                 let exit_side = match side {
                     Side::Buy => Side::Sell,
                     Side::Sell | Side::ShortSell => Side::Buy,

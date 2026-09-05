@@ -1313,6 +1313,9 @@ pub enum OrderRequest {
     /// Generates 3 FIX messages: parent (35=D), TP child (35=D with 6107+583), SL child
     /// (35=D with 6107+583).
     SubmitBracket {
+        /// The venue's id for the contract the caller meant, where they named
+        /// one. See [`OrderRequest::SubmitEx`].
+        con_id: i64,
         /// The order this one is a child of.
         parent_id: OrderId,
         /// The number the take-profit child is placed under.
@@ -1340,6 +1343,18 @@ pub enum OrderRequest {
         order_id: OrderId,
         /// The engine's own slot for the contract.
         instrument: InstrumentId,
+        /// The venue's id for the contract the caller meant, where they named
+        /// one.
+        ///
+        /// A slot is only an index, and the engine hands a freed one to the
+        /// next contract that needs it. A caller reads which slot a contract
+        /// holds from a cache, and between that read and this request reaching
+        /// the engine the slot can have been given away — so the order would
+        /// be built from whatever now holds it, sent on that contract, and its
+        /// fill would move that contract's position. Stated here, the engine
+        /// can see that the slot is no longer the one the caller meant. Zero
+        /// states no contract and is not compared.
+        con_id: i64,
         /// Whether it buys or sells.
         side: Side,
         /// How much, scaled by `QTY_SCALE`.

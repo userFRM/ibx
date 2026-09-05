@@ -847,6 +847,7 @@ impl EClient {
 
         let scaled = |price: f64| crate::types::price_from_f64(price);
         self.send(ControlCommand::Order(OrderRequest::SubmitBracket {
+            con_id: contract.con_id,
             parent_id: parent_id as u64,
             tp_id: tp_id as u64,
             sl_id: sl_id as u64,

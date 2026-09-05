@@ -1387,9 +1387,9 @@ w = W()",
                 matches!(
                     received.as_slice(),
                     [
-                        ControlCommand::Order(OrderRequest::SubmitEx { order_id: 3, .. }),
-                        ControlCommand::Order(OrderRequest::SubmitEx { order_id: 4, .. }),
-                        ControlCommand::Order(OrderRequest::SubmitEx { order_id: 5, .. }),
+                        ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: 3, .. }),
+                        ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: 4, .. }),
+                        ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: 5, .. }),
                     ],
                 ),
                 "the family goes in the order it was placed: {received:?}",
@@ -1439,7 +1439,7 @@ w = W()",
             assert!(
                 matches!(
                     received.as_slice(),
-                    [ControlCommand::Order(OrderRequest::SubmitEx { order_id: 3, .. })],
+                    [ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: 3, .. })],
                 ),
                 "only the parent reached the engine: {received:?}",
             );

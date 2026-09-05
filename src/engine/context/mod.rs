@@ -264,7 +264,7 @@ impl Context {
         attrs: OrderAttrs,
     ) -> OrderId {
         let id = self.take_order_ids(1);
-        self.pending_orders.push(OrderRequest::SubmitEx {
+        self.pending_orders.push(OrderRequest::SubmitEx { con_id: 0,
             order_id: id, instrument, side, qty: qty_from_wire(qty as i64), kind, tif, attrs,
         });
         id
@@ -285,7 +285,7 @@ impl Context {
         let parent_id = self.take_order_ids(3);
         let tp_id = parent_id + 1;
         let sl_id = parent_id + 2;
-        self.pending_orders.push(OrderRequest::SubmitBracket {
+        self.pending_orders.push(OrderRequest::SubmitBracket { con_id: 0,
             parent_id,
             tp_id,
             sl_id,
@@ -319,7 +319,7 @@ impl Context {
         price: Price,
     ) -> OrderId {
         let id = self.take_order_ids(1);
-        self.pending_orders.push(OrderRequest::SubmitEx {
+        self.pending_orders.push(OrderRequest::SubmitEx { con_id: 0,
             order_id: id,
             instrument,
             side,

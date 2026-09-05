@@ -70,7 +70,7 @@ pub(super) fn phase_forex_order(conns: Conns) -> Conns {
     hot_loop.context_mut().set_routing(inst, "CASH", "IDEALPRO");
 
     let oid = next_order_id();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid, instrument: inst, side: Side::Buy, qty: 20000 * ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 50_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: oid, instrument: inst, side: Side::Buy, qty: 20000 * ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 50_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -194,7 +194,7 @@ pub(super) fn phase_futures_order(conns: Conns) -> Conns {
 
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id: oid, instrument: inst, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+        order_id: oid, instrument: inst, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
         kind: OrderKind::Limit { price: 100 * PRICE_SCALE },
         tif: b'1', attrs: OrderAttrs { outside_rth: true, ..OrderAttrs::default() },
     })).unwrap();
@@ -327,7 +327,7 @@ pub(super) fn phase_options_order(conns: Conns) -> Conns {
 
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id: oid, instrument: inst, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+        order_id: oid, instrument: inst, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
         kind: OrderKind::Limit { price: 1_000_000 },
         tif: b'1', attrs: OrderAttrs { outside_rth: true, ..OrderAttrs::default() },
     })).unwrap();
@@ -393,9 +393,9 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     let oid2 = oid1 + 1;
     let oid3 = oid1 + 2;
 
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid1, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid2, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
-    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { order_id: oid3, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: oid1, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: oid2, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: oid3, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
 
     control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, regulatory_snapshot: false, reply_tx: None }).unwrap();
     let join = run_hot_loop(hot_loop);
@@ -660,7 +660,7 @@ pub(super) fn phase_non_usd_order(conns: Conns) -> Conns {
     let limit = ibx::types::PRICE_SCALE / 10;
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id: oid, instrument: inst, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+        order_id: oid, instrument: inst, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
         kind: OrderKind::Limit { price: limit }, tif: b'1',
         attrs: OrderAttrs { outside_rth: true, ..Default::default() },
     })).unwrap();
@@ -739,7 +739,7 @@ pub(super) fn phase_crypto_order(conns: Conns) -> Conns {
     // acting on an order it accepted.
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id: oid, instrument: inst, side: Side::Buy,
+        order_id: oid, instrument: inst, con_id: 0, side: Side::Buy,
         qty: ibx::types::QTY_SCALE / 1000,
         kind: OrderKind::Limit { price: 10_000 * ibx::types::PRICE_SCALE },
         tif: b'3', attrs: OrderAttrs::default(),
@@ -818,7 +818,7 @@ pub(super) fn phase_crypto_minutes_tif(conns: Conns) -> Conns {
 
     let oid = next_order_id();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-        order_id: oid, instrument: inst, side: Side::Buy,
+        order_id: oid, instrument: inst, con_id: 0, side: Side::Buy,
         qty: ibx::types::QTY_SCALE / 1000,
         kind: OrderKind::Limit { price: 10_000 * ibx::types::PRICE_SCALE },
         tif: b'p', attrs: OrderAttrs::default(),
@@ -920,7 +920,7 @@ pub(super) fn phase_crypto_fill(conns: Conns) -> Conns {
                     // the offer regardless, so paying through it costs nothing.
                     let price = (ask / ibx::types::PRICE_SCALE + 100) * ibx::types::PRICE_SCALE;
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-                        order_id: buy, instrument: inst, side: Side::Buy, qty: SIZE,
+                        order_id: buy, instrument: inst, con_id: 0, side: Side::Buy, qty: SIZE,
                         kind: OrderKind::Limit { price },
                         tif: b'3', attrs: OrderAttrs::default(),
                     })).unwrap();
@@ -939,7 +939,7 @@ pub(super) fn phase_crypto_fill(conns: Conns) -> Conns {
                     sell = Some(oid);
                     let price = (bid / ibx::types::PRICE_SCALE - 100) * ibx::types::PRICE_SCALE;
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
-                        order_id: oid, instrument: inst, side: Side::Sell, qty: fill.qty,
+                        order_id: oid, instrument: inst, con_id: 0, side: Side::Sell, qty: fill.qty,
                         kind: OrderKind::Limit { price },
                         tif: b'3', attrs: OrderAttrs::default(),
                     })).unwrap();

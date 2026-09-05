@@ -1592,7 +1592,7 @@ fn a_slot_the_engine_gave_back_is_not_answered_from_the_cache() {
     core.cache_instrument(756733, 4);
     core.cache_instrument(265598, 5);
 
-    shared.market.note_released_con_id(756733);
+    shared.market.note_released_slot(4);
     core.forget_released_slots(&shared);
 
     assert_eq!(core.cached_instrument(&shared, 756733), None, "the freed slot is not answered");
@@ -1700,7 +1700,7 @@ fn the_slot_cache_cannot_be_read_before_it_is_emptied() {
     let core = ClientCore::new();
     let shared = SharedState::new();
     core.cache_instrument(756733, 4);
-    shared.market.note_released_con_id(756733);
+    shared.market.note_released_slot(4);
 
     assert_eq!(
         core.cached_instrument(&shared, 756733), None,

@@ -43,13 +43,18 @@ pub struct MarketDataState {
     quotes: Box<[SeqQuote]>,
     /// InstrumentId counter — set by hot loop on RegisterInstrument.
     instrument_count: AtomicU64,
-    /// Contracts whose slot has been given back, for the surfaces to forget.
+    /// Slots that have been given back, for the surfaces to forget.
     ///
     /// A slot is handed to the next contract that needs one, and a surface
     /// that had cached the old contract's slot went on naming it: the order it
     /// placed was recorded against whatever now holds that slot, and the fill
     /// moved the wrong position.
-    released_con_ids: Mutex<Vec<i64>>,
+    ///
+    /// Named by the slot rather than by the contract on it, because a contract
+    /// the venue has not named yet holds a slot under no id at all — and a
+    /// release that could only say "contract nought" named nothing a surface
+    /// could act on, for exactly the contracts a caller states by description.
+    released_slots: Mutex<Vec<crate::types::InstrumentId>>,
     tbt_trades: Mutex<Vec<TbtTrade>>,
     tbt_quotes: Mutex<Vec<TbtQuote>>,
     real_time_bars: Mutex<Vec<(u32, RealTimeBar)>>,
@@ -101,7 +106,7 @@ impl MarketDataState {
         Self {
             quotes: (0..MAX_INSTRUMENTS).map(|_| SeqQuote::new()).collect(),
             instrument_count: AtomicU64::new(0),
-            released_con_ids: Mutex::new(Vec::new()),
+            released_slots: Mutex::new(Vec::new()),
             tbt_trades: Mutex::new(Vec::with_capacity(256)),
             tbt_quotes: Mutex::new(Vec::with_capacity(256)),
             real_time_bars: Mutex::new(Vec::with_capacity(64)),
@@ -141,14 +146,25 @@ impl MarketDataState {
         }
     }
 
-    /// Say that a contract no longer holds the slot it held.
-    #[doc(hidden)] pub fn note_released_con_id(&self, con_id: i64) {
-        self.released_con_ids.lock().unwrap().push(con_id);
+    /// Say that a slot has been given back.
+    #[doc(hidden)] pub fn note_released_slot(&self, instrument: crate::types::InstrumentId) {
+        self.released_slots.lock().unwrap().push(instrument);
     }
 
-    /// The contracts whose slot has been given back since this was last asked.
-    pub fn take_released_con_ids(&self) -> Vec<i64> {
-        std::mem::take(&mut *self.released_con_ids.lock().unwrap())
+    /// The slots given back since this was last asked.
+    pub fn take_released_slots(&self) -> Vec<crate::types::InstrumentId> {
+        std::mem::take(&mut *self.released_slots.lock().unwrap())
+    }
+
+    /// Drop a subscription failure still waiting under a slot that has gone
+    /// back to the table.
+    ///
+    /// A failure is resolved to a request through the slot it names, and the
+    /// slot's next occupant has its own requests: left queued, the reason the
+    /// last contract could not be subscribed was reported to whoever is
+    /// watching this one.
+    #[doc(hidden)] pub fn forget_subscription_failures(&self, id: crate::types::InstrumentId) {
+        self.subscription_failures.lock().unwrap().retain(|(at, _)| *at != id);
     }
 
     /// Drop the model last published for a slot, because the slot has gone
