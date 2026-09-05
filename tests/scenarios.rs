@@ -1092,6 +1092,9 @@ fn cancel_pnl_stops_dispatch() {
 #[test]
 fn pnl_single_dispatches_position_info() {
     let (client, _rx, shared) = test_client();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
 
     client.req_pnl_single(20, "DU123", "", 265598);
 

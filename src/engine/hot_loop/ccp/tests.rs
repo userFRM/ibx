@@ -3740,8 +3740,8 @@ fn figures_for_other_holdings_stay_out_of_the_account() {
     let mut stated = shared.portfolio.values_elsewhere(crate::types::HeldElsewhere::Away);
     stated.sort();
     assert_eq!(stated, [
-        ("GrossPositionValue".to_string(), "999.00".to_string()),
-        ("NetLiquidation".to_string(), "12345.67".to_string()),
+        ("GrossPositionValue".to_string(), "999.00".to_string(), String::new()),
+        ("NetLiquidation".to_string(), "12345.67".to_string(), String::new()),
     ]);
     assert!(
         shared.portfolio.values_elsewhere(crate::types::HeldElsewhere::Aside).is_empty(),
@@ -6268,4 +6268,41 @@ fn the_venues_reject_of_an_option_chain_request_reaches_its_caller_now() {
     assert_eq!(told.len(), 1, "{told:?}");
     assert_eq!((told[0].0, told[0].1), (701, crate::error_codes::Refusal::NO_DEFINITION));
     assert!(told[0].2.contains("Unknown contract"), "in the venue's words: {}", told[0].2);
+}
+
+/// The plain and the `Full` spellings of a margin figure are two figures, and
+/// they diverge whenever intraday margin relief applies. Folded into one
+/// field, the account read whichever the venue stated last.
+#[test]
+fn the_full_margin_spellings_do_not_overwrite_the_plain_ones() {
+    let (_ccp, mut context, shared) = u186_test_state();
+    let msg = b"8=FIX.4.1\x0135=U\x018001=InitMarginReq\x018004=100.00\x018001=FullInitMarginReq\x018004=200.00\x01\
+                8001=AvailableFunds\x018004=300.00\x018001=FullAvailableFunds\x018004=400.00\x01\
+                8001=ExcessLiquidity\x018004=500.00\x018001=FullExcessLiquidity\x018004=600.00\x01";
+    super::positions::handle_account_update(msg, &mut context, &shared);
+    let account = context.account();
+    assert_eq!(account.init_margin_req, 100 * PRICE_SCALE, "the plain figure");
+    assert_eq!(account.available_funds, 300 * PRICE_SCALE);
+    assert_eq!(account.excess_liquidity, 500 * PRICE_SCALE);
+    assert!(
+        shared.portfolio.stated_account_values().iter().any(|(k, v, _)| k == "FullInitMarginReq" && v == "200.00"),
+        "and the full spelling stays reachable by name",
+    );
+}
+
+/// A figure for holdings held elsewhere is stated in a currency, as the
+/// account's own figures are, and a figure stated in two currencies is two
+/// figures. Keyed on the name alone, the second statement overwrote the
+/// first and the caller read one number with nothing to say which currency.
+#[test]
+fn a_figure_for_holdings_elsewhere_keeps_its_currency() {
+    let (_ccp, _context, shared) = u186_test_state();
+    let msg = b"8=FIX.4.1\x0135=U\x018001=NetLiquidation\x018004=123.00\x0115=USD\x018001=NetLiquidation\x018004=100.00\x0115=EUR\x01";
+    super::handle_account_update_elsewhere(msg, &shared, crate::types::HeldElsewhere::Away);
+    let mut stated = shared.portfolio.values_elsewhere(crate::types::HeldElsewhere::Away);
+    stated.sort();
+    assert_eq!(stated, [
+        ("NetLiquidation".to_string(), "100.00".to_string(), "EUR".to_string()),
+        ("NetLiquidation".to_string(), "123.00".to_string(), "USD".to_string()),
+    ]);
 }

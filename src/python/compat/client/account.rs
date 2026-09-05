@@ -40,12 +40,15 @@ impl EClient {
     /// asked which, so there is no second account or model portfolio to name.
     #[pyo3(signature = (req_id, account, model_code=""))]
     fn req_pnl(&self, py: Python<'_>, req_id: i64, account: &str, model_code: &str) -> PyResult<()> {
+        // The session before the slot: taken first, a refused request held
+        // the one slot there is, and the next request under another number
+        // was refused as a duplicate of one that never went.
+        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         // Refused while another request holds the subscription, and nothing
         // is asked of the venue for a request that will not be reported.
         if let Err(why) = self.core.subscribe_pnl(req_id) {
             return self.report_refusal(py, req_id, why);
         }
-        let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         // Always the account this session opened under, whatever was named.
         //
         // The figures are worked out from one set of midnight seeds against
@@ -472,6 +475,8 @@ impl EClient {
             dict.set_item("available_funds", acct.available_funds as f64 / ps)?;
             dict.set_item("excess_liquidity", acct.excess_liquidity as f64 / ps)?;
             dict.set_item("settled_cash", acct.settled_cash as f64 / ps)?;
+            dict.set_item("accrued_cash", acct.accrued_cash as f64 / ps)?;
+            dict.set_item("margin_used", acct.margin_used as f64 / ps)?;
             dict.set_item("equity_with_loan", acct.equity_with_loan as f64 / ps)?;
             dict.set_item("cushion", acct.cushion as f64 / ps)?;
             dict.set_item("leverage", acct.leverage as f64 / ps)?;

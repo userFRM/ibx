@@ -1360,6 +1360,26 @@ fn a_cancelled_order_stops_being_tracked() {
     );
 }
 
+/// A profit subscription on an ended session takes no slot. Taken before the
+/// session was checked, a refused request held the one slot there is: the
+/// next request under another number was refused as a duplicate of one that
+/// never went, and the profit was reported under the refused number.
+#[test]
+fn a_profit_subscription_on_an_ended_session_takes_no_slot() {
+    let (client, _rx, shared) = test_client();
+    shared.reference.set_session_over("the trading connection");
+    #[derive(Default)]
+    struct Heard(Vec<i64>);
+    impl crate::api::wrapper::Wrapper for Heard {
+        fn error(&mut self, _req_id: i64, code: i64, _msg: &str, _json: &str) { self.0.push(code); }
+    }
+    let mut w = Heard::default();
+    client.req_pnl(9, "", "");
+    client.process_msgs(&mut w);
+    assert!(client.core.pnl_req_id.lock().unwrap().is_none(), "the slot is not taken");
+    assert!(w.0.contains(&504), "and the caller is told the session is over: {:?}", w.0);
+}
+
 /// An account read after the session ended is refused, not answered from the
 /// book the session left behind.
 ///
@@ -7375,7 +7395,13 @@ fn a_request_during_a_recoverable_loss_is_carried_and_one_after_the_end_is_refus
     client.process_msgs(&mut w);
     assert_eq!(refused(&w), 2, "each is answered 504 once: {:?}", w.events);
     assert!(client.positions_requested.load(Ordering::Acquire), "and nothing was applied");
-    assert_eq!(summary_asked(), Some(7), "the later request was not taken");
+    // The request parked behind the download is answered once the session
+    // is over, since no download is coming; the later one was never taken.
+    assert_eq!(summary_asked(), None, "the parked request was answered, the later one not taken");
+    assert!(
+        w.events.iter().any(|e| e.starts_with("account_summary_end")),
+        "the parked request ended: {:?}", w.events,
+    );
 }
 
 /// Two callers subscribing one contract at once: one holds it, the other

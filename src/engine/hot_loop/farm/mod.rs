@@ -840,14 +840,6 @@ impl FarmState {
                 }
             }
             b"L" => self.handle_ticker_setup(msg, context, shared),
-            b"UT" | b"UM" | b"RL" => super::ccp::positions::handle_account_update(msg, context, shared),
-            b"UP" => {
-                // One frame names several holdings. A flat parse keeps only
-                // the last value of each tag.
-                for parsed in super::ccp::positions::split_position_entries(msg) {
-                    super::ccp::positions::handle_position_update(&parsed, context, shared, event_tx);
-                }
-            }
             // The venue refusing a subscription it was asked for, naming the
             // request that asked. Dropped, a caller that asked for depth on a
             // venue this account cannot see waits for data that was refused

@@ -808,17 +808,17 @@ pub fn positions_elsewhere(&self) -> Vec<crate::types::PositionElsewhere>
 
 #### `values_elsewhere`
 
-The account figures describing one of the sets of holdings the account does not hold itself, as name and value. The venue states these the same way it states the account's own, and mixing them in would overstate what the account is worth, so they are kept where the holdings they describe are kept.
+The account figures describing one of the sets of holdings the account does not hold itself, as name, value and the currency each is stated in. A figure stated in two currencies is two figures. The venue states these the same way it states the account's own, and mixing them in would overstate what the account is worth, so they are kept where the holdings they describe are kept.
 
 ```rust
-pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String, String)>
+pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String, String, String)>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `held` | `crate::types::HeldElsewhere` |  |
 
-**Returns:** `Vec<(String, String)>`
+**Returns:** `Vec<(String, String, String)>`
 
 ---
 

@@ -198,20 +198,9 @@ pub struct AccountFieldUpdate {
 pub struct AccountUpdateBatch {
     /// Each figure that changed.
     pub fields: Vec<AccountFieldUpdate>,
-    /// Whether any field was delivered.
-    pub delivered: bool,
-    /// Whether the account is now taken to have been fully stated, said once.
-    ///
-    /// Read from the field stream going quiet, not from a signal: the venue
-    /// marks the end of its account request on its own message, and the same
-    /// mark is set by the first rows of the burst as well, so it cannot tell
-    /// the end of the description from its start. What this waits for instead
-    /// is a stretch of silence after the last field — not the first field of
-    /// any kind, since the figures that matter arrive seconds after it.
-    ///
-    /// A download that stalls for longer than that stretch and then resumes is
-    /// therefore called finished early, and a caller released on it reads the
-    /// account as it stood mid-burst.
+    /// Whether the account has just been stated whole: true on the pass after
+    /// the venue ended the download it was sending, once per download, so a
+    /// rebuilt connection's download ends again.
     pub finished: bool,
 }
 
@@ -3278,6 +3267,15 @@ impl ClientCore {
     /// moneyTraded = -qtyNow × avgCost so the formula collapses to unrealized P&L.
     pub fn poll_pnl(&self, shared: &SharedState) -> Option<PnlUpdate> {
         let req_id = (*self.pnl_req_id.lock().unwrap())?;
+        // Nothing until the venue has stated the account whole on this
+        // connection. A trading-connection drop leaves the quotes flowing
+        // while the book is stale, and the sum below multiplied the pre-drop
+        // quantities by live prices on every tick: a holding the account
+        // closed during the outage went on being valued, and its profit
+        // reported, until the download arrived.
+        if !shared.portfolio.account_download_complete() {
+            return None;
+        }
 
         let seeds: HashMap<i64, MidnightSeed> = shared.portfolio.midnight_seeds()
             .into_iter().map(|s| (s.con_id, s)).collect();
@@ -3399,17 +3397,6 @@ impl ClientCore {
         // by construction, so one unpriceable position sends the whole account
         // to them rather than reporting a partial sum as if it were the total.
         if priced == 0 || unpriceable > 0 {
-            // And only where the venue has stated them whole on this
-            // connection. A connection that has gone away leaves these
-            // standing at what they were before it, and after a drop nothing
-            // can be priced — so the fallback reported the pre-drop account as
-            // the current one, and the change-check below then found it
-            // unchanged and said nothing at all. Gated on whether anything had
-            // been heard instead, the first figure of the new connection let
-            // the rest of the pre-drop struct through.
-            if !shared.portfolio.account_download_complete() {
-                return None;
-            }
             let acct = shared.portfolio.account();
             total_daily = acct.daily_pnl as f64 / PRICE_SCALE_F;
             total_unrealized = acct.unrealized_pnl as f64 / PRICE_SCALE_F;
@@ -3441,7 +3428,9 @@ impl ClientCore {
     pub fn poll_pnl_single(&self, shared: &SharedState) -> Vec<PnlSingleUpdate> {
         let reqs: Vec<(i64, i64)> = self.pnl_single_reqs.lock().unwrap()
             .iter().map(|(&r, &c)| (r, c)).collect();
-        if reqs.is_empty() {
+        // As for the account's own profit: nothing from a book the download
+        // has not restated on this connection.
+        if reqs.is_empty() || !shared.portfolio.account_download_complete() {
             return Vec::new();
         }
 
@@ -3596,7 +3585,6 @@ impl ClientCore {
             fields.push(AccountFieldUpdate { key, value, currency });
         }
 
-        let delivered = !fields.is_empty();
         // Said once, when the venue ends the batch it was sending. Timed out
         // of a quiet spell instead, an account still arriving was called fully
         // stated because it paused, and one that finished early waited on a
@@ -3612,7 +3600,7 @@ impl ClientCore {
         // still said only once for the life of the client.
         let complete = shared.portfolio.account_download_complete();
         let finished = !self.account_end_sent.swap(complete, Ordering::AcqRel) && complete;
-        Some(AccountUpdateBatch { fields, delivered, finished })
+        Some(AccountUpdateBatch { fields, finished })
     }
 
     /// Prepare portfolio updates (position entries) for account streaming.
@@ -3674,8 +3662,10 @@ impl ClientCore {
         // figure, a summary asked for right after connecting -- which is the
         // ordinary idiom -- was handed the few tags parsed so far and its end,
         // and the request is one-shot, so the tags it actually asked for never
-        // came.
-        if !shared.portfolio.account_download_complete() {
+        // came. A session that has ended lets it through: no download is
+        // coming, and parked behind the gate the caller could neither receive
+        // its end nor withdraw it on the ended session.
+        if !shared.portfolio.account_download_complete() && shared.reference.session_over().is_none() {
             return None;
         }
         let req = self.account_summary_req.lock().unwrap().take();

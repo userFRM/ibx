@@ -23,6 +23,26 @@ pub(crate) fn drain_inner(peer: &mut Connection) -> Vec<Vec<u8>> {
     inner
 }
 
+/// Holdings and figures arrive on the trading connection's download. The
+/// market-data connection's copy of the same handlers struck a holding from
+/// the set a rebuilt download was still restating, so a holding the account
+/// closed while the connection was down survived the squaring. A position
+/// frame on this connection is recorded as unread and touches nothing.
+#[test]
+fn a_position_frame_on_the_market_data_connection_is_recorded_not_applied() {
+    let mut farm = FarmState::new();
+    let mut context = crate::engine::context::Context::new();
+    let shared = crate::bridge::SharedState::new();
+    let msg = b"8=FIX.4.1\x0135=UP\x016008=756733\x016064=100\x016068=SPY\x01";
+    farm.process_farm_message(msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new());
+    assert!(shared.portfolio.position_info(756733).is_none(), "nothing is applied");
+    assert!(
+        shared.market.unread_wire().iter().any(|(_, what)| what == "type UP"),
+        "and the frame is recorded as unread: {:?}",
+        shared.market.unread_wire(),
+    );
+}
+
 mod news_tests {
     use super::super::*;
     use crate::bridge::SharedState;

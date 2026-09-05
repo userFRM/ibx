@@ -49,7 +49,7 @@ pub struct PortfolioState {
     positions_elsewhere: Mutex<HashMap<i64, crate::types::PositionElsewhere>>,
     /// Account figures for the holdings the account does not hold itself,
     /// keyed by which set they describe and what they are called.
-    values_elsewhere: Mutex<HashMap<(crate::types::HeldElsewhere, String), String>>,
+    values_elsewhere: Mutex<HashMap<(crate::types::HeldElsewhere, String, String), String>>,
     positions: Box<[AtomicU64]>,
     /// Midnight seeds from 6040=143 for client-side daily P&L computation.
     midnight_seeds: Mutex<HashMap<i64, MidnightSeed>>,
@@ -97,19 +97,20 @@ impl PortfolioState {
     }
 
     /// The account figures describing one of the sets of holdings the account
-    /// does not hold itself, as name and value.
-    pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String, String)> {
+    /// does not hold itself, as name, value and the currency it is stated in.
+    /// A figure stated in two currencies is two figures.
+    pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String, String, String)> {
         self.values_elsewhere.lock().unwrap()
             .iter()
-            .filter(|((set, _), _)| *set == held)
-            .map(|((_, name), value)| (name.clone(), value.clone()))
+            .filter(|((set, ..), _)| *set == held)
+            .map(|((_, name, currency), value)| (name.clone(), value.clone(), currency.clone()))
             .collect()
     }
 
     #[doc(hidden)] pub fn set_value_elsewhere(
-        &self, held: crate::types::HeldElsewhere, name: String, value: String,
+        &self, held: crate::types::HeldElsewhere, name: String, value: String, currency: String,
     ) {
-        self.values_elsewhere.lock().unwrap().insert((held, name), value);
+        self.values_elsewhere.lock().unwrap().insert((held, name, currency), value);
     }
 
     /// Every position held, as the caller reads one.

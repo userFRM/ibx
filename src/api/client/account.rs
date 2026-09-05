@@ -144,6 +144,11 @@ impl EClient {
     /// `model_code` is taken and not applied: there is no model portfolio to
     /// name here.
     pub fn req_pnl(&self, req_id: i64, account: &str, _model_code: &str) {
+        // Before the slot is taken, as the siblings check it: taken first, a
+        // refused request held the one slot there is, so the next request
+        // under another number was refused as a duplicate of one that never
+        // went, and the profit was reported under the refused number.
+        if self.session_over() { return self.report_reason(-1, &Refusal::not_connected("Not connected")); }
         // Refused while another request holds the subscription, and nothing
         // is asked of the venue for a request that will not be reported.
         if let Err(why) = self.core.subscribe_pnl(req_id) {
@@ -442,12 +447,13 @@ impl EClient {
     }
 
     /// The account figures describing one of the sets of holdings the account
-    /// does not hold itself, as name and value.
+    /// does not hold itself, as name, value and the currency each is stated
+    /// in. A figure stated in two currencies is two figures.
     ///
     /// The venue states these the same way it states the account's own, and
     /// mixing them in would overstate what the account is worth, so they are
     /// kept where the holdings they describe are kept.
-    pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String, String)> {
+    pub fn values_elsewhere(&self, held: crate::types::HeldElsewhere) -> Vec<(String, String, String)> {
         self.shared.portfolio.values_elsewhere(held)
     }
 

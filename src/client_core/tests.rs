@@ -296,6 +296,9 @@ fn one_unpriceable_position_sends_the_whole_account_to_the_gateway() {
 fn an_unknown_seed_does_not_suppress_the_rest_of_a_single_callback() {
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl_single(21, 756733);
 
     seed_pnl_position(&core, &shared, 756733, 0, 10.0, 700.00, 735.00, 730.00);
@@ -409,6 +412,9 @@ fn a_seed_without_a_quantity_is_not_read_as_opened_today() {
 fn a_position_the_venue_says_has_made_nothing_is_reported_as_nothing() {
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl_single(11, 8002);
 
     // Held at 100, and the last print is 105 — so a figure worked out here
@@ -432,6 +438,9 @@ fn poll_pnl_intraday_opened_position_fires_callback() {
     // After fix: position iterated, money_traded synthesized, daily P&L = unrealized.
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl(42).unwrap();
 
     // 1 share bought at $735.00, now $735.07. No midnight seed (flat at midnight).
@@ -448,6 +457,9 @@ fn poll_pnl_intraday_opened_position_fires_callback() {
 fn poll_pnl_overnight_position_with_seed_unchanged() {
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl(99).unwrap();
 
     // Held 10 SPY through midnight: qty_midnight=10, prev_close=$730, avg_cost=$700.
@@ -477,6 +489,9 @@ fn poll_pnl_seeded_position_traded_intraday_uses_signed_net_cash() {
     // seed carries +330 net cash (sell proceeds) and +30 realized.
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl(31).unwrap();
 
     // Now holding 7 (was 10 at midnight), avg $100, last $110, prev close $100.
@@ -502,6 +517,9 @@ fn poll_pnl_seeded_position_traded_intraday_uses_signed_net_cash() {
 fn poll_pnl_change_detection_suppresses_duplicate() {
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl(7).unwrap();
     seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.0, 101.0, 0.0);
     assert!(core.poll_pnl(&shared).is_some());
@@ -556,6 +574,9 @@ fn poll_pnl_falls_back_to_account_level_without_market_data() {
 fn the_overnight_leg_is_valued_at_the_mark_the_venue_states() {
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl(31).unwrap();
 
     // Quoted at 101.25 now, with no locally derived previous close. The venue
@@ -595,6 +616,9 @@ fn the_overnight_leg_is_valued_at_the_mark_the_venue_states() {
 fn the_venues_midnight_value_beats_the_clients_previous_close() {
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl(32).unwrap();
 
     // Quoted at 101.00 with a previous close of 90.00.
@@ -679,6 +703,9 @@ fn poll_pnl_prefers_quotes_over_account_level_when_priced() {
     // the account-level fallback must not override it.
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl(22).unwrap();
 
     // Priced position: 1 share, avg 100, last 101 → daily/unrealized = 1.00.
@@ -705,6 +732,9 @@ fn poll_pnl_single_routes_quote_by_con_id() {
     // must see the price of its own con_id, not the first non-zero quote.
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
 
     seed_pnl_position(&core, &shared, 111, 0, 1.0, 100.0, 105.0, 0.0);  // SPY
     seed_pnl_position(&core, &shared, 222, 1, 1.0, 200.0, 210.0, 0.0);  // QQQ
@@ -731,6 +761,9 @@ fn poll_pnl_single_intraday_opened_position() {
     // No seed → money_traded synthesized, daily collapses to unrealized.
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     seed_pnl_position(&core, &shared, 756733, 0, 1.0, 735.00, 735.07, 0.0);
     core.subscribe_pnl_single(42, 756733);
 
@@ -748,6 +781,9 @@ fn poll_pnl_single_overnight_position_with_seed() {
     // #168 (bug 2): realized_pnl must come from the seed, not hardcoded 0.
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     seed_pnl_position(&core, &shared, 756733, 0, 10.0, 700.00, 735.00, 730.00);
     shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {
         con_id: 756733,
@@ -773,6 +809,9 @@ fn poll_pnl_single_overnight_position_with_seed() {
 fn poll_pnl_single_change_detection_suppresses_duplicate() {
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.0, 101.0, 0.0);
     core.subscribe_pnl_single(7, 1);
     assert_eq!(core.poll_pnl_single(&shared).len(), 1);
@@ -784,6 +823,9 @@ fn poll_pnl_single_change_detection_suppresses_duplicate() {
 fn poll_pnl_single_unsubscribe_clears_cache() {
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     seed_pnl_position(&core, &shared, 1, 0, 1.0, 100.0, 101.0, 0.0);
     core.subscribe_pnl_single(7, 1);
     let _ = core.poll_pnl_single(&shared);
@@ -1162,6 +1204,9 @@ fn an_option_holding_is_not_valued_from_a_per_unit_price() {
 fn a_position_pnl_is_answered_without_a_market_data_subscription() {
     let core = ClientCore::new();
     let shared = SharedState::new();
+    // A book the download has stated whole, which is the only book a profit
+    // is worked out from.
+    shared.portfolio.account_download_is_settled();
     core.subscribe_pnl_single(9, 8001);
 
     // No entry in con_id_to_instrument: nothing here subscribed to quotes.
@@ -1992,11 +2037,11 @@ fn asking_for_the_account_again_restates_it() {
     let first = core.prepare_account_updates(&shared).expect("a batch");
     assert!(first.finished, "the end that says the book is whole");
     let quiet = core.prepare_account_updates(&shared).expect("a batch");
-    assert!(!quiet.delivered && !quiet.finished, "nothing new, nothing said");
+    assert!(quiet.fields.is_empty() && !quiet.finished, "nothing new, nothing said");
 
     core.subscribe_account_updates(true);
     let again = core.prepare_account_updates(&shared).expect("a batch");
-    assert!(again.delivered, "asked again, every figure is restated");
+    assert!(!again.fields.is_empty(), "asked again, every figure is restated");
     assert!(again.finished, "and the end is said again");
 }
 
@@ -2033,3 +2078,53 @@ fn a_charge_naming_no_execution_stamps_none() {
     );
 }
 
+
+/// No profit is worked out from a book the download has not restated. A
+/// trading-connection drop leaves the quotes flowing while the book is
+/// stale, and the client-side sum multiplied the pre-drop quantities by live
+/// prices on every tick: a holding the account closed during the outage went
+/// on being valued, and its profit reported, until the download arrived.
+#[test]
+fn no_profit_is_worked_out_from_a_book_the_download_has_not_restated() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.portfolio.set_account(&crate::types::AccountState::default());
+    shared.portfolio.account_download_is_settled();
+    shared.portfolio.set_position_info(crate::types::PositionInfo {
+        con_id: 756733, position: 100.0, avg_cost: 150 * crate::types::PRICE_SCALE,
+        ..Default::default()
+    });
+    core.cache_instrument(756733, 4);
+    shared.market.push_quote(4, &crate::types::Quote { last: 151 * crate::types::PRICE_SCALE, ..Default::default() });
+    core.subscribe_pnl(7).unwrap();
+    core.subscribe_pnl_single(8, 756733);
+    assert!(core.poll_pnl(&shared).is_some(), "priced from the live quote while the book is whole");
+    assert!(!core.poll_pnl_single(&shared).is_empty());
+
+    shared.portfolio.account_download_is_pending();
+    shared.market.push_quote(4, &crate::types::Quote { last: 152 * crate::types::PRICE_SCALE, ..Default::default() });
+    assert!(core.poll_pnl(&shared).is_none(), "nothing while the download is pending, however the price moves");
+    assert!(core.poll_pnl_single(&shared).is_empty(), "for the position either");
+
+    shared.portfolio.account_download_is_settled();
+    shared.market.push_quote(4, &crate::types::Quote { last: 153 * crate::types::PRICE_SCALE, ..Default::default() });
+    assert!(core.poll_pnl(&shared).is_some(), "and again once the book is whole");
+}
+
+/// A one-shot summary asked for before the download finished is answered
+/// when the session ends rather than held for ever: parked behind the
+/// download gate, the caller could neither receive its end nor withdraw it
+/// on the ended session.
+#[test]
+fn a_summary_parked_behind_the_download_is_answered_when_the_session_ends() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    core.subscribe_account_summary(7, "NetLiquidation").unwrap();
+    shared.portfolio.account_download_is_pending();
+    assert!(core.prepare_account_summary(&shared, "DU1").is_none(), "parked while the download runs");
+    shared.reference.set_session_over("the trading connection");
+    assert!(
+        core.prepare_account_summary(&shared, "DU1").is_some(),
+        "answered with what there is once the session is over",
+    );
+}

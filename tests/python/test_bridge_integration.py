@@ -879,6 +879,9 @@ class TestAccountDispatch:
         c._test_map_con_id(265598, 0)
         c._test_set_position(265598, 100, 150.50)
         c._test_push_quote(0, bid=151.0, ask=151.5, last=151.25, close=150.0)
+        # And a book the download has stated whole: nothing is worked out from
+        # one it has not, whatever the prices do meanwhile.
+        c._test_finish_account_download()
         c._test_dispatch_once()
 
         events = [e for e in w.events if e[0] == "pnl"]
@@ -902,6 +905,7 @@ class TestAccountDispatch:
         c._test_map_con_id(265598, 0)
         c._test_set_position(265598, 100, 150.50)
         c._test_push_quote(0, bid=151.0, ask=151.5, last=151.25, close=150.0)
+        c._test_finish_account_download()
         c._test_dispatch_once()
         count1 = len([e for e in w.events if e[0] == "pnl"])
         assert count1 >= 1, "a held position with a price has a P&L"

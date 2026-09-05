@@ -2596,17 +2596,30 @@ fn handle_account_update_elsewhere(
     held: crate::types::HeldElsewhere,
 ) {
     let Ok(text) = std::str::from_utf8(msg) else { return };
+    // Name, value, currency: the currency follows the value, as it does on
+    // the account's own figures, and a figure stated in two currencies is
+    // two figures. Keyed on the name alone, the second statement overwrote
+    // the first.
     let mut name: Option<&str> = None;
+    let mut value: Option<&str> = None;
     let mut stated = 0usize;
+    let mut file = |name: &mut Option<&str>, value: &mut Option<&str>, currency: &str| {
+        if let (Some(n), Some(v)) = (name.take(), value.take()) {
+            shared.portfolio.set_value_elsewhere(held, n.to_string(), v.to_string(), currency.to_string());
+            stated += 1;
+        }
+    };
     for part in text.split('\x01') {
         if let Some(v) = part.strip_prefix("8001=") {
+            file(&mut name, &mut value, "");
             name = Some(v);
-        } else if let Some(v) = part.strip_prefix("8004=")
-            && let Some(n) = name.take() {
-                shared.portfolio.set_value_elsewhere(held, n.to_string(), v.to_string());
-                stated += 1;
-            }
+        } else if let Some(v) = part.strip_prefix("8004=") {
+            value = Some(v);
+        } else if let Some(c) = part.strip_prefix("15=") {
+            file(&mut name, &mut value, c);
+        }
     }
+    file(&mut name, &mut value, "");
     if stated > 0 {
         log::info!("{stated} account figures for holdings {held:?}");
     }
