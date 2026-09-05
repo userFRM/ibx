@@ -139,17 +139,18 @@ def without_declarations(text: str) -> str:
     still be reported as reaching the venue, because two declarations of it
     remained.
     """
+    # A declaration starts a line. Found anywhere, the word "struct" in a
+    # comment ("the pre-drop struct through") opened a cut that ran to the
+    # next brace in column zero — the end of the whole impl block — and every
+    # field read in the thousands of lines between reported as dropped.
+    declaration = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?struct\s+\w+|^impl Default for ", re.M)
     out, at = [], 0
     while True:
-        starts = [
-            (text.find(k, at), k)
-            for k in ("pub struct ", "impl Default for ", "struct ")
-        ]
-        starts = [(i, k) for i, k in starts if i >= 0]
-        if not starts:
+        m = declaration.search(text, at)
+        if not m:
             out.append(text[at:])
             return "".join(out)
-        start = min(starts)[0]
+        start = m.start()
         end = text.find("\n}", start)
         if end < 0:
             out.append(text[at:])
