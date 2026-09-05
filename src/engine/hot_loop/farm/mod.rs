@@ -1228,14 +1228,17 @@ impl FarmState {
                 let fanned_out = self.depth_fanout_map.iter()
                     .find(|(sub, _)| *sub == rid)
                     .map(|(_, user)| *user);
-                let (asked_for, still_asking) = match fanned_out {
-                    Some(user) => {
-                        self.depth_fanout_map.retain(|(sub, _)| *sub != rid);
-                        (user, self.depth_fanout_map.iter().any(|(_, u)| *u == user))
-                    }
-                    None => (rid, false),
+                // Naming nothing this client still asks under, the book was
+                // withdrawn or refused before this arrived, and there is no
+                // caller to tell. Handed on as it stood, the wire number was
+                // published as though it were a caller's request number, and
+                // whoever held that number was told a book had been refused.
+                let Some(asked_for) = fanned_out else {
+                    log::info!("the refusal names {rid}, which no book here asks under any more");
+                    return;
                 };
-                if still_asking {
+                self.depth_fanout_map.retain(|(sub, _)| *sub != rid);
+                if self.depth_fanout_map.iter().any(|(_, u)| *u == asked_for) {
                     return;
                 }
                 shared.reference.push_historical_error(
@@ -1780,15 +1783,18 @@ impl FarmState {
         // Cleared whether or not anything was asked yet: left behind, a book
         // the caller withdrew was asked for again by the next reconnect.
         self.depth_resub_info.retain(|(id, ..)| *id != req_id);
-        if asked_under.is_empty() {
-            return;
-        }
-
+        // And the routing, whether or not anything was asked: a tag record
+        // left behind after the venue refused the book mid-stream was
+        // inherited by the next contract asked for under this number, which
+        // then read the old book as its own.
         self.depth_subs.retain(|(id, _)| !asked_under.contains(id));
         self.depth_fanout_map.retain(|(_, user)| *user != req_id);
         self.depth_fanout_exchange.retain(|(sub, _)| !asked_under.contains(sub));
         self.depth_tag_to_req.retain(|(_, rid, ..)| *rid != req_id);
         self.depth_rows.retain(|(id, _)| *id != req_id);
+        if asked_under.is_empty() {
+            return;
+        }
 
         if let Some(conn) = farm_conn.as_mut() {
             for (sub_req, con_id, venue, fix_sec_type) in &entries {

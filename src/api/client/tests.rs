@@ -8833,3 +8833,34 @@ fn a_replace_naming_another_contract_is_refused_as_a_mismatch() {
     assert!(rx.try_recv().is_err(), "and nothing was sent under it");
 }
 
+/// A book reset is delivered before the levels that follow it.
+///
+/// The engine queues the reset and then the venue's first new levels land.
+/// Levels drained first, a pass that ran after both had arrived delivered the
+/// new book and then the order to empty it.
+#[test]
+fn a_book_reset_is_delivered_before_the_levels_that_follow_it() {
+    #[derive(Default)]
+    struct Sequence(Vec<&'static str>);
+    impl Wrapper for Sequence {
+        fn error(&mut self, _: i64, code: i64, _: &str, _: &str) {
+            if code == 317 { self.0.push("reset"); }
+        }
+        fn update_mkt_depth(&mut self, _: i64, _: i32, _: i32, _: i32, _: f64, _: f64) {
+            self.0.push("level");
+        }
+    }
+    let (client, _rx, shared) = test_client();
+    client.req_mkt_depth(7, &spy(), 5, false).expect("asked");
+    shared.reference.push_historical_error(
+        7, crate::error_codes::DEPTH_BOOK_RESET, "Market depth data has been RESET".into(),
+    );
+    shared.market.push_depth_update(crate::types::DepthUpdate {
+        req_id: 7, position: 0, market_maker: String::new(), operation: 0, side: 1,
+        price: 100.0, size: 5.0, is_smart_depth: false,
+    });
+    let mut w = Sequence::default();
+    client.process_msgs(&mut w);
+    assert_eq!(w.0, ["reset", "level"], "the order to empty the book comes first");
+}
+

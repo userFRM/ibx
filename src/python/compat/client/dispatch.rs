@@ -731,6 +731,19 @@ impl EClient {
                  quote.ask_size as f64 / crate::types::QTY_SCALE as f64, &attrib_obj));
         }
 
+        // The refusal queue, before the book levels below. A reset (317) is
+        // queued and then the venue's first new levels land; levels drained
+        // first, a pass that ran after both had arrived delivered the new book
+        // and then the order to empty it. Still before historical data, so a
+        // query error that also queued an empty terminal response is reported
+        // before historicalDataEnd.
+        for (req_id, code, msg) in shared.reference.drain_historical_errors_for_dispatch(
+            |id| shared.reference.held_under_any_kind(i64::from(id)),
+        ) {
+            let req_id = crate::bridge::ReferenceState::request_id_reported(req_id);
+            call_wrapper!(self.wrapper, py, "error", (req_id, 0i64, code as i64, msg.as_str(), ""));
+        }
+
         // Drain depth updates -> updateMktDepth / updateMktDepthL2
         let depth_updates = shared.market.drain_depth_updates_for_dispatch(
             |id| shared.reference.is_ours(crate::bridge::RecordKind::Depth, i64::from(id)),
@@ -793,15 +806,6 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "open_order",
                 (wi.order_id as i64, &contract_py, &order_py, &state_py));
             self.core.open_orders.lock().unwrap().remove(&wi.order_id);
-        }
-
-        // Drain HMDS query errors -> error. Surface gateway-side validation
-        // failures (e.g. "Invalid time length") that previously vanished silently.
-        for (req_id, code, msg) in shared.reference.drain_historical_errors_for_dispatch(
-            |id| shared.reference.held_under_any_kind(i64::from(id)),
-        ) {
-            let req_id = crate::bridge::ReferenceState::request_id_reported(req_id);
-            call_wrapper!(self.wrapper, py, "error", (req_id, 0i64, code as i64, msg.as_str(), ""));
         }
 
         // Drain historical data -> historicalData + historicalDataEnd /

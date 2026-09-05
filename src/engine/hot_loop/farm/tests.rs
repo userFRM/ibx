@@ -1376,6 +1376,41 @@ mod depth_identity_tests {
 mod depth_position_tests {
     use super::super::*;
 
+    /// A withdrawal that names nothing on the wire still clears the caller's
+    /// routing records. Returned early, the next contract asked for under
+    /// that number inherited the old one's tag and read its book as its own.
+    #[test]
+    fn a_withdrawal_naming_nothing_on_the_wire_still_clears_the_routing() {
+        let mut farm = FarmState::new();
+        let mut hb = HeartbeatState::new();
+        farm.depth_tag_to_req.push((0x11, 7, false, 0.01, 1.0, "IEX".to_string()));
+        farm.depth_rows.push((7, 10));
+        farm.send_depth_unsubscribe(7, &mut None, &mut hb);
+        assert!(farm.depth_tag_to_req.is_empty(), "the tag record goes with the request");
+        assert!(farm.depth_rows.is_empty(), "and so does the row count");
+    }
+
+    /// A refusal naming a number nobody holds is not published under it. The
+    /// wire number of a book already withdrawn was handed back as if it were
+    /// a caller's request number, and whoever held that number was told a
+    /// book had been refused.
+    #[test]
+    fn a_refusal_naming_no_caller_is_not_published_under_the_wire_number() {
+        let mut farm = FarmState::new();
+        let shared = SharedState::new();
+        let context = Context::new();
+        let refused = crate::protocol::fix::fix_build(&[
+            (crate::protocol::fix::TAG_MSG_TYPE, "j"),
+            (262, "100"),
+            (58, "Error&ISLAND/DEPTH/not available"),
+        ], 1);
+        farm.handle_subscription_reject(&refused, &context, &shared);
+        assert!(
+            shared.reference.drain_historical_errors().is_empty(),
+            "nobody holds 100, so nobody is told",
+        );
+    }
+
     /// One frame can carry sections for more than one stream. Each book's
     /// levels are numbered from zero.
     #[test]

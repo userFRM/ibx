@@ -438,6 +438,9 @@ impl Client {
     }
 
     /// Every change to a contract's book, until the stream is dropped.
+    ///
+    /// A reset the venue states mid-stream is read off
+    /// [`Subscription::take_notice`]; the levels after it are a fresh book.
     pub fn market_depth(
         &self,
         contract: &Contract,

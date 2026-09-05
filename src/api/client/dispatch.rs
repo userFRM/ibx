@@ -504,6 +504,30 @@ impl EClient {
             );
         }
 
+        // The refusal queue, before the book levels below. A reset (317) is
+        // queued and then the venue's first new levels land; levels drained
+        // first, a pass that ran after both had arrived delivered the new book
+        // and then the order to empty it. Still before historical_data, so a
+        // QueryError that also queued an empty terminal HistoricalResponse
+        // fires wrapper.error first, then wrapper.historical_data_end.
+        for (req_id, code, msg) in self.shared.reference.drain_historical_errors_for_dispatch(
+            |id| self.shared.reference.left_for_its_reader(id),
+        ) {
+            wrapper.error(
+                crate::bridge::ReferenceState::request_id_reported(req_id),
+                code as i64, &msg, "",
+            );
+        }
+
+        // A book this client could not keep whole, on the request that asked
+        // for it. Nothing further is kept for it, so a caller not told reads a
+        // subscription that is up and a book that has stopped moving.
+        for (req_id, reason) in self.shared.market.drain_depth_drops_for_dispatch(
+            |id| self.shared.reference.is_ours(RecordKind::Depth, i64::from(id)),
+        ) {
+            wrapper.error(i64::from(req_id), DEPTH_NOT_SERVED, &reason, "");
+        }
+
         // Depth updates → update_mkt_depth / update_mkt_depth_l2
         for du in self.shared.market.drain_depth_updates_for_dispatch(
             |id| self.shared.reference.is_ours(RecordKind::Depth, i64::from(id)),
@@ -608,32 +632,11 @@ impl EClient {
             }
         }
 
-        // A book this client could not keep whole, on the request that asked
-        // for it. Nothing further is kept for it, so a caller not told reads a
-        // subscription that is up and a book that has stopped moving.
-        for (req_id, reason) in self.shared.market.drain_depth_drops_for_dispatch(
-            |id| self.shared.reference.is_ours(RecordKind::Depth, i64::from(id)),
-        ) {
-            wrapper.error(i64::from(req_id), DEPTH_NOT_SERVED, &reason, "");
-        }
-
         // News bulletins → update_news_bulletin (only when subscribed)
         if self.core.bulletins_subscribed() {
             for b in self.shared.market.drain_news_bulletins() {
                 wrapper.update_news_bulletin(b.msg_id as i64, b.msg_type, &b.message, &b.exchange);
             }
-        }
-
-        // HMDS query errors → error. Drain before historical_data so a
-        // QueryError that also queued an empty terminal HistoricalResponse fires
-        // wrapper.error first, then wrapper.historical_data_end.
-        for (req_id, code, msg) in self.shared.reference.drain_historical_errors_for_dispatch(
-            |id| self.shared.reference.left_for_its_reader(id),
-        ) {
-            wrapper.error(
-                crate::bridge::ReferenceState::request_id_reported(req_id),
-                code as i64, &msg, "",
-            );
         }
 
         // Historical data → historical_data + historical_data_end, and after

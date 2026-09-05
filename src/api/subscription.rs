@@ -63,6 +63,9 @@ pub struct Subscription<T> {
     idle: Option<Duration>,
     /// The venue's words, if it refused the request.
     refusal: Option<(i64, String)>,
+    /// What the venue said about the stream without ending it: the book was
+    /// reset, and the levels after it are a fresh book. Taken once.
+    notice: Option<(i64, String)>,
     done: bool,
 }
 
@@ -97,6 +100,7 @@ impl<T> Subscription<T> {
             buffered: VecDeque::new(),
             idle: Some(DEFAULT_IDLE),
             refusal: None,
+            notice: None,
             done: false,
         }
     }
@@ -126,6 +130,7 @@ impl<T> Subscription<T> {
             buffered: VecDeque::new(),
             idle: None,
             refusal: None,
+            notice: None,
             done: false,
         }
     }
@@ -148,6 +153,14 @@ impl<T> Subscription<T> {
     /// nothing came look the same from the outside. This tells them apart.
     pub fn refusal(&self) -> Option<&(i64, String)> {
         self.refusal.as_ref()
+    }
+
+    /// A notice the venue gave about this stream without ending it, if one
+    /// stands: the book was reset (317), the levels read before it are gone,
+    /// and the levels after it are a fresh book. Taken once; read it between
+    /// items, and empty the book when it says so.
+    pub fn take_notice(&mut self) -> Option<(i64, String)> {
+        self.notice.take()
     }
 
     /// Stop asking, now, rather than when this is dropped.
@@ -186,6 +199,17 @@ impl<T> Subscription<T> {
                 return Some(item);
             }
             if let Some((code, message)) = self.shared.reference.take_error_for(self.req_id as u32) {
+                // A reset is not the end of a book. The engine queues it when
+                // a rebuilt connection asks for the book again, and the levels
+                // that follow are the same book started over. Ended here, the
+                // stream withdrew the very subscription the reconnect had just
+                // re-asked for, and reported a routine reset as the reason.
+                if self.reads == Some(RecordKind::Depth)
+                    && code == crate::error_codes::DEPTH_BOOK_RESET
+                {
+                    self.notice = Some((code as i64, message));
+                    continue;
+                }
                 self.refusal = Some((code as i64, message));
                 // Ended the way the endings below end it, and not merely
                 // marked done. A caller keeps a refused stream to read the
@@ -513,5 +537,39 @@ mod tests {
         .with_timeout(Duration::from_millis(20));
         assert_eq!(sub.next_item(), None);
         assert!(sub.refusal().is_none());
+    }
+
+    /// A reset the venue states mid-stream is a notice, not the end.
+    ///
+    /// The engine queues 317 under the book's number when a rebuilt
+    /// connection asks for the book again, and every error under a stream's
+    /// number ended it: the stream withdrew the very subscription the
+    /// reconnect had just re-asked for, and reported a routine reset as the
+    /// reason. The other surface delivers the same event and carries on.
+    #[test]
+    fn a_book_reset_is_read_as_a_notice_and_the_stream_goes_on() {
+        let shared = state();
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let r = Arc::clone(&reads);
+        let withdrawn = Arc::new(AtomicI64::new(0));
+        let w = Arc::clone(&withdrawn);
+        let mut sub: Subscription<i64> = Subscription::new(
+            7,
+            RecordKind::Depth,
+            Arc::clone(&shared),
+            // Nothing on the first read and a level on the second: the reset
+            // is read between the two.
+            move |_, _| if r.fetch_add(1, Ordering::Relaxed) == 0 { Vec::new() } else { vec![42] },
+            move |req_id| { w.store(req_id, Ordering::Relaxed); },
+        );
+        shared.reference.push_historical_error(
+            7, crate::error_codes::DEPTH_BOOK_RESET, "Market depth data has been RESET".into(),
+        );
+
+        assert_eq!(sub.next_item(), Some(42), "the level after the reset is delivered");
+        assert!(sub.refusal().is_none(), "a reset is not a refusal");
+        assert_eq!(withdrawn.load(Ordering::Relaxed), 0, "and the book is not withdrawn");
+        assert_eq!(sub.take_notice().map(|(code, _)| code), Some(317), "it is read as a notice");
+        assert!(sub.take_notice().is_none(), "once");
     }
 }

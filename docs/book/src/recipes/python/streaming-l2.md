@@ -32,6 +32,10 @@ arrives on the `error` callback. The example prints an em dash for a side with
 no levels rather than failing, so a book that never started shows up as zero
 updates rather than as an error.
 
+After a reconnect the venue restarts the book from the top. The client reports
+that as `error` 317 before the first new level arrives; empty the book on it,
+or the levels that follow land on top of the old ones.
+
 A contract whose security type and exchange are both left off is sent as it
 stands, and an unnamed exchange is read as the smart destination. Naming a
 security type that does not match the contract asks for one book as another's,
