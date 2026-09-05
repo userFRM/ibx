@@ -461,12 +461,17 @@ impl Client {
         self.inner.req_mkt_depth(req_id, contract, num_rows, smart_depth)?;
         let req_id = held.keep();
         let tx = self.inner.control_tx.clone();
+        let books = Arc::clone(&self.inner.core.depth_reqs);
         Ok(Subscription::new(
             req_id,
             RecordKind::Depth,
             Arc::clone(&self.inner.shared),
             |sh, id| sh.market.take_depth_updates_for(id as u32),
             move |id| {
+                // The slot the request took goes back with the withdrawal.
+                // Sent down the control channel alone, the number was refused
+                // as still holding a book for the life of the session.
+                books.lock().unwrap().remove(&id);
                 let _ = tx.send(ControlCommand::UnsubscribeDepth { req_id: id as u32 });
             },
         ))
@@ -1409,6 +1414,22 @@ mod tests {
         assert_eq!(bars.next_item().map(|_| ()), None, "a refused stream carries nothing");
         let (code, why) = bars.refusal().expect("the venue's reason");
         assert_eq!(*code, 354, "the stream was told it simply went quiet: {why}");
+    }
+
+    /// A depth stream gives its book slot back when it is withdrawn. Sent
+    /// straight down the control channel, the withdrawal skipped the release,
+    /// so a number a dead stream once held was refused as still holding a
+    /// book for the life of the session.
+    #[test]
+    fn a_withdrawn_depth_stream_gives_its_slot_back() {
+        let (client, _rx, _shared) = test_direct_client();
+        let mut book = client
+            .market_depth(&Contract { symbol: "SPY".into(), ..Default::default() }, 10, false)
+            .expect("the stream opened");
+        let asked = book.req_id();
+        assert!(client.inner.core.depth_reqs.lock().unwrap().contains(&asked), "the slot is held while it runs");
+        book.cancel();
+        assert!(!client.inner.core.depth_reqs.lock().unwrap().contains(&asked), "and given back when it is withdrawn");
     }
 
     /// A book this client gave up on ends the stream that asked for it.

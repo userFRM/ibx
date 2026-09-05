@@ -69,14 +69,6 @@ const _: () = assert!(LIVENESS_TEST_SECS < LIVENESS_DEAD_SECS);
 const _: () = assert!(
     LIVENESS_TEST_SECS == crate::protocol::connection::WHOLE_FRAME_TIMEOUT_SECS
 );
-/// How long a book on no particular venue waits for the list of venues that
-/// offer one before the caller is told it cannot be asked for.
-///
-/// The list arrives as a session opens, and is asked for again where it is
-/// missing, so this is not a race — it is the case where the answer never
-/// comes at all.
-const DEPTH_VENUE_LIST_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
-
 
 /// The pinned-core hot loop. Pushes events to SharedState + optional event channel.
 pub struct HotLoop {
@@ -116,17 +108,6 @@ pub struct HotLoop {
     pub secdef: secdef::SecDefState,
     /// SPSC channel receiver for control plane commands.
     control_rx: Option<Receiver<ControlCommand>>,
-    /// Books asked for on no particular venue, held until the server has said
-    /// which venues offer one.
-    depth_awaiting_venues: Vec<ControlCommand>,
-    /// When the first book started waiting for the list of venues.
-    ///
-    /// The list arrives unprompted as a session opens and is asked for again
-    /// where it is missing, but a session whose opening carried none may never
-    /// be sent one — and a book waiting on it waits for as long as the session
-    /// lasts, with nothing said to the caller. A request this client cannot
-    /// serve is answered rather than held.
-    depth_waiting_since: Option<std::time::Instant>,
     /// Whether the hot loop should keep running.
     running: bool,
     /// Account ID for order submission.
@@ -398,8 +379,6 @@ impl HotLoop {
             secdef_conn: None,
             secdef: secdef::SecDefState::new(),
             control_rx: None,
-            depth_awaiting_venues: Vec::new(),
-            depth_waiting_since: None,
             running: true,
             account_id: String::new(),
             hb: HeartbeatState::new(),
@@ -1005,38 +984,6 @@ impl HotLoop {
         // Drain the buffer first, so the loop body can mutably borrow self.
         // Requests held for want of a contract id come first: they were asked
         // for before anything still in the buffer.
-        // A book held for want of the list of venues that offer one, now that
-        // the server has named them.
-        if !self.depth_awaiting_venues.is_empty()
-            && !self.shared.reference.depth_exchanges().is_empty()
-        {
-            // Queued ahead of what is already buffered. A subscription held
-            // for the exchange list and withdrawn in the same batch must not
-            // have its withdrawal processed first.
-            let held = std::mem::take(&mut self.depth_awaiting_venues);
-            self.depth_waiting_since = None;
-            self.cmd_buf.splice(0..0, held);
-        }
-        // Or the list never came. Held silently, the caller waits on a book
-        // that is not coming and cannot tell that from a venue with nothing to
-        // say. Told, it can ask again naming a venue of its own.
-        if let Some(since) = self.depth_waiting_since
-            && since.elapsed() > DEPTH_VENUE_LIST_WAIT
-        {
-            for held in std::mem::take(&mut self.depth_awaiting_venues) {
-                if let ControlCommand::SubscribeDepth { req_id, .. } = held {
-                    self.shared.reference.push_historical_error(
-                        req_id,
-                        farm::DEPTH_VENUE_REFUSED,
-                        "the venue did not name the exchanges that offer a book, so one on \
-                         no particular venue cannot be asked for; name an exchange to ask \
-                         for its book"
-                            .to_string(),
-                    );
-                }
-            }
-            self.depth_waiting_since = None;
-        }
         let mut cmds: Vec<ControlCommand> = std::mem::take(&mut self.ccp.resolved_named);
         cmds.append(&mut self.cmd_buf);
         for cmd in cmds {
@@ -1733,24 +1680,6 @@ impl HotLoop {
                 }
                 ControlCommand::SubscribeDepth { contract, req_id, num_rows, is_smart_depth, filters, .. } => {
                     let ContractRef { con_id, exchange, sec_type, .. } = contract;
-                    // Which venues offer a book is the server's to say, and
-                    // it says so once, unprompted, after logon.
-                    //
-                    // A book on no particular venue waits for that list
-                    // rather than going out to the one venue the contract is
-                    // listed on: sent early it gathers from one venue where it
-                    // was meant to gather from all of them, and a caller sees
-                    // a thin book with nothing to say it is thin.
-                    let on_no_venue =
-                        is_smart_depth || matches!(exchange.as_str(), "SMART" | "BEST" | "");
-                    if on_no_venue && self.shared.reference.depth_exchanges().is_empty() {
-                        self.depth_awaiting_venues.push(ControlCommand::SubscribeDepth {
-                            req_id, num_rows, is_smart_depth, filters,
-                            contract: ContractRef { con_id, exchange, sec_type, ..Default::default() },
-                        });
-                        self.depth_waiting_since.get_or_insert_with(std::time::Instant::now);
-                        continue;
-                    }
                     self.farm.send_depth_subscribe(
                         req_id, con_id, &exchange, &filters.primary_exchange, &sec_type,
                         num_rows, is_smart_depth,
@@ -1761,12 +1690,6 @@ impl HotLoop {
                 }
                 ControlCommand::UnsubscribeDepth { req_id } => {
                     self.ccp.withdraw_named(req_id);
-                    // Includes a subscription still awaiting the exchange
-                    // list, which would otherwise be sent once it arrives.
-                    self.depth_awaiting_venues.retain(|held| !matches!(
-                        held,
-                        ControlCommand::SubscribeDepth { req_id: held_id, .. } if *held_id == req_id
-                    ));
                     self.farm.send_depth_unsubscribe(
                         req_id,
                         &mut self.farm_conn,
@@ -6509,37 +6432,36 @@ mod tests {
 }
 
 #[cfg(test)]
-mod deferred_depth_tests {
+mod smart_depth_tests {
     use super::*;
 
-    /// A book on no particular venue waits for the venue list.
-    ///
-    /// A withdrawal that arrives before the list has nothing to withdraw, so
-    /// the subscription must be recorded as cancelled rather than left to
-    /// publish when the list lands, which would put a live book in front of a
-    /// caller who believes it cancelled.
+    /// A book on no particular venue goes out at once. It was held for the
+    /// venue's directory of book venues and refused after fifteen seconds
+    /// without it, on the grounds that the request would gather from one
+    /// venue instead of all — but the request goes to the smart destination
+    /// whatever the directory says, and nothing asks the venue for the
+    /// directory any more, so the hold waited on a message nothing asked for
+    /// and the caller kept the book slot for the refused request.
     #[test]
-    fn a_book_withdrawn_while_it_waits_for_the_venue_list_never_goes_out() {
+    fn a_book_on_no_particular_venue_goes_out_at_once() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
-        hl.depth_awaiting_venues.push(ControlCommand::SubscribeDepth {
-            req_id: 9,
-            num_rows: 5,
-            is_smart_depth: true,
-            filters: Default::default(),
-            contract: crate::types::ContractRef { con_id: 756733, ..Default::default() },
-        });
+        let (conn, peer) = crate::protocol::connection::Connection::for_test();
+        let mut peer = crate::protocol::connection::Connection::new_raw(peer).unwrap();
+        hl.farm_conn = Some(conn);
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        hl.control_rx = Some(rx);
-        tx.send(ControlCommand::UnsubscribeDepth { req_id: 9 }).unwrap();
-
+        hl.set_control_rx(rx);
+        tx.send(ControlCommand::SubscribeDepth {
+            req_id: 9, num_rows: 5, is_smart_depth: true, filters: Default::default(),
+            contract: crate::types::ContractRef {
+                con_id: 756733, exchange: "SMART".into(), sec_type: "STK".into(), ..Default::default()
+            },
+        })
+        .unwrap();
         hl.poll_control_commands();
-
-        assert!(
-            hl.depth_awaiting_venues.is_empty(),
-            "the held request goes with the withdrawal",
-        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(hl.farm.depth_subs.len(), 1, "one book asked for on the wire");
+        assert!(!farm::tests::drain_inner(&mut peer).is_empty(), "and it went out at once");
     }
-
 }
 
 #[cfg(test)]

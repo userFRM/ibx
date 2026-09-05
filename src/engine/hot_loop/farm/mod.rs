@@ -148,6 +148,15 @@ impl BookBits<'_> {
         self.end - self.at
     }
 
+    /// Step over `n` bits, or nothing where fewer remain.
+    fn skip(&mut self, n: usize) -> Option<()> {
+        if n > self.left() {
+            return None;
+        }
+        self.at += n;
+        Some(())
+    }
+
     /// The next `n` bits as a number, or nothing where fewer remain.
     fn take(&mut self, n: usize) -> Option<u64> {
         if n > self.left() || n > 64 {
@@ -871,26 +880,6 @@ impl FarmState {
             None => return,
         };
 
-        // Depth 35=P entries may be interleaved with L1 tick entries in the same body.
-        if !self.depth_tag_to_req.is_empty() {
-            let mut has_depth = false;
-            let mut off = 0;
-            while off + 3 < body.len() {
-                if body[off] == 0x00 {
-                    let stag = ((body[off+1] as u32) << 16) | ((body[off+2] as u32) << 8) | (body[off+3] as u32);
-                    if self.depth_tag_to_req.iter().any(|(s, ..)| *s == stag) {
-                        has_depth = true;
-                        break;
-                    }
-                }
-                off += 1;
-            }
-            if has_depth {
-                self.handle_depth_35p(body, shared);
-                // Don't return — also process L1 ticks from same body below
-            }
-        }
-
         let mut ticks = std::mem::take(&mut self.tick_buf);
         tick_decoder::decode_ticks_35p_into(body, &mut ticks);
         // Which instruments this batch touched, and each of them once. The
@@ -1265,7 +1254,14 @@ impl FarmState {
                     log::info!("the refusal names {rid}, which no book here asks under any more");
                     return;
                 };
+                // Every record of the refused book. The two beside the map
+                // stayed for the life of the connection, scanned on every
+                // acknowledgement and every subscribe, and a later
+                // acknowledgement of the wire id would have filed the book
+                // under the wire number as though a caller held it.
                 self.depth_fanout_map.retain(|(sub, _)| *sub != rid);
+                self.depth_subs.retain(|(sub, _)| *sub != rid);
+                self.depth_fanout_exchange.retain(|(sub, _)| *sub != rid);
                 if self.depth_fanout_map.iter().any(|(_, u)| *u == asked_for) {
                     return;
                 }
@@ -1992,145 +1988,6 @@ impl FarmState {
         shared.market.note_unread_wire(kind, hex);
     }
 
-    /// Parse 35=P depth entries (byte-aligned: [00][3B stag][field tags...][58
-    /// terminator]).
-    /// SmartDepth entries may contain multiple price+size pairs (bid then ask).
-    /// Field tag encoding: bit 5(0x20)=size, bit 3(0x08)=ask, bit 2(0x04)=snapshot, bit
-    /// 0(0x01)=2-byte.
-    fn handle_depth_35p(&self, body: &[u8], shared: &SharedState) {
-        self.note_depth_wire("depth-35p", body, shared);
-        log::debug!("book frame, {} bytes", body.len());
-        use crate::types::DepthUpdate;
-        let mut pos = 0;
-        let mut bid_position: i32 = 0;
-        let mut ask_position: i32 = 0;
-        // Which stream the level counters above belong to. One frame can
-        // carry sections for more than one stream, and each book's levels are
-        // numbered from zero.
-        let mut counting_for: Option<u32> = None;
-
-        while pos < body.len() {
-            if body[pos] != 0x00 { pos += 1; continue; }
-            pos += 1;
-            if pos + 3 > body.len() { break; }
-
-            let stag = ((body[pos] as u32) << 16) | ((body[pos+1] as u32) << 8) | (body[pos+2] as u32);
-            pos += 3;
-            if counting_for != Some(stag) {
-                counting_for = Some(stag);
-                bid_position = 0;
-                ask_position = 0;
-            }
-
-            let Some((_, _, min_tick, size_tick, _)) = self.lookup_depth_stag(stag) else {
-                // A book frame for a stream this session does not hold. Silent
-                // otherwise, and silence here is indistinguishable from a
-                // market with nothing to send.
-                log::debug!("book frame for an unknown stream, tag {stag}");
-                continue;
-            };
-            // One venue's stream can belong to several requests.
-            let subscribers = self.depth_subscribers_of(stag);
-            log::debug!("book frame on tag {stag}: {} subscriber(s)", subscribers.len());
-
-            // What the venue counts this contract's sizes in, the same way
-            // min_tick is what it counts its prices in. Stating none means
-            // whole ones.
-            //
-            // KNOWN TO DIVERGE, and not changed without a book to check it
-            // against. The reference client's multiplier belongs to the
-            // CONTRACT and is the same whatever the venue packed the number
-            // into: one for anything that is not a share, and for a share the
-            // size table's smallest step, or a hundred where the venue stated
-            // no rule. What happens below instead is a hundred on the
-            // one-byte form and nothing on the two-byte one — a multiplier
-            // keyed on the width of the encoding, which the reference client
-            // has nothing like.
-            //
-            // The two agree for exactly one case: a share the venue states no
-            // size rule for, packed into one byte. Everything else is out by a
-            // hundred one way or the other, and which way cannot be settled
-            // from here — the login this was written on is refused a book on
-            // every venue it asked (354), so there is nothing to read. A
-            // hundredfold error in a number people size trades on is not a
-            // thing to fix on reasoning alone.
-            let counted_in = if size_tick > 0.0 { size_tick } else { 1.0 };
-            // Parse field tags, pushing a depth update on each complete price+size
-            // pair.
-            let mut price: f64 = 0.0;
-            let mut size: f64 = 0.0;
-            let mut side: i32 = 1;
-            let mut is_snapshot = false;
-            let mut has_price = false;
-            let mut has_size = false;
-
-            while pos < body.len() && body[pos] != 0x58 && body[pos] != 0x00 {
-                let tag = body[pos];
-                // Only recognize tags with known bits (0x20, 0x08, 0x04, 0x01).
-                // Bit 7 (0x80) or bit 6 (0x40) set → unknown encoding, stop.
-                if tag & 0xC0 != 0 { break; }
-                pos += 1;
-
-                let is_size_field = tag & 0x20 != 0;
-                let is_ask = tag & 0x08 != 0;
-                let snapshot = tag & 0x04 != 0;
-                let two_byte = tag & 0x01 != 0;
-
-                let new_side = if is_ask { 0 } else { 1 };
-                if snapshot { is_snapshot = true; }
-
-                // A side change with a pending pair flushes it first
-                if has_price && has_size && new_side != side {
-                    let position = if side == 0 { let p = ask_position; ask_position += 1; p }
-                                  else { let p = bid_position; bid_position += 1; p };
-                    let operation = if is_snapshot { 0 } else { 1 };
-                    for (req_id, is_smart, venue) in &subscribers {
-                        if !self.within_asked_depth(*req_id, position) { continue; }
-                        shared.market.push_depth_update(DepthUpdate {
-                            req_id: *req_id, position, market_maker: venue.clone(),
-                            operation, side, price, size, is_smart_depth: *is_smart,
-                        });
-                    }
-                    has_price = false;
-                    has_size = false;
-                }
-                side = new_side;
-
-                if two_byte {
-                    if pos + 2 > body.len() { break; }
-                    let val = ((body[pos] as u16) << 8) | (body[pos+1] as u16);
-                    pos += 2;
-                    if is_size_field { size = val as f64 * counted_in; has_size = true; }
-                    else { price = val as f64 * min_tick; has_price = true; }
-                } else {
-                    if pos >= body.len() { break; }
-                    let val = body[pos];
-                    pos += 1;
-                    if is_size_field { size = val as f64 * 100.0 * counted_in; has_size = true; }
-                    else { price = val as f64 * min_tick; has_price = true; }
-                }
-
-                // Flush complete pair immediately
-                if has_price && has_size {
-                    let position = if side == 0 { let p = ask_position; ask_position += 1; p }
-                                  else { let p = bid_position; bid_position += 1; p };
-                    let operation = if is_snapshot { 0 } else { 1 };
-                    for (req_id, is_smart, venue) in &subscribers {
-                        if !self.within_asked_depth(*req_id, position) { continue; }
-                        shared.market.push_depth_update(DepthUpdate {
-                            req_id: *req_id, position, market_maker: venue.clone(),
-                            operation, side, price, size, is_smart_depth: *is_smart,
-                        });
-                    }
-                    has_price = false;
-                    has_size = false;
-                }
-            }
-
-            if pos < body.len() && body[pos] == 0x58 { pos += 1; }
-        }
-    }
-
     /// Whether a level is inside the depth its caller asked for.
     ///
     /// The venue sends what it has. A caller that asked for five levels and is
@@ -2223,9 +2080,16 @@ impl FarmState {
                             (id, len as usize + 1)
                         };
                         let width = 8 * len;
+                        // A field wider than a number this reads, or stating no
+                        // width, is stepped over: the frame's other fields
+                        // still stand. Ended here, every entry after it in the
+                        // frame was lost, silently from the caller's side.
                         if width == 0 || width > 64 {
-                            log::warn!("book field of {len} bytes; the frame is left at that field");
-                            return;
+                            let Some(()) = bits.skip(width) else { return };
+                            if more_fields == 0 {
+                                break;
+                            }
+                            continue;
                         }
                         let (Some(sign), Some(magnitude)) = (bits.take(1), bits.take(width - 1)) else { return };
                         let value = if sign == 1 { -(magnitude as i64) } else { magnitude as i64 };

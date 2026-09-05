@@ -633,6 +633,20 @@ impl ReferenceState {
         Some((code, msg))
     }
 
+    /// Take the book reset queued under `req_id`, if one is, and nothing else.
+    ///
+    /// A stream reads it apart from the refusals so it can be noted before
+    /// the level that follows it is handed over, while a refusal still ends
+    /// the stream only after the levels that preceded it.
+    pub fn take_reset_for(&self, req_id: u32) -> Option<(i32, String)> {
+        let mut q = self.historical_errors.lock().unwrap();
+        let at = q.iter().position(|(id, code, _)| {
+            *id == req_id && *code == crate::error_codes::DEPTH_BOOK_RESET
+        })?;
+        let (_, code, msg) = q.remove(at);
+        Some((code, msg))
+    }
+
     /// Take every contract details end waiting, leaving none.
     pub fn drain_contract_details_end(&self) -> Vec<u32> {
         self.contract_details_end.lock().unwrap().drain(..).collect()

@@ -174,12 +174,27 @@ impl<T> Subscription<T> {
         self.done = true;
     }
 
+    /// Note a book reset queued under this stream's number, so it is readable
+    /// no later than the first level after it. Read with the refusals, after
+    /// the levels, it reached the caller after the restarted book's levels it
+    /// was meant to precede: the caller applied them on top of the old book
+    /// and was then told to empty it.
+    fn note_reset(&mut self) {
+        if self.reads != Some(RecordKind::Depth) {
+            return;
+        }
+        if let Some((code, message)) = self.shared.reference.take_reset_for(self.req_id as u32) {
+            self.notice = Some((code as i64, message));
+        }
+    }
+
     /// The next item, or nothing once the stream has ended.
     ///
     /// Blocks while it waits. Ends on the venue's refusal, on `cancel`, on
     /// the session ending, or — where the stream has one — when nothing has
     /// arrived for the idle period.
     pub fn next_item(&mut self) -> Option<T> {
+        self.note_reset();
         if let Some(item) = self.buffered.pop_front() {
             return Some(item);
         }
@@ -195,6 +210,7 @@ impl<T> Subscription<T> {
             for item in (self.take)(&self.shared, self.req_id) {
                 self.buffered.push_back(item);
             }
+            self.note_reset();
             if let Some(item) = self.buffered.pop_front() {
                 return Some(item);
             }
@@ -557,9 +573,11 @@ mod tests {
             7,
             RecordKind::Depth,
             Arc::clone(&shared),
-            // Nothing on the first read and a level on the second: the reset
-            // is read between the two.
-            move |_, _| if r.fetch_add(1, Ordering::Relaxed) == 0 { Vec::new() } else { vec![42] },
+            // A level on the first read: the reset queued before it has to
+            // be readable by the time that level is handed over, or the
+            // caller applies the restarted book on top of the old one and is
+            // told to empty it afterwards.
+            move |_, _| { r.fetch_add(1, Ordering::Relaxed); vec![42] },
             move |req_id| { w.store(req_id, Ordering::Relaxed); },
         );
         shared.reference.push_historical_error(
@@ -567,9 +585,9 @@ mod tests {
         );
 
         assert_eq!(sub.next_item(), Some(42), "the level after the reset is delivered");
+        assert_eq!(sub.take_notice().map(|(code, _)| code), Some(317), "and the reset is readable no later than it");
         assert!(sub.refusal().is_none(), "a reset is not a refusal");
         assert_eq!(withdrawn.load(Ordering::Relaxed), 0, "and the book is not withdrawn");
-        assert_eq!(sub.take_notice().map(|(code, _)| code), Some(317), "it is read as a notice");
         assert!(sub.take_notice().is_none(), "once");
     }
 }

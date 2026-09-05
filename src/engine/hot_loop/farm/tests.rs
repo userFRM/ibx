@@ -1286,6 +1286,31 @@ mod depth_identity_tests {
         }
     }
 
+    /// A refused book leaves nothing behind. Only the map from the wire id
+    /// to the caller was dropped: the two records beside it stayed for the
+    /// life of the connection, scanned on every acknowledgement and every
+    /// subscribe, and a later acknowledgement of that wire id would have
+    /// filed the book under the wire number as though a caller held it.
+    #[test]
+    fn a_refused_book_leaves_no_record_behind() {
+        let mut farm = FarmState::new();
+        let shared = SharedState::new();
+        let context = Context::new();
+        let mut hb = HeartbeatState::new();
+        farm.send_depth_subscribe(1, 756733, "ISLAND", "", "STK", 10, false, &mut None, &mut hb, &shared);
+        let under = farm.depth_fanout_map[0].0;
+        let refused = crate::protocol::fix::fix_build(&[
+            (crate::protocol::fix::TAG_MSG_TYPE, "j"),
+            (262, &under.to_string()),
+            (58, "Error&ISLAND/DEPTH/not available"),
+        ], 1);
+        farm.handle_subscription_reject(&refused, &context, &shared);
+        assert!(farm.depth_fanout_map.is_empty(), "the map goes");
+        assert!(farm.depth_subs.is_empty(), "and the wire record: {:?}", farm.depth_subs);
+        assert!(farm.depth_fanout_exchange.is_empty(), "and the venue it stood on: {:?}", farm.depth_fanout_exchange);
+        assert_eq!(shared.reference.drain_historical_errors().len(), 1, "the caller is told once");
+    }
+
     /// The venue answers a second subscription on a contract and venue it is
     /// already streaming with the tag it is already using.
     #[test]
@@ -1458,37 +1483,6 @@ mod depth_position_tests {
             shared.reference.drain_historical_errors().is_empty(),
             "nobody holds 100, so nobody is told",
         );
-    }
-
-    /// One frame can carry sections for more than one stream. Each book's
-    /// levels are numbered from zero.
-    #[test]
-    fn each_book_in_a_frame_starts_at_its_own_top() {
-        let mut farm = FarmState::new();
-        let shared = SharedState::new();
-        farm.depth_tag_to_req.push((0x11, 1, false, 0.01, 1.0, "IEX".to_string()));
-        farm.depth_tag_to_req.push((0x22, 2, false, 0.01, 1.0, "ARCA".to_string()));
-
-        // Two sections, one per stream, each a bid and an ask at level 0.
-        // Field tags carry bit 5 for size, bit 3 for ask and bit 2 for
-        // snapshot; the snapshot bit is set so no tag is 0x00, which is what
-        // opens a section. 0x58 closes one.
-        let level = [0x04u8, 100, 0x24, 5, 0x0C, 101, 0x2C, 6, 0x58];
-        let mut body = vec![0x00, 0x00, 0x00, 0x11];
-        body.extend_from_slice(&level);
-        body.extend_from_slice(&[0x00, 0x00, 0x00, 0x22]);
-        body.extend_from_slice(&level);
-
-        farm.handle_depth_35p(&body, &shared);
-
-        let updates = shared.market.drain_depth_updates();
-        assert!(!updates.is_empty(), "the frame carried levels");
-        for u in &updates {
-            assert_eq!(
-                u.position, 0,
-                "every book in the frame starts at its own top: {updates:?}",
-            );
-        }
     }
 
 
@@ -1776,7 +1770,7 @@ mod depth_bit_tests {
                 push_bits(&mut bits, e.position, 8);
                 for (fi, f) in e.fields.iter().enumerate() {
                     let more = u64::from(fi + 1 < e.fields.len());
-                    if f.id >= 31 {
+                    if f.id >= 31 || f.len > 4 {
                         push_bits(&mut bits, 31, 5);
                         push_bits(&mut bits, more, 1);
                         push_bits(&mut bits, 0, 2);
@@ -1788,7 +1782,15 @@ mod depth_bit_tests {
                         push_bits(&mut bits, (f.len - 1) as u64, 2);
                     }
                     push_bits(&mut bits, u64::from(f.value < 0), 1);
-                    push_bits(&mut bits, f.value.unsigned_abs(), 8 * f.len - 1);
+                    // A magnitude wider than a machine word: the high bits are
+                    // written as zeros, then the word.
+                    let width = 8 * f.len - 1;
+                    if width > 64 {
+                        push_bits(&mut bits, 0, width - 64);
+                        push_bits(&mut bits, f.value.unsigned_abs(), 64);
+                    } else {
+                        push_bits(&mut bits, f.value.unsigned_abs(), width);
+                    }
                 }
             }
         }
@@ -1898,6 +1900,25 @@ mod depth_bit_tests {
         let got: Vec<_> = shared.market.drain_depth_updates().into_iter()
             .map(|u| (u.position, u.price, u.size)).collect();
         assert_eq!(got, [(2, -12.34, 42.0)], "{got:?}");
+    }
+
+    /// A field wider than a number this reads is stepped over, and the
+    /// level after it is still delivered. Ended at that field, every entry
+    /// after it in the frame was lost, silently from the caller's side.
+    #[test]
+    fn a_field_wider_than_a_number_is_stepped_over() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            Entry { op: 0, name: "", position: 2, fields: vec![
+                Field { id: 100, len: 12, value: 5 },
+                Field { id: BID_PX, len: 2, value: 10050 },
+                Field { id: BID_SZ, len: 1, value: 7 },
+            ] },
+            level(0, "", 3, ASK_PX, 10075, ASK_SZ, 9),
+        ])]), &shared);
+        let got: Vec<_> = shared.market.drain_depth_updates().into_iter()
+            .map(|u| (u.position, u.price, u.size)).collect();
+        assert_eq!(got, [(2, 100.50, 7.0), (3, 100.75, 9.0)], "{got:?}");
     }
 
     /// The frame ends where its bit count says, not where the bytes do.

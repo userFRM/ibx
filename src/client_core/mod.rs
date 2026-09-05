@@ -790,7 +790,7 @@ pub struct ClientCore {
     ///
     /// Kept here rather than in the engine because the refusal has to reach
     /// the caller before anything is sent, and because both surfaces read it.
-    pub depth_reqs: Mutex<HashSet<i64>>,
+    pub depth_reqs: std::sync::Arc<Mutex<HashSet<i64>>>,
 
     /// Every number the venue has already worked an order under this session.
     ///
@@ -977,7 +977,7 @@ impl ClientCore {
             executions: Mutex::new(ExecutionStore::default()),
             open_orders: Mutex::new(HashMap::new()),
             spent_order_ids: Mutex::new(HashSet::new()),
-            depth_reqs: Mutex::new(HashSet::new()),
+            depth_reqs: std::sync::Arc::new(Mutex::new(HashSet::new())),
             market_data_type: AtomicI32::new(1),
             mdt_sent: Mutex::new(HashSet::new()),
             mdt_by_req: Mutex::new(HashMap::new()),
