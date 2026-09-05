@@ -6432,6 +6432,55 @@ mod queued_cancel_all_slot_tests {
 mod withdrawal_tests {
     use super::*;
 
+    /// An order that reached the wire is recorded as having, and one that did
+    /// not is not.
+    ///
+    /// Silence has two causes and they are identical from outside: the venue
+    /// answering nothing, and this client never having asked. A live phase
+    /// skipped on that silence, so about fifty of them passed whether or not
+    /// anything reached the socket.
+    #[test]
+    fn an_order_that_reached_the_wire_is_recorded_as_having() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        hl.ccp_conn = Some(conn);
+        hl.ccp.disconnected = false;
+        let instrument = hl.context_mut().register_instrument(756733);
+        hl.context_mut().set_routing(instrument, "STK", "SMART");
+
+        assert!(!shared.orders.the_order_went_out(41), "nothing has been sent yet");
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(crate::types::ControlCommand::Order(crate::types::OrderRequest::SubmitEx {
+            order_id: 41,
+            instrument, con_id: 756733,
+            side: crate::types::Side::Buy,
+            qty: crate::types::qty_from_f64(1.0),
+            kind: crate::types::OrderKind::Limit {
+                price: crate::types::price_from_f64(100.0),
+            },
+            tif: 0,
+            attrs: crate::types::OrderAttrs::default(),
+        })).unwrap();
+        hl.poll_control_commands();
+        order_builder::drain_and_send_orders(
+            &mut hl.ccp_conn, &mut hl.context, &hl.account_id, &mut hl.hb,
+            hl.ccp.disconnected, &hl.shared, false, &hl.event_tx,
+        );
+
+        use std::io::Read;
+        let mut buf = [0u8; 8192];
+        let n = peer.read(&mut buf).unwrap_or(0);
+        assert!(n > 0, "the order reached the socket");
+        assert!(
+            shared.orders.the_order_went_out(41),
+            "and this client records that it did, which is what tells silence \
+             from never having asked",
+        );
+    }
+
     /// Every withdrawal in the client answers when it names nothing.
     ///
     /// Five said nothing at all, which reads exactly like a withdrawal that

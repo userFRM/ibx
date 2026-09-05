@@ -732,7 +732,13 @@ pub(crate) fn drain_and_send_orders(
             }
         };
         match result {
-            Ok(()) => hb.last_ccp_sent = Instant::now(),
+            Ok(()) => {
+                hb.last_ccp_sent = Instant::now();
+                // Recorded because silence has two causes and they look the
+                // same from outside: the venue answering nothing, and this
+                // client never having asked.
+                shared.orders.note_the_order_went_out(oid);
+            }
             Err(e) => {
                 // The caller is told, which is the whole of — it was
                 // the silence that left a phantom position. What it is told is

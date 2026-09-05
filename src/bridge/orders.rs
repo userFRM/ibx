@@ -48,6 +48,11 @@ pub struct OrderState {
     /// then attached to both.
     fills: Mutex<Vec<(Fill, Option<RichOrderInfo>)>>,
     order_updates: Mutex<Vec<OrderUpdate>>,
+    /// Every order whose message this client put on the wire.
+    ///
+    /// What the venue then said about it is a separate question, and the two
+    /// are indistinguishable from outside without this.
+    orders_sent: Mutex<std::collections::HashSet<u64>>,
     cancel_rejects: Mutex<Vec<CancelReject>>,
     /// What each fill cost, as the venue states it on a record of its own.
     charges: Mutex<Vec<crate::types::model::CommissionAndFeesReport>>,
@@ -148,6 +153,7 @@ impl OrderState {
     pub(super) fn new() -> Self {
         Self {
             fills: Mutex::new(Vec::with_capacity(64)),
+            orders_sent: Mutex::new(std::collections::HashSet::new()),
             order_updates: Mutex::new(Vec::with_capacity(64)),
             cancel_rejects: Mutex::new(Vec::with_capacity(16)),
             charges: Mutex::new(Vec::with_capacity(16)),
@@ -537,6 +543,22 @@ impl OrderState {
     /// history of an order that partly filled and then went — named an id all
     /// the same, and every guard that stopped the row from being kept stopped
     /// the mark with it.
+    /// Note that this client put an order's message on the wire.
+    ///
+    /// Distinct from anything the venue then says about it. A caller, and a
+    /// phase, cannot otherwise tell "the venue answered nothing" from "we
+    /// never asked": both look like silence from outside, and a live phase
+    /// that skipped on that silence passed whether or not anything reached the
+    /// socket.
+    #[doc(hidden)] pub fn note_the_order_went_out(&self, order_id: u64) {
+        self.orders_sent.lock().unwrap().insert(order_id);
+    }
+
+    /// Whether this client put this order's message on the wire.
+    pub fn the_order_went_out(&self, order_id: u64) -> bool {
+        self.orders_sent.lock().unwrap().contains(&order_id)
+    }
+
     #[doc(hidden)] pub fn note_the_venue_named(&self, order_id: u64) {
         self.working_id_watermark.fetch_max(order_id, Ordering::AcqRel);
         if order_id <= u32::MAX as u64 {

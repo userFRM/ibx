@@ -35,6 +35,7 @@ ROWS = {
 
 #: How a phase of the paper suite names itself in its own output.
 PHASE = re.compile(r"Phase \d+[a-z]?\b")
+STRING_LITERAL = re.compile(r'"[^"\n]*"')
 
 
 def _targets_needing_a_session() -> list[str]:
@@ -140,9 +141,16 @@ def counted() -> dict[str, int]:
         "rust_offline": rust
             - _cargo_count(["--test", "ib_paper_compat"])
             - sum(_cargo_count(["--test", t]) for t in _targets_needing_a_session()),
+        # Announced phases only: a phase names itself in the line it prints,
+        # so the number has to sit inside a string literal. Counted over the
+        # whole file, a phase number written in a comment -- a note pointing at
+        # another phase, or one commented out -- counted as a phase that runs.
+        # It happens not to today, and the published figure is the same either
+        # way; this closes the way it would drift.
         "phases": len({
             m for f in (ROOT / "tests" / "ib_paper_compat").glob("*.rs")
-            for m in PHASE.findall(f.read_text())
+            for lit in STRING_LITERAL.findall(f.read_text())
+            for m in PHASE.findall(lit)
         }),
     }
 

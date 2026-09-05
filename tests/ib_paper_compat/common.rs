@@ -1270,6 +1270,18 @@ pub(super) fn run_submit_cancel_phase(
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
+    // Before any session gate, and never skipped: this client either put the
+    // order on the wire or it did not, and that is its own answer rather than
+    // the venue's. Every branch below skips on silence, and silence has two
+    // causes that look identical from here -- the venue answering nothing, and
+    // this client never having asked. Asserted here, the phases below can only
+    // ever skip on the first.
+    assert!(
+        shared.orders.the_order_went_out(order_id),
+        "{phase_name}: order {order_id} never reached the wire, so nothing the \
+         venue did or did not say about it is evidence of anything",
+    );
+
     // Only where the venue reported on this order: an unacknowledged order has no
     // report to read back from.
     if !stated_ref.is_empty() && order_acked {
