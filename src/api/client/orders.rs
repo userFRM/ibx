@@ -253,7 +253,7 @@ impl EClient {
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one, so refuse
             // rather than send a message that destroys it.
-            if let Some(refusal) = self.core.modify_refusal(oid, order) {
+            if let Some(refusal) = self.core.modify_refusal(oid, order, Some(&self.shared)) {
                 return Err(refusal);
             }
             // Each read from the field the submit reads it from: a stop's
@@ -303,12 +303,30 @@ impl EClient {
         // does — the venue can answer the replace before this call returns,
         // and a restatement written behind that answer put the attempted
         // terms over a refusal that had already put back the real ones.
+        // Whether this client placed the order, read before the restatement
+        // below tracks it: an order the venue named at connect is in no book
+        // here until then.
+        let placed_here = self.core.is_order_tracked(oid);
         if replacing {
             self.core.restate_order(Some(&self.shared), oid, contract.clone(), placed.clone(), instrument);
         }
         if order.transmit {
             if !replacing {
                 self.core.track_order(oid, contract.clone(), placed.clone(), instrument);
+            }
+            // A replace of an order this client did not place — one the venue
+            // named at connect — goes behind the caller's own statement of
+            // the order, which the engine keeps as the record it has none of
+            // and restates the shape from. That is what the reference client
+            // sends on a modify. An order placed here has its record already.
+            if replacing
+                && !placed_here
+                && let Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) =
+                    ClientCore::build_order_request(order, oid, instrument, Some(contract))
+            {
+                let _ = self.control_tx.send(ControlCommand::Order(OrderRequest::Describe {
+                    order_id: oid, spec: Box::new(crate::types::OrderSpec { kind, attrs }),
+                }));
             }
             let tx = self.control_tx.clone();
             if let Err(why) = self.core.transmit_family(oid, order.parent_id, cmd, |c| {

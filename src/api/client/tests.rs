@@ -106,6 +106,38 @@ fn modifying_a_trailing_stop_limit_carries_its_offset_and_trail() {
     }
 }
 
+/// A replace is preceded by the caller's own statement of the order, so an
+/// order this session did not place can be restated from it.
+#[test]
+fn a_replace_is_preceded_by_the_callers_statement_of_the_order() {
+    let (client, rx, shared) = test_client();
+    let named = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "PEG MID".into(),
+        lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+    // Known from the venue's naming at connect, in no book of this client's.
+    shared.orders.push_order_info(9302, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: Order { order_id: 9302, ..named.clone() },
+        order_state: crate::types::model::OrderState { status: "Submitted".into(), ..Default::default() },
+        last_exec: Default::default(),
+    });
+    let capped = Order { lmt_price: 101.0, ..named };
+    client.place_order(9302, &spy(), &capped).unwrap();
+
+    match rx.try_recv().expect("the statement") {
+        ControlCommand::Order(OrderRequest::Describe { order_id, spec }) => {
+            assert_eq!(order_id, 9302);
+            assert!(
+                matches!(spec.kind, crate::types::OrderKind::PegMid { price_cap, .. } if price_cap == (101.0 * PRICE_SCALE_F) as i64),
+                "the shape as the caller states it: {:?}", spec.kind,
+            );
+        }
+        other => panic!("the statement goes first, got {other:?}"),
+    }
+    assert!(matches!(rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::Modify { order_id: 9302, .. }))));
+}
+
 /// Nothing on an execution report carries a parent order id, so the engine
 /// reports none. This client placed the order and was told the parent, so it
 /// can answer where the engine cannot — and an order it did not place keeps
@@ -8665,6 +8697,12 @@ fn a_replayed_order_is_replaced_rather_than_placed_again() {
     assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
 
     client.place_order(4242, &spy(), &revision).expect("the revision travels");
+    // The venue named this order; this client did not place it, so the
+    // caller's statement of it goes ahead of the replace.
+    assert!(
+        matches!(rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::Describe { order_id: 4242, .. }))),
+        "the statement of an order this client did not place goes first",
+    );
     match rx.try_recv().expect("something travels") {
         ControlCommand::Order(OrderRequest::Modify { order_id, price, .. }) => {
             assert_eq!(order_id, 4242);

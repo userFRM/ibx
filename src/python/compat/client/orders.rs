@@ -313,7 +313,7 @@ impl EClient {
             }
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one.
-            if let Some(refusal) = self.core.modify_refusal(oid, &api_order) {
+            if let Some(refusal) = self.core.modify_refusal(oid, &api_order, venue_now) {
                 return self.report_refusal(py, order_id, refusal);
             }
             // Each read from the field the submit reads it from, as on the
@@ -382,6 +382,9 @@ impl EClient {
         // this call returns, and a restatement written behind that answer put
         // the attempted terms over a refusal that had already put back the
         // real ones.
+        // Whether this client placed the order, read before the restatement
+        // below tracks it, as on the other surface.
+        let placed_here = self.core.is_order_tracked(oid);
         if replacing {
             // Whether or not the session state is still here. Skipped where it
             // was not, the record went unchanged for a change that did go out
@@ -396,6 +399,17 @@ impl EClient {
                 self.core.track_order(
                     oid, api_contract.clone(), tracked_order.clone(), instrument,
                 );
+            }
+            // The caller's statement of an order this client did not place,
+            // ahead of the replace, as on the other surface.
+            if replacing
+                && !placed_here
+                && let Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) =
+                    ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract))
+            {
+                let _ = Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Describe {
+                    order_id: oid, spec: Box::new(crate::types::OrderSpec { kind, attrs }),
+                }));
             }
             let sent = self.core.transmit_family(oid, api_order.parent_id, cmd, |c| {
                 Self::send_control(py, &tx, c).is_ok()

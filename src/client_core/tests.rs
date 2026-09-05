@@ -1545,7 +1545,7 @@ fn a_replace_carries_every_number_but_a_trailing_percent() {
     };
     core.track_order(42, ApiContract::default(), placed.clone(), 0);
     let wider = ApiOrder { aux_price: 9.0, lmt_price_offset: 2.0, ..placed };
-    assert!(core.modify_refusal(42, &wider).is_none(), "the trail and the limit offset travel");
+    assert!(core.modify_refusal(42, &wider, None).is_none(), "the trail and the limit offset travel");
     assert_eq!(
         (ClientCore::replace_price(&wider), ClientCore::replace_trigger(&wider)),
         (2 * PRICE_SCALE, 9 * PRICE_SCALE),
@@ -1559,8 +1559,36 @@ fn a_replace_carries_every_number_but_a_trailing_percent() {
         order_type: "TRAIL".into(), trailing_percent: 1.0, tif: "DAY".into(), ..Default::default()
     };
     core.track_order(43, ApiContract::default(), pct.clone(), 0);
-    let why = core.modify_refusal(43, &ApiOrder { trailing_percent: 2.0, ..pct }).expect("a percent has nowhere to go");
+    let why = core.modify_refusal(43, &ApiOrder { trailing_percent: 2.0, ..pct }, None).expect("a percent has nowhere to go");
     assert!(why.message.contains("the trailing percent"), "{why}");
+}
+
+/// A modify of an order the venue named is judged against the venue's
+/// statement of it, not against nothing.
+///
+/// An order named at connect is in no book of this client's. Compared against
+/// nothing, a replace of a midpoint peg read as a change of type and was
+/// refused before the engine saw it; compared against the venue's statement it
+/// is the same type restating itself, and a change of type is still refused.
+#[test]
+fn a_modify_of_a_venue_named_order_is_judged_against_the_venues_statement() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let named = ApiOrder {
+        order_id: 42, action: "BUY".into(), total_quantity: 1.0,
+        order_type: "PEG MID".into(), lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+    shared.orders.push_order_info(42, crate::bridge::RichOrderInfo {
+        contract: ApiContract::default(),
+        order: named.clone(),
+        order_state: crate::types::model::OrderState { status: "Submitted".into(), ..Default::default() },
+        last_exec: Default::default(),
+    });
+    let capped = ApiOrder { lmt_price: 101.0, ..named.clone() };
+    assert!(core.modify_refusal(42, &capped, None).is_some(), "against nothing it reads as a change of type");
+    assert!(core.modify_refusal(42, &capped, Some(&shared)).is_none(), "against the venue's statement it restates itself");
+    let retyped = ApiOrder { order_type: "REL".into(), ..named };
+    assert!(core.modify_refusal(42, &retyped, Some(&shared)).is_some(), "a change of type is still refused");
 }
 
 /// The terms a restatement replaced come back when the venue refuses it, and

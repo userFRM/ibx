@@ -98,7 +98,12 @@ pub struct Context {
     /// into `last_clord` ahead of the same answer.
     /// Keyed by the order rather than held beside the send, because the
     /// refusal arrives as a message of its own, later, on another path.
-    pub(crate) pre_replace: HashMap<(OrderId, u32), (Order, String)>,
+    ///
+    /// The placed shape goes with them where the order has one. A replace
+    /// restates the shape with what it names written in, so a refusal has to
+    /// put the shape back too, or the next replace restates terms the venue
+    /// never held.
+    pub(crate) pre_replace: HashMap<(OrderId, u32), (Order, String, Option<crate::types::OrderKind>)>,
     /// Timestamp when the last farm socket recv returned data (for decode latency
     /// measurement).
     pub(crate) recv_at: Instant,
@@ -625,7 +630,10 @@ impl Context {
         // Every later revision was built on terms the venue never held, so its
         // fallback records a state that never existed. They go with this one.
         self.pre_replace.retain(|(id, ver), _| *id != order_id || *ver <= revision);
-        let Some((mut prior, name)) = self.pre_replace.remove(&(order_id, revision)) else { return };
+        let Some((mut prior, name, kind)) = self.pre_replace.remove(&(order_id, revision)) else { return };
+        if let (Some(kind), Some(spec)) = (kind, self.submitted.get_mut(&order_id)) {
+            spec.kind = kind;
+        }
         if let Some(current) = self.open_orders.get(&order_id) {
             prior.filled = current.filled;
         }

@@ -136,7 +136,9 @@ of those names its defining number in the field the placement used: a trail, a
 peg offset or a snap offset on the auxiliary price, a cap on the limit price, a
 trailing stop limit's limit offset on `lmtPriceOffset`. The one number a modify
 cannot move is a trailing percent, and a modify naming a new one is refused
-rather than sent.
+rather than sent. A modify of an order this session did not place — one the
+venue named at connect — is restated from the caller's own statement of it,
+which is what the reference client sends.
 
 A relative order is refused a modify as well. It answers both ways: sometimes
 the venue takes the replace and the order goes on working, and sometimes

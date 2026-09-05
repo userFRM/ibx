@@ -2074,6 +2074,61 @@ fn an_order_the_replay_names_as_replaced_is_recovered_and_its_end_is_heard() {
     assert!(heard.contains(&crate::types::OrderStatus::Cancelled), "the caller hears the order is gone: {heard:?}");
 }
 
+/// A replace of an order recovered from the venue's naming carries the shape
+/// the caller states, in the frame a placement's replace carries.
+///
+/// Composed end to end: the replay's own record of a replaced midpoint peg,
+/// the caller's statement of it, then a replace of the quantity alone. The
+/// venue refused the first such replace as an unsupported type, which a
+/// placement's replace of the same order is not.
+#[test]
+fn a_replayed_pegs_replace_carries_the_shape_a_placements_does() {
+    use std::io::Read;
+    use crate::types::{OrderKind as K, PRICE_SCALE as P};
+    let (mut ccp, mut context, shared) = (CcpState::new(), Context::new(), SharedState::new());
+    let frame: std::collections::HashMap<u32, String> = [
+        (11u32, "77.2"), (41, "77.1"), (150, "5"), (39, "5"), (6008, "756733"), (38, "2"),
+        (55, "SPY"), (54, "1"), (40, "P"), (18, "M"), (44, "101"), (99, "0.00"), (1, "DU1"),
+    ].into_iter().map(|(t, v)| (t, v.to_string())).collect();
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "DU1");
+    let recovered = context.order(77).expect("recovered");
+    let instrument = recovered.instrument;
+    context.set_symbol(instrument, "SPY".to_string());
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    context.pending_orders.push(crate::types::OrderRequest::Describe {
+        order_id: 77,
+        spec: Box::new(crate::types::OrderSpec {
+            kind: K::PegMid { offset: 0, price_cap: 101 * P },
+            attrs: crate::types::OrderAttrs::default(),
+        }),
+    });
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 77, price: 0, qty: 3 * crate::types::QTY_SCALE, outside_rth: false,
+        ord_type: 0, tif: 0, stop_price: 0,
+    });
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let mut buf = [0u8; 8192];
+    let n = peer.read(&mut buf).unwrap_or(0);
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    let tag = |t: &str| msg.split('\u{1}').filter_map(|f| f.strip_prefix(t)).collect::<Vec<_>>();
+    assert_eq!(tag("35="), ["G"], "sent: {msg}");
+    assert_eq!(tag("11="), ["77.3"], "named past the revision the venue holds: {msg}");
+    assert_eq!(tag("41="), ["77.2"], "{msg}");
+    assert_eq!((tag("40="), tag("18=")), (vec!["P"], vec!["M"]), "the type and its instruction: {msg}");
+    assert_eq!((tag("44="), tag("211=")), (vec!["101"], vec!["0"]), "the cap and the offset: {msg}");
+    assert_eq!(tag("38="), ["3"], "{msg}");
+    assert!(shared.orders.drain_order_inactive().is_empty());
+}
+
 /// An unrecognised or absent tag 59 leaves the wire match with nothing to
 /// report, so the fallback that knows what the caller submitted can run. An
 /// arm producing `DAY` for those cases keeps the fallback from ever
@@ -2578,7 +2633,7 @@ fn a_cancel_is_still_answered_when_rejections_cross_it() {
     // outstanding, a rejection behind a cancel is the venue's word on the
     // order itself and must stand, or the order waits for ever.
     let before = *context.order(42).expect("the order is tracked");
-    context.pre_replace.insert((42, 1), (before, "42.0".to_string()));
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string(), None));
     assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
 
     let report = |exec_type: &str, ord_status: &str, text: &str| {
@@ -5177,7 +5232,7 @@ fn the_naming_at_connect_settles_where_an_orders_revisions_stand() {
     // what the venue is working.
     let attempt = *context.order(42).expect("the order was recovered");
     context.last_clord.insert(42, "42.6".to_string());
-    context.pre_replace.insert((42, 6), (attempt, "42.5".to_string()));
+    context.pre_replace.insert((42, 6), (attempt, "42.5".to_string(), None));
     context.modify_versions.insert(42, 6);
     context.mark_orders_uncertain();
     ccp.handle_exec_report(&named, b"", &mut context, &shared, &None, "");
@@ -5214,11 +5269,11 @@ fn a_refused_revision_falls_back_to_the_revision_it_replaced() {
     // Two revisions out, neither answered. Each keeps what the record held
     // before it: the first the original price, the second the first's.
     let at_100 = *context.order(42).expect("the order is tracked");
-    context.pre_replace.insert((42, 1), (at_100, "42.0".to_string()));
+    context.pre_replace.insert((42, 1), (at_100, "42.0".to_string(), None));
     let mut at_101 = at_100;
     at_101.price = 101 * PRICE_SCALE;
     context.insert_order(at_101);
-    context.pre_replace.insert((42, 2), (at_101, "42.1".to_string()));
+    context.pre_replace.insert((42, 2), (at_101, "42.1".to_string(), None));
     let mut at_102 = at_100;
     at_102.price = 102 * PRICE_SCALE;
     context.insert_order(at_102);
@@ -5638,7 +5693,7 @@ fn a_refused_revision_travels_on_the_channel_a_refusal_travels_on() {
     ));
     assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
     let before = *context.order(42).expect("tracked");
-    context.pre_replace.insert((42, 1), (before, "42.0".to_string()));
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string(), None));
     let refused = exec_report_frame(&[
         (11, "42.1"), (150, "8"), (39, "0"), (378, "102"),
         (58, "the price is through the band"),
@@ -5683,7 +5738,7 @@ fn the_venue_taking_a_replacement_is_said_behind_a_fill() {
     // Staged as the builder stages one: the terms the venue holds, under the
     // revision the change goes out as.
     let before = *context.order(42).expect("tracked");
-    context.pre_replace.insert((42, 1), (before, "42.0".to_string()));
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string(), None));
     assert!(context.update_order_status(42, crate::types::OrderStatus::PendingReplace, false));
 
     // Part of it fills while the venue is still deciding on the change.

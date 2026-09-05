@@ -10,6 +10,16 @@ use crate::types::{AlgoParams, OrderCondition, OrderRequest, OrderStatus, OrderU
 
 use super::{HeartbeatState, format_price, format_qty, format_uint};
 
+/// Keep an outbound order frame beside the inbound ones, under the same
+/// switch, so a live reading shows what went out as well as what came back.
+fn note_sent(shared: &SharedState, fields: &[(u32, &str)]) {
+    if *crate::engine::hot_loop::CAPTURE_WIRE {
+        let text: String = fields.iter().map(|(t, v)| format!("{t}={v}\u{1}")).collect();
+        let hex: String = text.bytes().map(|b| format!("{b:02x}")).collect();
+        shared.market.note_unread_wire("trading-sent", hex);
+    }
+}
+
 /// Say that a change did not go, on the channel a refusal already travels on.
 ///
 /// The surfaces restate their record before the command is queued, because the
@@ -95,6 +105,14 @@ pub(crate) fn drain_and_send_orders(
     let orders: Vec<OrderRequest> = context.drain_pending_orders().collect();
     let mut unsent: Vec<OrderRequest> = Vec::new();
     for order_req in orders {
+        // The caller's statement of an order this session did not place: the
+        // record, where there is none, and nothing for the wire. Kept here,
+        // in the order the commands arrived, so the replace behind it
+        // restates from it.
+        if let OrderRequest::Describe { order_id, spec } = order_req {
+            context.submitted.entry(order_id).or_insert(spec);
+            continue;
+        }
         // Once a write has abandoned the transport nothing else can leave on
         // it, and the pre-write guard refuses the rest before they touch the
         // wire. Those are not in doubt the way the failed one is: they were
@@ -407,6 +425,7 @@ pub(crate) fn drain_and_send_orders(
                 }
                 Ok(())
             }
+            OrderRequest::Describe { .. } => unreachable!("kept above, before anything is sent"),
             OrderRequest::Modify {
                 order_id,
                 price,
@@ -579,7 +598,10 @@ pub(crate) fn drain_and_send_orders(
                 // spend or restore another's. The name the venue holds is kept
                 // with the terms: the line below writes the attempt's own over
                 // it ahead of the answer, and a refusal has to put both back.
-                context.pre_replace.insert((order_id, new_ver), (orig, orig_clord.clone()));
+                context.pre_replace.insert(
+                    (order_id, new_ver),
+                    (orig, orig_clord.clone(), context.submitted.get(&order_id).map(|s| s.kind.clone())),
+                );
                 context.modify_versions.insert(order_id, new_ver);
                 // Pre-seed `last_clord` with the id about to be emitted, so a
                 // subsequent cancel before the modify-ack still references the
@@ -747,6 +769,15 @@ pub(crate) fn drain_and_send_orders(
                     // `99=5 211=5`, and the venue accepted it. What the caller
                     // named goes on the wire instead.
                     let restated = restate_with(&spec.kind, price, stop_price);
+                    // And recorded, so the next replace restates what this
+                    // one moved to. Read off the placement alone, a replace
+                    // that moved the quantity after one that moved an offset
+                    // wrote the placed offset back onto the peg tag beside a
+                    // trigger tag carrying the moved one — and the venue reads
+                    // the peg tag.
+                    if let Some(placed) = context.submitted.get_mut(&order_id) {
+                        placed.kind = restated.clone();
+                    }
                     push_type_and_prices(&mut attr_fields, &restated);
                     restated_type = push_order_attrs(
                         &mut attr_fields,
@@ -771,6 +802,7 @@ pub(crate) fn drain_and_send_orders(
                     }
                 }
                 fields.extend(attr_fields.iter().map(|(t, v)| (*t, v.as_str())));
+                note_sent(shared, &fields);
                 conn.send_fix(&fields)
             }
         };
@@ -809,7 +841,11 @@ pub(crate) fn drain_and_send_orders(
                     // against a refusal goes with it — the revision it was
                     // recorded under is the one this send was building.
                     let ver = *context.modify_versions.get(&oid).unwrap_or(&0);
-                    context.pre_replace.remove(&(oid, ver));
+                    if let Some((_, _, Some(kind))) = context.pre_replace.remove(&(oid, ver))
+                        && let Some(placed) = context.submitted.get_mut(&oid)
+                    {
+                        placed.kind = kind;
+                    }
                 }
                 // Every leg is marked, not just the one the outcome was
                 // reported under. A bracket's children are sent whatever the
@@ -955,6 +991,8 @@ pub(crate) fn refuse_what_is_left(
                 req.order_ids(),
                 format!("{why} before this order reached the venue, so it was never placed"),
             ),
+            // Names nothing to the venue, so there is nothing to report.
+            OrderRequest::Describe { .. } => continue,
         };
         for id in ids {
             if id == 0 {

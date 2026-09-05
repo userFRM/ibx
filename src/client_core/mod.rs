@@ -2650,8 +2650,15 @@ impl ClientCore {
     ///
     /// One place, so the two bindings cannot diverge on either the rule or the
     /// wording.
-    pub fn modify_refusal(&self, order_id: u64, incoming: &ApiOrder) -> Option<Refusal> {
-        let tracked = self.tracked_order(order_id);
+    ///
+    /// The resting order is this client's own record where it placed the
+    /// order, and otherwise the venue's statement of it: an order the venue
+    /// named at connect is in no book here, and compared against nothing its
+    /// replace read as a change of type and was refused before the engine
+    /// saw it.
+    pub fn modify_refusal(&self, order_id: u64, incoming: &ApiOrder, venue: Option<&SharedState>) -> Option<Refusal> {
+        let tracked = self.tracked_order(order_id)
+            .or_else(|| venue.and_then(|v| v.orders.get_order_info(order_id)).map(|info| info.order));
         // Whether the replace leaves the order the type it already is.
         let restating_itself = tracked
             .as_ref()

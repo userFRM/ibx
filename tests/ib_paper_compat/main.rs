@@ -1602,14 +1602,15 @@ fn what_the_venue_holds_after_a_replace_of_each_priced_shape_live() {
     let wanted = [35u32, 11, 41, 39, 150, 40, 18, 44, 99, 211, 6370, 8403, 8404, 6268, 58];
     let frames_of = |shared: &SharedState, ids: &[u64]| {
         for (kind, hex) in shared.market.unread_wire() {
-            if kind != "trading-msg" { continue; }
+            let sent = kind == "trading-sent";
+            if kind != "trading-msg" && !sent { continue; }
             let tags = fix::fix_parse(&unhex(&hex));
             let names = tags.get(&11)
                 .and_then(|v| v.trim_start_matches('C').chars().take_while(char::is_ascii_digit).collect::<String>().parse::<u64>().ok())
                 .is_some_and(|id| ids.contains(&id));
-            if tags.get(&fix::TAG_MSG_TYPE).map(String::as_str) != Some("8") || !names { continue; }
-            let line: Vec<String> = wanted.iter().filter_map(|t| tags.get(t).map(|v| format!("{t}={v}"))).collect();
-            println!("  frame: {}", line.join(" "));
+            if (!sent && tags.get(&fix::TAG_MSG_TYPE).map(String::as_str) != Some("8")) || !names { continue; }
+            let line: Vec<String> = wanted.iter().chain([&167u32, &100, &59, &38]).filter_map(|t| tags.get(t).map(|v| format!("{t}={v}"))).collect();
+            println!("  {}: {}", if sent { "sent " } else { "frame" }, line.join(" "));
         }
     };
 
@@ -1680,6 +1681,28 @@ fn what_the_venue_holds_after_a_replace_of_each_priced_shape_live() {
             _ => {}
         }
     }
+    // A second replace that names no number, moving the quantity alone: what
+    // the first one moved has to stand. Restated from the placement, this
+    // wrote the placed offset back onto the peg tag.
+    for ((name, ..), &order_id) in shapes.iter().zip(&ids) {
+        if !working.contains(&order_id) { continue; }
+        println!("  {name}: a second replace moves the quantity alone");
+        control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+            order_id, price: 0, qty: 2 * QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        })).expect("second replace failed");
+    }
+    let deadline = Instant::now() + Duration::from_secs(12);
+    while Instant::now() < deadline {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::OrderUpdate(u)) if ids.contains(&u.order_id) => {
+                println!("  [update] {} {:?}", u.order_id, u.status);
+            }
+            Ok(Event::CancelReject(r)) if ids.contains(&r.order_id) => {
+                println!("  [replace refused] {} type={} code={}", r.order_id, r.reject_type, r.reason_code);
+            }
+            _ => {}
+        }
+    }
     for row in shared.orders.drain_order_inactive() {
         println!("  refusal: {} {} {}", row.0, row.1, row.2);
     }
@@ -1734,7 +1757,8 @@ fn what_the_venue_holds_after_a_replace_of_each_priced_shape_live() {
                 } else {
                     near(info.order.lmt_price, *price)
                 };
-                held_as_asked.push((name, price_as_asked && near(info.order.aux_price, *stop_price)));
+                let two = (info.order.total_quantity - 2.0).abs() < 1e-9;
+                held_as_asked.push((name, price_as_asked && near(info.order.aux_price, *stop_price) && two));
             }
             None if outstanding => println!("  order {order_id} left working by an earlier run — withdrawn below"),
             None => {}
@@ -1745,6 +1769,64 @@ fn what_the_venue_holds_after_a_replace_of_each_priced_shape_live() {
     }
     println!("  the replay, frame by frame:");
     frames_of(&shared, &ids);
+
+    // A replace from this session, which did not place the order: it is
+    // named past the revision the replay stated, or the venue answers that it
+    // already holds that name. A midpoint peg, or whichever of this run's
+    // orders the venue is still working.
+    let replayed = [ids[1], ids[0], ids[3], ids[8]].into_iter().find(|id| remaining.contains(id));
+    if let Some(order_id) = replayed {
+        println!("  order {order_id}: a replace from the session that did not place it, quantity alone");
+        // As the surfaces do: the caller's contract is registered, which
+        // gives the recovered instrument its routing, and the caller's
+        // statement of the order, built from what the venue named, goes
+        // ahead of the replace.
+        control_tx.send(ControlCommand::RegisterInstrument {
+            contract: ibx::types::ContractRef {
+                con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+                exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+            },
+            identity: String::new(), reply_tx: None,
+        }).expect("register failed");
+        let named = shared.orders.get_order_info(order_id).expect("named by the venue").order;
+        if let Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) =
+            ibx::client_core::ClientCore::build_order_request(&named, order_id, 0, None)
+        {
+            control_tx.send(ControlCommand::Order(OrderRequest::Describe {
+                order_id, spec: Box::new(ibx::types::OrderSpec { kind, attrs }),
+            })).expect("statement failed");
+        } else {
+            println!("  the venue's naming does not build an order this client can state");
+        }
+        control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+            order_id, price: 0, qty: 3 * QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        })).expect("replace failed");
+        // Held behind the naming at connect and released by the recovery
+        // sweep, so the answer is measured in tens of seconds, not one.
+        let deadline = Instant::now() + Duration::from_secs(40);
+        let mut answered = false;
+        while Instant::now() < deadline && !answered {
+            match event_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Event::OrderUpdate(u)) if u.order_id == order_id => {
+                    println!("  [update] {} {:?}", u.order_id, u.status);
+                    answered = matches!(u.status, OrderStatus::Submitted | OrderStatus::PreSubmitted)
+                        && shared.orders.get_order_info(order_id).is_some_and(|i| i.order.total_quantity == 3.0);
+                }
+                Ok(Event::CancelReject(r)) if r.order_id == order_id => {
+                    println!("  [replace refused] {} type={} code={}", r.order_id, r.reject_type, r.reason_code);
+                }
+                _ => {}
+            }
+        }
+        let refusals: Vec<_> = shared.orders.drain_order_inactive().into_iter().filter(|r| r.0 == order_id).collect();
+        let stated = shared.orders.get_order_info(order_id).map(|i| i.order.total_quantity);
+        println!("  answered={answered} refusals={refusals:?} quantity now {stated:?}");
+        frames_of(&shared, &[order_id]);
+        assert!(
+            refusals.is_empty() && stated == Some(3.0),
+            "a restarted session's replace of a replayed order: refusals {refusals:?}, quantity {stated:?}",
+        );
+    }
 
     // Withdrawn from the session that now holds them: each by name, and
     // whatever that leaves by contract, the way the account sweep withdraws.
@@ -1785,7 +1867,7 @@ fn what_the_venue_holds_after_a_replace_of_each_priced_shape_live() {
     let kept_the_placed: Vec<&str> = held_as_asked.iter().filter(|(_, ok)| !ok).map(|(n, _)| *n).collect();
     assert!(
         kept_the_placed.is_empty(),
-        "the venue holds the placed number, not the one the replace named, for {kept_the_placed:?}",
+        "the venue holds the placed number, not the one the replace named, or not the quantity the second one named, for {kept_the_placed:?}",
     );
     println!("\n  PASS — the venue holds what each replace named, and every order of this run is withdrawn");
 }
