@@ -734,6 +734,11 @@ impl HotLoop {
         // Asking on the way in is answered in under a second.
         let account = self.account_id.clone();
         if !account.is_empty() {
+            // This connection has stated nothing about the account yet. Said
+            // here as the other two latch sites say it: left to the flag's
+            // starting value, a loop entered on state that has run before is
+            // gated out of the latch below, and its download squares nothing.
+            self.shared.portfolio.account_download_is_pending();
             // The download a session opens with arrives under the key the
             // logon asked with, not under this refresh. Recorded before the
             // refresh draws a key of its own, so the end that squares the

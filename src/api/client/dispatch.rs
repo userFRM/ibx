@@ -269,6 +269,12 @@ impl EClient {
                     shares: qty_to_f64(fill.qty),
                     price: price_f,
                     order_id: fill.order_id as i64,
+                    // The venue stated nothing about this one, so the client
+                    // that placed the order is what names it. Left at nought,
+                    // a request filtered by client matched none of them.
+                    client_id: i64::from(
+                        self.core.placing_client(&self.shared, fill.order_id),
+                    ),
                     ..Default::default()
                 })
             };

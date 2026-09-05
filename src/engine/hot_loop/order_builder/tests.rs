@@ -3690,3 +3690,39 @@ fn a_request_that_names_a_slot_offers_it_back_when_it_drains() {
         "the slot it named is offered back once, as it leaves the buffer",
     );
 }
+
+/// A placement does not ask the loop to reconsider the slot it is on.
+///
+/// It is in the book by the time the loop looks, so the reclaim's own guard
+/// refuses it — and the guard is a scan of every open order. Asked for every
+/// request that names a slot, a session placing orders enqueued one such scan
+/// per order placed, on exactly the workload the reclaiming exists for.
+#[test]
+fn a_placement_does_not_ask_for_its_slot_back() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        order_id: 42,
+        instrument,
+        side: Side::Buy,
+        qty: 100 * crate::types::QTY_SCALE,
+        kind: crate::types::OrderKind::Limit { price: 150 * crate::types::PRICE_SCALE },
+        tif: b'0',
+        attrs: Default::default(),
+    });
+
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+
+    assert!(context.order(42).is_some(), "the order is in the book");
+    assert!(
+        context.slots_to_reconsider.is_empty(),
+        "and nothing asks the loop to scan the book for a slot it is holding",
+    );
+}

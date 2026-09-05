@@ -52,11 +52,19 @@ def test_a_foreign_client_id_filters_everything_out():
     assert w.rows == 0, f"another client's request must replay nothing, got {w.rows}"
 
 
-def test_a_cutoff_after_the_execution_filters_it_out():
+def test_a_cutoff_filters_on_the_time_the_venue_stated():
+    """A bound on time reaches an execution the venue timed, and no other.
+
+    The fixture's fill carries no report, so the venue stated no time for it.
+    Composing one from this client's clock made every such fill sort before
+    every bound a caller can write — so a caller asking for today's executions
+    was shown none of them. An execution nobody timed cannot be placed either
+    side of a bound, and is kept rather than hidden.
+    """
     c, w = _client_with_one_execution()
     c.req_executions(1, _Filter(time="20990101-00:00:00"))
     c._test_dispatch_once()
-    assert w.rows == 0, f"a future cutoff must replay nothing, got {w.rows}"
+    assert w.rows == 1, f"an execution the venue never timed is not hidden, got {w.rows}"
 
 
 def test_a_side_filter_states_the_order_action():

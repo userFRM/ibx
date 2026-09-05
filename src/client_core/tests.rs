@@ -1729,3 +1729,84 @@ fn a_refusal_of_a_change_already_answered_puts_nothing_back() {
         "the change the venue is still working is not rolled back by a stale refusal",
     );
 }
+
+/// A replace names the order, so the contract it states has to be the one the
+/// venue says the order is on.
+///
+/// A combination is not one contract. Two different combinations on one
+/// underlying carry the same id and register the same slot, so comparing ids
+/// could never tell them apart — and after a description is named, the id on a
+/// combination is one leg's underlying anyway. What identifies it is the legs.
+#[test]
+fn a_replace_names_the_contract_the_venue_says_the_order_is_on() {
+    let leg = |con_id: i64, ratio: i32, action: &str| crate::types::model::ComboLeg {
+        con_id, ratio, action: action.into(), ..Default::default()
+    };
+    let combo = |legs: Vec<crate::types::model::ComboLeg>| ApiContract {
+        symbol: "SPY".into(), sec_type: "BAG".into(), combo_legs: legs, ..Default::default()
+    };
+    let spread = combo(vec![leg(1, 1, "BUY"), leg(2, 1, "SELL")]);
+
+    assert!(
+        ClientCore::names_the_same_contract(&spread, &combo(vec![
+            leg(2, 1, "SELL"), leg(1, 1, "BUY"),
+        ])),
+        "the same legs, however they are written down",
+    );
+    assert!(
+        !ClientCore::names_the_same_contract(&spread, &combo(vec![
+            leg(1, 1, "BUY"), leg(3, 1, "SELL"),
+        ])),
+        "a different combination is a different contract",
+    );
+    assert!(
+        !ClientCore::names_the_same_contract(&spread, &combo(vec![
+            leg(1, 2, "BUY"), leg(2, 1, "SELL"),
+        ])),
+        "and so is the same pair in other proportions",
+    );
+
+    let by_id = |con_id: i64| ApiContract { con_id, ..Default::default() };
+    assert!(ClientCore::names_the_same_contract(&by_id(7), &by_id(7)));
+    assert!(!ClientCore::names_the_same_contract(&by_id(7), &by_id(8)));
+    assert!(
+        ClientCore::names_the_same_contract(&by_id(0), &by_id(8)),
+        "a side that states no contract states nothing to disagree with",
+    );
+    assert!(
+        ClientCore::names_the_same_contract(&spread, &by_id(8)),
+        "nor does one that states legs against one that states none",
+    );
+}
+
+/// A bound on time reaches an execution the venue timed, and no other.
+///
+/// The bound and the stored time are compared on their digits, so an execution
+/// carrying something that is not a venue timestamp sorts wherever those
+/// digits fall — a count of nanoseconds sorts before every bound a caller can
+/// write, and every such fill vanished from an ordinary request for today's.
+/// One the venue never timed cannot be placed either side of a bound at all,
+/// and is kept rather than hidden.
+#[test]
+fn a_time_bound_reads_only_what_the_venue_timed() {
+    let at = |time: &str| StoredExecution {
+        req_id: 1,
+        contract: ApiContract::default(),
+        execution: crate::types::model::Execution { time: time.into(), ..Default::default() },
+        commission_and_fees: Default::default(),
+    };
+    let after = |bound: &str| crate::types::model::ExecutionFilter {
+        time: bound.into(), ..Default::default()
+    };
+
+    assert!(execution_matches(&at("20260905-10:00:00"), &after("20260101-00:00:00")));
+    assert!(!execution_matches(&at("20260101-10:00:00"), &after("20990101-00:00:00")));
+    assert!(
+        execution_matches(&at(""), &after("20990101-00:00:00")),
+        "one the venue never timed is not hidden by a bound on time",
+    );
+    assert!(
+        execution_matches(&at("20260905-10:00:00"), &after("")),
+        "and a request that states no bound reads them all",
+    );
+}

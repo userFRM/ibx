@@ -269,17 +269,10 @@ impl EClient {
                 // rather than the contract — so one naming another contract is
                 // refused rather than recorded against it, and rather than
                 // spending a slot on a contract nothing needs.
-                // A combination is not one contract, and the id on it after
-                // the naming above is a single leg's underlying rather than
-                // the combination's — nothing to compare against what the
-                // venue states for the order.
                 if replacing
-                    && api_contract.combo_legs.is_empty()
-                    && contract.con_id != 0
                     && let Some(known) =
                         venue_now.and_then(|v| v.orders.get_order_info(oid))
-                    && known.contract.con_id != 0
-                    && known.contract.con_id != contract.con_id
+                    && !ClientCore::names_the_same_contract(&known.contract, &api_contract)
                 {
                     return self.report_refusal(py, order_id, wrong_contract());
                 }
@@ -941,6 +934,17 @@ impl EClient {
                                 ..Default::default()
                             },
                         ),
+                    };
+                    // Filled out from what the venue has said about the
+                    // contract, as the open-order answer already is on both
+                    // surfaces and as the other surface's completed answer is.
+                    // Taken verbatim here, an order lost its exchange, its
+                    // multiplier and its local symbol the moment it finished,
+                    // and only on this binding.
+                    let contract = if contract.con_id != 0 {
+                        self.core.get_contract(contract.con_id, &shared).unwrap_or(contract)
+                    } else {
+                        contract
                     };
                     archive.push((contract, order, state));
                     // Bound `order_cache` growth: terminal entries are no

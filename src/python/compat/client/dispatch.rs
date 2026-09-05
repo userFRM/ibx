@@ -332,16 +332,21 @@ impl EClient {
                 .as_ref()
                 .map(|info| info.last_exec.clone())
                 .unwrap_or_default();
+            // Left as the report stated them, which is what the comment above
+            // says and what the other surface does. Composed from the order
+            // number and the clock instead, a caller reconciling against the
+            // broker's own record was handed an id the broker never issued —
+            // and the time, which `req_executions` filters on by comparing
+            // digits, read as a count of nanoseconds and put every such fill
+            // before every bound a caller can state.
             let exec_id = rich_info
                 .as_ref()
                 .map(|i| i.last_exec.exec_id.clone())
-                .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| format!("{}.{}", fill.order_id, fill.timestamp_ns));
+                .unwrap_or_default();
             let now_str = rich_info
                 .as_ref()
                 .map(|i| i.last_exec.time.clone())
-                .filter(|t| !t.is_empty())
-                .unwrap_or_else(|| format!("{}", fill.timestamp_ns));
+                .unwrap_or_default();
             let exec_exchange = rich_info.as_ref()
                 .map(|i| i.last_exec.exchange.as_str()).unwrap_or("").to_string();
             let cum_qty = rich_info.as_ref()
@@ -375,7 +380,16 @@ impl EClient {
                 // request filtered by client matched nothing at all, and the
                 // same fill replayed named no client and no permanent id.
                 perm_id,
-                client_id: self.client_id.load(Ordering::Acquire) as i64,
+                // What the report stated, and where it stated none, the client
+                // the order was placed under. Read off this client instead, a
+                // fill on an order somebody else placed was labelled with
+                // whoever happened to be asking — and `req_executions` filters
+                // on exactly that field.
+                client_id: if from_the_report.client_id != 0 {
+                    from_the_report.client_id
+                } else {
+                    i64::from(self.core.placing_client(shared, fill.order_id))
+                },
                 cum_qty,
                 avg_price,
                 ..from_the_report

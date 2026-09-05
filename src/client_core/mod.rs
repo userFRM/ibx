@@ -514,7 +514,10 @@ fn execution_matches(se: &StoredExecution, filter: &ExecutionFilter) -> bool {
     // "20260729 10:00:00"), so compare on digits alone; both are yyyyMMdd
     // first, so that ordering is chronological. A bound carrying less
     // precision than the timestamp compares against the same prefix, so a
-    // date-only filter keeps that whole day rather than dropping it.
+    // date-only filter keeps that whole day rather than dropping it. An
+    // execution the venue stated no time for compares on nothing and is kept:
+    // it cannot be placed either side of a bound, and a caller asking what has
+    // traded is worse served by a fill they are never shown.
     if !filter.time.is_empty() {
         let digits = |s: &str| s.chars().filter(|c| c.is_ascii_digit()).collect::<String>();
         let lo = digits(&filter.time);
@@ -2297,6 +2300,37 @@ impl ClientCore {
     pub fn holds_a_submission(&self, order_id: u64) -> bool {
         self.held_orders.lock().unwrap().iter()
             .any(|h| h.order_id == order_id && h.places_the_order())
+    }
+
+    /// Whether a replace names the contract the venue says the order is on.
+    ///
+    /// A replace names the order and not the contract, so one naming another
+    /// contract is refused rather than recorded against it. A combination is
+    /// not one contract: what identifies it is the set of legs it is built
+    /// from, and after a description is named the id on it is one leg's
+    /// underlying — two different combinations on one underlying carry the
+    /// same id and register the same slot, so comparing ids could never have
+    /// told them apart.
+    ///
+    /// Where one side states neither an id nor legs there is nothing to
+    /// compare, and the replace stands.
+    pub(crate) fn names_the_same_contract(known: &ApiContract, stated: &ApiContract) -> bool {
+        if !known.combo_legs.is_empty() || !stated.combo_legs.is_empty() {
+            if known.combo_legs.is_empty() || stated.combo_legs.is_empty() {
+                return true;
+            }
+            // The legs, whatever order they are stated in: a combination is
+            // the same combination however it is written down.
+            let legs = |c: &ApiContract| {
+                let mut v: Vec<(i64, i32, String)> = c.combo_legs.iter()
+                    .map(|l| (l.con_id, l.ratio, l.action.to_ascii_uppercase()))
+                    .collect();
+                v.sort();
+                v
+            };
+            return legs(known) == legs(stated);
+        }
+        known.con_id == 0 || stated.con_id == 0 || known.con_id == stated.con_id
     }
 
     /// The slot a tracked order was placed on, if it is tracked.
