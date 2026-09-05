@@ -1127,6 +1127,11 @@ impl HmdsState {
                                     } else {
                                         shared.reference.push_historical_news(req_id, Vec::new(), false);
                                     }
+                                } else {
+                                    shared.market.note_unread_wire(
+                                        "historical",
+                                        "news reply with nothing pending".to_string(),
+                                    );
                                 }
                             }
                         }
@@ -2194,7 +2199,7 @@ fn build_tbt_query(
         }
     }
 
-    pub(crate) fn send_historical_news_request(&mut self, req_id: u32, con_id: u32, provider_codes: &str, start_time: &str, end_time: &str, max_results: u32, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    pub(crate) fn send_historical_news_request(&mut self, req_id: u32, con_id: u32, provider_codes: &str, start_time: &str, end_time: &str, max_results: u32, shared: &SharedState, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let query_id = format!("news_{}", self.next_hmds_query_id);
         let req = crate::control::news::HistoricalNewsRequest {
             query_id: query_id.clone(),
@@ -2206,18 +2211,39 @@ fn build_tbt_query(
         };
         let xml = crate::control::news::build_historical_news_xml(&req);
         self.next_hmds_query_id += 1;
-        if let Some(conn) = hmds_conn.as_mut() {
-            let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
-                (fix::TAG_MSG_TYPE, "U"),
-                (fix::TAG_SENDING_TIME, &ts),
-                (6040, "10030"),
-                (6118, &xml),
-            ]);
-            hb.last_hmds_sent = Instant::now();
-            log::info!("Sent historical news request: req_id={req_id} con_id={con_id}");
+        // Registered as outstanding only if it went out, as the corporate
+        // actions request beside this is: recorded regardless, the caller
+        // waited its whole deadline for an answer to a request the socket
+        // never carried.
+        match Self::send_news_query(hmds_conn, &xml) {
+            Ok(()) => {
+                hb.last_hmds_sent = Instant::now();
+                log::info!("Sent historical news request: req_id={req_id} con_id={con_id}");
+                self.pending_news.push((query_id, req_id));
+            }
+            Err(e) => {
+                log::warn!("historical news request did not go out: req_id={req_id} con_id={con_id}: {e}");
+                super::push_hmds_refusal(
+                    shared, req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+                    format!("the news request could not be sent: {e}"), false,
+                );
+            }
         }
-        self.pending_news.push((query_id, req_id));
+    }
+
+    /// One news query, historical or article, on the historical connection.
+    fn send_news_query(hmds_conn: &mut Option<Connection>, xml: &str) -> Result<(), String> {
+        let Some(conn) = hmds_conn.as_mut() else {
+            return Err("no connection to the historical service".to_string());
+        };
+        let ts = chrono_free_timestamp();
+        conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, "10030"),
+            (6118, xml),
+        ])
+        .map_err(|e| e.to_string())
     }
 
     /// Ask the historical farm for a contract's corporate actions.
@@ -2321,7 +2347,7 @@ fn build_tbt_query(
         }
     }
 
-    pub(crate) fn send_news_article_request(&mut self, req_id: u32, provider_code: &str, article_id: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
+    pub(crate) fn send_news_article_request(&mut self, req_id: u32, provider_code: &str, article_id: &str, shared: &SharedState, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {
         let query_id = format!("art_{}", self.next_hmds_query_id);
         let req = crate::control::news::NewsArticleRequest {
             query_id: query_id.clone(),
@@ -2330,18 +2356,20 @@ fn build_tbt_query(
         };
         let xml = crate::control::news::build_article_request_xml(&req);
         self.next_hmds_query_id += 1;
-        if let Some(conn) = hmds_conn.as_mut() {
-            let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
-                (fix::TAG_MSG_TYPE, "U"),
-                (fix::TAG_SENDING_TIME, &ts),
-                (6040, "10030"),
-                (6118, &xml),
-            ]);
-            hb.last_hmds_sent = Instant::now();
-            log::info!("Sent news article request: req_id={req_id} article={article_id}");
+        match Self::send_news_query(hmds_conn, &xml) {
+            Ok(()) => {
+                hb.last_hmds_sent = Instant::now();
+                log::info!("Sent news article request: req_id={req_id} article={article_id}");
+                self.pending_articles.push((query_id, req_id));
+            }
+            Err(e) => {
+                log::warn!("news article request did not go out: req_id={req_id} article={article_id}: {e}");
+                super::push_hmds_refusal(
+                    shared, req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+                    format!("the article request could not be sent: {e}"), false,
+                );
+            }
         }
-        self.pending_articles.push((query_id, req_id));
     }
 
     pub(crate) fn send_fundamental_data_request(&mut self, req_id: u32, con_id: u32, report_type: &str, shared: &SharedState, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {

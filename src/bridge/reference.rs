@@ -454,9 +454,13 @@ impl ReferenceState {
     }
 
     /// Throw away calendar answers still queued under a request.
-    pub fn purge_calendar_for(&self, req_id: u32) {
-        self.calendar_meta_data.lock().unwrap().retain(|(id, _)| *id != req_id);
-        self.calendar_events.lock().unwrap().retain(|(id, _)| *id != req_id);
+    pub fn purge_calendar_for(&self, req_id: u32) -> bool {
+        let mut meta = self.calendar_meta_data.lock().unwrap();
+        let mut events = self.calendar_events.lock().unwrap();
+        let before = meta.len() + events.len();
+        meta.retain(|(id, _)| *id != req_id);
+        events.retain(|(id, _)| *id != req_id);
+        meta.len() + events.len() != before
     }
 
     /// Throw away a report still queued under a request.

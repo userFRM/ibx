@@ -1335,6 +1335,44 @@ mod hmds_correlation_tests {
         );
     }
 
+    /// A news query is registered as outstanding only if it went out.
+    /// Registered regardless, the caller waited its whole deadline for an
+    /// answer to a request the socket never carried.
+    #[test]
+    fn a_news_query_that_did_not_go_out_is_refused_not_registered() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        hmds.send_historical_news_request(7, 265598, "BRFG", "", "", 10, &shared, &mut conn, &mut hb);
+        hmds.send_news_article_request(8, "BRFG", "BRFG$1", &shared, &mut conn, &mut hb);
+        assert!(hmds.pending_news.is_empty() && hmds.pending_articles.is_empty(), "nothing waits on a request that never left");
+        let told = shared.reference.drain_historical_errors();
+        let codes: Vec<_> = told.iter().map(|(id, code, _)| (*id, *code)).collect();
+        assert_eq!(codes, [(7, 504), (8, 504)], "{told:?}");
+    }
+
+    /// A news reply naming nothing pending is noted, not dropped in silence:
+    /// a reply after the lists were cleared, a duplicate, or an id this
+    /// client cannot read all looked like nothing arriving.
+    #[test]
+    fn a_news_reply_naming_nothing_pending_is_noted() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        let xml = "<NewsResponse><id>news_9-history;;NewsQuery;;0;;true;;0;;U</id></NewsResponse>";
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"35=U\x016040=10032\x016118=");
+        msg.extend_from_slice(xml.as_bytes());
+        msg.push(0x01);
+        hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+        assert!(
+            shared.market.unread_wire().iter().any(|(c, what)| *c == "historical" && what.contains("news reply")),
+            "{:?}", shared.market.unread_wire(),
+        );
+    }
+
     /// A histogram reply that names a query and cannot be read fails that
     /// query rather than leaving it waiting on an answer that has already
     /// arrived.

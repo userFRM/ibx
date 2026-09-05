@@ -4473,14 +4473,24 @@ fn a_news_stream_is_withdrawn_by_naming_what_it_was() {
     let mut ccp = CcpState::new();
     let mut hb = HeartbeatState::new();
     let mut conn = Some(conn);
-    ccp.send_news_subscribe(756733, 3, "STK", "BRFG", 41, &mut conn, &mut hb);
+    // A future, so the type on the withdrawal is not the one a stock carries:
+    // stamped with the stock's type whatever was subscribed, the withdrawal
+    // named an entry the venue never had, and the stream went on.
+    ccp.send_news_subscribe(756733, 3, "FUT", "BRFG", 41, &mut conn, &mut hb);
     let mut buf = [0u8; 4096];
-    let _subscribe = peer.read(&mut buf).unwrap();
+    let n = peer.read(&mut buf).unwrap();
+    let subscribed = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    let stated_type = subscribed.split("|167=").nth(1).and_then(|t| t.split('|').next())
+        .expect("the subscription states its type").to_string();
 
     ccp.send_news_unsubscribe(3, &mut conn, &mut hb);
     let n = peer.read(&mut buf).unwrap();
     let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
     assert!(msg.contains("|263=2|"), "it is a withdrawal: {msg}");
+    assert!(
+        msg.contains(&format!("|167={stated_type}|")),
+        "of the type it was subscribed as ({stated_type}): {msg}",
+    );
     assert!(msg.contains("|146=1|"), "of one entry: {msg}");
     assert!(msg.contains("|262=41|"), "under the request it was asked under: {msg}");
     assert!(msg.contains("|6008=756733|"), "naming the contract: {msg}");

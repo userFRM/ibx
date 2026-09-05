@@ -51,6 +51,38 @@ mod news_tests {
         body
     }
 
+    /// A news subscription acknowledged by the ticker setup keyed to the
+    /// contract, rather than under its own number, files its tag there.
+    #[test]
+    fn a_news_subscription_files_its_tag_on_the_ticker_setup_too() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.note_news_request(7, instrument);
+
+        farm.handle_ticker_setup(b"35=L\x01756733,0.01,44011", &mut context, &shared);
+        farm.handle_generic_tick(&framed_news(44011, &one_article()), &mut context, &shared, &None);
+        assert_eq!(shared.market.drain_tick_news().len(), 1, "the headline reaches the caller");
+    }
+
+    /// Forgotten, a news subscription's tag goes with it, and the request
+    /// with it survives neither: a headline arriving after is nobody's.
+    #[test]
+    fn a_forgotten_news_subscription_leaves_no_tag_behind() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.note_news_request(7, instrument);
+        farm.handle_subscription_ack(b"35=Q\x0133082,7,0.01,0,3", &mut context, &shared);
+        farm.forget_news(7, instrument);
+
+        farm.handle_generic_tick(&framed_news(33082, &one_article()), &mut context, &shared, &None);
+        assert!(shared.market.drain_tick_news().is_empty(), "nothing after the withdrawal");
+        assert!(farm.generic_tick_reqs.iter().all(|(rid, _)| *rid != 7));
+    }
+
     /// A frame under a number nothing asked a generic tick under says nothing
     /// about which tick it is, so it is dropped rather than guessed at.
     /// Instrument 0 is a real instrument — the first one registered — so a

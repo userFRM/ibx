@@ -1277,6 +1277,9 @@ impl HotLoop {
                         // Allocate req_id from farm's counter (shared ID space)
                         let req_id = self.farm.next_md_req_id;
                         self.farm.next_md_req_id += 1;
+                        // Recorded where the acknowledgement arrives, or the
+                        // tag is never filed and no headline is delivered.
+                        self.farm.note_news_request(req_id, id);
                         self.ccp.send_news_subscribe(
                             con_id, id, &sec_type, &providers, req_id,
                             &mut self.ccp_conn, &mut self.hb,
@@ -1284,7 +1287,9 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::UnsubscribeNews { instrument } => {
-                    self.ccp.send_news_unsubscribe(instrument, &mut self.ccp_conn, &mut self.hb);
+                    if let Some(req_id) = self.ccp.send_news_unsubscribe(instrument, &mut self.ccp_conn, &mut self.hb) {
+                        self.farm.forget_news(req_id, instrument);
+                    }
                     self.try_reclaim_instrument(instrument);
                 }
                 ControlCommand::UpdateParam { key, value } => {
@@ -1469,9 +1474,13 @@ impl HotLoop {
                     );
                 }
                 ControlCommand::CancelCalendar { req_id } => {
-                    // As above: the answers already queued go with it.
-                    self.shared.reference.purge_calendar_for(req_id);
-                    if !self.secdef.withdraw_calendar_request(req_id) {
+                    // As above: the answers already queued go with it. An
+                    // answer thrown away is a withdrawal that acted, and one
+                    // that acted says nothing beside it: refused on the
+                    // pending list alone, a caller withdrawing a request the
+                    // venue had just answered was told it was never made.
+                    let purged = self.shared.reference.purge_calendar_for(req_id);
+                    if !self.secdef.withdraw_calendar_request(req_id) && !purged {
                         // Under the number that says nothing was waiting, not
                         // the data service's own: a withdrawal naming nothing
                         // is not the service reporting a difficulty with a
@@ -1534,8 +1543,17 @@ impl HotLoop {
                 ControlCommand::FetchHistoricalNews { req_id, con_id, provider_codes, start_time, end_time, max_results } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
+                    } else if self.hmds.pending_news.iter().any(|(_, rid)| *rid == req_id) {
+                        // As a second bar query under a live number is refused:
+                        // two queries under one number answer twice, and a
+                        // withdrawal reaches one of them.
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::DUPLICATE_HISTORICAL_QUERY,
+                            format!("request {req_id} is already answering a news query: withdraw it before asking for another under the same number"),
+                            false,
+                        );
                     } else {
-                        self.hmds.send_historical_news_request(req_id, con_id, &provider_codes, &start_time, &end_time, max_results, &mut self.hmds_conn, &mut self.hb);
+                        self.hmds.send_historical_news_request(req_id, con_id, &provider_codes, &start_time, &end_time, max_results, &self.shared, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::FetchAdjustments { req_id, con_id, sec_type, exchange, start_date, end_date } => {
@@ -1548,8 +1566,14 @@ impl HotLoop {
                 ControlCommand::FetchNewsArticle { req_id, provider_code, article_id } => {
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
+                    } else if self.hmds.pending_articles.iter().any(|(_, rid)| *rid == req_id) {
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::DUPLICATE_HISTORICAL_QUERY,
+                            format!("request {req_id} is already answering an article query: withdraw it before asking for another under the same number"),
+                            false,
+                        );
                     } else {
-                        self.hmds.send_news_article_request(req_id, &provider_code, &article_id, &mut self.hmds_conn, &mut self.hb);
+                        self.hmds.send_news_article_request(req_id, &provider_code, &article_id, &self.shared, &mut self.hmds_conn, &mut self.hb);
                     }
                 }
                 ControlCommand::FetchFundamentalData { req_id, con_id, report_type } => {
@@ -6042,6 +6066,111 @@ mod tests {
             hl.context.market.instrument_by_server_tag(910_002), Some(id),
             "news routes through this map, so its tag outlives the L1 request",
         );
+    }
+
+    /// One news record framed the way the venue frames a generic tick: a
+    /// two-byte bit length, the tag, a two-byte payload length, the payload.
+    fn news_frame(server_tag: u32) -> Vec<u8> {
+        let mut article = Vec::new();
+        article.extend_from_slice(&1u32.to_be_bytes());
+        article.extend_from_slice(&4u32.to_be_bytes());
+        article.extend_from_slice(b"BRFG");
+        article.extend_from_slice(&0u32.to_be_bytes());
+        article.extend_from_slice(&2u16.to_be_bytes());
+        article.extend_from_slice(b"id");
+        article.extend_from_slice(&0u32.to_be_bytes());
+        article.extend_from_slice(&1_785_325_554u32.to_be_bytes());
+        article.extend_from_slice(&8u32.to_be_bytes());
+        article.extend_from_slice(b"headline");
+        let mut body = server_tag.to_be_bytes().to_vec();
+        body.extend_from_slice(&(article.len() as u16).to_be_bytes());
+        body.extend_from_slice(&article);
+        let mut msg = b"35=G\x01".to_vec();
+        msg.extend_from_slice(&(((body.len() * 8) % 65_536) as u16).to_be_bytes());
+        msg.extend_from_slice(&body);
+        msg
+    }
+
+    /// A news subscription's headlines reach the caller. The venue numbers a
+    /// generic tick apart from the prices and says what it carries once, on
+    /// the acknowledgement, and the reader tells a frame's bytes apart only by
+    /// what was asked for under the tag. Asking recorded nothing on the
+    /// market-data side, so the acknowledgement filed no tag and every
+    /// headline was dropped as a tick nothing had asked for.
+    #[test]
+    fn a_news_subscription_delivers_its_headlines() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(ControlCommand::SubscribeNews {
+            con_id: 265598,
+            symbol: "AAPL".into(),
+            sec_type: "STK".into(),
+            providers: String::new(),
+            reply_tx: None,
+        })
+        .expect("the engine is holding the other end");
+        hl.poll_control_commands();
+        let req_id = hl.farm.next_md_req_id - 1;
+        let id = hl.context.market.instrument_by_con_id(265598).expect("registered");
+
+        // The venue takes the subscription on under a number of its own, then
+        // sends a headline under that number.
+        let ack = format!("35=Q\x0133082,{req_id},0.01,0,3");
+        hl.farm.process_farm_message(ack.as_bytes(), &mut None, &mut hl.context, &shared, &None, &mut hl.hb);
+        hl.farm.process_farm_message(&news_frame(33082), &mut None, &mut hl.context, &shared, &None, &mut hl.hb);
+        let delivered = shared.market.drain_tick_news();
+        assert_eq!(delivered.len(), 1, "the headline reaches the caller: {delivered:?}");
+        assert_eq!(delivered[0].instrument, id, "on the contract it was asked for");
+
+        // Withdrawn, the tag goes with it: a headline after is nobody's.
+        tx.send(ControlCommand::UnsubscribeNews { instrument: id }).unwrap();
+        hl.poll_control_commands();
+        hl.farm.process_farm_message(&news_frame(33082), &mut None, &mut hl.context, &shared, &None, &mut hl.hb);
+        assert!(shared.market.drain_tick_news().is_empty(), "nothing after the withdrawal");
+    }
+
+    /// A second historical-news request under a number still answering is
+    /// refused, as a second bar query is: two queries under one number answer
+    /// twice, and a withdrawal reaches one of them.
+    #[test]
+    fn a_second_news_request_under_a_live_number_is_refused() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+        hl.hmds_conn = Some(conn);
+        for _ in 0..2 {
+            tx.send(ControlCommand::FetchHistoricalNews {
+                req_id: 7, con_id: 265598, provider_codes: "BRFG".into(),
+                start_time: String::new(), end_time: String::new(), max_results: 10,
+            })
+            .unwrap();
+        }
+        hl.poll_control_commands();
+        assert_eq!(hl.hmds.pending_news.len(), 1, "one query answers under the number");
+        let told = shared.reference.drain_historical_errors();
+        assert_eq!(told.len(), 1, "the second is refused: {told:?}");
+        assert_eq!((told[0].0, told[0].1), (7, 386), "{told:?}");
+    }
+
+    /// A calendar withdrawal that throws away an answer already queued acted,
+    /// and is not told nothing was waiting. The answer had arrived; refusing
+    /// the withdrawal said the request was never made.
+    #[test]
+    fn withdrawing_a_calendar_request_whose_answer_is_queued_is_not_refused() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        shared.reference.push_calendar_meta_data(7, "{}".to_string());
+        tx.send(ControlCommand::CancelCalendar { req_id: 7 }).unwrap();
+        hl.poll_control_commands();
+        assert!(shared.reference.drain_calendar_meta_data().is_empty(), "the answer goes with the request");
+        let told = shared.reference.drain_historical_errors();
+        assert!(told.is_empty(), "and a withdrawal that acted says nothing beside it: {told:?}");
     }
 
     /// A chargeable snapshot is a request of its own, not a share of a stream

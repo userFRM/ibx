@@ -230,6 +230,12 @@ pub(crate) struct FarmState {
     /// The venue's number for a generic-tick subscription, and what it
     /// carries: (server tag, request type, instrument).
     generic_tick_tags: Vec<(u32, u32, InstrumentId)>,
+    /// News subscriptions this session asked for, as (request, instrument).
+    /// Kept apart from the tables a drop clears: the subscription lives on
+    /// the trading connection and outlives this one, and whether the next
+    /// connection acknowledges it again is the venue's to decide — where it
+    /// does, the tag is filed again.
+    news_requests: Vec<(u32, InstrumentId)>,
     /// Message types the venue has sent on this connection that nothing reads.
     unread_types: std::collections::HashSet<String>,
     pub(crate) disconnected: bool,
@@ -687,6 +693,7 @@ impl FarmState {
             md_resub_info: Vec::new(),
             greeks_subs: Vec::new(),
             generic_tick_reqs: Vec::new(),
+            news_requests: Vec::new(),
             generic_tick_tags: Vec::new(),
             unread_types: std::collections::HashSet::new(),
             disconnected: false,
@@ -1308,7 +1315,49 @@ impl FarmState {
                 context.market.set_size_tick(instrument, size_tick);
             }
             log::info!("Ticker setup: con_id {con_id} -> server_tag {server_tag}, minTick {min_tick}");
+            // A news subscription on this contract may be acknowledged here,
+            // keyed by the contract, rather than under its own number. Its
+            // frames are told apart from the prices only by the tag's type,
+            // so the tag is filed as the news tag or every headline is
+            // dropped.
+            if self.news_requests.iter().any(|(_, i)| *i == instrument) {
+                self.generic_tick_tags.retain(|(tag, ..)| *tag != server_tag);
+                self.generic_tick_tags.push((server_tag, NEWS_REQUEST_TYPE, instrument));
+            }
         }
+    }
+
+    /// Record a news subscription asked for under `req_id` on `instrument`.
+    ///
+    /// The venue numbers a generic tick apart from the prices and says what
+    /// it carries once, on the acknowledgement, and the reader tells a
+    /// frame's bytes apart only by what was asked for under the tag. Asked
+    /// for on the trading connection and recorded nowhere here, the
+    /// acknowledgement filed no tag and every headline was dropped as a tick
+    /// nothing had asked for.
+    pub(crate) fn note_news_request(&mut self, req_id: u32, instrument: InstrumentId) {
+        self.news_requests.retain(|(rid, _)| *rid != req_id);
+        self.news_requests.push((req_id, instrument));
+        self.arm_news_request(req_id, instrument);
+    }
+
+    /// The request and its tick, where an acknowledgement under the request's
+    /// number will find them.
+    fn arm_news_request(&mut self, req_id: u32, instrument: InstrumentId) {
+        self.md_req_to_instrument.retain(|(rid, _)| *rid != req_id);
+        self.md_req_to_instrument.push((req_id, instrument));
+        self.generic_tick_reqs.retain(|(rid, _)| *rid != req_id);
+        self.generic_tick_reqs.push((req_id, NEWS_REQUEST_TYPE));
+    }
+
+    /// Forget a news subscription: its request, and the tag it was filed
+    /// under. A headline arriving after is a tick nothing asked for.
+    pub(crate) fn forget_news(&mut self, req_id: u32, instrument: InstrumentId) {
+        self.news_requests.retain(|(rid, _)| *rid != req_id);
+        self.md_req_to_instrument.retain(|(rid, _)| *rid != req_id);
+        self.generic_tick_reqs.retain(|(rid, _)| *rid != req_id);
+        self.generic_tick_tags
+            .retain(|(_, tick, i)| !(*tick == NEWS_REQUEST_TYPE && *i == instrument));
     }
 
     pub(crate) fn send_mktdata_subscribe(
@@ -2306,6 +2355,12 @@ impl FarmState {
         let active = self.take_resub_targets(&context.market);
         self.md_req_to_instrument.clear();
         self.instrument_md_reqs.clear();
+        // The news subscriptions were not withdrawn: they live on the trading
+        // connection. Armed again here so that an acknowledgement on this
+        // connection files their tags.
+        for (req_id, instrument) in self.news_requests.clone() {
+            self.arm_news_request(req_id, instrument);
+        }
         // Queued rather than sent here. The first burst goes out on this pass
         // and the rest on the passes that follow, so the pacing costs the
         // venue nothing and the engine nothing.

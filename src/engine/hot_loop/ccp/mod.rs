@@ -1713,23 +1713,24 @@ impl CcpState {
         }
     }
 
+    /// Withdraw the news subscription on `instrument`, and say which request
+    /// it was asked under, so the market-data side can forget its tag.
     pub(crate) fn send_news_unsubscribe(
         &mut self,
         instrument: InstrumentId,
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
-    ) {
-        let (req_id, con_id) =
-            match self.news_subscriptions.iter().position(|(id, ..)| *id == instrument) {
-                Some(pos) => {
-                    let (_, rid, _, con_id, _) = self.news_subscriptions.remove(pos);
-                    (rid, con_id)
-                }
-                None => return,
-            };
+    ) -> Option<u32> {
+        let pos = self.news_subscriptions.iter().position(|(id, ..)| *id == instrument)?;
+        let (_, req_id, _, con_id, sec_type) = self.news_subscriptions.remove(pos);
         if let Some(conn) = ccp_conn.as_mut() {
             let req_id_str = req_id.to_string();
             let con_id_str = (con_id as u32).to_string();
+            // The type it was subscribed as, not a stock's: stamped with the
+            // stock's type whatever was subscribed, the withdrawal of a
+            // future's or an index's news named an entry the venue never had,
+            // and the stream went on for the session.
+            let stated_type = crate::control::contracts::sec_type_to_fix(&sec_type).to_string();
             // Withdrawn the way it was asked for: the venue is told which tick,
             // on which contract, not merely which request. The option model
             // beside it is already withdrawn that way, and the protocol
@@ -1744,7 +1745,7 @@ impl CcpState {
                 (262, &req_id_str),
                 (6008, &con_id_str),
                 (207, "NEWS"),
-                (167, "CS"),
+                (167, &stated_type),
                 (264, "292"),
             ]);
             hb.last_ccp_sent = Instant::now();
@@ -1761,6 +1762,7 @@ impl CcpState {
                 ),
             }
         }
+        Some(req_id)
     }
 
     pub(crate) fn send_secdef_request(&mut self, req_id: u32, con_id: i64, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {

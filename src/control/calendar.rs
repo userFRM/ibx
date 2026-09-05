@@ -72,6 +72,15 @@ pub fn event_data_request(query: &CalendarQuery) -> Result<String, String> {
     let filter = if !query.filter.trim().is_empty() {
         query.filter.trim().to_string()
     } else if let Some(con_id) = query.con_id {
+        // A contract the venue does not number is not a scope. Written into
+        // the watchlist as text, "0" asked the calendar about nothing the
+        // venue can find, where the same id is refused for a headline.
+        if con_id <= 0 {
+            return Err(format!(
+                "contract {con_id} is not one the venue numbers, and the calendar is asked \
+                 about a contract by the venue's id: qualify it first",
+            ));
+        }
         format!(r#"{{"watchlist":["{con_id}"]}}"#)
     } else {
         // Neither stated. The document is still a document — a request scoped
@@ -121,6 +130,19 @@ mod tests {
 
     /// The metadata request carries no filters. The answer is the same for
     /// everybody, so there is nothing to narrow.
+    /// A contract the venue does not number is not a scope. Written into the
+    /// watchlist as text, "0" asked the calendar about nothing the venue can
+    /// find, where the request surface refuses the same id for a headline.
+    #[test]
+    fn a_contract_the_venue_does_not_number_is_refused_as_a_scope() {
+        for id in [0, -1] {
+            let query = CalendarQuery { con_id: Some(id), ..Default::default() };
+            assert!(event_data_request(&query).is_err(), "contract {id} is not a scope");
+        }
+        let unscoped = CalendarQuery { con_id: None, ..Default::default() };
+        assert!(event_data_request(&unscoped).is_ok(), "no contract named is a request with no scope");
+    }
+
     #[test]
     fn the_metadata_request_states_only_what_this_client_can_take() {
         let json = meta_data_request();
