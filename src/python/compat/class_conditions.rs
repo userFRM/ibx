@@ -476,7 +476,7 @@ mod tests {
         };
         let why = crate::client_core::ClientCore::validate_order(&built, "")
             .expect_err("a trigger the venue does not carry is refused on either surface");
-        assert!(why.contains("trigger method"), "the refusal names the trigger: {why}");
+        assert!(why.message.contains("trigger method"), "the refusal names the trigger: {why}");
     }
 }
 

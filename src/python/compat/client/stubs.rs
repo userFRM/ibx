@@ -449,7 +449,8 @@ impl EClient {
             3 => "info",
             4 => "debug",
             5 => "trace",
-            _ => return self.report_refusal(py, -1, crate::error_codes::Refusal::validation(
+            _ => return self.report_refusal(py, -1, crate::error_codes::Refusal::stated(
+                crate::error_codes::LOG_LEVEL_INVALID,
                 format!("set_server_log_level: {log_level} is not a log level; it is 1 to 5"),
             )),
         };

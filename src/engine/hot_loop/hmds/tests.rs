@@ -308,7 +308,10 @@ fn scanner_parameters_on_a_dead_connection_is_reported_not_dropped() {
     let errors = shared.reference.drain_historical_errors();
     assert_eq!(errors.len(), 1, "the caller is told it was not sent");
     assert_eq!(errors[0].0, crate::bridge::ReferenceState::NO_REQUEST);
-    assert_eq!(errors[0].1, 162);
+    assert_eq!(
+        errors[0].1, 504,
+        "the request never left, so the service reported no difficulty with it",
+    );
 }
 
 // ── unknown bar_size rejects at the engine too (backstop for

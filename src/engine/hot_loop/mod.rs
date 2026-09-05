@@ -3324,8 +3324,16 @@ pub(crate) fn reconnect_backoff(failures: u32) -> std::time::Duration {
 /// `historical_data_end` fires. Without this, requests issued while HMDS is
 /// down hang silently.
 pub(crate) fn push_hmds_unavailable(shared: &SharedState, req_id: u32, from_historical: bool) {
-    push_hmds_error(
+    // Under the number for a request made with no connection to send it on,
+    // not the data service's own.
+    //
+    // Every caller of this asks because there is no socket: the request never
+    // left, so the service reported no difficulty with it and never saw it. A
+    // caller branching on the service's number retried against a service it
+    // had not asked -- which is every request made inside a reconnect window.
+    push_hmds_refusal(
         shared, req_id,
+        crate::error_codes::Refusal::NOT_CONNECTED,
         "Historical data service connection is not available".to_string(),
         from_historical,
     );
@@ -5763,6 +5771,12 @@ mod tests {
         assert!(!engine.is_running());
     }
 
+    /// A request with no connection to send it on is answered under the
+    /// number for that, not the data service's own.
+    ///
+    /// The service reported no difficulty with a request it never saw. A
+    /// caller branching on the service's number retried against a service it
+    /// had not asked, which is every request made inside a reconnect window.
     #[test]
     fn push_hmds_unavailable_historical_emits_error_and_terminal_sentinel() {
         let shared = SharedState::new();
@@ -5771,7 +5785,7 @@ mod tests {
         let errors = shared.reference.drain_historical_errors();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].0, 7);
-        assert_eq!(errors[0].1, 162);
+        assert_eq!(errors[0].1, 504, "the request never left, so nothing answered it");
         assert!(errors[0].2.contains("not available"));
 
         let hist = shared.reference.drain_historical_data();
@@ -5904,7 +5918,7 @@ mod tests {
         let errors = shared.reference.drain_historical_errors();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].0, 42);
-        assert_eq!(errors[0].1, 162);
+        assert_eq!(errors[0].1, 504, "the request never left, so nothing answered it");
         // Head-ts / histogram / ticks / schedule / scanner / news / fundamental:
         // no bar-stream consumer waiting for historical_data_end.
         assert!(shared.reference.drain_historical_data().is_empty());

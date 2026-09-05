@@ -164,7 +164,7 @@ impl EClient {
         }
         for (at, leg) in api_contract.combo_legs.iter().enumerate() {
             if let Err(why) = ClientCore::validate_leg(at, leg) {
-                return self.report_refusal(py, order_id, Refusal::validation(why));
+                return self.report_refusal(py, order_id, why);
             }
         }
         if let Err(why) = ClientCore::validate_order_contract(
@@ -312,7 +312,7 @@ impl EClient {
             // A replace states the order type, the limit price and the trigger.
             // An order defined by anything else cannot survive one.
             if let Some(refusal) = self.core.modify_refusal(oid, &api_order) {
-                return self.report_refusal(py, order_id, refusal.into());
+                return self.report_refusal(py, order_id, refusal);
             }
             let price = crate::types::price_from_f64(api_order.lmt_price);
             let qty = crate::types::qty_from_f64(api_order.total_quantity);

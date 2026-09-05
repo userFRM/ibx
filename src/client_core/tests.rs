@@ -1358,7 +1358,7 @@ fn a_peg_best_order_is_built_from_the_price_it_states() {
 
     let unpriced = ApiOrder { lmt_price: 0.0, ..order };
     let err = ClientCore::validate_order(&unpriced, "DU123").unwrap_err();
-    assert!(err.contains("lmt_price"), "a pegged-to-best order with no price is refused: {err}");
+    assert!(err.message.contains("lmt_price"), "a pegged-to-best order with no price is refused: {err}");
 }
 
 /// A snapshot ends on the venue having stated what one is made of, or on the
@@ -1485,7 +1485,7 @@ fn a_replace_that_cannot_state_the_number_asked_for_is_refused() {
     let wider = ApiOrder { aux_price: 9.0, ..placed };
     let why = core.modify_refusal(42, &wider).expect("the trail has nowhere to go");
     assert!(
-        why.contains("the trail amount"),
+        why.message.contains("the trail amount"),
         "the caller is told which number cannot travel: {why}",
     );
 }
@@ -1808,5 +1808,70 @@ fn a_time_bound_reads_only_what_the_venue_timed() {
     assert!(
         execution_matches(&at("20260905-10:00:00"), &after("")),
         "and a request that states no bound reads them all",
+    );
+}
+
+/// Each refusal the catalogue names carries its own number, not the general
+/// one for a malformed request.
+///
+/// Every shared validator answered in prose, and prose is stamped with the
+/// general validation number on the way out — so a caller branching on the
+/// number for an unset stop price, an unpermitted security type or a
+/// combination with no legs took the same branch it takes for a typo in a
+/// field name, and could not tell them apart. One row per number, so the
+/// numbers cannot drift back one validator at a time.
+#[test]
+fn a_refusal_the_catalogue_names_carries_its_own_number() {
+    let priced = |order_type: &str| ApiOrder {
+        action: "BUY".into(), total_quantity: 1.0, order_type: order_type.into(),
+        lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+
+    // A stop with nothing to trigger on.
+    for order_type in ["STP", "STP LMT", "TRAIL", "TRAIL LIMIT", "MIT", "LIT"] {
+        let why = ClientCore::validate_order(&priced(order_type), "")
+            .expect_err("a stop with no trigger price is refused");
+        assert_eq!(why.code, 403, "{order_type}: {why}");
+    }
+
+    // A combination that names no legs, and a leg this client cannot state.
+    assert_eq!(
+        ClientCore::validate_combo_legs("BAG", 0).expect_err("no legs").code, 314,
+    );
+    let leg = crate::types::model::ComboLeg {
+        action: "SIDEWAYS".into(), ratio: 1, ..Default::default()
+    };
+    assert_eq!(ClientCore::validate_leg(0, &leg).expect_err("no such side").code, 313);
+
+    // A security type the account was not permitted at logon.
+    let permitted = std::collections::HashMap::from([
+        ("STK".to_string(), vec!["LMT".to_string()]),
+    ]);
+    assert_eq!(
+        ClientCore::refuse_unpermitted_sec_type(&permitted, "OPT")
+            .expect_err("not permitted").code,
+        203,
+    );
+
+    // A trigger method the venue does not carry, and a date it cannot read.
+    let mut triggered = priced("LMT");
+    triggered.trigger_method = 9;
+    assert_eq!(
+        ClientCore::validate_order(&triggered, "").expect_err("no such trigger").code, 146,
+    );
+    let mut dated = priced("LMT");
+    dated.tif = "GTD".into();
+    dated.good_till_date = "the day after tomorrow".into();
+    assert_eq!(
+        ClientCore::validate_order(&dated, "").expect_err("unreadable date").code, 334,
+    );
+
+    // And a request that is malformed with no number of its own keeps the
+    // general one, which is what makes the rest branchable.
+    let mut unpriced = priced("LMT");
+    unpriced.lmt_price = f64::NAN;
+    assert_eq!(
+        ClientCore::validate_order(&unpriced, "").expect_err("not a price").code,
+        Refusal::VALIDATION,
     );
 }

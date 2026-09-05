@@ -76,6 +76,37 @@ impl Refusal {
 /// under.
 pub const DUPLICATE_TICKER_ID: i32 = 102;
 
+/// The code a combination naming no legs is refused under.
+pub const COMBINATION_NEEDS_LEGS: i32 = 314;
+
+/// The code a combination leg this client cannot state is refused under.
+pub const COMBINATION_LEG_INVALID: i32 = 313;
+
+/// The code an order on a security type the account may not trade is refused
+/// under.
+pub const SECURITY_NOT_PERMITTED: i32 = 203;
+
+/// The code an order missing the price that triggers it is refused under.
+pub const TRIGGER_PRICE_MISSING: i32 = 403;
+
+/// The code an order stating a trigger method the venue does not carry is
+/// refused under.
+pub const TRIGGER_METHOD_INVALID: i32 = 146;
+
+/// The code a condition on an order that does not describe its contract is
+/// refused under.
+pub const CONDITION_CONTRACT_INCOMPLETE: i32 = 147;
+
+/// The code an unreadable good-till date is refused under.
+pub const GOOD_TILL_DATE_INVALID: i32 = 334;
+
+/// The code a change that would move an order to a type the change cannot
+/// restate is refused under.
+pub const CHANGE_CANNOT_CHANGE_TYPE: i32 = 329;
+
+/// The code a log level outside the range the client carries is refused under.
+pub const LOG_LEVEL_INVALID: i32 = 319;
+
 /// The code a placement under a number the venue has already worked an order
 /// under is refused under.
 ///

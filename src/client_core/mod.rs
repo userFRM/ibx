@@ -10,7 +10,11 @@
 // names, and used here for the same reason it was written.
 pub use crate::types::order_status::{is_open_or_reactivatable, is_open_status, order_status_str};
 use std::collections::{HashMap, HashSet};
-use crate::error_codes::{DUPLICATE_TICKER_ID, Refusal};
+use crate::error_codes::{
+    CHANGE_CANNOT_CHANGE_TYPE, COMBINATION_LEG_INVALID, COMBINATION_NEEDS_LEGS,
+    CONDITION_CONTRACT_INCOMPLETE, DUPLICATE_TICKER_ID, GOOD_TILL_DATE_INVALID, Refusal,
+    SECURITY_NOT_PERMITTED, TRIGGER_METHOD_INVALID, TRIGGER_PRICE_MISSING,
+};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
 use std::sync::LazyLock;
@@ -2577,7 +2581,7 @@ impl ClientCore {
     ///
     /// One place, so the two bindings cannot diverge on either the rule or the
     /// wording.
-    pub fn modify_refusal(&self, order_id: u64, incoming: &ApiOrder) -> Option<String> {
+    pub fn modify_refusal(&self, order_id: u64, incoming: &ApiOrder) -> Option<Refusal> {
         let tracked = self.tracked_order(order_id);
         // Whether the replace leaves the order the type it already is.
         let restating_itself = tracked
@@ -2591,19 +2595,24 @@ impl ClientCore {
             && let Some(tracked) = tracked.as_ref()
             && let Some(field) = Self::replace_cannot_state(tracked, incoming)
         {
-            return Some(format!(
+            // A field the replace has nowhere to put, on a type it can
+            // otherwise restate. The catalogue has no number for that, so it
+            // keeps the general one.
+            return Some(Refusal::validation(format!(
                 "{field} of a {} order cannot be modified: the replace does not carry it, \
                  and the venue would go on working the order as it was placed",
                 tracked.order_type,
-            ));
+            )));
         }
         let why = tracked
             .and_then(|tracked| Self::replace_cannot_restate(&tracked, restating_itself))
             .or_else(|| Self::replace_cannot_restate(incoming, restating_itself))?;
-        Some(format!(
+        // A change that would move the order to a type the replace cannot
+        // restate, which the catalogue names.
+        Some(Refusal::stated(CHANGE_CANNOT_CHANGE_TYPE, format!(
             "{why} cannot be modified: the replace does not carry the fields that \
              define it, and sending one would cancel the order"
-        ))
+        )))
     }
 
     /// The venue has taken the replacement outstanding on this order, so the
@@ -3595,7 +3604,7 @@ impl ClientCore {
 
     /// Pre-validate order fields that don't depend on instrument ID.
     /// Call this before `find_or_register_instrument` to fail fast.
-    pub fn validate_order(order: &ApiOrder, connected_account: &str) -> Result<(), String> {
+    pub fn validate_order(order: &ApiOrder, connected_account: &str) -> Result<(), Refusal> {
         order.side()?;
 
         // An execution condition names a symbol, an exchange and a security
@@ -3608,10 +3617,10 @@ impl ClientCore {
                     [("symbol", symbol), ("exchange", exchange), ("security type", sec_type)]
                 {
                     if value.trim().is_empty() {
-                        return Err(format!(
+                        return Err(Refusal::stated(CONDITION_CONTRACT_INCOMPLETE, format!(
                             "an execution condition needs a {what}; the venue refuses one \
                              that leaves any of symbol, exchange or security type out",
-                        ));
+                        )));
                     }
                 }
             }
@@ -3621,11 +3630,11 @@ impl ClientCore {
             if let crate::types::OrderCondition::Price { trigger_method, .. } = condition
                 && *trigger_method > 4
             {
-                return Err(format!(
+                return Err(Refusal::stated(TRIGGER_METHOD_INVALID, format!(
                     "a price condition's trigger method {trigger_method} is not one \
                      the venue carries on a condition: it is 0 to 4, and anything \
                      else would go out as a different trigger than the one stated",
-                ));
+                )));
             }
         }
 
@@ -3686,7 +3695,7 @@ impl ClientCore {
             return Err(format!(
                 "trailing_percent must be a finite, non-negative number, got {}",
                 order.trailing_percent
-            ));
+            ).into());
         }
         // The quantity reaches the wire as the decimal it was given, so a
         // fraction of a share is carried rather than refused. The bound is
@@ -3694,10 +3703,10 @@ impl ClientCore {
         // low digits are lost, and the order goes out for a size nobody
         // asked for rather than being refused.
         if !order.total_quantity.is_finite() {
-            return Err("total_quantity must be a finite number".to_string());
+            return Err("total_quantity must be a finite number".to_string().into());
         }
         if order.total_quantity > crate::types::MAX_EXACT_QTY_SHARES {
-            return Err(format!("total_quantity {} is too large", order.total_quantity));
+            return Err(format!("total_quantity {} is too large", order.total_quantity).into());
         }
         // Zero and negative go out as they were given. Both encode exactly —
         // tag 38 carries the sign and carries a zero — so the venue is asked
@@ -3705,7 +3714,7 @@ impl ClientCore {
         // caller reading that code was handed one this client made up for a
         // request the venue was never asked about.
         if order.parent_id < 0 {
-            return Err(format!("parent_id must not be negative, got {}", order.parent_id));
+            return Err(format!("parent_id must not be negative, got {}", order.parent_id).into());
         }
 
         // A time in force this client does not know becomes DAY, and a DAY
@@ -3721,7 +3730,7 @@ impl ClientCore {
                  sent as DAY and expire at the close.",
                 order.tif,
                 TIME_IN_FORCE.join(", "),
-            ));
+            ).into());
         }
 
         // An expiry this client cannot read used to be logged and dropped, and
@@ -3730,12 +3739,12 @@ impl ClientCore {
         if !order.good_till_date.is_empty()
             && let Err(e) = crate::protocol::datetime::parse_ib_expiry(&order.good_till_date)
         {
-            return Err(format!(
+            return Err(Refusal::stated(GOOD_TILL_DATE_INVALID, format!(
                 "good_till_date '{}' cannot be read: {e}. State it as \
                  `yyyyMMdd HH:mm:ss` with an optional zone, or `yyyyMMdd` for \
                  a date — sent unread, the order would carry no expiry.",
                 order.good_till_date,
-            ));
+            )));
         }
 
         // Everything this protocol has no field for. Each is documented on the
@@ -3767,7 +3776,7 @@ impl ClientCore {
                              to place the order without it.",
                             stringify!($field),
                         ),
-                    });
+                    }.into());
                 })+
             };
         }
@@ -3808,7 +3817,7 @@ impl ClientCore {
                  the start of a day — sent unread, the order would go live at \
                  once instead of waiting.",
                 order.good_after_time,
-            ));
+            ).into());
         }
 
         // A quantity or a slot stated as a negative number is not a smaller
@@ -3827,7 +3836,7 @@ impl ClientCore {
                     "{what} is {stated}, which is not a quantity. Sent, it goes \
                      out as none at all and the order does something other than \
                      what was asked.",
-                ));
+                ).into());
             }
         }
         // These two go out in a single byte, so a value above it is not a
@@ -3840,7 +3849,7 @@ impl ClientCore {
                 return Err(format!(
                     "{what} is {stated}, which does not fit the field it goes \
                      out in. Sent, it would arrive as a different value.",
-                ));
+                ).into());
             }
         }
         // A cash quantity is what to spend, so a negative one buys nothing: the
@@ -3850,7 +3859,7 @@ impl ClientCore {
                 "cash_qty is {}, which is not an amount to spend. Sent, it is \
                  omitted and the order goes out sized by its quantity instead.",
                 order.cash_qty,
-            ));
+            ).into());
         }
         // Both halves or neither: a tier named with nothing against it is not
         // an arrangement, and the encoder writes neither part rather than half.
@@ -3859,7 +3868,8 @@ impl ClientCore {
                 "a soft-dollar arrangement is a tier and what it is worth. \
                  Stated with one of the two, neither goes out and the \
                  commission goes wherever the account's default sends it."
-                    .to_string(),
+                    .to_string()
+                    .into(),
             );
         }
         // These carry a sentinel for "not stated", so only a value that is
@@ -3873,7 +3883,7 @@ impl ClientCore {
                 return Err(format!(
                     "{what} is {stated}, which is not a quantity. Sent, it goes \
                      out as none at all. Leave it at its default to state none.",
-                ));
+                ).into());
             }
         }
 
@@ -3882,12 +3892,12 @@ impl ClientCore {
         // there the same way, but a value outside the set is a caller's
         // mistake and is reported rather than silently changed.
         if !matches!(order.trigger_method, 0..=4 | 7 | 8) {
-            return Err(format!(
+            return Err(Refusal::stated(TRIGGER_METHOD_INVALID, format!(
                 "trigger_method {} is not one this venue carries. It is 0 to 4, \
                  7 or 8 — anything else becomes 0, which is the default trigger \
                  and not the one asked for.",
                 order.trigger_method,
-            ));
+            )));
         }
         if order.oca_type != 0 && !matches!(order.oca_type, 1..=4) {
             return Err(format!(
@@ -3896,7 +3906,7 @@ impl ClientCore {
                  group cancels under the venue's default rather than the rule \
                  asked for.",
                 order.oca_type,
-            ));
+            ).into());
         }
 
         // A hedge is stated as a kind and a parameter that goes with it. A
@@ -3915,7 +3925,7 @@ impl ClientCore {
                      sent unhedged.",
                     order.hedge_type,
                     HEDGE.join(", "),
-                ));
+                ).into());
             }
             // Only these two kinds are struck at a number. Delta and FX take
             // no parameter, so one stated with them is not read.
@@ -3928,7 +3938,7 @@ impl ClientCore {
                      sent as zero and dropped, leaving the order hedged \
                      against nothing.",
                     order.hedge_type, order.hedge_param,
-                ));
+                ).into());
             }
         }
 
@@ -3947,7 +3957,7 @@ impl ClientCore {
                  would fill on the connected account {:?} instead, and the \
                  open-order snapshot would still report {:?}",
                 order.account, connected_account, order.account,
-            ));
+            ).into());
         }
 
 
@@ -3971,7 +3981,7 @@ impl ClientCore {
                      states order_type '{}'. Sent as it stands the venue would \
                      receive a limit at {}, which is not the order described.",
                     order.algo_strategy, order.order_type, order.lmt_price,
-                ));
+                ).into());
             }
             return Ok(());
         }
@@ -3986,7 +3996,7 @@ impl ClientCore {
             | "MIDPX" | "MIDPRICE"
             | "SNAP MKT" | "SNAP MID" | "SNAP MIDPT" | "SNAP PRI" | "SNAP PRIM"
             | "PEG BENCH" | "PEGBENCH" | "BOX TOP" => {}
-            _ => return Err(format!("Unsupported order type: '{}'", order.order_type)),
+            _ => return Err(format!("Unsupported order type: '{}'", order.order_type).into()),
         }
         if order.what_if {
             return Ok(());
@@ -3996,36 +4006,38 @@ impl ClientCore {
         // trigger bugs.
         match order_type.as_str() {
             "STP" | "STP PRT" | "MIT" if order.aux_price == 0.0 => {
-                return Err(format!(
+                return Err(Refusal::stated(TRIGGER_PRICE_MISSING, format!(
                     "{} order requires aux_price (stop/trigger price) but got 0.0 — \
                      set aux_price to the desired trigger price, not lmt_price",
                     order.order_type
-                ));
+                )));
             }
             "STP LMT" | "LIT" if order.aux_price == 0.0 => {
-                return Err(format!(
+                return Err(Refusal::stated(TRIGGER_PRICE_MISSING, format!(
                     "{} order requires aux_price (stop/trigger price) but got 0.0",
                     order.order_type
-                ));
+                )));
             }
             "TRAIL" if order.trailing_percent == 0.0 && order.aux_price == 0.0 => {
-                return Err(
+                return Err(Refusal::stated(
+                    TRIGGER_PRICE_MISSING,
                     "TRAIL order requires either trailing_percent or aux_price (trail amount) \
-                     but both are 0.0".into()
-                );
+                     but both are 0.0",
+                ));
             }
             "TRAIL LIMIT" if order.aux_price == 0.0 => {
-                return Err(
-                    "TRAIL LIMIT order requires aux_price (trail amount) but got 0.0".into()
-                );
+                return Err(Refusal::stated(
+                    TRIGGER_PRICE_MISSING,
+                    "TRAIL LIMIT order requires aux_price (trail amount) but got 0.0",
+                ));
             }
             // This type's wire shape has one price and no second tag for it
             // to move to, so an order sent without one is malformed rather
             // than refused by the venue under a code a caller could expect.
             "PEG BEST" if order.lmt_price == 0.0 => {
-                return Err(
-                    "PEG BEST order requires lmt_price (the order's price) but got 0.0".into()
-                );
+                return Err(Refusal::validation(
+                    "PEG BEST order requires lmt_price (the order's price) but got 0.0",
+                ));
             }
             _ => {}
         }
@@ -4158,14 +4170,17 @@ impl ClientCore {
     /// A combination states its legs on the order, so an order for one is
     /// placeable. What is refused is a combination that names none: the venue
     /// would be given a security type with nothing to build from.
-    pub fn validate_combo_legs(sec_type: &str, leg_count: usize) -> Result<(), String> {
+    pub fn validate_combo_legs(sec_type: &str, leg_count: usize) -> Result<(), Refusal> {
         let names_a_combination = sec_type.eq_ignore_ascii_case("BAG")
             || sec_type.eq_ignore_ascii_case("COMBO");
         if leg_count > 0 || !names_a_combination {
             return Ok(());
         }
-        Err("a combination order has no legs: state them on the contract, \
-             or use the security type of the thing you mean to trade".to_string())
+        Err(Refusal::stated(
+            COMBINATION_NEEDS_LEGS,
+            "a combination order has no legs: state them on the contract, \
+             or use the security type of the thing you mean to trade",
+        ))
     }
 
     /// What each leg of a combination states, before any of it is converted.
@@ -4176,29 +4191,29 @@ impl ClientCore {
     /// a leg trading the other way, in no size, or borrowing from somewhere
     /// nobody named —
     /// against the rest of a combination that is priced as one thing.
-    pub fn validate_leg(at: usize, leg: &crate::types::model::ComboLeg) -> Result<(), String> {
+    pub fn validate_leg(at: usize, leg: &crate::types::model::ComboLeg) -> Result<(), Refusal> {
         if !leg.action.eq_ignore_ascii_case("BUY") && !leg.action.eq_ignore_ascii_case("SELL") {
-            return Err(format!(
+            return Err(Refusal::stated(COMBINATION_LEG_INVALID, format!(
                 "leg {at} states side {:?}, which is BUY or SELL. Anything else \
                  is sent as a buy, and the combination trades the wrong way \
                  round on that leg.",
                 leg.action,
-            ));
+            )));
         }
         if leg.ratio <= 0 {
-            return Err(format!(
+            return Err(Refusal::stated(COMBINATION_LEG_INVALID, format!(
                 "leg {at} states a ratio of {}, which is not a quantity. Sent, \
                  the leg goes out in no size at all.",
                 leg.ratio,
-            ));
+            )));
         }
         for (what, stated) in [("openClose", leg.open_close), ("shortSaleSlot", leg.shorting_policy)] {
             if !(0..=255).contains(&stated) {
-                return Err(format!(
+                return Err(Refusal::stated(COMBINATION_LEG_INVALID, format!(
                     "leg {at} states {what} as {stated}, which does not fit the \
                      field it goes out in — sent, it would arrive as a \
                      different value.",
-                ));
+                )));
             }
         }
         Ok(())
@@ -4221,7 +4236,7 @@ impl ClientCore {
     pub fn refuse_unpermitted_sec_type(
         permitted: &std::collections::HashMap<String, Vec<String>>,
         sec_type: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         if sec_type.is_empty() || permitted.is_empty() {
             return Ok(());
         }
@@ -4232,10 +4247,10 @@ impl ClientCore {
         }
         let mut named: Vec<&str> = permitted.keys().map(String::as_str).collect();
         named.sort_unstable();
-        Err(format!(
+        Err(Refusal::stated(SECURITY_NOT_PERMITTED, format!(
             "the account is not permitted to trade {ty}. It is permitted: {}",
             named.join(", "),
-        ))
+        )))
     }
 
     /// An order states where it is to be filled.

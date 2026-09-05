@@ -160,7 +160,7 @@ class TestAuxPriceValidation:
         client.place_order(1, make_spy(), order)
         reason, code = refusal(wrapper)
         assert "aux_price" in reason
-        assert code == 321
+        assert code == 403, "the catalogue names a missing trigger price"
 
     def test_stp_lmt_order_zero_aux_price_rejected(self, local_client):
         """STP LMT with only lmt_price must raise."""
@@ -174,7 +174,7 @@ class TestAuxPriceValidation:
         client.place_order(2, make_spy(), order)
         reason, code = refusal(wrapper)
         assert "aux_price" in reason
-        assert code == 321
+        assert code == 403, "the catalogue names a missing trigger price"
 
     def test_trail_order_zero_both_rejected(self, local_client):
         """TRAIL with neither trailing_percent nor aux_price must raise."""
@@ -187,7 +187,7 @@ class TestAuxPriceValidation:
         client.place_order(3, make_spy(), order)
         reason, code = refusal(wrapper)
         assert "trailing_percent" in reason
-        assert code == 321
+        assert code == 403, "the catalogue names a missing trigger price"
 
     def test_trail_limit_order_zero_aux_price_rejected(self, local_client):
         """TRAIL LIMIT with only lmt_price must raise."""
@@ -200,7 +200,7 @@ class TestAuxPriceValidation:
         client.place_order(4, make_spy(), order)
         reason, code = refusal(wrapper)
         assert "aux_price" in reason
-        assert code == 321
+        assert code == 403, "the catalogue names a missing trigger price"
 
     def test_mit_order_zero_aux_price_rejected(self, local_client):
         """MIT with no aux_price must raise."""
@@ -212,7 +212,7 @@ class TestAuxPriceValidation:
         client.place_order(5, make_spy(), order)
         reason, code = refusal(wrapper)
         assert "aux_price" in reason
-        assert code == 321
+        assert code == 403, "the catalogue names a missing trigger price"
 
     def test_lit_order_zero_aux_price_rejected(self, local_client):
         """LIT with only lmt_price must raise."""
@@ -225,7 +225,7 @@ class TestAuxPriceValidation:
         client.place_order(6, make_spy(), order)
         reason, code = refusal(wrapper)
         assert "aux_price" in reason
-        assert code == 321
+        assert code == 403, "the catalogue names a missing trigger price"
 
     def test_stp_prt_order_zero_aux_price_rejected(self, local_client):
         """STP PRT with no aux_price must raise."""
@@ -237,7 +237,7 @@ class TestAuxPriceValidation:
         client.place_order(7, make_spy(), order)
         reason, code = refusal(wrapper)
         assert "aux_price" in reason
-        assert code == 321
+        assert code == 403, "the catalogue names a missing trigger price"
 
 
 # ═══════════════════════════════════════════════════════════════════

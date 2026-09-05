@@ -3,7 +3,7 @@
 //! Methods that are not yet supported log a warning.
 
 use crate::api::wrapper::Wrapper;
-use crate::error_codes::Refusal;
+use crate::error_codes::{LOG_LEVEL_INVALID, Refusal};
 
 use super::EClient;
 
@@ -412,7 +412,15 @@ impl EClient {
             3 => "info",
             4 => "debug",
             5 => "trace",
-            _ => "warn",
+            // Refused rather than substituted. Reading a level nobody asked
+            // for as `warn` told the caller nothing and left them believing
+            // they had set the level they named.
+            _ => {
+                return self.report_reason(crate::bridge::ReferenceState::NO_REQUEST as i64, &Refusal::stated(
+                    LOG_LEVEL_INVALID,
+                    format!("set_server_log_level: {log_level} is not a log level; it is 1 to 5"),
+                ));
+            }
         };
         log::info!("set_server_log_level: {level} (level {log_level})");
     }

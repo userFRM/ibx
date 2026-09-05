@@ -21,12 +21,11 @@ impl EClient {
     /// here is not permission: when the venue stated no permissions, there is
     /// nothing to enforce and the order goes.
     fn check_sec_type_permitted(&self, sec_type: &str) -> Result<(), Refusal> {
-        // A validator's own words, under the number a request the client will
-        // not send is reported with.
+        // The validator's own words under its own number, not flattened onto
+        // the general one: a caller branches on which refusal it got.
         ClientCore::refuse_unpermitted_sec_type(
             &self.shared.reference.order_permissions(), sec_type,
         )
-        .map_err(Refusal::validation)
     }
 
     /// Security type → the order types the venue permits for it, as stated at
@@ -255,7 +254,7 @@ impl EClient {
             // An order defined by anything else cannot survive one, so refuse
             // rather than send a message that destroys it.
             if let Some(refusal) = self.core.modify_refusal(oid, order) {
-                return Err(refusal.into());
+                return Err(refusal);
             }
             let price = crate::types::price_from_f64(order.lmt_price);
             let qty = crate::types::qty_from_f64(order.total_quantity);

@@ -3879,7 +3879,7 @@ fn validate_order_adaptive_rejects_unknown_priority() {
         ..Default::default()
     };
     let err = crate::client_core::ClientCore::validate_order(&order, "DU123").unwrap_err();
-    assert!(err.contains("adaptivePriority"), "got: {err}");
+    assert!(err.message.contains("adaptivePriority"), "got: {err}");
 }
 
 #[test]
