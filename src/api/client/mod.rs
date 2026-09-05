@@ -604,7 +604,15 @@ impl EClient {
             shared.clone(), event_tx, farm_conn, ccp_conn, hmds_conn, secdef_conn, config.core_id,
             caller_auth(config, &gw_config),
         );
-        hot_loop.set_reconnect_config(config.reconnect.clone());
+        // The switch a gateway carries turns recovery off wherever it is
+        // stated — in code, or in the environment a program migrating from a
+        // gateway already sets. What is left of `reconnect` still stands: it
+        // says how hard to try, and this says whether to.
+        let mut recovery = config.reconnect.clone();
+        if !gw_config.settings.reconnect_on_socket_err {
+            recovery.policy = crate::reliability::ReconnectPolicy::Manual;
+        }
+        hot_loop.set_reconnect_config(recovery);
 
         let handle = thread::Builder::new()
             .name("ib-engine-hotloop".into())

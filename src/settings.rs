@@ -79,6 +79,15 @@ pub struct GatewaySettings {
     /// spelling. The gateway does, so a program written against it compares
     /// against that spelling.
     pub island_for_nasdaq: Option<bool>,
+    /// Whether a session recovers on its own when a connection goes away.
+    ///
+    /// On by default, which is what a process that must keep running wants.
+    /// Turned off, the loss is reported and nothing is done about it, and the
+    /// caller decides whether and when to open a session again. A Rust caller
+    /// states the rest of recovery — how many attempts, for how long — on
+    /// [`ReconnectConfig`](crate::reliability::ReconnectConfig); this is the
+    /// switch, and it is the one both surfaces have.
+    pub reconnect_on_socket_err: Option<bool>,
 }
 
 /// Which executions a session asks for when it opens.
@@ -109,7 +118,6 @@ pub const UNAVAILABLE: &[(&str, &str)] = &[
     ("RemotePortOrderRouting", "one port, fixed by the protocol: a redirect naming another is accepted at the socket and then reset, and the session only completes on the fixed one"),
     ("useSsl", "no switch: the login and the order connection are TLS with no plaintext path, and a farm connection is opened the one way the venue answers — a key exchange, an enciphered logon, then messages signed rather than enciphered"),
     ("UseSSL", "no switch: the login and the order connection are TLS with no plaintext path, and a farm connection is opened the one way the venue answers — a key exchange, an enciphered logon, then messages signed rather than enciphered"),
-    ("reconnectOnSocketErr", "recovery is on unless a session turns it off, which is `reconnect` on the Rust client config, where ReconnectPolicy::Manual reports the loss and waits instead; a Python session always recovers"),
     ("Select_account_type", "nothing here selects one: the login decides, the venue names the accounts it holds at logon, and whether a session is a paper one is stated as `paper` on the client config, or connect(paper=True)"),
     ("MainWindow.Width", "no window"),
     ("MainWindow.Height", "no window"),
@@ -147,6 +155,8 @@ pub struct SessionSettings {
     /// Whether a US stock on Nasdaq is named by the older spelling. Takes the
     /// venue's grant as well as this setting.
     pub island_for_nasdaq: bool,
+    /// Whether this session recovers on its own when a connection goes away.
+    pub reconnect_on_socket_err: bool,
 }
 
 impl Default for SessionSettings {
@@ -241,6 +251,11 @@ impl GatewaySettings {
                     ["0", "false", "no"].iter().any(|off| stated.eq_ignore_ascii_case(off))
                 })
             }),
+            reconnect_on_socket_err: self.reconnect_on_socket_err.unwrap_or_else(|| {
+                !std::env::var("IBX_RECONNECT_ON_SOCKET_ERR").is_ok_and(|stated| {
+                    ["0", "false", "no"].iter().any(|off| stated.eq_ignore_ascii_case(off))
+                })
+            }),
         }
     }
 
@@ -249,6 +264,37 @@ impl GatewaySettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Recovery is on unless the switch a gateway carries says otherwise.
+    ///
+    /// The switch is what a program migrating from a gateway looks for, and
+    /// until it was a setting here the Python surface had no way to say it at
+    /// all: a session recovered on its own whatever the caller wanted.
+    #[test]
+    fn the_recovery_switch_is_on_unless_it_is_turned_off() {
+        assert!(
+            GatewaySettings::default().resolve().reconnect_on_socket_err,
+            "the documented default",
+        );
+        for off in ["0", "false", "False", "no", "NO"] {
+            let stated = GatewaySettings {
+                reconnect_on_socket_err: Some(
+                    !["0", "false", "no"].iter().any(|s| off.eq_ignore_ascii_case(s)),
+                ),
+                ..Default::default()
+            };
+            assert!(
+                !stated.resolve().reconnect_on_socket_err,
+                "however {off} is spelled",
+            );
+        }
+        assert!(
+            GatewaySettings { reconnect_on_socket_err: Some(true), ..Default::default() }
+                .resolve()
+                .reconnect_on_socket_err,
+            "and a session that states it on is on",
+        );
+    }
 
     /// A setting stated on the client is what the session runs under.
     #[test]
@@ -364,6 +410,7 @@ mod tests {
             log_queue: Some(4096),
             execution_reports: Some(ExecutionReportScope::Today),
             island_for_nasdaq: Some(false),
+            reconnect_on_socket_err: Some(false),
         };
         let resolved = all.resolve();
         assert_eq!(resolved.timezone, "t");
@@ -377,6 +424,7 @@ mod tests {
         assert_eq!(resolved.registration_timeout, std::time::Duration::from_millis(2));
         assert_eq!(resolved.execution_reports, ExecutionReportScope::Today);
         assert!(!resolved.island_for_nasdaq);
+        assert!(!resolved.reconnect_on_socket_err);
         // The three log settings are process-scoped by nature — one logger per
         // process — so they are not on the resolved form. They reach the
         // logger instead, and are checked here for the same reason: stated
@@ -393,7 +441,7 @@ mod tests {
             timezone: _, locale: _, build: _, version: _, encoded: _, hardware_id: _,
             market_data_host: _, port: _, registration_timeout_ms: _,
             log_level: _, log_dir: _, log_queue: _,
-            execution_reports: _, island_for_nasdaq: _,
+            execution_reports: _, island_for_nasdaq: _, reconnect_on_socket_err: _,
         } = all;
     }
 }

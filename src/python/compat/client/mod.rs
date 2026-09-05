@@ -532,7 +532,7 @@ impl EClient {
         let connect_password = config.password.clone();
         let connect_paper = config.paper;
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
-        let (hot_loop, control_tx) = crate::engine::hot_loop::HotLoop::for_session(
+        let (mut hot_loop, control_tx) = crate::engine::hot_loop::HotLoop::for_session(
             gw,
             shared.clone(),
             // This session's own count of what it discarded, so a program with
@@ -560,6 +560,14 @@ impl EClient {
                 ib_key_token_sub_type: config.ib_key_token_sub_type.clone(),
             },
         );
+        // The recovery switch a gateway carries. Never applied here, a Python
+        // session recovered on its own whatever the setting said, so a program
+        // that would rather fail loudly than carry on quietly could not say so
+        // on this surface at all.
+        if !config.settings.reconnect_on_socket_err {
+            hot_loop.set_reconnect_config(crate::reliability::ReconnectConfig::manual());
+        }
+
         let handle = thread::Builder::new()
             .name("ib-engine-hotloop".into())
             .spawn(move || {

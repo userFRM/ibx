@@ -73,6 +73,14 @@ pub(crate) fn settings_from(
                     !["0", "false", "no"].iter().any(|off| value.eq_ignore_ascii_case(off)),
                 );
             }
+            // The switch a gateway carries, under its name there and the spelling
+            // the rest of this map uses. Off means the loss is reported and
+            // nothing is done about it.
+            "reconnect_on_socket_err" | "reconnectOnSocketErr" => {
+                settings.reconnect_on_socket_err = Some(
+                    !["0", "false", "no"].iter().any(|off| value.eq_ignore_ascii_case(off)),
+                );
+            }
             other => return Err(format!("no such setting: {other}")),
         }
     }
@@ -99,4 +107,27 @@ fn ibx(m: &Bound<'_, PyModule>) -> PyResult<()> {
     }
     compat::register(m)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod settings_from_tests {
+    /// The switch a gateway carries is honoured under the name it has there.
+    ///
+    /// A program migrating from a gateway carries the gateway's spelling, and
+    /// a name this map does not know is refused rather than dropped — so
+    /// without both spellings the caller's connect line simply fails.
+    #[test]
+    fn the_recovery_switch_is_taken_under_either_spelling() {
+        for name in ["reconnectOnSocketErr", "reconnect_on_socket_err"] {
+            let stated = std::collections::HashMap::from([
+                (name.to_string(), "false".to_string()),
+            ]);
+            let settled = super::settings_from(stated).expect("the name is known");
+            assert!(!settled.reconnect_on_socket_err, "stated off under {name}");
+        }
+        let on = super::settings_from(std::collections::HashMap::from([
+            ("reconnectOnSocketErr".to_string(), "true".to_string()),
+        ])).expect("the name is known");
+        assert!(on.reconnect_on_socket_err, "and on when it says so");
+    }
 }

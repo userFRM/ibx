@@ -59,6 +59,10 @@ _SETTINGS: dict[str, tuple[str, str]] = {
         "IBX_ISLAND_FOR_NASDAQ",
         "whether a US stock on Nasdaq is handed back under the older spelling",
     ),
+    "reconnect_on_socket_err": (
+        "IBX_RECONNECT_ON_SOCKET_ERR",
+        "whether a session recovers on its own when a connection goes away",
+    ),
 }
 
 #: Gateway settings that are not settings here, and what to do instead. Named
@@ -79,7 +83,6 @@ UNAVAILABLE: dict[str, str] = {
     "RemotePortOrderRouting": "one port, fixed by the protocol: a redirect naming another is accepted at the socket and then reset, and the session only completes on the fixed one",
     "useSsl": "no switch: the login and the order connection are TLS with no plaintext path, and a farm connection is opened the one way the venue answers — a key exchange, an enciphered logon, then messages signed rather than enciphered",
     "UseSSL": "no switch: the login and the order connection are TLS with no plaintext path, and a farm connection is opened the one way the venue answers — a key exchange, an enciphered logon, then messages signed rather than enciphered",
-    "reconnectOnSocketErr": "recovery is on unless a session turns it off, which is `reconnect` on the Rust client config, where ReconnectPolicy::Manual reports the loss and waits instead; a Python session always recovers",
     "Select_account_type": "nothing here selects one: the login decides, the venue names the accounts it holds at logon, and whether a session is a paper one is stated as `paper` on the client config, or connect(paper=True)",
     "MainWindow.Width": "no window",
     "MainWindow.Height": "no window",

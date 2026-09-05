@@ -49,7 +49,7 @@ _A_GATEWAY_CARRIES = {
     "Local_FIX_Server_Settings": None,
     "useSsl": None,
     "UseSSL": None,
-    "reconnectOnSocketErr": None,
+    "reconnectOnSocketErr": "reconnect_on_socket_err",
     "RemoteHostOrderRouting": None,
     "RemotePortOrderRouting": None,
     "Select_account_type": None,
