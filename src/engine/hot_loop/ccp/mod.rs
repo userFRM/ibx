@@ -356,11 +356,6 @@ pub(crate) struct CcpState {
     /// the whole set — a wholesale clear would let a post-reconnect server
     /// replay of a recently-seen ExecID double-count a fill.
     pub(crate) exec_id_order: VecDeque<String>,
-    /// Live news subscriptions: instrument, request id, the providers the
-    /// caller asked for, and the contract. The providers are kept because a
-    /// reconnect has to send the same request again, and the request is the
-    /// only place they appear; the contract because the withdrawal names it.
-    pub(crate) news_subscriptions: Vec<(InstrumentId, u32, String, i64, String)>,
     pub(crate) disconnected: bool,
     /// When to account for orders the reconnect did not explain.
     ///
@@ -511,7 +506,6 @@ impl CcpState {
         Self {
             seen_exec_ids: HashSet::with_capacity(256),
             exec_id_order: VecDeque::with_capacity(256),
-            news_subscriptions: Vec::new(),
             disconnected: false,
             recovery_sweep_at: None,
             hydrated_any: false,
@@ -606,7 +600,30 @@ impl CcpState {
             "3" => {
                 let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                 let ref_tag = parsed.get(&371).map(|s| s.as_str()).unwrap_or("?");
-                log::warn!("SessionReject: reason='{reason}' refTag={ref_tag}");
+                let stated = parsed.get(&320).and_then(|s| s.parse::<u32>().ok());
+                log::warn!("SessionReject: reason='{reason}' refTag={ref_tag} request={stated:?}");
+                // A refusal of an option-chain request. The venue rejects one
+                // asked for an underlying it cannot number with "Unknown
+                // contract", naming the request; attributed to nothing, the
+                // caller waited out the chain's deadline for an answer that
+                // had arrived fifteen milliseconds after the request.
+                let refused_chain = stated
+                    .and_then(|rid| self.pending_option_params.iter().position(|(pid, ..)| *pid == rid))
+                    .or_else(|| {
+                        (stated.is_none()
+                            && self.pending_option_params.len() == 1
+                            && self.pending_secdef.is_empty())
+                        .then_some(0)
+                    });
+                if let Some(at) = refused_chain {
+                    let (req_id, symbol, _, _) = self.pending_option_params.remove(at);
+                    log::warn!("Option chain request req_id={req_id} symbol={symbol} rejected: {reason}");
+                    shared.reference.push_historical_error(
+                        req_id, crate::error_codes::Refusal::NO_DEFINITION,
+                        format!("option chain request rejected: {reason}"),
+                    );
+                    return;
+                }
                 // The venue names the request it is refusing, on tag 320 —
                 // the same tag its answers are matched on below. Attributed
                 // by count instead, only a lone request was ever told: five
@@ -1735,42 +1752,6 @@ impl CcpState {
         }
     }
 
-    pub(crate) fn send_news_subscribe(
-        &mut self,
-        con_id: i64,
-        instrument: InstrumentId,
-        sec_type: &str,
-        providers: &str,
-        req_id: u32,
-        ccp_conn: &mut Option<Connection>,
-        hb: &mut HeartbeatState,
-    ) {
-        self.news_subscriptions.push((instrument, req_id, providers.to_string(), con_id, sec_type.to_string()));
-        if let Some(conn) = ccp_conn.as_mut() {
-            let req_id_str = req_id.to_string();
-            let con_id_str = (con_id as u32).to_string();
-            let stated_type = crate::control::contracts::sec_type_to_fix(sec_type).to_string();
-            let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
-                (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                (fix::TAG_SENDING_TIME, &ts),
-                (263, "1"),
-                (146, "1"),
-                (262, &req_id_str),
-                (6008, &con_id_str),
-                (207, "NEWS"),
-                // What the contract is, as the venue states it. Stamped as a
-                // US stock, headlines for a future or an index went out
-                // describing something else.
-                (167, &stated_type),
-                (264, "292"),
-                (6472, providers),
-            ]);
-            hb.last_ccp_sent = Instant::now();
-            log::info!("Sent news subscribe: con_id={con_id} req_id={req_id} providers={providers}");
-        }
-    }
-
     /// Say goodbye before going.
     ///
     /// A session dropped without this is one the venue has to time out, and
@@ -1795,58 +1776,6 @@ impl CcpState {
             hb.last_ccp_sent = Instant::now();
             log::info!("Logout sent");
         }
-    }
-
-    /// Withdraw the news subscription on `instrument`, and say which request
-    /// it was asked under, so the market-data side can forget its tag.
-    pub(crate) fn send_news_unsubscribe(
-        &mut self,
-        instrument: InstrumentId,
-        ccp_conn: &mut Option<Connection>,
-        hb: &mut HeartbeatState,
-    ) -> Option<u32> {
-        let pos = self.news_subscriptions.iter().position(|(id, ..)| *id == instrument)?;
-        let (_, req_id, _, con_id, sec_type) = self.news_subscriptions.remove(pos);
-        if let Some(conn) = ccp_conn.as_mut() {
-            let req_id_str = req_id.to_string();
-            let con_id_str = (con_id as u32).to_string();
-            // The type it was subscribed as, not a stock's: stamped with the
-            // stock's type whatever was subscribed, the withdrawal of a
-            // future's or an index's news named an entry the venue never had,
-            // and the stream went on for the session.
-            let stated_type = crate::control::contracts::sec_type_to_fix(&sec_type).to_string();
-            // Withdrawn the way it was asked for: the venue is told which tick,
-            // on which contract, not merely which request. The option model
-            // beside it is already withdrawn that way, and the protocol
-            // writes the same group on a withdrawal as on a subscription: the
-            // action, then the number of entries, then each entry's request id,
-            // contract, venue and type — the entry is written the same way
-            // whichever action it belongs to.
-            let sent = conn.send_fix(&[
-                (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
-                (263, "2"),
-                (146, "1"),
-                (262, &req_id_str),
-                (6008, &con_id_str),
-                (207, "NEWS"),
-                (167, &stated_type),
-                (264, "292"),
-            ]);
-            hb.last_ccp_sent = Instant::now();
-            match sent {
-                Ok(()) => log::info!(
-                    "Sent news unsubscribe: instrument={instrument:?} req_id={req_id}",
-                ),
-                // Reported as what it is. Logged as sent, a withdrawal that
-                // never left reads as one the venue took, and headlines keep
-                // arriving for a subscription no caller is reading.
-                Err(e) => log::warn!(
-                    "News unsubscribe for instrument={instrument:?} req_id={req_id} was not \
-                     sent: {e}; the venue goes on serving it until the session ends",
-                ),
-            }
-        }
-        Some(req_id)
     }
 
     pub(crate) fn send_secdef_request(&mut self, req_id: u32, con_id: i64, ccp_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
@@ -2592,7 +2521,6 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
         account_id: &str,
-        market: &crate::engine::market_state::MarketState,
         shared: &SharedState,
     ) {
         *ccp_conn = Some(conn);
@@ -2653,28 +2581,6 @@ impl CcpState {
             log::info!("CCP reconnected, sent account/position re-subscribe");
         }
 
-        // News streams belonged to the dead session and are not part of what
-        // the server pushes back. Left alone they went quiet for good, with
-        // the connection reporting healthy the whole time.
-        let stale = std::mem::take(&mut self.news_subscriptions);
-        let wanted = stale.len();
-        for (instrument, req_id, providers, _, sec_type) in stale {
-            match market.con_id(instrument) {
-                Some(con_id) => self.send_news_subscribe(
-                    con_id, instrument, &sec_type, &providers, req_id, ccp_conn, hb,
-                ),
-                None => log::warn!(
-                    "CCP reconnect: instrument {instrument} has no contract id, \
-                     leaving its news stream unsubscribed",
-                ),
-            }
-        }
-        if wanted > 0 {
-            log::info!(
-                "CCP reconnected, re-subscribed {}/{} news streams",
-                self.news_subscriptions.len(), wanted,
-            );
-        }
     }
 }
 

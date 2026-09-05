@@ -411,6 +411,14 @@ fn read_record(
     }
 }
 
+/// A quote frame the venue sent on the tenth of August 2026, on a currency
+/// pair that was 1.15510 bid at 1.15515: five records under one stream number.
+#[cfg(test)]
+pub(crate) const A_CAPTURED_QUOTE_FRAME: &str = "383d4f01393d303130380133353d450102b08106536549c40134be0134bf80\
+    0e1765f03d04c08106536549c48080800f4e73b03d04c08106536549c48080\
+    800e1765f03d04c08106536549c48081800e1765f00d5a61b08106536549c4\
+    8080800d7923d00d5a61b001383334393d363932384333303801";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,10 +496,7 @@ mod tests {
     /// the tenth of August 2026, when the market was 1.15510 bid at 1.15515.
     #[test]
     fn a_frame_the_venue_actually_sent_decodes_to_the_market_that_was_there() {
-        let message = "383d4f01393d303130380133353d450102b08106536549c40134be0134bf80\
-                       0e1765f03d04c08106536549c48080800f4e73b03d04c08106536549c48080\
-                       800e1765f03d04c08106536549c48081800e1765f00d5a61b08106536549c4\
-                       8080800d7923d00d5a61b001383334393d363932384333303801";
+        let message = A_CAPTURED_QUOTE_FRAME;
         let bytes: Vec<u8> = (0..message.len() / 2)
             .map(|i| u8::from_str_radix(&message[i * 2..i * 2 + 2], 16).unwrap())
             .collect();

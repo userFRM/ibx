@@ -634,7 +634,7 @@ impl HotLoop {
         if self.hmds.tbt_subscriptions.iter().any(|sub| sub.instrument == instrument) {
             return;
         }
-        if self.ccp.news_subscriptions.iter().any(|(id, ..)| *id == instrument) {
+        if self.farm.news_subscriptions.iter().any(|(id, ..)| *id == instrument) {
             return;
         }
         // A subscription waiting on the lookup that will name its contract is
@@ -1224,7 +1224,7 @@ impl HotLoop {
                     // one reader that outlives the L1 request: ticker setup
                     // registers into the same map and news routes on it, so a
                     // live news subscription keeps them.
-                    if !self.ccp.news_subscriptions.iter().any(|(id, ..)| *id == instrument) {
+                    if !self.farm.news_subscriptions.iter().any(|(id, ..)| *id == instrument) {
                         self.context.market.clear_server_tags_for(instrument);
                     }
                     self.try_reclaim_instrument(instrument);
@@ -1296,17 +1296,13 @@ impl HotLoop {
                         self.farm.next_md_req_id += 1;
                         // Recorded where the acknowledgement arrives, or the
                         // tag is never filed and no headline is delivered.
-                        self.farm.note_news_request(req_id, id);
-                        self.ccp.send_news_subscribe(
-                            con_id, id, &sec_type, &providers, req_id,
-                            &mut self.ccp_conn, &mut self.hb,
+                        self.farm.send_news_subscribe(
+                            con_id, id, &sec_type, &providers, req_id, &mut self.farm_conn, &mut self.hb,
                         );
                     }
                 }
                 ControlCommand::UnsubscribeNews { instrument } => {
-                    if let Some(req_id) = self.ccp.send_news_unsubscribe(instrument, &mut self.ccp_conn, &mut self.hb) {
-                        self.farm.forget_news(req_id, instrument);
-                    }
+                    self.farm.send_news_unsubscribe(instrument, &mut self.farm_conn, &mut self.hb);
                     self.try_reclaim_instrument(instrument);
                 }
                 ControlCommand::UpdateParam { key, value } => {
@@ -1899,10 +1895,10 @@ impl HotLoop {
                         );
                     }
                     // Unsubscribe all news subscriptions before stopping
-                    let news_instruments: Vec<InstrumentId> = self.ccp.news_subscriptions
+                    let news_instruments: Vec<InstrumentId> = self.farm.news_subscriptions
                         .iter().map(|(id, ..)| *id).collect();
                     for instrument in news_instruments {
-                        self.ccp.send_news_unsubscribe(instrument, &mut self.ccp_conn, &mut self.hb);
+                        self.farm.send_news_unsubscribe(instrument, &mut self.farm_conn, &mut self.hb);
                     }
                     // And whatever the drain above could not send is said
                     // rather than left in a buffer nothing will read again.
@@ -2281,7 +2277,7 @@ impl HotLoop {
             }
             auth.host = landed;
         }
-        self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id, &self.context.market, &self.shared);
+        self.ccp.reconnect(conn, &mut self.ccp_conn, &mut self.hb, &self.account_id, &self.shared);
     }
 
     /// Give up any transport that can no longer be written to, or whose
@@ -6129,7 +6125,7 @@ mod tests {
             mode_9887: 0,
             entries: vec![crate::engine::hot_loop::farm::MdReqEntry { req_id: 8, request_type: 442, venue: "BEST".into() }],
         }));
-        hl.ccp.news_subscriptions.push((id, 55, "BRFG".to_string(), 756733, "STK".to_string()));
+        hl.farm.news_subscriptions.push((id, 55, "BRFG".to_string(), 756733, "STK".to_string()));
 
         tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();
         hl.poll_once();
@@ -6391,6 +6387,51 @@ mod tests {
             "{told:?}",
         );
         assert_eq!(shared.reference.drain_contract_details_end(), [7], "and the request is ended");
+    }
+
+    /// A news subscription is a market-data request and goes out on the
+    /// market-data connection, and is withdrawn there. Sent on the trading
+    /// connection, the venue refused it as a message that connection does not
+    /// carry, so no headline could ever arrive; and the withdrawal, lacking
+    /// the time it was sent, was refused too, and the venue closed the trading
+    /// connection behind it.
+    #[test]
+    fn a_news_subscription_goes_out_on_the_market_data_connection() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (conn, peer) = crate::protocol::connection::Connection::for_test();
+        let mut peer = crate::protocol::connection::Connection::new_raw(peer).unwrap();
+        hl.farm_conn = Some(conn);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(ControlCommand::SubscribeNews {
+            con_id: 793356217, symbol: "MES".into(), sec_type: "FUT".into(),
+            providers: "BRFG".into(), reply_tx: Some(reply_tx),
+        })
+        .unwrap();
+        hl.poll_control_commands();
+        let id = reply_rx.try_recv().expect("registered").expect("a slot");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let sent = farm::tests::drain_inner(&mut peer);
+        let text = sent.iter().map(|f| String::from_utf8_lossy(f).replace('\u{1}', "|")).collect::<Vec<_>>().join("\n");
+        for field in ["|263=1|", "|6008=793356217|", "|207=NEWS|", "|167=FUT|", "|264=292|", "|6472=BRFG|"] {
+            assert!(text.contains(field), "the subscription states {field}: {text:?}");
+        }
+        assert!(
+            hl.farm.generic_tick_reqs.iter().any(|(_, tick)| *tick == 292),
+            "and its tag is filed for the acknowledgement",
+        );
+
+        tx.send(ControlCommand::UnsubscribeNews { instrument: id }).unwrap();
+        hl.poll_control_commands();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let sent = farm::tests::drain_inner(&mut peer);
+        let text = sent.iter().map(|f| String::from_utf8_lossy(f).replace('\u{1}', "|")).collect::<Vec<_>>().join("\n");
+        for field in ["|263=2|", "|6008=793356217|", "|207=NEWS|", "|167=FUT|", "|264=292|"] {
+            assert!(text.contains(field), "the withdrawal states {field}: {text:?}");
+        }
+        assert!(!hl.farm.generic_tick_reqs.iter().any(|(_, tick)| *tick == 292), "and the tag is forgotten");
     }
 
     /// A tick stream asked for while the data connection is down is refused

@@ -1133,6 +1133,48 @@ mod withdrawing_one_stream_tests {
         assert!(hmds.tbt_withdrawn.contains(&41), "and its ticks are known as withdrawn");
         assert!(hmds.tbt_subscriptions.is_empty(), "nothing is reopened by the acknowledgement");
     }
+
+    /// The venue answers a second query on a contract and kind with the
+    /// number it gave the first, so two callers share one stream. Every
+    /// record reaches both, and the first withdrawal leaves the stream
+    /// running for the other: routed to whichever subscription came first,
+    /// the second caller heard nothing, and the first caller's withdrawal
+    /// stopped the stream the second was still reading.
+    #[test]
+    fn two_callers_sharing_the_venues_number_both_hear_it_and_the_last_to_leave_withdraws_it() {
+        let mut hmds = HmdsState::new();
+        let shared = crate::bridge::SharedState::new();
+        let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+        peer.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+        let mut conn = Some(conn);
+        let mut hb = HeartbeatState::new();
+        let hex = crate::protocol::tbt_stream::A_CAPTURED_QUOTE_FRAME;
+        let frame: Vec<u8> = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        let start = frame.windows(5).position(|w| w == b"35=E\x01").unwrap() + 5;
+        let end = frame.windows(6).position(|w| w == b"\x018349=").unwrap();
+        let number = crate::protocol::tbt_stream::frame_ticker_id(&frame[start..end])
+            .expect("the frame names its stream");
+        for caller in [1, 2] {
+            let mut sub = stream(caller, 7, TbtType::BidAsk);
+            sub.venue_id = number;
+            sub.min_tick = (0.00005 * crate::types::PRICE_SCALE as f64).round() as i64;
+            hmds.tbt_subscriptions.push(sub);
+        }
+        hmds.process_hmds_message(&frame, &mut conn, &shared, &None, &mut hb);
+        let heard: Vec<i64> = shared.market.drain_tbt_quotes().into_iter().map(|q| q.req_id).collect();
+        assert_eq!(heard.iter().filter(|r| **r == 1).count(), 5, "{heard:?}");
+        assert_eq!(heard.iter().filter(|r| **r == 2).count(), 5, "both callers hear every record: {heard:?}");
+
+        hmds.send_tbt_unsubscribe(1, 7, &mut conn, &mut hb);
+        assert!(super::read_frame(&mut peer).is_empty(), "the stream is left running for the other caller");
+        assert!(!hmds.tbt_withdrawn.contains(&number), "and is not marked withdrawn");
+        hmds.send_tbt_unsubscribe(2, 7, &mut conn, &mut hb);
+        let withdrawn = String::from_utf8_lossy(&super::read_frame(&mut peer)).into_owned();
+        assert!(withdrawn.contains(&format!("ticker:{number}")), "the last to leave withdraws it: {withdrawn:?}");
+        assert!(hmds.tbt_withdrawn.contains(&number));
+    }
 }
 mod counted_size_range_tests {
     use super::super::scaled_size;

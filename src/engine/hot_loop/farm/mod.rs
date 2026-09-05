@@ -226,16 +226,15 @@ pub(crate) struct FarmState {
     /// nothing on the frames themselves about which tick they carry, so the
     /// only thing that says what a frame holds is what was asked for under
     /// that number.
-    generic_tick_reqs: Vec<(u32, u32)>,
+    pub(crate) generic_tick_reqs: Vec<(u32, u32)>,
     /// The venue's number for a generic-tick subscription, and what it
     /// carries: (server tag, request type, instrument).
     generic_tick_tags: Vec<(u32, u32, InstrumentId)>,
-    /// News subscriptions this session asked for, as (request, instrument).
-    /// Kept apart from the tables a drop clears: the subscription lives on
-    /// the trading connection and outlives this one, and whether the next
-    /// connection acknowledges it again is the venue's to decide — where it
-    /// does, the tag is filed again.
-    news_requests: Vec<(u32, InstrumentId)>,
+    /// The headline subscriptions this session holds: the contract, the
+    /// request number they were asked under, the providers, the contract's id
+    /// and its type. Kept so a rebuilt connection asks for each again, and a
+    /// withdrawal states each the way the subscription did.
+    pub(crate) news_subscriptions: Vec<(InstrumentId, u32, String, i64, String)>,
     /// Message types the venue has sent on this connection that nothing reads.
     unread_types: std::collections::HashSet<String>,
     pub(crate) disconnected: bool,
@@ -400,6 +399,9 @@ const GREEKS_REQUEST_TYPE: u32 = 732;
 
 /// The news tick's own number, in place of a request type.
 const NEWS_REQUEST_TYPE: u32 = 292;
+
+/// The venue a headline subscription names.
+const NEWS_VENUE: &str = "NEWS";
 
 /// How a generic tick states the length of its payload.
 ///
@@ -693,7 +695,7 @@ impl FarmState {
             md_resub_info: Vec::new(),
             greeks_subs: Vec::new(),
             generic_tick_reqs: Vec::new(),
-            news_requests: Vec::new(),
+            news_subscriptions: Vec::new(),
             generic_tick_tags: Vec::new(),
             unread_types: std::collections::HashSet::new(),
             disconnected: false,
@@ -1320,25 +1322,95 @@ impl FarmState {
             // frames are told apart from the prices only by the tag's type,
             // so the tag is filed as the news tag or every headline is
             // dropped.
-            if self.news_requests.iter().any(|(_, i)| *i == instrument) {
+            if self.news_subscriptions.iter().any(|(i, ..)| *i == instrument) {
                 self.generic_tick_tags.retain(|(tag, ..)| *tag != server_tag);
                 self.generic_tick_tags.push((server_tag, NEWS_REQUEST_TYPE, instrument));
             }
         }
     }
 
-    /// Record a news subscription asked for under `req_id` on `instrument`.
+    /// Subscribe to the headlines on `instrument`, asked for under `req_id`.
     ///
-    /// The venue numbers a generic tick apart from the prices and says what
-    /// it carries once, on the acknowledgement, and the reader tells a
-    /// frame's bytes apart only by what was asked for under the tag. Asked
-    /// for on the trading connection and recorded nowhere here, the
-    /// acknowledgement filed no tag and every headline was dropped as a tick
-    /// nothing had asked for.
-    pub(crate) fn note_news_request(&mut self, req_id: u32, instrument: InstrumentId) {
-        self.news_requests.retain(|(rid, _)| *rid != req_id);
-        self.news_requests.push((req_id, instrument));
+    /// A market-data request, on the market-data connection: the tick is
+    /// 292, the venue is `NEWS`, and the providers ride on 6472. Sent on the
+    /// trading connection, the venue refused it as a message that connection
+    /// does not carry, and no headline could ever arrive.
+    pub(crate) fn send_news_subscribe(
+        &mut self,
+        con_id: i64,
+        instrument: InstrumentId,
+        sec_type: &str,
+        providers: &str,
+        req_id: u32,
+        farm_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        self.news_subscriptions.push((instrument, req_id, providers.to_string(), con_id, sec_type.to_string()));
+        // Filed before it is sent: the venue numbers a generic tick apart from
+        // the prices and says what it carries once, on the acknowledgement,
+        // and the reader tells a frame's bytes apart only by what was asked
+        // for under the tag.
         self.arm_news_request(req_id, instrument);
+        let Some(conn) = farm_conn.as_mut() else { return };
+        let req_id_str = req_id.to_string();
+        let con_id_str = (con_id as u32).to_string();
+        // What the contract is, as the venue states it. Stamped as a US
+        // stock, headlines for a future or an index went out describing
+        // something else.
+        let stated_type = crate::control::contracts::sec_type_to_fix(sec_type).to_string();
+        let tick = NEWS_REQUEST_TYPE.to_string();
+        let _ = conn.send_fixcomp(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
+            (263, SUBSCRIBE_ACTION),
+            (146, "1"),
+            (262, &req_id_str),
+            (6008, &con_id_str),
+            (207, NEWS_VENUE),
+            (167, &stated_type),
+            (264, &tick),
+            (6472, providers),
+        ]);
+        hb.last_farm_sent = Instant::now();
+        log::info!("Sent news subscribe: con_id={con_id} req_id={req_id} providers={providers}");
+    }
+
+    /// Withdraw the headlines on `instrument`, stated the way they were asked
+    /// for: which tick, on which contract, on which venue, of which type.
+    pub(crate) fn send_news_unsubscribe(
+        &mut self,
+        instrument: InstrumentId,
+        farm_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        let Some(pos) = self.news_subscriptions.iter().position(|(id, ..)| *id == instrument) else { return };
+        let (_, req_id, _, con_id, sec_type) = self.news_subscriptions.remove(pos);
+        self.forget_news(req_id, instrument);
+        let Some(conn) = farm_conn.as_mut() else { return };
+        let req_id_str = req_id.to_string();
+        let con_id_str = (con_id as u32).to_string();
+        let stated_type = crate::control::contracts::sec_type_to_fix(&sec_type).to_string();
+        let tick = NEWS_REQUEST_TYPE.to_string();
+        let sent = conn.send_fixcomp(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
+            (263, "2"),
+            (146, "1"),
+            (262, &req_id_str),
+            (6008, &con_id_str),
+            (207, NEWS_VENUE),
+            (167, &stated_type),
+            (264, &tick),
+        ]);
+        hb.last_farm_sent = Instant::now();
+        match sent {
+            Ok(()) => log::info!("Sent news unsubscribe: instrument={instrument} req_id={req_id}"),
+            // Reported as what it is. Logged as sent, a withdrawal that never
+            // left reads as one the venue took, and headlines keep arriving
+            // for a subscription no caller is reading.
+            Err(e) => log::warn!(
+                "News unsubscribe for instrument={instrument} req_id={req_id} was not sent: {e}; \
+                 the venue goes on serving it until the session ends",
+            ),
+        }
     }
 
     /// The request and its tick, where an acknowledgement under the request's
@@ -1352,8 +1424,7 @@ impl FarmState {
 
     /// Forget a news subscription: its request, and the tag it was filed
     /// under. A headline arriving after is a tick nothing asked for.
-    pub(crate) fn forget_news(&mut self, req_id: u32, instrument: InstrumentId) {
-        self.news_requests.retain(|(rid, _)| *rid != req_id);
+    fn forget_news(&mut self, req_id: u32, instrument: InstrumentId) {
         self.md_req_to_instrument.retain(|(rid, _)| *rid != req_id);
         self.generic_tick_reqs.retain(|(rid, _)| *rid != req_id);
         self.generic_tick_tags
@@ -2355,11 +2426,11 @@ impl FarmState {
         let active = self.take_resub_targets(&context.market);
         self.md_req_to_instrument.clear();
         self.instrument_md_reqs.clear();
-        // The news subscriptions were not withdrawn: they live on the trading
-        // connection. Armed again here so that an acknowledgement on this
-        // connection files their tags.
-        for (req_id, instrument) in self.news_requests.clone() {
-            self.arm_news_request(req_id, instrument);
+        // The headline subscriptions belonged to the dead session and are not
+        // part of what the venue pushes back. Left alone they went quiet for
+        // good, with the connection reporting healthy the whole time.
+        for (instrument, req_id, providers, con_id, sec_type) in std::mem::take(&mut self.news_subscriptions) {
+            self.send_news_subscribe(con_id, instrument, &sec_type, &providers, req_id, farm_conn, hb);
         }
         // Queued rather than sent here. The first burst goes out on this pass
         // and the rest on the passes that follow, so the pacing costs the
@@ -2618,4 +2689,4 @@ impl FarmState {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

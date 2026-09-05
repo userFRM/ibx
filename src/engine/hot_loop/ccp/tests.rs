@@ -4162,14 +4162,13 @@ fn a_fanout_leg_does_not_displace_the_row_that_carries_the_hours() {
 fn a_reconnect_waits_for_the_new_account_of_what_is_working() {
     let mut ccp = CcpState::new();
     let shared = SharedState::new();
-    let market = crate::engine::market_state::MarketState::new();
     let mut hb = HeartbeatState::new();
     ccp.hydrated_any = true;
     shared.orders.set_replay_done();
 
     let (conn, _peer) = crate::protocol::connection::Connection::for_test();
     let mut ccp_conn: Option<Connection> = None;
-    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &market, &shared);
+    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &shared);
 
     assert!(!shared.orders.replay_done(), "the new connection has named nothing yet");
     assert!(!ccp.hydrated_any, "and nothing has been hydrated from it");
@@ -4186,13 +4185,12 @@ fn a_reconnect_waits_for_the_new_account_of_what_is_working() {
 fn a_reconnect_waits_for_the_new_statement_of_what_the_account_holds() {
     let mut ccp = CcpState::new();
     let shared = SharedState::new();
-    let market = crate::engine::market_state::MarketState::new();
     let mut hb = HeartbeatState::new();
     shared.portfolio.account_download_is_settled();
 
     let (conn, _peer) = crate::protocol::connection::Connection::for_test();
     let mut ccp_conn: Option<Connection> = None;
-    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &market, &shared);
+    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &shared);
 
     assert!(
         !shared.portfolio.account_download_complete(),
@@ -4468,44 +4466,6 @@ fn a_contract_named_by_its_issuer_is_asked_for_as_fixed_income() {
     let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
     assert!(msg.contains("|6454=e1453318|"), "the issuer: {msg}");
     assert!(msg.contains("|167=FIXED|"), "asked for as fixed income: {msg}");
-}
-
-/// A news stream is withdrawn by naming which tick and which contract, not
-/// only the request number. The option model beside it is withdrawn the same
-/// way. Naming only the request leaves the venue serving the subscription.
-#[test]
-fn a_news_stream_is_withdrawn_by_naming_what_it_was() {
-    use std::io::Read;
-    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
-    let mut ccp = CcpState::new();
-    let mut hb = HeartbeatState::new();
-    let mut conn = Some(conn);
-    // A future, so the type on the withdrawal is not the one a stock carries:
-    // stamped with the stock's type whatever was subscribed, the withdrawal
-    // named an entry the venue never had, and the stream went on.
-    ccp.send_news_subscribe(756733, 3, "FUT", "BRFG", 41, &mut conn, &mut hb);
-    let mut buf = [0u8; 4096];
-    let n = peer.read(&mut buf).unwrap();
-    let subscribed = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
-    let stated_type = subscribed.split("|167=").nth(1).and_then(|t| t.split('|').next())
-        .expect("the subscription states its type").to_string();
-
-    ccp.send_news_unsubscribe(3, &mut conn, &mut hb);
-    let n = peer.read(&mut buf).unwrap();
-    let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
-    assert!(msg.contains("|263=2|"), "it is a withdrawal: {msg}");
-    assert!(
-        msg.contains(&format!("|167={stated_type}|")),
-        "of the type it was subscribed as ({stated_type}): {msg}",
-    );
-    assert!(msg.contains("|146=1|"), "of one entry: {msg}");
-    assert!(msg.contains("|262=41|"), "under the request it was asked under: {msg}");
-    assert!(msg.contains("|6008=756733|"), "naming the contract: {msg}");
-    assert!(msg.contains("|264=292|"), "and which tick: {msg}");
-    assert!(
-        ccp.news_subscriptions.is_empty(),
-        "and nothing is left waiting to deliver it",
-    );
 }
 
 /// A contract fetched without a caller asking is remembered so it is not
@@ -5528,7 +5488,7 @@ fn a_holding_the_new_statement_never_names_is_closed() {
 
     let (conn, _peer) = crate::protocol::connection::Connection::for_test();
     let mut ccp_conn: Option<Connection> = None;
-    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &context.market, &shared);
+    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &shared);
 
     // The download a rebuilt connection carries arrives under the key its own
     // opening asked with, which the handshake sent before this loop saw the
@@ -5867,7 +5827,6 @@ fn an_end_that_squares_nothing_does_not_end_the_download() {
 fn a_rebuilt_connection_settles_under_the_key_its_opening_asked_with() {
     let mut ccp = CcpState::new();
     let shared = SharedState::new();
-    let market = crate::engine::market_state::MarketState::new();
     let mut hb = HeartbeatState::new();
     shared.portfolio.set_position_info(crate::types::PositionInfo {
         con_id: 756733, position: 300.0, ..Default::default()
@@ -5875,7 +5834,7 @@ fn a_rebuilt_connection_settles_under_the_key_its_opening_asked_with() {
 
     let (conn, _peer) = crate::protocol::connection::Connection::for_test();
     let mut ccp_conn: Option<Connection> = None;
-    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &market, &shared);
+    ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &shared);
 
     assert_eq!(
         shared.portfolio.set_account_download_complete(OPENING_ACCOUNT_REQUEST),
@@ -6289,4 +6248,24 @@ fn a_scans_batches_are_handed_over_in_the_order_they_arrived() {
     let got: Vec<(u32, Vec<u32>)> = shared.reference.drain_scanner_data().into_iter()
         .map(|(rid, r)| (rid, r.con_ids)).collect();
     assert_eq!(got, [(7, vec![111]), (7, vec![])], "both, in the order they arrived");
+}
+
+/// The venue refuses an option-chain request for an underlying it cannot
+/// number with a session reject naming the request. Attributed to nothing,
+/// the caller waited out the chain's deadline for an answer that had arrived
+/// fifteen milliseconds after the request.
+#[test]
+fn the_venues_reject_of_an_option_chain_request_reaches_its_caller_now() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let mut hb = HeartbeatState::new();
+    ccp.pending_option_params.push((701, "SPY".into(), 0, Instant::now() + Duration::from_secs(12)));
+    let reject = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "3"), (320, "701"), (58, "Unknown contract"),
+    ], 1);
+    ccp.process_ccp_message(&reject, &mut None, &mut context, &shared, &None, &mut hb, "DU1");
+    assert!(ccp.pending_option_params.is_empty(), "the request is over");
+    let told = shared.reference.drain_historical_errors();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!((told[0].0, told[0].1), (701, crate::error_codes::Refusal::NO_DEFINITION));
+    assert!(told[0].2.contains("Unknown contract"), "in the venue's words: {}", told[0].2);
 }

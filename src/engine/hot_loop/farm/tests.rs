@@ -4,6 +4,25 @@
 //! reaches the code it tests through `super::super`, which is the module this
 //! file belongs to.
 
+use super::*;
+
+/// Every inner message the peer has been sent, decompressed, in order.
+pub(crate) fn drain_inner(peer: &mut Connection) -> Vec<Vec<u8>> {
+    let mut inner = Vec::new();
+    loop {
+        match peer.try_recv() {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        for frame in peer.extract_frames() {
+            let Frame::FixComp(raw) = frame else { continue };
+            let Some(unsigned) = peer.unsign(&raw) else { continue };
+            inner.extend(fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default());
+        }
+    }
+    inner
+}
+
 mod news_tests {
     use super::super::*;
     use crate::bridge::SharedState;
@@ -59,7 +78,7 @@ mod news_tests {
         let mut context = Context::new();
         let shared = SharedState::new();
         let instrument = context.market.register(756733);
-        farm.note_news_request(7, instrument);
+        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new());
 
         farm.handle_ticker_setup(b"35=L\x01756733,0.01,44011", &mut context, &shared);
         farm.handle_generic_tick(&framed_news(44011, &one_article()), &mut context, &shared, &None);
@@ -74,7 +93,7 @@ mod news_tests {
         let mut context = Context::new();
         let shared = SharedState::new();
         let instrument = context.market.register(756733);
-        farm.note_news_request(7, instrument);
+        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new());
         farm.handle_subscription_ack(b"35=Q\x0133082,7,0.01,0,3", &mut context, &shared);
         farm.forget_news(7, instrument);
 
@@ -801,7 +820,6 @@ mod resub_tests {
         assert!(!FarmState::new().holds_market_data(instrument));
     }
 }
-use super::*;
 use std::collections::HashMap;
 
 fn tag_values(tags: &[(u32, String)], tag: u32) -> Vec<&str> {
@@ -1589,24 +1607,6 @@ mod withdrawal_wire_tests {
             .collect()
     }
 
-    /// Every inner message written onto the wire, read off the peer's side of
-    /// the test pair and decompressed.
-    fn drain_inner(peer: &mut Connection) -> Vec<Vec<u8>> {
-        let mut inner = Vec::new();
-        loop {
-            match peer.try_recv() {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-            for frame in peer.extract_frames() {
-                let Frame::FixComp(raw) = frame else { continue };
-                let Some(unsigned) = peer.unsign(&raw) else { continue };
-                inner.extend(fixcomp::fixcomp_decompress(&unsigned).unwrap_or_default());
-            }
-        }
-        inner
-    }
-
     /// A withdrawal states each entry the way the subscription stated it.
     ///
     /// Named by the number alone, the venue leaves the subscription being
@@ -1631,7 +1631,7 @@ mod withdrawal_wire_tests {
             false, &mut conn, &mut hb,
         );
         let mut asked = BTreeSet::new();
-        for msg in drain_inner(&mut peer) {
+        for msg in super::drain_inner(&mut peer) {
             if values_of(&msg, 263).first().map(String::as_str) == Some("1") {
                 asked.extend(values_of(&msg, 262));
             }
@@ -1639,7 +1639,7 @@ mod withdrawal_wire_tests {
         assert_eq!(asked.len(), 4, "a realtime stock is asked for under four numbers");
 
         farm.send_mktdata_unsubscribe(instrument, &mut conn, &mut hb);
-        let withdrawals: Vec<Vec<u8>> = drain_inner(&mut peer)
+        let withdrawals: Vec<Vec<u8>> = super::drain_inner(&mut peer)
             .into_iter()
             .filter(|msg| values_of(msg, 263).first().map(String::as_str) == Some("2"))
             .collect();
@@ -1688,10 +1688,10 @@ mod withdrawal_wire_tests {
         farm.send_depth_subscribe(
             7, 756733, "SMART", "", "STK", 10, true, &mut conn, &mut hb, &shared,
         );
-        let _asked = drain_inner(&mut peer);
+        let _asked = super::drain_inner(&mut peer);
 
         farm.send_depth_unsubscribe(7, &mut conn, &mut hb);
-        let withdrawals: Vec<Vec<u8>> = drain_inner(&mut peer)
+        let withdrawals: Vec<Vec<u8>> = super::drain_inner(&mut peer)
             .into_iter()
             .filter(|msg| values_of(msg, 263).first().map(String::as_str) == Some("2"))
             .collect();

@@ -1343,12 +1343,24 @@ impl HmdsState {
         // was made first, so a second contract's trades were reported under the
         // first contract's name — visibly, once two were running at once.
         let stated = crate::protocol::tbt_stream::frame_ticker_id(body);
-        let found = stated.and_then(|id| {
-            self.tbt_subscriptions.iter().position(|sub| sub.venue_id == id)
-        });
+        // Every subscription the venue serves under this number. It answers a
+        // second query on a contract and kind with the number it gave the
+        // first, so two callers can share one stream, and each hears every
+        // record of it; routed to whichever subscription came first, the
+        // second caller heard nothing.
+        let holders: Vec<usize> = stated
+            .map(|id| {
+                self.tbt_subscriptions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, sub)| sub.venue_id == id)
+                    .map(|(at, _)| at)
+                    .collect()
+            })
+            .unwrap_or_default();
         // A frame naming a subscription this session does not hold is not
         // attributed to another one.
-        let Some(at) = found else {
+        if holders.is_empty() {
             // Said once per stream rather than once per tick. A withdrawal this
             // venue does not act on goes on delivering for the rest of the
             // session, and several hundred identical lines bury the rest of the
@@ -1369,92 +1381,94 @@ impl HmdsState {
                 }
             }
             return;
-        };
-        let instrument = self.tbt_subscriptions[at].instrument;
-        // Which request this arrived under, as the caller numbered it. A
-        // contract can carry several streams, so the contract alone does not
-        // say which one a record belongs to.
-        let caller_req_id = self.tbt_subscriptions[at].caller_req_id;
-        // The layout of a record is the layout of the stream it arrived on,
-        // which is a property of the subscription and not of the contract.
-        let kind = match self.tbt_subscriptions[at].kind {
-            TbtType::BidAsk => TbtKind::BidAsk,
-            _ => TbtKind::AllLast,
-        };
-
-        // A move is stated in whole increments of the contract's own smallest
-        // one, so without that increment a move cannot be turned into a price.
-        let mts = self.tbt_subscriptions[at].min_tick;
-        if mts <= 0 {
-            log::warn!(
-                "a tick arrived for an instrument whose smallest increment is not \
-                 known, so its price cannot be worked out; dropped rather than guessed"
-            );
-            return;
         }
+        for at in holders {
+            let instrument = self.tbt_subscriptions[at].instrument;
+            // Which request this arrived under, as the caller numbered it. A
+            // contract can carry several streams, so the contract alone does not
+            // say which one a record belongs to.
+            let caller_req_id = self.tbt_subscriptions[at].caller_req_id;
+            // The layout of a record is the layout of the stream it arrived on,
+            // which is a property of the subscription and not of the contract.
+            let kind = match self.tbt_subscriptions[at].kind {
+                TbtType::BidAsk => TbtKind::BidAsk,
+                _ => TbtKind::AllLast,
+            };
 
-        // What sizes move in for this contract. Stated once, when the venue
-        // took the subscription on.
-        let size_tick = self.tbt_subscriptions[at].size_tick;
-        // Whether this subscription wants only what the exchange itself
-        // printed. The venue serves one trade stream — a future, which has no
-        // off-exchange tape at all, streams on AllLast and stays silent on
-        // Last — and marks the prints that were not reported to the tape. So
-        // the narrower stream is the wider one without those.
-        let kind_asked_for = self.tbt_subscriptions[at].kind;
+            // A move is stated in whole increments of the contract's own smallest
+            // one, so without that increment a move cannot be turned into a price.
+            let mts = self.tbt_subscriptions[at].min_tick;
+            if mts <= 0 {
+                log::warn!(
+                    "a tick arrived for an instrument whose smallest increment is not \
+                     known, so its price cannot be worked out; dropped rather than guessed"
+                );
+                continue;
+            }
 
-        // Decoded in whole increments and scaled by whole numbers afterwards,
-        // so a session of moves cannot drift the way adding fractions would.
-        let running = &mut self.tbt_subscriptions[at].running;
-        let Some(frame) = tbt_stream::decode_frame(body, kind, 1.0, running) else {
-            return;
-        };
+            // What sizes move in for this contract. Stated once, when the venue
+            // took the subscription on.
+            let size_tick = self.tbt_subscriptions[at].size_tick;
+            // Whether this subscription wants only what the exchange itself
+            // printed. The venue serves one trade stream — a future, which has no
+            // off-exchange tape at all, streams on AllLast and stays silent on
+            // Last — and marks the prints that were not reported to the tape. So
+            // the narrower stream is the wider one without those.
+            let kind_asked_for = self.tbt_subscriptions[at].kind;
 
-        for stamped in &frame.records {
-            match &stamped.record {
-                TbtRecord::Trade(t) => {
-                    if !belongs_on(kind_asked_for, t.unreported) {
-                        continue;
+            // Decoded in whole increments and scaled by whole numbers afterwards,
+            // so a session of moves cannot drift the way adding fractions would.
+            let running = &mut self.tbt_subscriptions[at].running;
+            let Some(frame) = tbt_stream::decode_frame(body, kind, 1.0, running) else {
+                continue;
+            };
+
+            for stamped in &frame.records {
+                match &stamped.record {
+                    TbtRecord::Trade(t) => {
+                        if !belongs_on(kind_asked_for, t.unreported) {
+                            continue;
+                        }
+                        let trade = crate::types::TbtTrade {
+                            instrument,
+                            req_id: caller_req_id,
+                            price: (t.price as i64).saturating_mul(mts),
+                            // A size is a count of what the venue said sizes move
+                            // in for this contract — whole ones for a share,
+                            // hundred-millionths for a crypto — and is then held in
+                            // the form every reader divides by.
+                            size: scaled_size(t.size, size_tick),
+                            timestamp: stamped.seconds,
+                            exchange: t.exchange.clone(),
+                            conditions: t.conditions.clone(),
+                            past_limit: t.past_limit,
+                            unreported: t.unreported,
+                        };
+                        shared.market.push_tbt_trade(trade.clone());
+                        emit(event_tx, Event::TbtTrade(trade));
                     }
-                    let trade = crate::types::TbtTrade {
-                        instrument,
-                        req_id: caller_req_id,
-                        price: (t.price as i64).saturating_mul(mts),
-                        // A size is a count of what the venue said sizes move
-                        // in for this contract — whole ones for a share,
-                        // hundred-millionths for a crypto — and is then held in
-                        // the form every reader divides by.
-                        size: scaled_size(t.size, size_tick),
-                        timestamp: stamped.seconds,
-                        exchange: t.exchange.clone(),
-                        conditions: t.conditions.clone(),
-                        past_limit: t.past_limit,
-                        unreported: t.unreported,
-                    };
-                    shared.market.push_tbt_trade(trade.clone());
-                    emit(event_tx, Event::TbtTrade(trade));
+                    TbtRecord::Quote(q) => {
+                        let quote = crate::types::TbtQuote {
+                            instrument,
+                            req_id: caller_req_id,
+                            bid: (q.bid as i64).saturating_mul(mts),
+                            ask: (q.ask as i64).saturating_mul(mts),
+                            bid_size: scaled_size(q.bid_size, size_tick),
+                            ask_size: scaled_size(q.ask_size, size_tick),
+                            timestamp: stamped.seconds,
+                            bid_past_low: q.bid_past_low,
+                            ask_past_high: q.ask_past_high,
+                        };
+                        shared.market.push_tbt_quote(quote);
+                        emit(event_tx, Event::TbtQuote(quote));
+                    }
+                    // A midpoint has no place on either of the two shapes a caller
+                    // reads, so no record is synthesised. Recorded as unread:
+                    // nothing here subscribes to this stream.
+                    TbtRecord::MidPoint { .. } => shared
+                        .market
+                        .note_unread_wire("tbt-frame", "MidPoint record".to_string()),
                 }
-                TbtRecord::Quote(q) => {
-                    let quote = crate::types::TbtQuote {
-                        instrument,
-                        req_id: caller_req_id,
-                        bid: (q.bid as i64).saturating_mul(mts),
-                        ask: (q.ask as i64).saturating_mul(mts),
-                        bid_size: scaled_size(q.bid_size, size_tick),
-                        ask_size: scaled_size(q.ask_size, size_tick),
-                        timestamp: stamped.seconds,
-                        bid_past_low: q.bid_past_low,
-                        ask_past_high: q.ask_past_high,
-                    };
-                    shared.market.push_tbt_quote(quote);
-                    emit(event_tx, Event::TbtQuote(quote));
-                }
-                // A midpoint has no place on either of the two shapes a caller
-                // reads, so no record is synthesised. Recorded as unread:
-                // nothing here subscribes to this stream.
-                TbtRecord::MidPoint { .. } => shared
-                    .market
-                    .note_unread_wire("tbt-frame", "MidPoint record".to_string()),
             }
         }
     }
@@ -1640,6 +1654,17 @@ fn build_tbt_query(
             return;
         };
         let gone = self.tbt_subscriptions.remove(idx);
+        // Two callers' streams on one contract and kind are served under one
+        // number, so the withdrawal goes out when the last of them leaves;
+        // sent by the first, it stopped the stream the other was still
+        // reading.
+        if gone.venue_id != 0 && self.tbt_subscriptions.iter().any(|sub| sub.venue_id == gone.venue_id) {
+            log::info!(
+                "TBT stream {} is still read by another caller; left running for it",
+                gone.venue_id,
+            );
+            return;
+        }
         // The venue's own number for the stream, which its records are stamped
         // with. Kept so records that keep arriving after this are recognised as
         // the ones this withdrawal was meant to stop.
