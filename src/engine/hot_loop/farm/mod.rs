@@ -137,11 +137,6 @@ pub(crate) struct MdReqRecord {
 }
 
 pub(crate) struct FarmState {
-    /// The trade time the venue last stated as a base, in seconds, and how far
-    /// past it the last offset stood. The venue states the two apart and they
-    /// add; a base replaces the offset with nothing.
-    ts_base_secs: u64,
-    ts_offset_secs: u64,
     /// Subscriptions a reconnect has still to put back, and the earliest the
     /// next burst may go out.
     ///
@@ -650,8 +645,6 @@ impl FarmState {
 
     pub(crate) fn new() -> Self {
         Self {
-            ts_base_secs: 0,
-            ts_offset_secs: 0,
             replay_queue: Default::default(),
             replay_not_before: None,
             next_md_req_id: 1,
@@ -918,7 +911,7 @@ impl FarmState {
             // A size is a count of what the venue said sizes move in for this
             // contract, the same way a price is a count of what prices move in.
             let size_tick = context.market.size_tick(instrument);
-            let q = context.market.quote_mut(instrument);
+            let (q, clock) = context.market.quote_and_clock_mut(instrument);
 
             // The extended 35=P format carries a full 8-bit byte width, so a
             // magnitude can reach i64::MAX and the scaling multiply wrapped to
@@ -1021,9 +1014,9 @@ impl FarmState {
                 // read as an epoch is worse than no timestamp.
                 //
                 // Type 21 is the seconds since that base, and the two add.
-                // The reference client keeps them as a pair and settles it the
-                // same way: a base is stored and clears the offset, and an
-                // offset only ever moves forward. Left out, a quote carried
+                // The reference client keeps them as a pair, per stream, and
+                // settles it the same way: a base is stored and clears the
+                // offset, and an offset only ever moves forward. Left out, a quote carried
                 // the time of the last base for as long as one stood — every
                 // print in between stamped with the same second.
                 // Type 23 was previously folded in here and is now dropped:
@@ -1032,18 +1025,18 @@ impl FarmState {
                 // nanosecond field. Left unmapped until a capture identifies
                 // it rather than guessed at.
                 tick_decoder::O_TS_BASE if tick.magnitude > 1_000_000_000 => {
-                    self.ts_base_secs = tick.magnitude as u64;
-                    self.ts_offset_secs = 0;
-                    q.timestamp_ns = self.ts_base_secs.saturating_mul(1_000_000_000);
+                    clock.base_secs = tick.magnitude as u64;
+                    clock.offset_secs = 0;
+                    q.timestamp_ns = clock.base_secs.saturating_mul(1_000_000_000);
                 }
                 // Only ever forward, as the reference client keeps it: an
                 // offset behind the one in hand belongs to a base that has
                 // been replaced.
-                tick_decoder::O_TS_OFFSET if self.ts_base_secs > 0 => {
+                tick_decoder::O_TS_OFFSET if clock.base_secs > 0 => {
                     let offset = tick.magnitude.max(0) as u64;
-                    if offset >= self.ts_offset_secs {
-                        self.ts_offset_secs = offset;
-                        q.timestamp_ns = self.ts_base_secs
+                    if offset >= clock.offset_secs {
+                        clock.offset_secs = offset;
+                        q.timestamp_ns = clock.base_secs
                             .saturating_add(offset)
                             .saturating_mul(1_000_000_000);
                     } else {

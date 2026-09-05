@@ -297,6 +297,70 @@ mod decode_publish_tests {
         );
     }
 
+    /// The base is stated per stream. Held once for the connection, a base
+    /// stated for one instrument was what the next offset on any other added
+    /// to, so every stream but the last to state a base carried that one's
+    /// second.
+    #[test]
+    fn a_base_stated_for_one_stream_does_not_stamp_another() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let a = context.market.register(756733);
+        context.market.register_server_tag(11, a);
+        context.market.set_min_tick(a, 0.01);
+        let b = context.market.register(265598);
+        context.market.register_server_tag(12, b);
+        context.market.set_min_tick(b, 0.01);
+
+        // B states its base, A states a later one, then B moves forward.
+        for (tag, tick) in [
+            (12, (tick_decoder::O_TS_BASE, 4, 1_785_325_000)),
+            (11, (tick_decoder::O_TS_BASE, 4, 1_785_326_000)),
+            (12, (tick_decoder::O_TS_OFFSET, 1, 7)),
+        ] {
+            farm.handle_tick_data(&framed_35p(tag, &[tick]), &mut context, &shared, &None);
+        }
+        assert_eq!(
+            context.market.quote(b).timestamp_ns, 1_785_325_007_000_000_000,
+            "B's offset adds to B's own base",
+        );
+        assert_eq!(
+            context.market.quote(a).timestamp_ns, 1_785_326_000_000_000_000,
+            "A's stamp is not moved by B's offset",
+        );
+    }
+
+    /// The pair goes with the slot. Left behind, a contract registered into
+    /// a freed slot had its first offset added to the previous occupant's base.
+    #[test]
+    fn a_freed_slot_carries_no_base_into_its_next_contract() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let a = context.market.register(756733);
+        context.market.register_server_tag(11, a);
+        context.market.set_min_tick(a, 0.01);
+        farm.handle_tick_data(
+            &framed_35p(11, &[(tick_decoder::O_TS_BASE, 4, 1_785_325_000)]),
+            &mut context, &shared, &None,
+        );
+        context.market.unregister(a);
+
+        let c = context.market.register(265598);
+        assert_eq!(c, a, "the slot is reused");
+        context.market.register_server_tag(13, c);
+        context.market.set_min_tick(c, 0.01);
+        farm.handle_tick_data(
+            &framed_35p(13, &[(tick_decoder::O_TS_OFFSET, 1, 7)]),
+            &mut context, &shared, &None,
+        );
+        assert_eq!(
+            context.market.quote(c).timestamp_ns, 0,
+            "an offset with no base of its own stamps nothing",
+        );
+    }
+
     /// The producer half of the quantity contract. Everything downstream
     /// divides by `QTY_SCALE`, so a decode path that stores the wire magnitude
     /// raw delivers quantities 10_000x too small — and nothing else

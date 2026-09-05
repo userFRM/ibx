@@ -31,8 +31,21 @@ pub struct OrderIdentity {
     pub currency: String,
 }
 
+/// The trade time the venue last stated as a base for one instrument, in
+/// seconds, and how far past it the last offset stood. The venue states the
+/// two apart, per stream, and they add; a base replaces the offset with
+/// nothing. Held once for the connection instead, a base stated for one
+/// stream was what the next offset on every other added to.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TradeClock {
+    pub base_secs: u64,
+    pub offset_secs: u64,
+}
+
 pub struct MarketState {
     quotes: Box<[Quote]>,
+    /// Per-instrument, alongside the quote it stamps.
+    clocks: Box<[TradeClock]>,
     /// High-water mark: slots ever allocated (iteration bound). Freed slots
     /// below this mark are reused via `free_ids` before new ones are taken,
     /// so the MAX_INSTRUMENTS cap bounds CONCURRENT instruments, not the
@@ -89,6 +102,7 @@ impl MarketState {
     pub fn new() -> Self {
         Self {
             quotes: vec![Quote::default(); MAX_INSTRUMENTS].into(),
+            clocks: vec![TradeClock::default(); MAX_INSTRUMENTS].into(),
             active_count: 0,
             free_ids: Vec::new(),
             con_id_to_instrument: HashMap::new(),
@@ -266,6 +280,7 @@ impl MarketState {
         self.con_id_to_instrument.remove(&con_id);
         self.instrument_to_con_id[instrument as usize] = FREE_SLOT;
         self.quotes[instrument as usize] = Quote::default();
+        self.clocks[instrument as usize] = TradeClock::default();
         self.symbols[instrument as usize] = None;
         self.sec_types[instrument as usize] = None;
         self.exchanges[instrument as usize] = None;
@@ -521,6 +536,12 @@ impl MarketState {
         &mut self.quotes[id as usize]
     }
 
+    /// The quote and the trade clock it is stamped from, together: one tick
+    /// writes both, and the two are the same instrument's.
+    pub(crate) fn quote_and_clock_mut(&mut self, instrument: InstrumentId) -> (&mut Quote, &mut TradeClock) {
+        (&mut self.quotes[instrument as usize], &mut self.clocks[instrument as usize])
+    }
+
     #[inline(always)]
     pub fn bid(&self, id: InstrumentId) -> Price {
         self.quotes[id as usize].bid
@@ -575,9 +596,12 @@ impl MarketState {
     }
 
     /// Zero all quote data to prevent stale price trading after farm disconnect.
+    /// The clocks go with them: the venue states a base again on the next
+    /// connection, and an offset arriving before it has nothing to add to.
     pub fn zero_all_quotes(&mut self) {
         for i in 0..self.active_count as usize {
             self.quotes[i] = Quote::default();
+            self.clocks[i] = TradeClock::default();
         }
     }
 }
@@ -1137,10 +1161,12 @@ mod tests {
         ms.quote_mut(a).bid = 150 * PRICE_SCALE;
         ms.quote_mut(a).ask = 151 * PRICE_SCALE;
         ms.quote_mut(b).last = 400 * PRICE_SCALE;
+        ms.quote_and_clock_mut(a).1.base_secs = 1_785_325_000;
         ms.zero_all_quotes();
         assert_eq!(ms.bid(a), 0);
         assert_eq!(ms.ask(a), 0);
         assert_eq!(ms.last(b), 0);
+        assert_eq!(ms.quote_and_clock_mut(a).1.base_secs, 0, "the clock goes with the quote");
     }
 
     #[test]
