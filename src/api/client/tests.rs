@@ -8325,3 +8325,64 @@ fn a_number_this_session_has_spent_is_not_handed_out_again() {
         "the next number is past everything this session has spent",
     );
 }
+
+/// A number already watching a contract cannot be given another.
+///
+/// Nothing refused it, and the two records that answer "who is watching this
+/// contract" and "what is this request watching" then disagreed: the second
+/// contract took the request and the first was left in the one the delivery
+/// loop reads. The caller was handed both contracts' ticks under one number
+/// with nothing to tell them apart, its withdrawal reached only the second,
+/// and a second withdrawal reached nothing — so the first went on arriving
+/// under a number the caller had cancelled.
+#[test]
+fn a_request_already_watching_a_contract_is_not_given_another() {
+    let (client, rx, _shared) = test_client();
+    client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 5);
+    client.core.req_to_instrument.lock().unwrap().insert(5, 0);
+    while rx.try_recv().is_ok() {}
+
+    let elsewhere = Contract { symbol: "QQQ".into(), con_id: 320227571, ..spy() };
+    let refused = client.req_mkt_data(5, &elsewhere, "", false, false);
+
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 102),
+        "the number is already watching something under 102: {refused:?}",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
+    assert_eq!(
+        client.core.req_to_instrument.lock().unwrap().get(&5).copied(), Some(0),
+        "the contract it was already watching is untouched",
+    );
+}
+
+/// A contract the venue refuses is refused to everyone watching it.
+///
+/// A caller sharing somebody else's subscription holds no request of its own
+/// for the venue to refuse, and the refusal names the contract rather than a
+/// request — so it was told nothing at all and waited for ticks that could not
+/// arrive.
+#[test]
+fn a_refused_contract_is_refused_to_everyone_watching_it() {
+    let (client, rx, shared) = test_client();
+    client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+    client.core.req_to_instrument.lock().unwrap().insert(1, 0);
+    // A second caller watching the same contract, holding no request of its own.
+    client.core.instrument_followers.lock().unwrap().insert(0, vec![2]);
+    while rx.try_recv().is_ok() {}
+
+    shared.market.push_subscription_failure(0, "no security definition".into());
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:1:") && e.contains("no security")),
+        "the holder is told: {:?}", w.events,
+    );
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:2:") && e.contains("no security")),
+        "and so is the one sharing it: {:?}", w.events,
+    );
+}

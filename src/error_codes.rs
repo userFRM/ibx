@@ -72,6 +72,10 @@ impl Refusal {
     }
 }
 
+/// The code a request number that is already watching something is refused
+/// under.
+pub const DUPLICATE_TICKER_ID: i32 = 102;
+
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)

@@ -10,7 +10,7 @@
 // names, and used here for the same reason it was written.
 pub use crate::types::order_status::{is_open_or_reactivatable, is_open_status, order_status_str};
 use std::collections::{HashMap, HashSet};
-use crate::error_codes::Refusal;
+use crate::error_codes::{DUPLICATE_TICKER_ID, Refusal};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
 use std::sync::LazyLock;
@@ -1590,6 +1590,30 @@ impl ClientCore {
         generic_tick_list: &str,
         mode_9887: i32,
     ) -> Result<InstrumentId, Refusal> {
+        // A number already watching something cannot watch a second thing.
+        //
+        // Nothing refused it, and the two maps that answer "who is watching
+        // this contract" and "what is this request watching" then disagreed:
+        // the second contract took the request, and the first was left in the
+        // one map the delivery loop reads. The caller was handed both
+        // contracts' ticks under one number with nothing to tell them apart,
+        // its withdrawal reached only the second, and a second withdrawal
+        // reached nothing at all — so the first went on arriving under a
+        // number the caller had cancelled, for the life of the session.
+        //
+        // Refused here, before anything is sent: the venue is asked before the
+        // slot this request would take is known, so there is no later point at
+        // which refusing leaves nothing behind.
+        if self.req_to_instrument.lock().unwrap().contains_key(&req_id) {
+            return Err(Refusal::stated(
+                DUPLICATE_TICKER_ID,
+                format!(
+                    "request {req_id} is already watching a contract: withdraw it before \
+                     asking for another under the same number",
+                ),
+            ));
+        }
+
         // The chargeable snapshot is one burst by construction, so it ends the
         // way an ordinary snapshot does and the caller hears the same end.
         let snapshot = snapshot || regulatory_snapshot;

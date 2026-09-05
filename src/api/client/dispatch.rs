@@ -580,9 +580,19 @@ impl EClient {
         for (from, into) in self.shared.market.drain_subscription_moves() {
             self.core.move_watchers(from, into);
         }
+        // Everyone watching the contract, not only whoever asked first. A
+        // refusal is a fact about the contract, and a caller sharing somebody
+        // else's subscription holds no request of its own for the venue to
+        // refuse — so it was told nothing and waited for ticks that could not
+        // arrive. Where nobody holds it, there is nobody to tell.
         for (instrument, reason) in self.shared.market.drain_subscription_failures() {
-            let req_id = self.core.req_id_for_instrument(instrument);
-            wrapper.error(req_id, NO_SECURITY_DEFINITION, &reason, "");
+            let held_by = self.core.req_id_for_instrument(instrument);
+            let watching = std::iter::once(held_by)
+                .filter(|id| *id >= 0)
+                .chain(self.core.followers_of(instrument));
+            for req_id in watching {
+                wrapper.error(req_id, NO_SECURITY_DEFINITION, &reason, "");
+            }
         }
 
         // A book this client could not keep whole, on the request that asked

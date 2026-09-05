@@ -243,7 +243,13 @@ fn order_lifecycle_what_if_preview() {
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
-    assert!(w.events.iter().any(|e| e.starts_with("order_status:90:PreSubmitted")));
+    // A preview is answered on the order and nothing else: the venue states
+    // what it would cost, and no status for an order that was never placed.
+    assert!(w.events.iter().any(|e| e.starts_with("open_order:90:PreSubmitted")));
+    assert!(
+        !w.events.iter().any(|e| e.starts_with("order_status:90")),
+        "no status is stated for a preview: {:?}", w.events,
+    );
 
     // No actual position change
     assert_eq!(shared.portfolio.position(0), 0.0);
