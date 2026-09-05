@@ -135,10 +135,6 @@ A user message carries what it is for on tag 6040.
 | `P` | Tick |
 | `Q` | Subscription ack |
 | `Y` | Subscription reject |
-| `RL` | Account update |
-| `UM` | Account update |
-| `UP` | Position update |
-| `UT` | Account update |
 
 ### On the historical connection
 
