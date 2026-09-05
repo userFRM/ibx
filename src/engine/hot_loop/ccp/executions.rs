@@ -1739,7 +1739,10 @@ impl CcpState {
         // second revision before it has answered the first, and a cancel can
         // be sent over both, so a refusal of a revision already answered says
         // nothing about where the order stands now.
-        let mut answers_a_live_revision = true;
+        // Meaningful for a refused change alone, and read only there. Left
+        // true by default, the two sites that set it disagreed about what a
+        // refused cancellation carries.
+        let mut answers_a_live_revision = false;
         if reject_type == 2 && !unknown_order {
             let refused_revision = parsed.get(&11)
                 .map(|c| revision_of(c))
@@ -1762,7 +1765,13 @@ impl CcpState {
                 // A fill that races the rejection is not lost with the order:
                 // the untracked-fill path books it and moves the position.
                 context.retire_order(oid);
-            } else if answers_a_live_revision {
+            // A refused cancellation always leaves the order standing, so its
+            // status always goes back. A refused change does too — but only
+            // where it is the change the order is still waiting on: one the
+            // venue answered before a cancel went out says nothing about where
+            // the order stands now, and forcing it back to working undid the
+            // withdrawal the caller had been told about.
+            } else if reject_type != 2 || answers_a_live_revision {
                 let restore_status = if order.filled > 0 {
                     crate::types::OrderStatus::PartiallyFilled
                 } else {

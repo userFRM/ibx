@@ -176,27 +176,24 @@ impl PortfolioState {
     /// being reported as held and every exposure decision reads it that way.
     /// Their rows are set to nothing here; the instrument slots beside them
     /// belong to the caller, which is the side that can name an instrument.
-    #[doc(hidden)] pub fn set_account_download_complete(&self, ends: &str) -> Vec<i64> {
+    #[doc(hidden)] pub fn set_account_download_complete(&self, ends: &str) -> Option<Vec<i64>> {
         // Only the request that was asked to restate everything since the
         // download began. Another request's end says nothing about what this
-        // one has stated so far.
+        // one has stated so far — and `None` says so to the caller, which owns
+        // the rest of the squaring and must not declare the download over on
+        // the strength of an end that squared nothing.
         let mut under = self.restating_under.lock().unwrap();
         if under.as_deref() != Some(ends) {
-            // A request still outstanding is what ends the download. Where
-            // none is, this is the opening sequence's own end and there is
-            // nothing to square — but where one is, this end belongs to some
-            // other request and says nothing about what that one has stated.
-            if under.is_none() {
-                self.account_download_complete.store(true, Ordering::Release);
-            }
-            return Vec::new();
+            // Nothing outstanding: nothing was being waited on, so there is
+            // nothing to square and this end is as good as any.
+            return under.is_none().then(Vec::new);
         }
         *under = None;
         drop(under);
         let unstated = std::mem::take(&mut *self.awaiting_restatement.lock().unwrap());
         let mut held = self.position_infos.lock().unwrap();
         let mut moved = self.position_changes.lock().unwrap();
-        unstated.into_iter().filter(|con_id| match held.get_mut(con_id) {
+        Some(unstated.into_iter().filter(|con_id| match held.get_mut(con_id) {
             Some(info) if info.position != 0.0 => {
                 info.position = 0.0;
                 // And what the holding was worth, which is nothing. The basis
@@ -217,7 +214,7 @@ impl PortfolioState {
                 true
             }
             _ => false,
-        }).collect()
+        }).collect())
     }
 
     /// The download is over, and every holding it left unstated has been
@@ -251,9 +248,9 @@ impl PortfolioState {
         // account message of the session and cleared nowhere, every wait that
         // reads it stopped meaning anything after that.
         self.account_data_received.store(false, Ordering::Release);
-        *self.awaiting_restatement.lock().unwrap() =
-            self.position_infos.lock().unwrap().keys().copied().collect();
-        // Nothing has been asked to restate them yet.
+        // Nothing has been asked to restate anything yet, and what the last
+        // request was measuring belongs to the connection that is gone.
+        self.awaiting_restatement.lock().unwrap().clear();
         *self.restating_under.lock().unwrap() = None;
     }
 
@@ -266,8 +263,21 @@ impl PortfolioState {
     /// first request had simply not reached yet, were closed on the strength
     /// of a request that was never asked to state them.
     #[doc(hidden)] pub fn holdings_restated_under(&self, key: &str) {
+        // Only while a download is outstanding. A request asked at steady
+        // state is a refresh, and what a refresh does not restate is not
+        // evidence that the account no longer holds it.
+        if self.account_download_complete.load(Ordering::Acquire) {
+            return;
+        }
         let mut under = self.restating_under.lock().unwrap();
         if under.is_none() {
+            // The set belongs to this request: what it has not named by its
+            // own end is what the account no longer has. Taken when the
+            // connection dropped instead, anything arriving over the other
+            // transport during the backoff cleared a holding this request had
+            // not reached yet, and the close was missed.
+            *self.awaiting_restatement.lock().unwrap() =
+                self.position_infos.lock().unwrap().keys().copied().collect();
             *under = Some(key.to_string());
         }
     }

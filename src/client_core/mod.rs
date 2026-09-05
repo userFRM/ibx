@@ -2571,7 +2571,12 @@ impl ClientCore {
                 }
                 tracked.remaining = (order.total_quantity - tracked.filled).max(0.0);
                 tracked.contract = contract;
+                // The client the order went out under is the order's, not the
+                // caller's object's: a replace states terms, and for an order
+                // the venue replayed the caller's object states client zero.
+                let placed_by = tracked.order.client_id;
                 tracked.order = order;
+                tracked.order.client_id = placed_by;
             }
             None => {
                 // A caller replacing an order the venue replayed at connect:

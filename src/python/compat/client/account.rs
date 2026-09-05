@@ -313,9 +313,21 @@ impl EClient {
         // As above.
         let Some(_connected) = self.tx_or_report(req_id)? else { return Ok(()) };
         let shared = self.shared_state()?;
-        for _ in 0..500 {
-            if shared.portfolio.account_data_received() { break; }
+        // The same wait and the same warning the plain answer makes, and on
+        // the same flag. Waiting on whether anything had been heard at all,
+        // this was satisfied by the first account figure of a new connection —
+        // tens of rows before a holding was restated — so it answered from the
+        // book as it stood before the drop, and said nothing about it.
+        for _ in 0..1000 {
+            if shared.portfolio.account_download_complete() { break; }
             py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
+        }
+        if !shared.portfolio.account_download_complete() {
+            let why = "the account had not finished stating its holdings within the wait, \
+                       so what follows is what this session already held rather than what \
+                       the account holds";
+            log::warn!("{why}");
+            self.report_refusal(py, req_id, Refusal::validation(why))?;
         }
         // Watching before reading, as on the other surface: the queue of moves
         // is drained once for everyone watching, so a holding that moves while

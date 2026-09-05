@@ -4182,7 +4182,7 @@ fn a_reconnect_waits_for_the_new_statement_of_what_the_account_holds() {
     let shared = SharedState::new();
     let market = crate::engine::market_state::MarketState::new();
     let mut hb = HeartbeatState::new();
-    shared.portfolio.set_account_download_complete("");
+    shared.portfolio.account_download_is_settled();
 
     let (conn, _peer) = crate::protocol::connection::Connection::for_test();
     let mut ccp_conn: Option<Connection> = None;
@@ -5718,7 +5718,7 @@ fn the_download_reads_as_over_only_once_it_is_squared() {
     shared.portfolio.holdings_restated_under("AR.4");
 
     let unstated = shared.portfolio.set_account_download_complete("AR.4");
-    assert_eq!(unstated, vec![756733], "the venue named none of it");
+    assert_eq!(unstated, Some(vec![756733]), "the venue named none of it");
     assert!(
         !shared.portfolio.account_download_complete(),
         "and the download does not read as over while the caller still has work",
@@ -5776,9 +5776,9 @@ fn a_later_request_does_not_settle_an_earlier_one() {
     shared.portfolio.holdings_restated_under("AR.6");
 
     // The refresh's end says nothing about what the first request has stated.
-    assert!(
-        shared.portfolio.set_account_download_complete("AR.6").is_empty(),
-        "an end that is not the asked request's closes nothing",
+    assert_eq!(
+        shared.portfolio.set_account_download_complete("AR.6"), None,
+        "an end that is not the asked request's squares nothing, and says so",
     );
     assert!(
         !shared.portfolio.account_download_complete(),
@@ -5788,7 +5788,42 @@ fn a_later_request_does_not_settle_an_earlier_one() {
     // The venue names one of them, and then the asked request ends.
     shared.portfolio.note_restated(756733);
     assert_eq!(
-        shared.portfolio.set_account_download_complete("AR.5"), vec![140148322],
+        shared.portfolio.set_account_download_complete("AR.5"), Some(vec![140148322]),
         "only what the request that was asked never named",
+    );
+}
+
+/// An end that squares nothing does not declare the download over.
+///
+/// The guard that decides which end belongs to the outstanding request lives
+/// in one place, and the caller owns the rest of the squaring — the instrument
+/// slots and the engine's own book. Declaring the download over beside that
+/// loop rather than inside it undid the guard entirely: every end set the
+/// flag, including the ones the guard had just refused to act on, and a caller
+/// waiting on it read the holdings the squaring was about to close.
+#[test]
+fn an_end_that_squares_nothing_does_not_end_the_download() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    shared.portfolio.set_position_info(crate::types::PositionInfo {
+        con_id: 756733, position: 300.0, ..Default::default()
+    });
+    shared.portfolio.account_download_is_pending();
+    shared.portfolio.holdings_restated_under("AR.5");
+
+    // Some other request's end arrives first.
+    ccp.process_ccp_message(
+        b"35=EB\x016529=AR.6\x01", &mut None, &mut context, &shared, &None,
+        &mut HeartbeatState::new(), "DU1",
+    );
+
+    assert!(
+        !shared.portfolio.account_download_complete(),
+        "the download is not over on an end that squared nothing",
+    );
+    assert_eq!(
+        shared.portfolio.position_info(756733).map(|i| i.position), Some(300.0),
+        "and nothing was closed on the strength of it",
     );
 }

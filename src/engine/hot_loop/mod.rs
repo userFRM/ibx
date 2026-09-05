@@ -622,6 +622,11 @@ impl HotLoop {
         // unheld, gave it back, and the order went out on whichever contract
         // took it next.
         if self.context.pending_orders.holds(instrument) {
+            // Asked again next lap. Unlike a working order, a queued request
+            // can leave the buffer without ever reaching the book — a
+            // cancel-all names a slot and puts nothing in it — and nothing
+            // else would ever ask about the slot again.
+            self.context.slots_to_reconsider.push(instrument);
             return;
         }
         // Market data was missing from this list. Cancelling tick-by-tick or
@@ -734,6 +739,13 @@ impl HotLoop {
         // Asking on the way in is answered in under a second.
         let account = self.account_id.clone();
         if !account.is_empty() {
+            // The download a session opens with arrives under the key the
+            // logon asked with, not under this refresh. Recorded before the
+            // refresh draws a key of its own, so the end that squares the
+            // account is the end of the request that is carrying it.
+            self.shared.portfolio.holdings_restated_under(
+                crate::engine::hot_loop::ccp::OPENING_ACCOUNT_REQUEST,
+            );
             self.ccp.send_account_refresh(&account, &mut self.ccp_conn, &mut self.hb, &self.shared);
         }
 
@@ -6223,6 +6235,40 @@ mod queued_order_slot_tests {
         assert_ne!(
             hl.context.market.register(265598), instrument,
             "and is not handed to the next contract that asks",
+        );
+    }
+}
+
+#[cfg(test)]
+mod queued_cancel_all_slot_tests {
+    use super::*;
+
+    /// A queued request that never reaches the book still gives its slot back.
+    ///
+    /// A submit is in the book from the moment it is built, so retiring it
+    /// offers the slot back. A cancel-all names a slot and puts nothing in the
+    /// book, so once it has drained nothing would ever ask about that slot
+    /// again — leaked for the life of the session, which is the exhaustion the
+    /// reclaiming exists to prevent.
+    #[test]
+    fn a_queued_cancel_all_does_not_strand_its_slot() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let instrument = hl.context.market.register(756733);
+        hl.context.pending_orders.push(crate::types::OrderRequest::CancelAll { instrument });
+
+        hl.try_reclaim_instrument(instrument);
+        assert_eq!(
+            hl.context.market.instrument_by_con_id(756733), Some(instrument),
+            "the queued request holds the slot while it is queued",
+        );
+
+        // It drains without ever entering the book.
+        let _: Vec<_> = hl.context.pending_orders.drain().collect();
+        hl.reclaim_slots_no_order_holds();
+
+        assert_eq!(
+            hl.context.market.register(265598), instrument,
+            "and the slot is offered back once nothing names it",
         );
     }
 }

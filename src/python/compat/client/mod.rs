@@ -2170,7 +2170,7 @@ w = W()",
         Python::initialize();
         Python::attach(|py| {
             let (client, _rx, shared, w) = wired_client(py);
-            shared.portfolio.set_account_download_complete("");
+            shared.portfolio.account_download_is_settled();
             let held = |qty: f64| PositionInfo {
                 con_id: 756733, position: qty, symbol: "SPY".into(),
                 sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
@@ -2225,7 +2225,7 @@ w = W()",
             shared.portfolio.set_position_info(PositionInfo {
                 con_id: 756733, position: 1.0, ..Default::default()
             });
-            shared.portfolio.set_account_download_complete("");
+            shared.portfolio.account_download_is_settled();
             shared.portfolio.set_account(&Default::default());
 
             client.call_method0(py, "req_positions").unwrap();

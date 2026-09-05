@@ -4288,7 +4288,7 @@ fn a_queued_fill_survives_a_completed_orders_read() {
 #[test]
 fn a_restated_holding_reaches_a_caller_that_already_asked() {
     let (client, _rx, shared) = test_client();
-    shared.portfolio.set_account_download_complete("");
+    shared.portfolio.account_download_is_settled();
     shared.portfolio.set_position_info(PositionInfo {
         con_id: 265598, position: 100.0, symbol: "AAPL".into(),
         sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
@@ -4325,7 +4325,7 @@ fn a_restated_holding_reaches_a_caller_that_already_asked() {
 #[test]
 fn a_holding_that_moves_reaches_every_watcher() {
     let (client, _rx, shared) = test_client();
-    shared.portfolio.set_account_download_complete("");
+    shared.portfolio.account_download_is_settled();
     let held = |qty: f64| PositionInfo {
         con_id: 265598, position: qty, symbol: "AAPL".into(),
         sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
@@ -4467,7 +4467,7 @@ fn a_watchers_first_answer_and_its_registration_are_one_moment() {
 #[test]
 fn a_holding_that_moves_after_the_request_is_reported() {
     let (client, _rx, shared) = test_client();
-    shared.portfolio.set_account_download_complete("");
+    shared.portfolio.account_download_is_settled();
     let held = |qty: f64| PositionInfo {
         con_id: 265598, position: qty, symbol: "AAPL".into(),
         sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
@@ -4498,7 +4498,7 @@ fn a_holding_that_moves_after_the_request_is_reported() {
 #[test]
 fn moves_from_before_the_request_are_not_refired_as_changes() {
     let (client, _rx, shared) = test_client();
-    shared.portfolio.set_account_download_complete("");
+    shared.portfolio.account_download_is_settled();
     // Two holdings arrive before anything asks, so both moves queue.
     shared.portfolio.set_position_info(PositionInfo {
         con_id: 265598, position: 100.0, symbol: "AAPL".into(),
@@ -4570,7 +4570,7 @@ fn req_positions_delivers_via_wrapper() {
     // The account has stated everything it holds. Without it this waits out
     // the whole ten seconds for a signal no engine is here to send, and comes
     // back through the timeout rather than through delivery.
-    shared.portfolio.set_account_download_complete("");
+    shared.portfolio.account_download_is_settled();
     // Named, as a holding off the wire is: nameless, delivery waits three
     // seconds for a definition to arrive from an engine that is not here.
     shared.portfolio.set_position_info(PositionInfo { con_id: 265598, position: 100.0, avg_cost: 150 * PRICE_SCALE, symbol: "AAPL".into(), ..Default::default() });
@@ -4645,7 +4645,7 @@ fn holdings_are_labelled_with_the_account_that_holds_them() {
 fn req_positions_empty_still_calls_position_end() {
     let (client, _rx, shared) = test_client();
     // As above: the account has spoken, and it holds nothing.
-    shared.portfolio.set_account_download_complete("");
+    shared.portfolio.account_download_is_settled();
     let mut w = RecordingWrapper::default();
     client.req_positions(&mut w);
     assert_eq!(w.events, vec!["position_end"]);

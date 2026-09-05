@@ -3624,3 +3624,41 @@ fn a_replacement_that_cannot_be_named_leaves_the_order_standing() {
         "the surfaces are told the change did not go: {refusals:?}",
     );
 }
+
+/// A cancel that does not reach the wire leaves an outstanding change alone.
+///
+/// A write that fails rolls back the attempt it wrote, and a cancel writes
+/// none — but it names an order that is in the book, which is why it is being
+/// cancelled, so the rollback took it for a failed replace. It threw away what
+/// the replacement still outstanding falls back to, and the venue's answer to
+/// that replacement, either way, then read as belonging to nothing: a refusal
+/// put nothing back, and an acceptance settled nothing.
+#[test]
+fn a_cancel_that_does_not_go_leaves_the_change_outstanding() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy,
+        100 * crate::types::QTY_SCALE, 150 * crate::types::PRICE_SCALE,
+        b'2', b'0', 0,
+    ));
+    // A change is out, and what the venue holds is kept under its revision.
+    let before = *context.order(42).expect("tracked");
+    context.modify_versions.insert(42, 1);
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string()));
+
+    context.pending_orders.push(crate::types::OrderRequest::Cancel { order_id: 42 });
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+
+    assert!(
+        context.pre_replace.contains_key(&(42, 1)),
+        "the change still outstanding keeps what it falls back to",
+    );
+}

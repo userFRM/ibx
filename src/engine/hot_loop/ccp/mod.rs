@@ -492,6 +492,13 @@ pub(crate) struct PendingFanout {
     pub deadline: Instant,
 }
 
+/// The key the logon opens the account under, before this loop exists.
+///
+/// Named once because two places need it: the logon sends it, and the loop has
+/// to know which request the download arriving at a session's start belongs
+/// to. The counter below starts past it.
+pub(crate) const OPENING_ACCOUNT_REQUEST: &str = "AR.1";
+
 impl CcpState {
     pub(crate) fn new() -> Self {
         Self {
@@ -730,22 +737,29 @@ impl CcpState {
                 let ends = parsed.get(&6529).map(String::as_str).unwrap_or("");
                 if ends.starts_with("AR") {
                     log::info!("Account request {ends} is complete");
-                    for con_id in shared.portfolio.set_account_download_complete(ends) {
-                        let avg_cost = shared.portfolio.position_info(con_id)
-                            .map(|i| i.avg_cost).unwrap_or_default();
-                        let Some(instrument) = context.market.instrument_by_con_id(con_id)
-                        else { continue };
-                        let standing = context.position(instrument);
-                        if standing != 0.0 { context.update_position(instrument, -standing); }
-                        shared.portfolio.set_position(instrument, 0.0);
-                        emit(event_tx, Event::PositionUpdate {
-                            instrument, con_id, position: 0.0, avg_cost,
-                        });
+                    // Only where this end is the outstanding request's. Any
+                    // other request's end squares nothing, and declaring the
+                    // download over on it lets a caller through to the answer
+                    // the squaring exists to prevent.
+                    if let Some(unstated) = shared.portfolio.set_account_download_complete(ends) {
+                        for con_id in unstated {
+                            let avg_cost = shared.portfolio.position_info(con_id)
+                                .map(|i| i.avg_cost).unwrap_or_default();
+                            let Some(instrument) = context.market.instrument_by_con_id(con_id)
+                            else { continue };
+                            let standing = context.position(instrument);
+                            if standing != 0.0 { context.update_position(instrument, -standing); }
+                            shared.portfolio.set_position(instrument, 0.0);
+                            emit(event_tx, Event::PositionUpdate {
+                                instrument, con_id, position: 0.0, avg_cost,
+                            });
+                        }
+                        // Last, so a caller waiting on the download is let
+                        // through to an account that has been squared with
+                        // what the venue just said rather than to what it held
+                        // before.
+                        shared.portfolio.account_download_is_settled();
                     }
-                    // Last, so a caller waiting on the download is let through
-                    // to an account that has been squared with what the venue
-                    // just said rather than to what it held before.
-                    shared.portfolio.account_download_is_settled();
                 }
             }
             "UT" | "UM" | "RL" => positions::handle_account_update(msg, context, shared),

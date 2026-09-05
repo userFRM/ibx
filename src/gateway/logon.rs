@@ -437,7 +437,10 @@ pub(super) fn send_post_burst_grace(
         w.write_all(&fix_build(fields, seq))
     };
 
-    send(&[(35, "U"), (52, now), (6040, "6"), (6036, "1"), (6529, "AR.1"), (6095, account)])?;
+    send(&[
+        (35, "U"), (52, now), (6040, "6"), (6036, "1"),
+        (6529, crate::engine::hot_loop::ccp::OPENING_ACCOUNT_REQUEST), (6095, account),
+    ])?;
     send(&[(35, "H"), (52, now), (11, "*"), (55, "*"), (54, "*")])?;
     // The account goes in tag 1 here, not 6095.
     send(&[(35, "U"), (52, now), (6040, "142"), (6529, "PLR.1"), (1, account)])?;

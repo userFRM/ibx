@@ -112,6 +112,14 @@ pub(crate) fn drain_and_send_orders(
         // and a write that fails must not leave that attempt standing as though
         // the broker had accepted it.
         let before = context.order(oid).copied();
+        // Whether this request is the one that wrote an attempt into the
+        // record. A cancel names an order that is in the book — which is why
+        // it is being cancelled — so `before` is always Some for one, and the
+        // rollback below took a failed cancel for a failed replace: it threw
+        // away the fallback kept for a replacement still outstanding, and both
+        // the acceptance and the refusal of that replacement then read as
+        // belonging to nothing.
+        let restating = matches!(&order_req, OrderRequest::Modify { .. });
         // Prices go out as stated. The venue rejects a price off the
         // contract's tick grid rather than adjusting it, so snapping here would
         // substitute a price the caller never gave.
@@ -683,9 +691,10 @@ pub(crate) fn drain_and_send_orders(
                 log::error!("Failed to send order {oid}: {e} — its state is not known");
                 // Restore the last state the venue is known to hold. An
                 // attempt the venue did not accept is not the order's own
-                // values, and hydration must not read it as such. Replace path
-                // only; it carries one id.
-                if oid != 0
+                // values, and hydration must not read it as such. The replace
+                // path alone writes one, and it carries one id.
+                if restating
+                    && oid != 0
                     && let Some(prior) = before
                 {
                     context.insert_order(prior);
