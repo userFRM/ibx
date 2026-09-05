@@ -2006,6 +2006,74 @@ fn a_recovery_record_with_a_side_is_tracked() {
         assert_eq!(order.side, expected, "Side={tag54}");
     }
 }
+
+/// An order is named to a caller as the reference client names it.
+///
+/// The venue states the type on tag 40 and, for the four that travel as `P`,
+/// tells them apart on tag 18. Read from tag 40 alone, a relative order and
+/// both pegs were answered as `TRAIL`, and every multi-letter name as the wire
+/// spells it — `TSL`, `SMID`, `MIDPX` — which no program written against the
+/// reference client knows. A trailing stop limit's limit offset rides tag 6370
+/// and was read from nowhere.
+#[test]
+fn an_order_is_named_as_the_reference_client_names_it() {
+    let cases: [(&[(u32, &str)], &str); 17] = [
+        (&[(40, "P"), (18, "R")], "REL"), (&[(40, "P"), (18, "M")], "PEG MID"),
+        (&[(40, "P"), (18, "P")], "PEG MKT"), (&[(40, "P"), (18, "a")], "TRAIL"),
+        (&[(40, "TSL")], "TRAIL LIMIT"), (&[(40, "SMID")], "SNAP MID"), (&[(40, "SMKT")], "SNAP MKT"),
+        (&[(40, "SREL")], "SNAP PRI"), (&[(40, "MIDPX")], "MIDPRICE"), (&[(40, "PSVR")], "PASSV REL"),
+        (&[(40, "PB")], "PEG BENCH"), (&[(40, "E2M")], "PEG BEST"), (&[(40, "LT")], "LIT"),
+        (&[(40, "SP")], "STP PRT"), (&[(40, "U")], "MKT PRT"), (&[(40, "K")], "MTL"), (&[(40, "PMID2")], "PEG MID"),
+    ];
+    for (typed, name) in cases {
+        let (mut ccp, mut context, shared) = (CcpState::new(), Context::new(), SharedState::new());
+        let mut pairs: Vec<(u32, &str)> = vec![
+            (11, "77"), (150, "0"), (39, "0"), (6008, "756733"), (38, "1"), (55, "SPY"), (54, "1"), (6370, "0.1"),
+        ];
+        pairs.extend_from_slice(typed);
+        let frame: std::collections::HashMap<u32, String> =
+            pairs.iter().map(|(t, v)| (*t, v.to_string())).collect();
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "DU1");
+        let order = shared.orders.get_order_info(77).expect("published").order;
+        assert_eq!(order.order_type, name, "{typed:?}");
+        assert_eq!(order.lmt_price_offset, 0.1, "the limit offset is read off its tag: {typed:?}");
+    }
+}
+
+/// An order the replay names as replaced is recovered like one it names as
+/// new, so the report that ends it reaches the caller.
+///
+/// Measured on a paper session: orders one session had placed and replaced
+/// were named to the next as replaced, under the version the replace gave
+/// them, and were not brought into the book — so when that session withdrew
+/// them the venue's cancelled reports, under the cancel's own id, matched
+/// nothing and no caller heard the orders were gone.
+#[test]
+fn an_order_the_replay_names_as_replaced_is_recovered_and_its_end_is_heard() {
+    let (mut ccp, mut context, shared) = (CcpState::new(), Context::new(), SharedState::new());
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    let sink = Some(crate::engine::hot_loop::EventSink::new(tx, Default::default()));
+    let frame = |pairs: &[(u32, &str)]| -> std::collections::HashMap<u32, String> {
+        pairs.iter().map(|(t, v)| (*t, v.to_string())).collect()
+    };
+    let named = [(6008u32, "756733"), (38, "1"), (55, "SPY"), (54, "1"), (40, "P"), (18, "R"), (99, "0.05")];
+    let mut replaced = vec![(11u32, "77.1"), (41, "77.0"), (150, "5"), (39, "5")];
+    replaced.extend_from_slice(&named);
+    ccp.handle_exec_report(&frame(&replaced), b"", &mut context, &shared, &sink, "DU1");
+    assert!(context.order(77).is_some(), "a replaced order the venue holds is in the book");
+
+    let mut cancelled = vec![(11u32, "C77"), (41, "77.1"), (150, "4"), (39, "4")];
+    cancelled.extend_from_slice(&named);
+    ccp.handle_exec_report(&frame(&cancelled), b"", &mut context, &shared, &sink, "DU1");
+    let heard: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|e| match e {
+            Event::OrderUpdate(u) if u.order_id == 77 => Some(u.status),
+            _ => None,
+        })
+        .collect();
+    assert!(heard.contains(&crate::types::OrderStatus::Cancelled), "the caller hears the order is gone: {heard:?}");
+}
+
 /// An unrecognised or absent tag 59 leaves the wire match with nothing to
 /// report, so the fallback that knows what the caller submitted can run. An
 /// arm producing `DAY` for those cases keeps the fallback from ever

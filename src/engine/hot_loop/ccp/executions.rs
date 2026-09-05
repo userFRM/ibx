@@ -633,9 +633,13 @@ impl CcpState {
                         _ => "SELL".to_string(),
                     },
                     total_quantity: qty_to_f64(qty),
-                    order_type: crate::types::ord_type_fix_str(ord_type_byte).to_string(),
+                    order_type: crate::types::ord_type_api_name(
+                        parsed.get(&40).map_or_else(|| crate::types::ord_type_fix_str(ord_type_byte), String::as_str),
+                        parsed.get(&18).map(String::as_str).unwrap_or_default(),
+                    ).to_string(),
                     lmt_price: limit_price_i64 as f64 / PRICE_SCALE as f64,
                     aux_price: stop_price_i64 as f64 / PRICE_SCALE as f64,
+                    lmt_price_offset: parsed.get(&6370).and_then(|s| s.parse().ok()).unwrap_or(f64::MAX),
                     account: parsed.get(&1).cloned().unwrap_or_default(),
                     // Tag 583, the OCA group. A recovered order without it
                     // reads as standing alone, and resubmitting it drops the
@@ -798,7 +802,6 @@ impl CcpState {
         // recovered as working either.
         let ord_status = parsed.get(&39).map(|s| s.as_str()).unwrap_or("");
         let exec_type = parsed.get(&150).map(|s| s.as_str()).unwrap_or("");
-        let is_new_ack = exec_type == "0";
         let status = status_of(ord_status, clord_id, parsed);
         let replayed = |tag: u32| {
             parsed.get(&tag).map(|v| v.eq_ignore_ascii_case("Y")).unwrap_or(false)
@@ -830,7 +833,13 @@ impl CcpState {
         // The venue naming an order it holds, rather than answering something
         // this session sent. Kept, because the name it states is the
         // authority the recorded one is reconciled against below.
-        let recovering = is_new_ack && !status.is_terminal() && !marked_resend
+        //
+        // Whatever it names it as. Taken only from a report of a new order,
+        // an order the last session had replaced was named to this one as
+        // replaced, under the version the replace gave it, and never reached
+        // the book — so when this session withdrew it, the venue's cancelled
+        // report matched nothing and no caller heard the order was gone.
+        let recovering = !status.is_terminal() && !marked_resend
             && clord_id != 0 && !already_finished
             && (context.order(clord_id).is_none() || unknown);
         if recovering {
@@ -1314,11 +1323,10 @@ impl CcpState {
                 _ => &sec_type,
             };
 
-            let order_type_str = match ord_type_tag {
-                "1" => "MKT", "2" => "LMT", "3" => "STP", "4" => "STP LMT",
-                "P" => "TRAIL", "5" => "MOC", "B" => "LOC", "J" => "MIT",
-                "K" => "MTL", "R" => "REL", _ => ord_type_tag,
-            };
+            let order_type_str = crate::types::ord_type_api_name(
+                ord_type_tag,
+                parsed.get(&18).map(String::as_str).unwrap_or_default(),
+            );
 
             // Unknown maps to empty, which is what `decode_tif` means by it and
             // what makes the fallback below reachable. A catch-all of `DAY`
@@ -1399,10 +1407,7 @@ impl CcpState {
                     crate::types::Side::Sell | crate::types::Side::ShortSell => "SELL",
                 };
                 let t = decode_tif(ctx_order.tif);
-                let o = match ctx_order.ord_type {
-                    b'1' => "MKT", b'2' => "LMT", b'3' => "STP", b'4' => "STP LMT",
-                    b'P' => "TRAIL", _ => "",
-                };
+                let o = crate::types::ord_type_api_name(crate::types::ord_type_fix_str(ctx_order.ord_type), "");
                 (a, t, o)
             } else {
                 ("", "", "")
@@ -1441,6 +1446,9 @@ impl CcpState {
                 order_type: if order_type_str.is_empty() { fb_ord_type.to_string() } else { order_type_str.to_string() },
                 lmt_price: limit_price,
                 aux_price: stop_px,
+                // A trailing stop limit's limit offset, which the venue states
+                // on its own tag and which was read from nowhere.
+                lmt_price_offset: parsed.get(&6370).and_then(|s| s.parse().ok()).unwrap_or(f64::MAX),
                 tif: if tif_str.is_empty() { fb_tif.to_string() } else { tif_str.to_string() },
                 account: if account.is_empty() { account_id.to_string() } else { account.clone() },
                 perm_id,

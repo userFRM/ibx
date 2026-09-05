@@ -1527,9 +1527,16 @@ fn a_family_send_that_stops_partway_forgets_what_it_did_not_send() {
     );
 }
 
-/// and every later action restated from the nine this client had recorded.
+/// A replace carries every number a shape is defined by but a trailing
+/// percent, and names each in the slot the shape's submit reads it from.
+///
+/// The trail of a trailing stop limit, a peg's offset and cap, a snap's offset
+/// and a midprice cap used to be refused as numbers the replace had nowhere to
+/// put. Measured on a paper session, each shape placed and replaced, the venue
+/// takes them on the tags the submit states them on, so the replace carries
+/// them; the percent is neither a price nor a trigger and is still refused.
 #[test]
-fn a_replace_that_cannot_state_the_number_asked_for_is_refused() {
+fn a_replace_carries_every_number_but_a_trailing_percent() {
     let core = ClientCore::new();
     let placed = ApiOrder {
         order_id: 42, action: "BUY".into(), total_quantity: 1.0,
@@ -1537,21 +1544,23 @@ fn a_replace_that_cannot_state_the_number_asked_for_is_refused() {
         tif: "DAY".into(), ..Default::default()
     };
     core.track_order(42, ApiContract::default(), placed.clone(), 0);
-
-    // A number the replacement does not name leaves the placed one in force,
-    // which is how a caller moves the quantity alone.
-    let fewer = ApiOrder { total_quantity: 2.0, ..placed.clone() };
-    assert!(
-        core.modify_refusal(42, &fewer).is_none(),
-        "the quantity is on the replace and travels",
+    let wider = ApiOrder { aux_price: 9.0, lmt_price_offset: 2.0, ..placed };
+    assert!(core.modify_refusal(42, &wider).is_none(), "the trail and the limit offset travel");
+    assert_eq!(
+        (ClientCore::replace_price(&wider), ClientCore::replace_trigger(&wider)),
+        (2 * PRICE_SCALE, 9 * PRICE_SCALE),
+        "the limit offset is the price the replace names, the trail its trigger",
     );
+    let unset = ApiOrder { lmt_price_offset: f64::MAX, lmt_price: f64::MAX, aux_price: f64::MAX, ..wider };
+    assert_eq!((ClientCore::replace_price(&unset), ClientCore::replace_trigger(&unset)), (0, 0), "unset names nothing");
 
-    let wider = ApiOrder { aux_price: 9.0, ..placed };
-    let why = core.modify_refusal(42, &wider).expect("the trail has nowhere to go");
-    assert!(
-        why.message.contains("the trail amount"),
-        "the caller is told which number cannot travel: {why}",
-    );
+    let pct = ApiOrder {
+        order_id: 43, action: "SELL".into(), total_quantity: 1.0,
+        order_type: "TRAIL".into(), trailing_percent: 1.0, tif: "DAY".into(), ..Default::default()
+    };
+    core.track_order(43, ApiContract::default(), pct.clone(), 0);
+    let why = core.modify_refusal(43, &ApiOrder { trailing_percent: 2.0, ..pct }).expect("a percent has nowhere to go");
+    assert!(why.message.contains("the trailing percent"), "{why}");
 }
 
 /// The terms a restatement replaced come back when the venue refuses it, and

@@ -1552,6 +1552,296 @@ fn a_cancel_racing_an_unacked_replace_live() {
     );
 }
 
+/// What the venue holds after a replace names a new price for each shape that
+/// carries its price in the shape it was placed with.
+///
+/// A trailing stop was measured and corrected: a replace naming a new trail
+/// went out restating the placed one. The other shapes that carry a price this
+/// way — a trailing stop with a limit, the two pegs, a relative order — still
+/// restate what was placed, because which of their numbers a replace names has
+/// not been measured. This reads it: one session places each and replaces it
+/// naming new numbers, and a second session reads what the venue holds, since
+/// a session that placed an order answers about it from its own record. Run
+/// with `IBX_CAPTURE_WIRE=1` and the second session's replay is printed tag by
+/// tag, so each number is read where the venue put it rather than where this
+/// client's decoder looks.
+///
+/// The venue is expected to hold the numbers the replace named, which is what
+/// the restatement was corrected to send, and to have withdrawn every order
+/// this run placed by the end.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn what_the_venue_holds_after_a_replace_of_each_priced_shape_live() {
+    use ibx::types::{OrderKind, PRICE_SCALE, QTY_SCALE};
+    start_logging();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    let px = |d: f64| (d * PRICE_SCALE as f64).round() as i64;
+    let shown = |p: i64| p as f64 / PRICE_SCALE as f64;
+    // Each shape as placed, then the price and the trigger its replace names.
+    // Bought, capped far below the market, so nothing here can fill.
+    let shapes: Vec<(&str, OrderKind, i64, i64)> = vec![
+        ("REL", OrderKind::Rel { offset: px(0.05) }, 0, px(0.10)),
+        // A midpoint peg on this route takes no offset: "Peg diff offset is
+        // not allowed for PegToMid", the venue said of one. Its replace names
+        // the cap alone.
+        ("PEG MID", OrderKind::PegMid { offset: 0, price_cap: px(100.0) }, px(101.0), 0),
+        ("PEG MKT", OrderKind::PegMkt { offset: px(0.03), price_cap: px(100.0) }, px(101.0), px(0.06)),
+        ("TRAIL LIMIT", OrderKind::TrailingStopLimit { lmt_offset: px(0.10), trail_amt: px(1.0), trail_stop_price: 0 }, px(0.20), px(2.0)),
+        ("PASSV REL", OrderKind::PassiveRel { offset: px(0.05), price_cap: px(100.0) }, px(101.0), px(0.10)),
+        ("SNAP MID", OrderKind::SnapMid { offset: px(0.05) }, 0, px(0.10)),
+        ("SNAP MKT", OrderKind::SnapMkt { offset: px(0.05) }, 0, px(0.10)),
+        ("SNAP PRI", OrderKind::SnapPri { offset: px(0.05) }, 0, px(0.10)),
+        ("MIDPX", OrderKind::MidPrice { price_cap: px(100.0) }, px(101.0), 0),
+    ];
+    let unhex = |s: &str| -> Vec<u8> {
+        (0..s.len() / 2).filter_map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()).collect()
+    };
+    let wanted = [35u32, 11, 41, 39, 150, 40, 18, 44, 99, 211, 6370, 8403, 8404, 6268, 58];
+    let frames_of = |shared: &SharedState, ids: &[u64]| {
+        for (kind, hex) in shared.market.unread_wire() {
+            if kind != "trading-msg" { continue; }
+            let tags = fix::fix_parse(&unhex(&hex));
+            let names = tags.get(&11)
+                .and_then(|v| v.trim_start_matches('C').chars().take_while(char::is_ascii_digit).collect::<String>().parse::<u64>().ok())
+                .is_some_and(|id| ids.contains(&id));
+            if tags.get(&fix::TAG_MSG_TYPE).map(String::as_str) != Some("8") || !names { continue; }
+            let line: Vec<String> = wanted.iter().filter_map(|t| tags.get(t).map(|v| format!("{t}={v}"))).collect();
+            println!("  frame: {}", line.join(" "));
+        }
+    };
+
+    println!("=== What the venue holds after a replace of each priced shape ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id.clone(), farm, ccp, hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+    let join = run_hot_loop(hot_loop);
+
+    let ids: Vec<u64> = shapes.iter().map(|_| common::next_order_id()).collect();
+    for ((name, kind, _, _), &order_id) in shapes.iter().zip(&ids) {
+        println!("  {name}: order {order_id} placed as {kind:?}");
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+            order_id, instrument: inst_id, con_id: 0, side: Side::Buy, qty: QTY_SCALE,
+            kind: kind.clone(), tif: b'0', attrs: ibx::types::OrderAttrs::default(),
+        })).expect("send failed");
+    }
+    let mut working: Vec<u64> = Vec::new();
+    let mut refused: Vec<u64> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while Instant::now() < deadline && working.len() + refused.len() < ids.len() {
+        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if !ids.contains(&u.order_id) || working.contains(&u.order_id) || refused.contains(&u.order_id) {
+                continue;
+            }
+            match u.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => working.push(u.order_id),
+                OrderStatus::Rejected | OrderStatus::Inactive => {
+                    let why = shared.orders.get_order_info(u.order_id).map(|i| i.order_state.reject_reason).unwrap_or_default();
+                    println!("  order {} refused — {why}", u.order_id);
+                    refused.push(u.order_id);
+                }
+                _ => {}
+            }
+        }
+    }
+    for ((name, _, price, stop_price), &order_id) in shapes.iter().zip(&ids) {
+        if !working.contains(&order_id) {
+            println!("  {name}: never working, not replaced");
+            continue;
+        }
+        println!("  {name}: the replace names price {} and trigger {}", shown(*price), shown(*stop_price));
+        control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+            order_id, price: *price, qty: QTY_SCALE, outside_rth: false,
+            ord_type: 0, tif: 0, stop_price: *stop_price,
+        })).expect("replace failed");
+    }
+    let deadline = Instant::now() + Duration::from_secs(12);
+    while Instant::now() < deadline {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::OrderUpdate(u)) if ids.contains(&u.order_id) => {
+                println!("  [update] {} {:?}", u.order_id, u.status);
+            }
+            Ok(Event::CancelReject(r)) if ids.contains(&r.order_id) => {
+                println!("  [replace refused] {} type={} code={}", r.order_id, r.reject_type, r.reason_code);
+            }
+            _ => {}
+        }
+    }
+    for row in shared.orders.drain_order_inactive() {
+        println!("  refusal: {} {} {}", row.0, row.1, row.2);
+    }
+    for ((name, ..), &order_id) in shapes.iter().zip(&ids) {
+        if let Some(info) = shared.orders.get_order_info(order_id) {
+            println!(
+                "  {name}: this session states type {} lmt {} aux {} lmtOffset {}",
+                info.order.order_type, info.order.lmt_price, info.order.aux_price, info.order.lmt_price_offset,
+            );
+        }
+    }
+    println!("  what the first session heard, frame by frame:");
+    frames_of(&shared, &ids);
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    drop(join.join().expect("hot loop thread panicked"));
+    std::thread::sleep(Duration::from_secs(5));
+
+    println!("\n  --- a second session reads the venue's own statement ---");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("the second Gateway::connect failed");
+    drop(gw);
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id.clone(), farm, ccp, hmds, None,
+    );
+    let join = run_hot_loop(hot_loop);
+    let named = shared.orders.wait_for_replay();
+    println!("  the replay {}", if named { "finished" } else { "did not finish in time" });
+    // Everything the venue is working, this run's and whatever an earlier
+    // run left, so the account is clear when this ends.
+    let mut remaining: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut held_as_asked: Vec<(&str, bool)> = Vec::new();
+    for (order_id, info) in shared.orders.drain_open_orders() {
+        let outstanding = !matches!(info.order_state.status.as_str(), "Filled" | "Cancelled");
+        match ids.iter().position(|id| *id == order_id) {
+            Some(at) => {
+                let (name, _, price, stop_price) = &shapes[at];
+                println!(
+                    "  {name}: the venue states {} type {} lmt {} aux {} lmtOffset {}",
+                    info.order_state.status, info.order.order_type,
+                    info.order.lmt_price, info.order.aux_price, info.order.lmt_price_offset,
+                );
+                // The cap and the limit offset are the price the replace
+                // named; the trail and the offsets are its trigger. The venue
+                // states each where this client reads it.
+                let near = |stated: f64, asked: i64| asked == 0 || (stated - shown(asked)).abs() < 1e-9;
+                let price_as_asked = if *name == "TRAIL LIMIT" {
+                    near(info.order.lmt_price_offset, *price)
+                } else {
+                    near(info.order.lmt_price, *price)
+                };
+                held_as_asked.push((name, price_as_asked && near(info.order.aux_price, *stop_price)));
+            }
+            None if outstanding => println!("  order {order_id} left working by an earlier run — withdrawn below"),
+            None => {}
+        }
+        if outstanding {
+            remaining.insert(order_id);
+        }
+    }
+    println!("  the replay, frame by frame:");
+    frames_of(&shared, &ids);
+
+    // Withdrawn from the session that now holds them: each by name, and
+    // whatever that leaves by contract, the way the account sweep withdraws.
+    for &order_id in &remaining {
+        let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }));
+    }
+    let mut swept = false;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !remaining.is_empty() && Instant::now() < deadline {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::OrderUpdate(u)) if remaining.contains(&u.order_id) => {
+                if matches!(u.status, OrderStatus::Cancelled | OrderStatus::Filled | OrderStatus::Rejected) {
+                    remaining.remove(&u.order_id);
+                }
+            }
+            Ok(Event::CancelReject(r)) if remaining.contains(&r.order_id) => {
+                println!("  [cancel refused] {} type={} code={}", r.order_id, r.reject_type, r.reason_code);
+            }
+            _ => {}
+        }
+        if !swept && Instant::now() > deadline - Duration::from_secs(80) {
+            swept = true;
+            for instrument in 0..shared.market.instrument_count() {
+                let _ = control_tx.send(ControlCommand::Order(OrderRequest::CancelAll { instrument }));
+            }
+        }
+    }
+    println!("  what the cancels were answered with, frame by frame:");
+    frames_of(&shared, &ids);
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+    let ours: Vec<u64> = remaining.iter().copied().filter(|id| ids.contains(id)).collect();
+    let earlier: Vec<u64> = remaining.iter().copied().filter(|id| !ids.contains(id)).collect();
+    if !earlier.is_empty() {
+        println!("  still being withdrawn from an earlier run, the venue's business now: {earlier:?}");
+    }
+    assert!(ours.is_empty(), "still working after the cancels — clean up {ours:?} by hand");
+    let kept_the_placed: Vec<&str> = held_as_asked.iter().filter(|(_, ok)| !ok).map(|(n, _)| *n).collect();
+    assert!(
+        kept_the_placed.is_empty(),
+        "the venue holds the placed number, not the one the replace named, for {kept_the_placed:?}",
+    );
+    println!("\n  PASS — the venue holds what each replace named, and every order of this run is withdrawn");
+}
+
+/// What the account is working, read and left alone.
+///
+/// A reading for the times an order is left behind: every order the replay
+/// names, with the status the venue states for it, and with
+/// `IBX_CAPTURE_WIRE=1` the replay's frames tag by tag. Nothing is sent.
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn what_the_account_is_working_live() {
+    start_logging();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    println!("=== What the account is working ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        ibx::gateway::Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, _event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(),
+        Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id, farm, ccp, hmds, None,
+    );
+    let join = run_hot_loop(hot_loop);
+    let named = shared.orders.wait_for_replay();
+    println!("  the replay {}", if named { "finished" } else { "did not finish in time" });
+    std::thread::sleep(Duration::from_secs(3));
+    for (order_id, info) in shared.orders.drain_open_orders() {
+        println!(
+            "  order {order_id}: {} {} {} type {} lmt {} aux {} qty {}",
+            info.order_state.status, info.contract.symbol, info.order.action, info.order.order_type,
+            info.order.lmt_price, info.order.aux_price, info.order.total_quantity,
+        );
+    }
+    let unhex = |s: &str| -> Vec<u8> {
+        (0..s.len() / 2).filter_map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()).collect()
+    };
+    let wanted = [35u32, 11, 41, 37, 39, 150, 54, 40, 18, 44, 99, 211, 6370, 59, 100, 58, 97];
+    for (kind, hex) in shared.market.unread_wire() {
+        if kind != "trading-msg" { continue; }
+        let tags = fix::fix_parse(&unhex(&hex));
+        if tags.get(&fix::TAG_MSG_TYPE).map(String::as_str) != Some("8") { continue; }
+        let line: Vec<String> = wanted.iter().filter_map(|t| tags.get(t).map(|v| format!("{t}={v}"))).collect();
+        println!("  frame: {}", line.join(" "));
+    }
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+    println!("\n  (nothing sent; this is a reading)");
+}
+
 /// A real fill books the quantity the venue reported, and moves the holding.
 ///
 /// Run against a European listing, which trades while New York is closed, so

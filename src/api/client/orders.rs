@@ -256,12 +256,13 @@ impl EClient {
             if let Some(refusal) = self.core.modify_refusal(oid, order) {
                 return Err(refusal);
             }
-            let price = crate::types::price_from_f64(order.lmt_price);
+            // Each read from the field the submit reads it from: a stop's
+            // trigger rides on aux_price, and a trailing stop limit's price is
+            // its limit offset. Reading only lmt_price left a stop order
+            // modifying itself to a limit price of zero.
+            let price = ClientCore::replace_price(order);
             let qty = crate::types::qty_from_f64(order.total_quantity);
-            // A stop's trigger rides on aux_price, exactly as it does on the
-            // submit path. Reading only lmt_price left a stop order modifying
-            // itself to a limit price of zero.
-            let stop_price = crate::types::price_from_f64(order.aux_price);
+            let stop_price = ClientCore::replace_trigger(order);
             ControlCommand::Order(OrderRequest::Modify {
                 order_id: oid,
                 price,

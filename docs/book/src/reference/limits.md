@@ -131,7 +131,12 @@ kinds cannot be stated that way and the call is refused rather than sent:
 Everything else is replaced as itself, including the ones that carry more than
 a type and a price: hidden, all-or-none, iceberg, discretionary, sweep-to-fill,
 an OCA group, a good-till date, a bracket child, an algo, a conditional order,
-and the trailing, pegged, midpoint and limit-if-touched types.
+and the trailing, pegged, midpoint and limit-if-touched types. A modify of one
+of those names its defining number in the field the placement used: a trail, a
+peg offset or a snap offset on the auxiliary price, a cap on the limit price, a
+trailing stop limit's limit offset on `lmtPriceOffset`. The one number a modify
+cannot move is a trailing percent, and a modify naming a new one is refused
+rather than sent.
 
 A relative order is refused a modify as well. It answers both ways: sometimes
 the venue takes the replace and the order goes on working, and sometimes

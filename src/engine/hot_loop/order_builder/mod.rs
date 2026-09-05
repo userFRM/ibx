@@ -482,9 +482,9 @@ pub(crate) fn drain_and_send_orders(
                 // shape it had, so a trigger on the request cannot become a tag
                 // 99 for a limit order.
                 //
-                // A pegged or relative order holds its offset in `stop_price`
-                // and restates it on tag 99 unchanged. Those types are refused
-                // a modify outright.
+                // A pegged, relative or snap order holds its offset in
+                // `stop_price`, and a replace naming a new one restates it
+                // below.
                 let carries_trigger = trigger_only
                     || (matches!(ord_type, b'4' | crate::types::ORD_LIT)
                         && if ord_type_stated {
@@ -499,6 +499,14 @@ pub(crate) fn drain_and_send_orders(
                 let new_stop = if trigger_only && stop_price == 0 {
                     price
                 } else if carries_trigger && stop_price != 0 {
+                    stop_price
+                } else if stop_price != 0 && orig_stop != 0 && !type_changed {
+                    // A pegged, relative or snap order holds its offset here,
+                    // and the venue states the offset it holds on this tag.
+                    // The shape restated below carries the caller's new offset
+                    // on the peg tag, and this has to agree with it: measured,
+                    // a relative order replaced naming a new offset went out
+                    // stating the old one on both, and the venue kept it.
                     stop_price
                 } else if type_changed && !carries_trigger {
                     // The replace moved the order to a type with no trigger.
@@ -1372,43 +1380,57 @@ fn replace_needs_the_placed_record(ord_type: u8) -> bool {
 /// The placed shape with whatever the replace named written into it.
 ///
 /// These types carry their price in the shape rather than on the lean
-/// message — a trail amount, a peg offset, a snap cap — so a replace restates
-/// it from the record. A caller naming a new one means that number, and left
-/// out of the restatement the venue keeps the old one while this session
-/// records the new: measured on a paper session, a replace naming a trail of
-/// nine went out as five and was accepted.
+/// message — a trail, a peg or snap offset, a cap — so a replace restates it
+/// from the record. A caller naming a new one means that number, and left out
+/// of the restatement the venue keeps the old one while this session records
+/// the new. Measured on a paper session, shape by shape: a trailing stop
+/// replaced naming a trail of nine went out as five and was accepted; a
+/// relative order, a midpoint peg, a midprice order and a trailing stop limit
+/// each replaced naming a new offset, cap, trail or limit offset were read
+/// back on a second session still held at the placed number.
 ///
-/// Only the trailing stop is corrected here. That is the one whose frame was
-/// read and whose replace the venue was seen to accept; for the rest, which
-/// of their numbers a replace names is not established.
+/// Each number goes where the shape's own submit puts the same field. The
+/// trigger the replace names is the trail, the peg offset or the snap offset,
+/// which the submit reads off the auxiliary price; the price it names is the
+/// cap, or a trailing stop limit's limit offset, which the submit reads off
+/// the limit price. A trailing stop carries no limit price at all, so the
+/// price a replace names is not its trail. The two shapes this account's
+/// routes refuse at placement — pegged to market and passive relative — are
+/// restated the same way, and the venue's answer to the placement is the
+/// check on them.
 ///
 /// A replace states nothing with a zero, which is how a caller moves the
 /// quantity alone; that leaves the placed value in force, which is right.
-fn restate_with(kind: &crate::types::OrderKind, _price: i64, stop_price: i64) -> crate::types::OrderKind {
+fn restate_with(kind: &crate::types::OrderKind, price: i64, stop_price: i64) -> crate::types::OrderKind {
     use crate::types::OrderKind as K;
     let named = |placed: i64, asked: i64| if asked != 0 { asked } else { placed };
     match kind {
-        // The trail goes out on tag 99, which is the field the reference
-        // client calls the auxiliary price and this command calls
-        // `stop_price`. The limit price a caller names is tag 44, which a
-        // trailing stop does not carry, so it is not the trail and mapping it
-        // to one puts the wrong number on the wire in the other direction.
-        //
-        // What the order was placed with beyond the trail — the price the
-        // trail starts from — is not written by the sender at all, so there
-        // is nothing to restate for it.
         K::TrailingStop { trail_stop_price, trail_amt } => K::TrailingStop {
             trail_stop_price: *trail_stop_price,
             trail_amt: named(*trail_amt, stop_price),
         },
-        // The other shapes that carry a price here — a trailing stop with a
-        // limit, the two pegs, a relative order — have the same defect and are
-        // not corrected, because which of their numbers a replace names has
-        // not been measured. A peg to the midpoint carries an offset and a
-        // cap; nothing read so far says which of the two a caller means, and
-        // guessing puts a cap where an offset belongs. They keep restating the
-        // placed value, which is wrong in the same way and wrong in a way that
-        // has been seen rather than assumed.
+        K::TrailingStopLimit { lmt_offset, trail_amt, trail_stop_price } => K::TrailingStopLimit {
+            lmt_offset: named(*lmt_offset, price),
+            trail_amt: named(*trail_amt, stop_price),
+            trail_stop_price: *trail_stop_price,
+        },
+        K::Rel { offset } => K::Rel { offset: named(*offset, stop_price) },
+        K::SnapMkt { offset } => K::SnapMkt { offset: named(*offset, stop_price) },
+        K::SnapMid { offset } => K::SnapMid { offset: named(*offset, stop_price) },
+        K::SnapPri { offset } => K::SnapPri { offset: named(*offset, stop_price) },
+        K::PegMkt { offset, price_cap } => K::PegMkt {
+            offset: named(*offset, stop_price),
+            price_cap: named(*price_cap, price),
+        },
+        K::PegMid { offset, price_cap } => K::PegMid {
+            offset: named(*offset, stop_price),
+            price_cap: named(*price_cap, price),
+        },
+        K::PassiveRel { offset, price_cap } => K::PassiveRel {
+            offset: named(*offset, stop_price),
+            price_cap: named(*price_cap, price),
+        },
+        K::MidPrice { price_cap } => K::MidPrice { price_cap: named(*price_cap, price) },
         other => other.clone(),
     }
 }

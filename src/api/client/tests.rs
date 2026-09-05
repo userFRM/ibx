@@ -82,6 +82,30 @@ fn modifying_a_stop_carries_the_new_trigger() {
         other => panic!("expected a Modify, got {other:?}"),
     }
 }
+/// A trailing stop limit's replace names its limit offset as the price and
+/// its trail as the trigger, which is where the submit reads each from.
+/// Read from `lmt_price`, the offset a caller set on `lmt_price_offset` never
+/// reached the request.
+#[test]
+fn modifying_a_trailing_stop_limit_carries_its_offset_and_trail() {
+    let (client, rx, _shared) = test_client();
+    let placed = Order {
+        action: "SELL".into(), total_quantity: 1.0, order_type: "TRAIL LIMIT".into(),
+        aux_price: 1.0, lmt_price_offset: 0.1, tif: "DAY".into(), ..Default::default()
+    };
+    client.place_order(9202, &spy(), &placed).unwrap();
+    rx.try_recv().expect("the submit");
+
+    let moved = Order { aux_price: 2.0, lmt_price_offset: 0.2, ..placed };
+    client.place_order(9202, &spy(), &moved).unwrap();
+    match rx.try_recv().expect("the modify") {
+        ControlCommand::Order(OrderRequest::Modify { price, stop_price, .. }) => assert_eq!(
+            (price, stop_price), ((0.2 * PRICE_SCALE_F) as i64, (2.0 * PRICE_SCALE_F) as i64),
+        ),
+        other => panic!("expected a Modify, got {other:?}"),
+    }
+}
+
 /// Nothing on an execution report carries a parent order id, so the engine
 /// reports none. This client placed the order and was told the parent, so it
 /// can answer where the engine cannot — and an order it did not place keeps

@@ -316,11 +316,11 @@ impl EClient {
             if let Some(refusal) = self.core.modify_refusal(oid, &api_order) {
                 return self.report_refusal(py, order_id, refusal);
             }
-            let price = crate::types::price_from_f64(api_order.lmt_price);
+            // Each read from the field the submit reads it from, as on the
+            // other surface.
+            let price = ClientCore::replace_price(&api_order);
             let qty = crate::types::qty_from_f64(api_order.total_quantity);
-            // A stop's trigger rides on aux_price, exactly as it does on the
-            // submit path.
-            let stop_price = crate::types::price_from_f64(api_order.aux_price);
+            let stop_price = ClientCore::replace_trigger(&api_order);
             ControlCommand::Order(OrderRequest::Modify {
                 order_id: oid,
                 price,

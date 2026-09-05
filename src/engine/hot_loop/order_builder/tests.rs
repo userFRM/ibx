@@ -3302,6 +3302,89 @@ fn a_replace_naming_a_new_trail_puts_that_trail_on_the_wire() {
     );
 }
 
+/// A placed order, replaced naming a price and a trigger, and the frame the
+/// replace put on the wire.
+fn replace_frame(kind: crate::types::OrderKind, price: i64, stop_price: i64) -> String {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        con_id: 0, order_id: 42, instrument, side: Side::Buy, qty: crate::types::QTY_SCALE,
+        kind, tif: b'0', attrs: crate::types::OrderAttrs::default(),
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let mut buf = [0u8; 8192];
+    let _placed = peer.read(&mut buf).expect("the order reaches the peer");
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 42, price, qty: crate::types::QTY_SCALE, outside_rth: false,
+        ord_type: 0, tif: 0, stop_price,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let n = peer.read(&mut buf).unwrap();
+    String::from_utf8_lossy(&buf[..n]).to_string()
+}
+
+/// Every statement of one tag on a frame, in order.
+fn stated(msg: &str, tag: &str) -> Vec<String> {
+    msg.split('\u{1}').filter_map(|f| f.strip_prefix(tag).map(str::to_string)).collect()
+}
+
+/// What a replace naming a new offset or cap puts on the wire, for every
+/// shape that carries one in the shape it was placed with.
+///
+/// Measured on a paper session, each shape placed and then replaced naming a
+/// new number: the venue went on holding the placed offset of a relative
+/// order, the placed cap of a midpoint peg and of a midprice order, and the
+/// placed trail and limit offset of a trailing stop limit, because the replace
+/// restated each from the record of the placement while the caller's number
+/// went nowhere. The venue reads each number from the tag the shape's own
+/// submit states it on, so that is where the replace states the new one — on
+/// every tag the submit uses, and on none the caller did not name.
+#[test]
+fn a_replace_naming_a_new_offset_or_cap_puts_it_where_the_submit_does() {
+    use crate::types::{OrderKind as K, PRICE_SCALE as P};
+    let one = |tag: &str, msg: &str| {
+        let all = stated(msg, tag);
+        assert!(all.len() <= 1, "{tag} stated twice on one frame: {msg}");
+        all.into_iter().next()
+    };
+
+    let msg = replace_frame(K::Rel { offset: 5 * P / 100 }, 0, 10 * P / 100);
+    assert_eq!(one("211=", &msg).as_deref(), Some("0.1"), "a relative order's offset: {msg}");
+    assert_eq!(one("99=", &msg).as_deref(), Some("0.1"), "and the trigger tag agrees with it: {msg}");
+
+    let msg = replace_frame(K::PegMid { offset: 0, price_cap: 100 * P }, 101 * P, 0);
+    assert_eq!(one("44=", &msg).as_deref(), Some("101"), "a midpoint peg's cap: {msg}");
+    assert_eq!(one("211=", &msg).as_deref(), Some("0"), "and the offset it was placed with stays: {msg}");
+
+    let msg = replace_frame(K::MidPrice { price_cap: 100 * P }, 101 * P, 0);
+    assert_eq!(one("44=", &msg).as_deref(), Some("101"), "a midprice order's cap: {msg}");
+
+    let msg = replace_frame(K::SnapMid { offset: 5 * P / 100 }, 0, 10 * P / 100);
+    assert_eq!(one("211=", &msg).as_deref(), Some("0.1"), "a snap's offset: {msg}");
+    assert_eq!(one("99=", &msg).as_deref(), Some("0.1"), "on both tags the venue states it on: {msg}");
+
+    let msg = replace_frame(
+        K::TrailingStopLimit { lmt_offset: 10 * P / 100, trail_amt: P, trail_stop_price: 0 },
+        20 * P / 100, 2 * P,
+    );
+    assert_eq!(one("99=", &msg).as_deref(), Some("2"), "a trailing stop limit's trail: {msg}");
+    assert_eq!(one("211=", &msg).as_deref(), Some("2"), "on both of its tags: {msg}");
+    assert_eq!(one("6370=", &msg).as_deref(), Some("0.2"), "and its limit offset: {msg}");
+
+    // A replace naming nothing leaves every placed number in force, which is
+    // how a caller moves the quantity alone.
+    let msg = replace_frame(K::TrailingStopLimit { lmt_offset: 10 * P / 100, trail_amt: P, trail_stop_price: 0 }, 0, 0);
+    assert_eq!((one("211=", &msg).as_deref(), one("6370=", &msg).as_deref()), (Some("1"), Some("0.1")), "{msg}");
+}
+
 
 /// A preview is the order it asks about, and nothing less.
 ///

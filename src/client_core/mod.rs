@@ -2593,29 +2593,18 @@ impl ClientCore {
     /// The defining number a replace cannot carry, where the replacement names
     /// a different one.
     ///
-    /// These types hold their defining price in the shape the submit sent — a
-    /// trail, a peg offset, a midpoint cap — and a replace restates that shape
-    /// from the record of the order as it was placed. What the replace itself
-    /// states is the limit price, the trigger and the quantity; a new value for
-    /// anything else has nowhere to go on it. Sent anyway, the venue went on
-    /// working the number the order was placed with while this client recorded
-    /// the new one and answered that the replacement had been submitted.
-    ///
-    /// The plain trailing stop's amount is the exception: it rides the trigger
-    /// tag, and a session was seen to accept a replace that moved it. Which of
-    /// a peg's two numbers a replace would name has not been established, and
-    /// a number this client cannot state is refused rather than guessed.
+    /// A shape that holds its defining price in the form the submit sent — a
+    /// trail, a peg or snap offset, a cap, a limit offset — has it restated
+    /// from the record, with whatever the replace names written into it: each
+    /// was measured on a paper session, placed, replaced and read back. The
+    /// trailing percent is the one number left with nowhere to go: the
+    /// replace carries a price and a trigger, and a percent is neither.
     ///
     /// A replacement that names none of them still goes: a zero and an unset
     /// value both leave the placed number in force, which is how a caller
     /// moves the quantity alone.
     fn replace_cannot_state(tracked: &ApiOrder, incoming: &ApiOrder) -> Option<&'static str> {
         let named = |v: f64| v != 0.0 && v != f64::MAX;
-        // Where a trailing stop with a limit holds its limit-versus-trail
-        // offset, which is the field the submit reads it off.
-        let limit_offset = |o: &ApiOrder| {
-            if o.lmt_price_offset != f64::MAX { o.lmt_price_offset } else { o.lmt_price }
-        };
         let moved = |placed: f64, asked: f64| named(asked) && asked != placed;
         let by_percent = named(tracked.trailing_percent);
         Some(match tracked.order_type.to_uppercase().as_str() {
@@ -2625,20 +2614,30 @@ impl ClientCore {
             "TRAIL" if by_percent && moved(tracked.aux_price, incoming.aux_price) => {
                 "the trail amount"
             }
-            "TRAIL LIMIT" if moved(tracked.aux_price, incoming.aux_price) => "the trail amount",
-            "TRAIL LIMIT" if moved(limit_offset(tracked), limit_offset(incoming)) => {
-                "the limit offset"
-            }
-            "PEG MID" | "PEG MIDPT" if moved(tracked.aux_price, incoming.aux_price) => {
-                "the peg offset"
-            }
-            "PEG MID" | "PEG MIDPT" | "MIDPX" | "MIDPRICE"
-                if moved(tracked.lmt_price, incoming.lmt_price) => "the price cap",
-            "SNAP MID" | "SNAP MIDPT" if moved(tracked.aux_price, incoming.aux_price) => {
-                "the snap offset"
-            }
             _ => return None,
         })
+    }
+
+    /// The price a replace names, read from the field the shape's own submit
+    /// reads it from: a trailing stop limit's limit offset, and every other
+    /// type's limit price. Unset names nothing.
+    ///
+    /// One place, so the two bindings cannot diverge on it.
+    pub fn replace_price(order: &ApiOrder) -> i64 {
+        let named = if order.order_type.eq_ignore_ascii_case("TRAIL LIMIT")
+            && order.lmt_price_offset != f64::MAX
+        {
+            order.lmt_price_offset
+        } else {
+            order.lmt_price
+        };
+        Self::price_or_unset(named)
+    }
+
+    /// The trigger a replace names: the auxiliary price, as the submit reads
+    /// it. Unset names nothing.
+    pub fn replace_trigger(order: &ApiOrder) -> i64 {
+        Self::price_or_unset(order.aux_price)
     }
 
     /// Why a modify of `order_id` cannot be sent, if it cannot.

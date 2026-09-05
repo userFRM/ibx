@@ -265,6 +265,30 @@ pub fn ord_type_from_fix(ord_type: &str, exec_inst: &str) -> u8 {
     }
 }
 
+/// The name the reference client gives an order type, from the name the wire
+/// states and the execution instruction beside it.
+///
+/// The inverse of what a submit makes of a caller's `orderType`, spelled as
+/// that accepts them. Four kinds travel as `P` and are told apart by the
+/// instruction. Read from tag 40 alone, a relative order and both pegs were
+/// answered as `TRAIL`, and every multi-letter name as the wire spells it —
+/// `TSL`, `SMID`, `MIDPX` — which no program written against the reference
+/// client knows. A name this does not know is passed through as stated.
+pub fn ord_type_api_name<'a>(ord_type: &'a str, exec_inst: &str) -> &'a str {
+    match ord_type {
+        "1" => "MKT", "2" => "LMT", "3" => "STP", "4" => "STP LMT", "5" => "MOC",
+        "B" => "LOC", "J" => "MIT", "K" => "MTL", "U" => "MKT PRT", "R" => "REL",
+        "SP" => "STP PRT", "LT" => "LIT", "TSL" => "TRAIL LIMIT", "MIDPX" => "MIDPRICE",
+        "SMKT" => "SNAP MKT", "SMID" => "SNAP MID", "SREL" => "SNAP PRI",
+        "PB" => "PEG BENCH", "E2M" => "PEG BEST", "PSVR" => "PASSV REL", "PMID2" => "PEG MID",
+        "P" if exec_inst.contains('P') => "PEG MKT",
+        "P" if exec_inst.contains('M') => "PEG MID",
+        "P" if exec_inst.contains('R') => "REL",
+        "P" => "TRAIL",
+        other => other,
+    }
+}
+
 /// What-If margin/commission preview response (execution report with tag 6091=1).
 /// Returned when a what-if order is submitted — the order is NOT placed.
 #[derive(Debug, Clone)]
