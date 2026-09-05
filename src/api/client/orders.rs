@@ -189,20 +189,37 @@ impl EClient {
         ));
         let instrument = match placed_on {
             Some(placed_on) if contract.con_id != 0 => {
-                if self.core.cached_instrument(contract.con_id) != Some(placed_on) {
+                if self.core.cached_instrument(&self.shared, contract.con_id) != Some(placed_on) {
                     return Err(wrong_contract());
                 }
                 placed_on
             }
-            _ => self.core.find_or_register_instrument(
-                &self.shared,
-                &self.control_tx,
-                contract.con_id, &contract.symbol, &contract.exchange, &contract.sec_type,
-                &crate::types::model::contract_identity(
-                    &contract.last_trade_date_or_contract_month, contract.strike,
-                    &contract.right, &contract.multiplier, &contract.currency,
-                ),
-            )?,
+            _ => {
+                // An order the venue replayed holds no slot here, and the
+                // check above has nothing to compare. The venue's own book
+                // names the contract it is on, and a replace names the order
+                // rather than the contract — so one naming another contract is
+                // refused rather than recorded against it, and rather than
+                // spending a slot on a contract nothing needs.
+                if replacing
+                    && contract.con_id != 0
+                    && let Some(known) = self.shared.orders.get_order_info(oid)
+                    && known.contract.con_id != 0
+                    && known.contract.con_id != contract.con_id
+                {
+                    return Err(wrong_contract());
+                }
+                self.core.find_or_register_instrument(
+                    &self.shared,
+                    &self.control_tx,
+                    contract.con_id, &contract.symbol, &contract.exchange,
+                    &contract.sec_type,
+                    &crate::types::model::contract_identity(
+                        &contract.last_trade_date_or_contract_month, contract.strike,
+                        &contract.right, &contract.multiplier, &contract.currency,
+                    ),
+                )?
+            }
         };
 
         // If orderId is already tracked, this is a modification — emit Modify instead
@@ -267,7 +284,7 @@ impl EClient {
         // and a restatement written behind that answer put the attempted
         // terms over a refusal that had already put back the real ones.
         if replacing {
-            self.core.restate_order(&self.shared, oid, contract.clone(), placed.clone(), instrument);
+            self.core.restate_order(Some(&self.shared), oid, contract.clone(), placed.clone(), instrument);
         }
         if order.transmit {
             if !replacing {

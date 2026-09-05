@@ -616,6 +616,14 @@ impl HotLoop {
         if !self.context.open_orders_for(instrument).is_empty() {
             return;
         }
+        // And what is queued to be sent. The book holds an order from the
+        // moment it is built, which is a lap after the caller was told it was
+        // accepted: a withdrawal drained in the same pass found the slot
+        // unheld, gave it back, and the order went out on whichever contract
+        // took it next.
+        if self.context.pending_orders.holds(instrument) {
+            return;
+        }
         // Market data was missing from this list. Cancelling tick-by-tick or
         // news on an instrument that also holds an L1 subscription freed the
         // slot underneath it, and the resubscribe record then replayed the old
@@ -670,6 +678,10 @@ impl HotLoop {
             // the next contract to take the slot is read as holding the
             // previous one's quantity until the venue states otherwise.
             self.shared.portfolio.set_position(instrument, 0.0);
+            // And the model the venue last published for it, which is kept by
+            // slot: the next contract handed this one was solved against the
+            // previous contract's volatility and price, and answered finite.
+            self.shared.market.forget_option_model(instrument);
             log::info!("Reclaimed instrument slot {instrument}");
         }
     }
@@ -812,7 +824,7 @@ impl HotLoop {
             self.ccp.sweep_pending_schedule_pairs(&self.shared, &self.event_tx);
             self.ccp.sweep_scanner_enrichments(&self.shared);
             self.ccp.sweep_contract_details(&self.shared, &self.event_tx);
-            self.ccp.sweep_pending_subscribes(&self.shared);
+            self.ccp.sweep_pending_subscribes(&mut self.context, &self.shared);
             self.ccp.sweep_pending_named(&self.shared);
 
             // 4. Check control_plane_rx (SPSC) for commands
@@ -6109,6 +6121,108 @@ mod slot_reclamation_tests {
         assert_eq!(
             hl.shared.portfolio.position(instrument), 0.0,
             "and the holding a caller reads off the slot went with it",
+        );
+    }
+}
+
+#[cfg(test)]
+mod slot_aliasing_tests {
+    use super::*;
+
+    /// The model the venue published for a slot goes back with the slot.
+    ///
+    /// It is kept by slot rather than by contract, so nothing that speaks in
+    /// contract ids can drop it. The next contract handed the slot was solved
+    /// against the previous contract's volatility, price and dividend, and the
+    /// answer came back a finite number about a contract nobody asked about.
+    #[test]
+    fn the_model_a_slot_carried_goes_back_with_it() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let instrument = hl.context.market.register(756733);
+        hl.shared.market.push_option_computation(crate::types::OptionComputation {
+            instrument, implied_vol: 0.42, ..Default::default()
+        });
+        assert!(hl.shared.market.option_model(instrument).is_some(), "the venue stated one");
+
+        hl.try_reclaim_instrument(instrument);
+
+        assert_eq!(
+            hl.context.market.register(265598), instrument,
+            "the slot went to the next contract",
+        );
+        assert!(
+            hl.shared.market.option_model(instrument).is_none(),
+            "and it is not solved against the last contract's model",
+        );
+    }
+
+    /// A lookup the venue never answers gives its slot back.
+    ///
+    /// A caller told the venue knows no such contract has no reason to
+    /// withdraw a subscription that never opened, and nothing else asked. A
+    /// chain naming a few dead strikes spent one slot on each until the table
+    /// ran out — the failure reclaiming exists to prevent.
+    #[test]
+    fn a_lookup_the_venue_never_answers_gives_its_slot_back() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let instrument = hl.context.market.register(0);
+        hl.ccp.pending_md_subscribe.push((
+            1,
+            crate::engine::hot_loop::ccp::PendingSubscribe {
+                con_id: 0, instrument,
+                symbol: "SPY".into(), exchange: "SMART".into(), sec_type: "STK".into(),
+                currency: "USD".into(), last_trade_date: String::new(), strike: 0.0,
+                right: String::new(), multiplier: String::new(),
+                mode_9887: 0, regulatory_snapshot: false,
+            },
+            Instant::now() - std::time::Duration::from_secs(3600),
+        ));
+
+        hl.ccp.sweep_pending_subscribes(&mut hl.context, &hl.shared);
+        hl.reclaim_slots_no_order_holds();
+
+        assert_eq!(
+            hl.context.market.register(265598), instrument,
+            "the slot the abandoned lookup held is offered to the next contract",
+        );
+    }
+}
+
+#[cfg(test)]
+mod queued_order_slot_tests {
+    use super::*;
+
+    /// An order waiting to be sent holds the slot it names.
+    ///
+    /// The book holds an order from the moment it is built, which is a lap
+    /// after the caller was told it was accepted. A withdrawal of the quotes
+    /// drained in the same pass found the slot unheld and gave it back, so the
+    /// order was built a lap later from whatever contract had taken it — sent
+    /// on the wrong contract, and recorded so its fill moved that contract's
+    /// position.
+    #[test]
+    fn an_order_waiting_to_be_sent_holds_its_slot() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let instrument = hl.context.market.register(756733);
+        hl.context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+            order_id: 42,
+            instrument,
+            side: crate::types::Side::Buy,
+            qty: 100 * crate::types::QTY_SCALE,
+            kind: crate::types::OrderKind::Limit { price: 150 * crate::types::PRICE_SCALE },
+            tif: b'0',
+            attrs: Default::default(),
+        });
+
+        hl.try_reclaim_instrument(instrument);
+
+        assert_eq!(
+            hl.context.market.instrument_by_con_id(756733), Some(instrument),
+            "the slot the queued order names is still its contract's",
+        );
+        assert_ne!(
+            hl.context.market.register(265598), instrument,
+            "and is not handed to the next contract that asks",
         );
     }
 }

@@ -243,6 +243,7 @@ impl EClient {
         // the order stays on the instrument it was placed on. A contract
         // naming a different instrument is refused rather than recorded.
         let placed_on = if replacing { self.core.tracked_instrument(oid) } else { None };
+        let venue_now = venue.as_deref();
         let wrong_contract = || Refusal::validation(format!(
             "order {oid} is working on another contract, and a replace names \
              the order rather than the contract: withdraw it and place a new \
@@ -253,16 +254,35 @@ impl EClient {
         // an engine that went away mid-request — is a refusal, and reported
         // as one: nothing this call sends has anywhere to go.
         let instrument = match placed_on {
-            Some(placed_on) if contract.con_id != 0 => {
-                if self.core.cached_instrument(contract.con_id) != Some(placed_on) {
+            Some(placed_on) if contract.con_id != 0 && venue_now.is_some() => {
+                if self.core.cached_instrument(venue_now.unwrap(), contract.con_id)
+                    != Some(placed_on)
+                {
                     return self.report_refusal(py, order_id, wrong_contract());
                 }
                 placed_on
             }
-            _ => match self.find_or_register_instrument(py, contract) {
-                Ok(instrument) => instrument,
-                Err(why) => return self.report_refusal(py, order_id, why),
-            },
+            _ => {
+                // An order the venue replayed holds no slot here, and the
+                // check above has nothing to compare. The venue's own book
+                // names the contract it is on, and a replace names the order
+                // rather than the contract — so one naming another contract is
+                // refused rather than recorded against it, and rather than
+                // spending a slot on a contract nothing needs.
+                if replacing
+                    && contract.con_id != 0
+                    && let Some(known) =
+                        venue_now.and_then(|v| v.orders.get_order_info(oid))
+                    && known.contract.con_id != 0
+                    && known.contract.con_id != contract.con_id
+                {
+                    return self.report_refusal(py, order_id, wrong_contract());
+                }
+                match self.find_or_register_instrument(py, contract) {
+                    Ok(instrument) => instrument,
+                    Err(why) => return self.report_refusal(py, order_id, why),
+                }
+            }
         };
 
         let cmd = if replacing {
@@ -340,9 +360,13 @@ impl EClient {
         // this call returns, and a restatement written behind that answer put
         // the attempted terms over a refusal that had already put back the
         // real ones.
-        if replacing && let Some(venue) = venue.as_deref() {
+        if replacing {
+            // Whether or not the session state is still here. Skipped where it
+            // was not, the record went unchanged for a change that did go out
+            // — and the undo on the send-failure path below still ran, putting
+            // back terms from before a change the venue may have taken.
             self.core.restate_order(
-                venue, oid, api_contract.clone(), tracked_order.clone(), instrument,
+                venue_now, oid, api_contract.clone(), tracked_order.clone(), instrument,
             );
         }
         if api_order.transmit {

@@ -441,7 +441,7 @@ impl EClient {
             order_id, instrument, reject_type: 1, reason_code,
             // The venue's own word on whether the order still stands rides on
             // the refusal; this helper states a refusal without one.
-            still_working: None,
+            answers_a_live_change: true, still_working: None,
             timestamp_ns: 100,
         });
         Ok(())

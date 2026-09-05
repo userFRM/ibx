@@ -742,6 +742,10 @@ impl CcpState {
                             instrument, con_id, position: 0.0, avg_cost,
                         });
                     }
+                    // Last, so a caller waiting on the download is let through
+                    // to an account that has been squared with what the venue
+                    // just said rather than to what it held before.
+                    shared.portfolio.account_download_is_settled();
                 }
             }
             "UT" | "UM" | "RL" => positions::handle_account_update(msg, context, shared),
@@ -1254,7 +1258,9 @@ impl CcpState {
 
     /// A subscription whose contract the venue never named. Reported rather
     /// than left waiting: silence is what this whole path exists to remove.
-    pub(crate) fn sweep_pending_subscribes(&mut self, shared: &SharedState) {
+    pub(crate) fn sweep_pending_subscribes(
+        &mut self, context: &mut Context, shared: &SharedState,
+    ) {
         if self.pending_md_subscribe.is_empty() {
             return;
         }
@@ -1275,6 +1281,12 @@ impl CcpState {
             );
             log::warn!("Subscription abandoned: {reason}");
             shared.market.push_subscription_failure(p.instrument, reason);
+            // The slot the registration took goes back. Nothing else will ask
+            // for it: a caller told the venue knows no such contract has no
+            // reason to withdraw a subscription that never opened, and until
+            // now a chain naming a few dead strikes spent one slot on each
+            // until the table ran out.
+            context.slots_to_reconsider.push(p.instrument);
         }
     }
 
@@ -2376,6 +2388,13 @@ impl CcpState {
         // nobody — so the API layer went on reporting the pre-disconnect
         // status and `req_open_orders` kept asserting it.
         context.mark_orders_uncertain();
+        // And what the account holds, for the same reason and at the same
+        // moment. Marked only when the next connection arrived, the flag said
+        // the download had finished for the whole of a backoff — or for ever,
+        // where the retries ran out — so a caller asking what the account
+        // holds was answered at once from the pre-drop book with nothing to
+        // say the venue had not been heard from since.
+        shared.portfolio.account_download_is_pending();
         for order in context.uncertain_orders() {
             let update = executions::uncertain_update(&order, shared.orders.get_order_info(order.order_id));
             shared.orders.push_order_update(update);

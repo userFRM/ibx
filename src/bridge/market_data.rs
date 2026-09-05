@@ -151,6 +151,17 @@ impl MarketDataState {
         std::mem::take(&mut *self.released_con_ids.lock().unwrap())
     }
 
+    /// Drop the model last published for a slot, because the slot has gone
+    /// back to the table.
+    ///
+    /// Kept by slot rather than by contract, so nothing else can drop it: the
+    /// next contract handed this slot was solved against the previous one's
+    /// volatility, price and dividend, and the answer came back finite and
+    /// wrong.
+    #[doc(hidden)] pub fn forget_option_model(&self, instrument: crate::types::InstrumentId) {
+        self.last_option_model.lock().unwrap().remove(&instrument);
+    }
+
     /// Number of registered instruments.
     pub fn instrument_count(&self) -> u32 {
         self.instrument_count.load(Ordering::Relaxed) as u32

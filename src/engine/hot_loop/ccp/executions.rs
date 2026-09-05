@@ -1030,14 +1030,19 @@ impl CcpState {
             // The venue holds what the attempt stated, so the fallback kept
             // against a refusal is spent. A stale refusal arriving behind the
             // acceptance must not put the old terms back over it.
-            context.pre_replace.remove(&(clord_id, reported_revision));
-            // And said to the surfaces, which keep a copy of their own. They
+            let ours = context.pre_replace.remove(&(clord_id, reported_revision)).is_some();
+            // And said to the surfaces, which keep a copy of their own. Only
+            // where the change was this session's: an acknowledgement of one
+            // made elsewhere, or replayed at connect, spends nothing here and
+            // must spend nothing there. They
             // read the acceptance off a status before this: a fill landing
             // between the attempt and the answer took the more advanced
             // status, the acknowledgement behind it was dropped as stale, and
             // the copy outlived the replacement the venue had taken — so the
             // next refusal put back terms from before it.
-            shared.orders.note_replacement_taken(clord_id);
+            if ours {
+                shared.orders.note_replacement_taken(clord_id);
+            }
         }
         if revision_refused {
             // A revision the venue will not make leaves the order on the terms
@@ -1045,7 +1050,10 @@ impl CcpState {
             // the answer. The refusal of a cancellation is not touched — it
             // changed no terms, and the revision it may be waiting on has its
             // own answer coming.
+            let mut answered_a_live_revision = false;
             if restatement_reason == "102" {
+                answered_a_live_revision =
+                    context.pre_replace.contains_key(&(clord_id, reported_revision));
                 context.restore_pre_replace(clord_id, reported_revision);
             }
             // The order stands as it was, so it has no new status to report —
@@ -1068,14 +1076,11 @@ impl CcpState {
             // message above, the surfaces kept the terms of an attempt the
             // venue had turned down: the caller was told the change did not
             // happen and their own book went on stating that it had.
-            let stood = context.order(clord_id).map(|order| {
-                let status = if order.filled > 0 {
-                    crate::types::OrderStatus::PartiallyFilled
-                } else {
-                    crate::types::OrderStatus::Submitted
-                };
-                (order.instrument, status)
-            });
+            // Where the order stands, as the engine's own book has it after
+            // the restore above — not guessed from what it usually is. An
+            // order the caller had already withdrawn stands at pending cancel,
+            // and reporting it as working said the withdrawal had come undone.
+            let stood = context.order(clord_id).map(|order| (order.instrument, order.status));
             if let Some((instrument, status)) = stood {
                 let reject = crate::types::CancelReject {
                     order_id: clord_id,
@@ -1085,6 +1090,10 @@ impl CcpState {
                     // The report carries no tag 102, and this says as much.
                     reason_code: -1,
                     still_working: Some(status),
+                    // The revision it names is the one the restore above acted
+                    // on, or none was outstanding and there is nothing to put
+                    // back either way.
+                    answers_a_live_change: answered_a_live_revision,
                     timestamp_ns: context.now_ns(),
                 };
                 shared.orders.push_cancel_reject(reject);
@@ -1804,6 +1813,7 @@ impl CcpState {
             reject_type,
             reason_code,
             still_working: restored,
+            answers_a_live_change: answers_a_live_revision,
             timestamp_ns: context.now_ns(),
         };
         shared.orders.push_cancel_reject(reject);

@@ -1513,7 +1513,7 @@ fn working_at(price: f64) -> (ClientCore, SharedState, ApiOrder) {
 fn refusal(reject_type: u8) -> crate::types::CancelReject {
     crate::types::CancelReject {
         order_id: 42, instrument: 0, reject_type, reason_code: 0,
-        still_working: Some(crate::types::OrderStatus::Submitted), timestamp_ns: 0,
+        answers_a_live_change: true, still_working: Some(crate::types::OrderStatus::Submitted), timestamp_ns: 0,
     }
 }
 
@@ -1524,7 +1524,7 @@ fn price_on_record(core: &ClientCore) -> f64 {
 #[test]
 fn a_fill_is_not_the_venues_answer_to_a_replacement() {
     let (core, shared, revision) = working_at(100.0);
-    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
+    core.restate_order(Some(&shared), 42, ApiContract::default(), revision, 0);
     // The venue fills part of the order it holds while it is still deciding.
     core.update_order_status(
         &shared, 42, crate::types::OrderStatus::PartiallyFilled, 10.0, 90.0, 0,
@@ -1538,7 +1538,7 @@ fn a_fill_is_not_the_venues_answer_to_a_replacement() {
 #[test]
 fn a_refused_cancellation_does_not_roll_back_a_replacement() {
     let (core, shared, revision) = working_at(100.0);
-    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
+    core.restate_order(Some(&shared), 42, ApiContract::default(), revision, 0);
     core.retire_rejected(&refusal(1));
 
     assert_eq!(
@@ -1550,7 +1550,7 @@ fn a_refused_cancellation_does_not_roll_back_a_replacement() {
 #[test]
 fn the_venue_taking_the_replacement_settles_it() {
     let (core, shared, revision) = working_at(100.0);
-    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
+    core.restate_order(Some(&shared), 42, ApiContract::default(), revision, 0);
     // The venue fills part of the order it holds while it is still deciding,
     // and then takes the replacement. The fill is not the answer; the taking
     // is, and it is stated rather than read off a status.
@@ -1570,7 +1570,7 @@ fn the_venue_taking_the_replacement_settles_it() {
 #[test]
 fn a_restatement_that_never_left_is_undone() {
     let (core, shared, revision) = working_at(100.0);
-    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
+    core.restate_order(Some(&shared), 42, ApiContract::default(), revision, 0);
     core.undo_restatement(42);
 
     assert_eq!(price_on_record(&core), 100.0, "the record states what the venue holds");
@@ -1595,8 +1595,8 @@ fn a_slot_the_engine_gave_back_is_not_answered_from_the_cache() {
     shared.market.note_released_con_id(756733);
     core.forget_released_slots(&shared);
 
-    assert_eq!(core.cached_instrument(756733), None, "the freed slot is not answered");
-    assert_eq!(core.cached_instrument(265598), Some(5), "the others stand");
+    assert_eq!(core.cached_instrument(&shared, 756733), None, "the freed slot is not answered");
+    assert_eq!(core.cached_instrument(&shared, 265598), Some(5), "the others stand");
 }
 
 /// A replacement of an order the venue replayed records what the venue said.
@@ -1626,7 +1626,7 @@ fn a_replayed_order_is_recorded_as_the_venue_states_it() {
         order_id: 4242, action: "BUY".into(), total_quantity: 100.0,
         order_type: "LMT".into(), lmt_price: 101.0, ..Default::default()
     };
-    core.restate_order(&shared, 4242, ApiContract::default(), revision, 7);
+    core.restate_order(Some(&shared), 4242, ApiContract::default(), revision, 7);
 
     let tracked = core.open_orders.lock().unwrap().get(&4242).cloned().expect("recorded");
     assert_eq!(tracked.instrument, 7, "on the slot the call named");
@@ -1650,10 +1650,10 @@ fn a_replayed_order_is_recorded_as_the_venue_states_it() {
 #[test]
 fn a_refusal_that_states_no_status_still_puts_the_terms_back() {
     let (core, shared, revision) = working_at(100.0);
-    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
+    core.restate_order(Some(&shared), 42, ApiContract::default(), revision, 0);
     core.retire_rejected(&crate::types::CancelReject {
         order_id: 42, instrument: 0, reject_type: 2, reason_code: -1,
-        still_working: None, timestamp_ns: 0,
+        answers_a_live_change: true, still_working: None, timestamp_ns: 0,
     });
 
     assert_eq!(price_on_record(&core), 100.0, "the record states what the venue holds");
@@ -1671,16 +1671,61 @@ fn a_refusal_from_this_side_states_no_reason_code() {
     let (core, _shared, _revision) = working_at(100.0);
     let (_, ours) = core.retire_rejected(&crate::types::CancelReject {
         order_id: 42, instrument: 0, reject_type: 2, reason_code: -1,
-        still_working: None, timestamp_ns: 0,
+        answers_a_live_change: true, still_working: None, timestamp_ns: 0,
     });
     assert_eq!(ours, "Order 42 modify rejected", "no reason, and none invented");
 
     let (_, theirs) = core.retire_rejected(&crate::types::CancelReject {
         order_id: 42, instrument: 0, reject_type: 1, reason_code: 0,
-        still_working: None, timestamp_ns: 0,
+        answers_a_live_change: true, still_working: None, timestamp_ns: 0,
     });
     assert_eq!(
         theirs, "Order 42 cancel rejected by the venue (reason: 0)",
         "and the venue's own reason still reaches the caller",
+    );
+}
+
+/// Every reader of the slot cache is answered from a cache the engine has not
+/// already emptied under it.
+///
+/// The cache answers "which slot does this contract hold" without a round trip
+/// to the engine, and the engine hands a freed slot to the next contract that
+/// needs one. Every reader has to drop what has been given back before it
+/// reads, and one of them will always forget: a chain of margin previews frees
+/// its slot after each one, so a later market-data request read a slot the
+/// first strike now holds, decided it was already watched, and delivered that
+/// strike's prices under every other strike's request id.
+#[test]
+fn the_slot_cache_cannot_be_read_before_it_is_emptied() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    core.cache_instrument(756733, 4);
+    shared.market.note_released_con_id(756733);
+
+    assert_eq!(
+        core.cached_instrument(&shared, 756733), None,
+        "the reader is answered from a cache the release has already reached",
+    );
+}
+
+/// A refusal of a change the venue has already answered puts nothing back.
+///
+/// The venue takes a second change before it has answered the first, and the
+/// engine settles a refusal against the revision it names. That verdict now
+/// reaches the surfaces: without it, a late or duplicate refusal of a change
+/// already answered rolled back the change still outstanding, so the record
+/// stated terms the venue was working away from.
+#[test]
+fn a_refusal_of_a_change_already_answered_puts_nothing_back() {
+    let (core, shared, revision) = working_at(100.0);
+    core.restate_order(Some(&shared), 42, ApiContract::default(), revision, 0);
+    core.retire_rejected(&crate::types::CancelReject {
+        order_id: 42, instrument: 0, reject_type: 2, reason_code: 0,
+        still_working: None, answers_a_live_change: false, timestamp_ns: 0,
+    });
+
+    assert_eq!(
+        price_on_record(&core), 101.0,
+        "the change the venue is still working is not rolled back by a stale refusal",
     );
 }

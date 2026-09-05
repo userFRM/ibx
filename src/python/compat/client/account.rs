@@ -164,7 +164,9 @@ impl EClient {
         let mut positions = shared.portfolio.position_infos();
         loop {
             let unnamed = positions.iter().any(|pi| {
-                pi.symbol.is_empty() && self.core.get_contract(pi.con_id, &shared).is_none()
+                pi.position != 0.0
+                    && pi.symbol.is_empty()
+                    && self.core.get_contract(pi.con_id, &shared).is_none()
             });
             if !unnamed || waited_from.elapsed() > std::time::Duration::from_secs(2) {
                 break;
@@ -265,9 +267,21 @@ impl EClient {
         let Some(_connected) = self.tx_or_report(req_id)? else { return Ok(()) };
         let shared = self.shared_state()?;
         let _ = ledger_and_nlv;
-        for _ in 0..500 {
-            if shared.portfolio.account_data_received() { break; }
+        // The same wait the plain answer makes, on the flag that a dropped
+        // connection actually clears: the one below it was stored once at the
+        // first account message of the session and cleared nowhere, so the
+        // loop meant nothing after that and this path answered from the
+        // pre-drop book without a warning.
+        for _ in 0..1000 {
+            if shared.portfolio.account_download_complete() { break; }
             py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
+        }
+        if !shared.portfolio.account_download_complete() {
+            let why = "the account had not finished stating its holdings within the wait, \
+                       so what follows is what this session already held rather than what \
+                       the account holds";
+            log::warn!("{why}");
+            self.report_refusal(py, req_id, Refusal::validation(why))?;
         }
         let acct_default = self.account();
         let acct_name = if !account.is_empty() { account } else { acct_default.as_str() };
@@ -303,17 +317,36 @@ impl EClient {
             if shared.portfolio.account_data_received() { break; }
             py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
         }
-        let positions = shared.portfolio.position_infos();
-        for pi in &positions {
+        // Watching before reading, as on the other surface: the queue of moves
+        // is drained once for everyone watching, so a holding that moves while
+        // this answer is being assembled was taken by a watcher that already
+        // existed and reached this one nowhere.
+        self.positions_multi_requested.lock().unwrap().insert(req_id);
+        let held: Vec<_> = shared.portfolio.position_infos()
+            .into_iter()
+            .filter(|pi| pi.position != 0.0)
+            .collect();
+        if !account.is_empty() && account != self.account() {
+            let why = format!(
+                "account {account} was named and the holdings that follow are {}'s, which \
+                 is the account this session opened under",
+                self.account(),
+            );
+            log::warn!("{why}");
+            self.report_refusal(py, req_id, Refusal::validation(why))?;
+        }
+        // Labelled with the account they are on, not with the one that was
+        // asked about: these are the holdings of the account this session
+        // opened under, and echoing the caller's own put another account's
+        // name on them.
+        let on = self.account();
+        for pi in &held {
             let c_py = Py::new(py, self.position_contract(py, pi, &shared)?)?.into_any();
             let avg_cost = pi.avg_cost as f64 / PRICE_SCALE_F;
             self.deliver(py, "position_multi",
-                (req_id, account, model_code, &c_py, pi.position, avg_cost))?;
+                (req_id, on.as_str(), model_code, &c_py, pi.position, avg_cost))?;
         }
         self.deliver(py, "position_multi_end", (req_id,))?;
-        // Reported from here, on the next holding to move. The same live feed
-        // as `position`, asked for under this request id.
-        self.positions_multi_requested.lock().unwrap().insert(req_id);
         Ok(())
     }
 

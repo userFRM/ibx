@@ -2736,7 +2736,7 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
 /// remove, and it would have reappeared one level down.
 #[test]
 fn a_subscription_the_venue_never_names_is_reported() {
-    let (mut ccp, _context, shared) = u186_test_state();
+    let (mut ccp, mut context, shared) = u186_test_state();
     let parked = PendingSubscribe {
         con_id: 0,
         instrument: 4,
@@ -2752,14 +2752,14 @@ fn a_subscription_the_venue_never_names_is_reported() {
     };
     ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new(), &shared);
 
-    ccp.sweep_pending_subscribes(&shared);
+    ccp.sweep_pending_subscribes(&mut context, &shared);
     assert_eq!(ccp.pending_md_subscribe.len(), 1, "still within its wait");
     assert!(shared.market.drain_subscription_failures().is_empty());
 
     // Wind the clock back past the wait.
     let asked_at = &mut ccp.pending_md_subscribe[0].2;
     *asked_at -= CcpState::NAMING_TIMEOUT + Duration::from_secs(1);
-    ccp.sweep_pending_subscribes(&shared);
+    ccp.sweep_pending_subscribes(&mut context, &shared);
 
     assert!(ccp.pending_md_subscribe.is_empty(), "given up on");
     let failures = shared.market.drain_subscription_failures();
@@ -5484,7 +5484,9 @@ fn a_holding_the_new_statement_never_names_is_closed() {
 
     // What the account held when the connection dropped.
     let holding = |con_id: i64, qty: f64| crate::types::PositionInfo {
-        con_id, position: qty, ..Default::default()
+        // With what it cost, so a close can be seen to take that with it.
+        con_id, position: qty, avg_cost: 4 * PRICE_SCALE, unrealized_pnl: 9 * PRICE_SCALE,
+        unrealized_stated: true, ..Default::default()
     };
     shared.portfolio.set_position_info(holding(756733, 300.0));
     shared.portfolio.set_position(kept, 300.0);
@@ -5492,6 +5494,13 @@ fn a_holding_the_new_statement_never_names_is_closed() {
     shared.portfolio.set_position_info(holding(140148322, 3.0));
     shared.portfolio.set_position(closed, 3.0);
     context.update_position(closed, 3.0);
+    // A third the venue will name without stating a quantity. An entry that
+    // states no quantity states no quantity — it does not say the account is
+    // flat — so naming it is what counts.
+    let marks_only = context.register_instrument(479624278);
+    shared.portfolio.set_position_info(holding(479624278, 7.0));
+    shared.portfolio.set_position(marks_only, 7.0);
+    context.update_position(marks_only, 7.0);
     shared.portfolio.drain_position_changes();
 
     let (conn, _peer) = crate::protocol::connection::Connection::for_test();
@@ -5518,6 +5527,14 @@ fn a_holding_the_new_statement_never_names_is_closed() {
     ccp.process_ccp_message(
         restated.as_bytes(), &mut None, &mut context, &shared, &None, &mut hb, "DU1",
     );
+    let named_without_a_quantity = format!(
+        "35=UP\x016529={asked_under}\x016068=BTC\x016008=479624278\x016065=80533.4\x01",
+    );
+    ccp.process_ccp_message(
+        named_without_a_quantity.as_bytes(),
+        &mut None, &mut context, &shared, &None, &mut hb, "DU1",
+    );
+
     let done = format!("35=EB\x016529={asked_under}\x01");
     ccp.process_ccp_message(
         done.as_bytes(), &mut None, &mut context, &shared, &None, &mut hb, "DU1",
@@ -5527,10 +5544,19 @@ fn a_holding_the_new_statement_never_names_is_closed() {
         .map(|i| i.position)
         .unwrap_or_else(|| panic!("con {con_id} is still known"));
     assert_eq!(held(756733), 300.0, "the holding the venue restated stands");
+    let gone = shared.portfolio.position_info(140148322).expect("still known");
+    assert_eq!(gone.avg_cost, 0, "a row closing a holding takes its basis with it");
+    assert_eq!(gone.unrealized_pnl, 0, "and what it was showing");
+    assert!(!gone.unrealized_stated, "which is no longer a figure the venue stated");
     assert_eq!(held(140148322), 0.0, "the one it never named is gone");
     assert_eq!(shared.portfolio.position(closed), 0.0, "and so is its slot");
     assert_eq!(context.position(closed), 0.0, "and the book behind it");
     assert_eq!(context.position(kept), 300.0, "which the other one keeps");
+    assert_eq!(
+        held(479624278), 7.0,
+        "the venue named this one and stated no quantity for it, which is not the \
+         same as stating that it is flat",
+    );
     let moves = shared.portfolio.drain_position_changes();
     assert!(
         moves.iter().any(|m| m.con_id == 140148322 && m.position == 0.0),
@@ -5556,6 +5582,9 @@ fn a_refused_revision_travels_on_the_channel_a_refusal_travels_on() {
         100 * crate::types::QTY_SCALE, 150 * crate::types::PRICE_SCALE,
         b'2', b'0', 0,
     ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    let before = *context.order(42).expect("tracked");
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string()));
     let refused = exec_report_frame(&[
         (11, "42.1"), (150, "8"), (39, "0"), (378, "102"),
         (58, "the price is through the band"),
@@ -5597,6 +5626,10 @@ fn the_venue_taking_a_replacement_is_said_behind_a_fill() {
         100 * crate::types::QTY_SCALE, 150 * crate::types::PRICE_SCALE,
         b'2', b'0', 0,
     ));
+    // Staged as the builder stages one: the terms the venue holds, under the
+    // revision the change goes out as.
+    let before = *context.order(42).expect("tracked");
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string()));
     assert!(context.update_order_status(42, crate::types::OrderStatus::PendingReplace, false));
 
     // Part of it fills while the venue is still deciding on the change.
@@ -5665,5 +5698,97 @@ fn a_refused_revision_the_venue_has_answered_does_not_revive_the_order() {
         !updates.iter().any(|u| u.order_id == 42
             && matches!(u.status, crate::types::OrderStatus::Submitted)),
         "and nobody is told it is working again: {updates:?}",
+    );
+}
+
+/// A caller waiting on the download is let through to a squared account.
+///
+/// The flag that says the download is over used to be the first thing the
+/// completion did, and the squaring — closing every holding the download never
+/// named — followed it. A caller spinning on that flag from its own thread woke
+/// inside that window and was handed the holding the squaring was about to
+/// close, which is the answer the squaring exists to prevent.
+#[test]
+fn the_download_reads_as_over_only_once_it_is_squared() {
+    let shared = SharedState::new();
+    shared.portfolio.set_position_info(crate::types::PositionInfo {
+        con_id: 756733, position: 300.0, ..Default::default()
+    });
+    shared.portfolio.account_download_is_pending();
+    shared.portfolio.holdings_restated_under("AR.4");
+
+    let unstated = shared.portfolio.set_account_download_complete("AR.4");
+    assert_eq!(unstated, vec![756733], "the venue named none of it");
+    assert!(
+        !shared.portfolio.account_download_complete(),
+        "and the download does not read as over while the caller still has work",
+    );
+
+    shared.portfolio.account_download_is_settled();
+    assert!(shared.portfolio.account_download_complete(), "now it does");
+}
+
+/// A connection that dies takes the account's download with it.
+///
+/// The download was marked pending when the next connection arrived, so
+/// through the whole of a backoff — or for ever, where the retries ran out —
+/// the flag still said the venue had finished stating what the account holds.
+/// A caller asking was answered at once from the book as it stood before the
+/// drop, with nothing to say the venue had not been heard from since.
+#[test]
+fn a_connection_that_dies_takes_the_download_with_it() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    shared.portfolio.holdings_restated_under("AR.1");
+    shared.portfolio.set_account_download_complete("AR.1");
+    shared.portfolio.account_download_is_settled();
+    assert!(shared.portfolio.account_download_complete(), "the session had one");
+
+    let mut ccp_conn: Option<Connection> = None;
+    ccp.handle_disconnect(&mut ccp_conn, &mut context, &shared, &None);
+
+    assert!(
+        !shared.portfolio.account_download_complete(),
+        "and nothing has been stated about the account since it died",
+    );
+}
+
+/// The end that squares the account is the end of the request that was asked
+/// to state it.
+///
+/// A caller can ask for a refresh at any moment, and a later request taking
+/// over left the earlier one's unstated holdings to be settled by an end that
+/// was never asked to state them — so holdings the account still had, which
+/// the first request had simply not reached yet, were closed on the strength
+/// of the second.
+#[test]
+fn a_later_request_does_not_settle_an_earlier_one() {
+    let shared = SharedState::new();
+    let held = |con_id: i64| crate::types::PositionInfo {
+        con_id, position: 5.0, ..Default::default()
+    };
+    shared.portfolio.set_position_info(held(756733));
+    shared.portfolio.set_position_info(held(140148322));
+    shared.portfolio.account_download_is_pending();
+    shared.portfolio.holdings_restated_under("AR.5");
+    // A caller asks for a refresh while the first request is still arriving.
+    shared.portfolio.holdings_restated_under("AR.6");
+
+    // The refresh's end says nothing about what the first request has stated.
+    assert!(
+        shared.portfolio.set_account_download_complete("AR.6").is_empty(),
+        "an end that is not the asked request's closes nothing",
+    );
+    assert!(
+        !shared.portfolio.account_download_complete(),
+        "and the download is not over while the request that was asked is out",
+    );
+
+    // The venue names one of them, and then the asked request ends.
+    shared.portfolio.note_restated(756733);
+    assert_eq!(
+        shared.portfolio.set_account_download_complete("AR.5"), vec![140148322],
+        "only what the request that was asked never named",
     );
 }

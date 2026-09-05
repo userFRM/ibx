@@ -109,6 +109,14 @@ pub struct CancelReject {
     /// what it goes back to, taken from the engine's own book rather than
     /// guessed from a status that has already been overwritten.
     pub still_working: Option<OrderStatus>,
+    /// Whether it answers a change the order is still waiting on.
+    ///
+    /// The venue takes a second change before it has answered the first, and a
+    /// withdrawal can be sent over both, so a refusal of a change the venue
+    /// has already answered says nothing about where the order stands now. The
+    /// engine settles that against the revision the refusal names; read
+    /// without it, a stale refusal put back terms the venue was still working.
+    pub answers_a_live_change: bool,
 }
 
 /// Multi-char OrdType discriminants: values below 32, so they cannot collide
@@ -1448,6 +1456,16 @@ impl Default for OrderBuffer {
 }
 
 impl OrderBuffer {
+    /// Whether anything waiting to be sent names this slot.
+    ///
+    /// A request that has not been built yet names its slot as surely as a
+    /// working order does; it is simply not in the book. Asked of the book
+    /// alone, the slot under a queued order was given back and handed to
+    /// another contract, and the order went out on that one.
+    pub fn holds(&self, id: InstrumentId) -> bool {
+        self.buf.iter().any(|r| r.instrument() == Some(id))
+    }
+
     /// An empty buffer.
     pub fn new() -> Self {
         Self {

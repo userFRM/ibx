@@ -1304,7 +1304,7 @@ fn a_stream_outlives_the_snapshot_it_was_watching() {
 /// asked, leaving a subscription the one withdrawal could not match.
 #[test]
 fn two_callers_racing_for_one_contract_ask_for_the_headlines_once() {
-    let (client, rx, _shared) = test_client();
+    let (client, rx, shared) = test_client();
     // Asked against the contract, which both callers name before either has
     // an instrument to name instead.
     let first = client.core.first_to_ask_for_news(spy().con_id, 1);
@@ -1314,7 +1314,7 @@ fn two_callers_racing_for_one_contract_ask_for_the_headlines_once() {
     assert!(!second, "and the second finds it already asked");
 
     // And the headlines outlast the first of them.
-    assert_eq!(client.core.release_news(1), None, "one of two left");
+    assert_eq!(client.core.release_news(&shared, 1), None, "one of two left");
     let _ = rx.try_recv();
 }
 
@@ -1538,7 +1538,7 @@ fn the_headlines_are_asked_for_once_however_many_callers_want_them() {
 /// and the news it asked for was never withdrawn on that one.
 #[test]
 fn the_headlines_stop_with_the_last_caller_that_asked_for_them() {
-    let (client, rx, _shared) = test_client();
+    let (client, rx, shared) = test_client();
     // Someone already watches the quotes, and asked for no headlines.
     client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
@@ -1563,9 +1563,9 @@ fn the_headlines_stop_with_the_last_caller_that_asked_for_them() {
     // Two callers asking: the headlines outlast the first of them.
     client.req_mkt_data(3, &spy(), "292", false, false).expect("watches what is up");
     client.req_mkt_data(4, &spy(), "292", false, false).expect("watches what is up");
-    let (_, stop_news) = client.core.unregister_mkt_data(3);
+    let (_, stop_news) = client.core.unregister_mkt_data(&shared, 3);
     assert_eq!(stop_news, None, "one of two left, so the headlines carry on");
-    let (_, stop_news) = client.core.unregister_mkt_data(4);
+    let (_, stop_news) = client.core.unregister_mkt_data(&shared, 4);
     assert_eq!(stop_news, Some(0), "and stop when the last of them goes");
 }
 
@@ -1573,7 +1573,7 @@ fn the_headlines_stop_with_the_last_caller_that_asked_for_them() {
 // the first's reverse mapping and orphan it silently. Reject at the call.
 #[test]
 fn a_second_caller_watches_the_subscription_that_is_up() {
-    let (client, rx, _shared) = test_client();
+    let (client, rx, shared) = test_client();
     // Existing live subscription for SPY (instrument 0) under req_id 1.
     client.core.con_id_to_instrument.lock().unwrap().insert(spy().con_id, 0);
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
@@ -1591,7 +1591,7 @@ fn a_second_caller_watches_the_subscription_that_is_up() {
 
     // The holder leaves; the one still watching takes it over rather than
     // losing the feed, and nothing is withdrawn from the venue.
-    let (withdraw, _) = client.core.unregister_mkt_data(1);
+    let (withdraw, _) = client.core.unregister_mkt_data(&shared, 1);
     assert!(withdraw.is_none(), "nothing is withdrawn while someone is watching");
     assert_eq!(
         client.core.instrument_to_req.lock().unwrap().get(&0).copied(),
@@ -1600,7 +1600,7 @@ fn a_second_caller_watches_the_subscription_that_is_up() {
     );
 
     // And when the last one leaves, it goes.
-    let (withdraw, _) = client.core.unregister_mkt_data(2);
+    let (withdraw, _) = client.core.unregister_mkt_data(&shared, 2);
     assert_eq!(withdraw, Some(0), "the last one out withdraws it");
 }
 
@@ -3001,7 +3001,7 @@ fn a_refused_replacement_leaves_the_terms_the_venue_holds() {
     // The venue refuses it, and says the order still stands.
     shared.orders.push_cancel_reject(CancelReject {
         order_id: 66, instrument: 0, reject_type: 2, reason_code: 0,
-        still_working: Some(crate::types::OrderStatus::Submitted), timestamp_ns: 0,
+        answers_a_live_change: true, still_working: Some(crate::types::OrderStatus::Submitted), timestamp_ns: 0,
     });
     client.process_msgs(&mut RecordingWrapper::default());
 
@@ -5104,7 +5104,7 @@ fn a_refused_cancel_leaves_the_order_reading_as_working() {
 
     shared.orders.push_cancel_reject(CancelReject {
         order_id: 44, instrument: 0, reject_type: 1, reason_code: 0,
-        still_working: Some(crate::types::OrderStatus::Submitted), timestamp_ns: 0,
+        answers_a_live_change: true, still_working: Some(crate::types::OrderStatus::Submitted), timestamp_ns: 0,
     });
     client.process_msgs(&mut RecordingWrapper::default());
 
@@ -5122,7 +5122,7 @@ fn process_msgs_dispatches_cancel_reject_type_1() {
     // act on it. Reported as 202 this read as "Order Cancelled" — the opposite
     // of what happened, and a caller would replace an order still working.
     shared.orders.push_cancel_reject(CancelReject {
-        order_id: 44, instrument: 0, reject_type: 1, reason_code: 0, still_working: None, timestamp_ns: 0,
+        order_id: 44, instrument: 0, reject_type: 1, reason_code: 0, answers_a_live_change: true, still_working: None, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -5137,7 +5137,7 @@ fn process_msgs_dispatches_cancel_reject_type_1() {
 fn process_msgs_dispatches_cancel_reject_type_2() {
     let (client, _rx, shared) = test_client();
     shared.orders.push_cancel_reject(CancelReject {
-        order_id: 44, instrument: 0, reject_type: 2, reason_code: 5, still_working: None, timestamp_ns: 0,
+        order_id: 44, instrument: 0, reject_type: 2, reason_code: 5, answers_a_live_change: true, still_working: None, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -5153,7 +5153,7 @@ fn process_msgs_dispatches_cancel_reject_type_2() {
 fn an_unknown_order_is_the_only_cancel_reject_reported_as_not_found() {
     let (client, _rx, shared) = test_client();
     shared.orders.push_cancel_reject(CancelReject {
-        order_id: 44, instrument: 0, reject_type: 1, reason_code: 1, still_working: None, timestamp_ns: 0,
+        order_id: 44, instrument: 0, reject_type: 1, reason_code: 1, answers_a_live_change: true, still_working: None, timestamp_ns: 0,
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
@@ -6144,7 +6144,7 @@ fn modify_filled_order_receives_cancel_reject() {
     assert!(w.events.iter().any(|e| e.starts_with("order_status:120:Filled")));
 
     shared.orders.push_cancel_reject(CancelReject {
-        order_id: 120, instrument: 0, reject_type: 2, reason_code: 0, still_working: None, timestamp_ns: 2000,
+        order_id: 120, instrument: 0, reject_type: 2, reason_code: 0, answers_a_live_change: true, still_working: None, timestamp_ns: 2000,
     });
     w.events.clear();
     client.process_msgs(&mut w);
@@ -8215,6 +8215,16 @@ fn a_replayed_order_is_replaced_rather_than_placed_again() {
         order_type: "LMT".into(), lmt_price: 101.0, tif: "DAY".into(),
         transmit: true, ..Default::default()
     };
+    // Naming another contract on a replace is refused: the venue's own book
+    // says which contract this order is on, and a replace names the order.
+    let elsewhere = Contract { symbol: "QQQ".into(), con_id: 320227571, ..spy() };
+    let wrong = client.place_order(4242, &elsewhere, &revision);
+    assert!(
+        wrong.is_err_and(|why| why.message.contains("another contract")),
+        "a replace naming a contract the order is not on is refused",
+    );
+    assert!(rx.try_recv().is_err(), "and nothing was asked of the engine for it");
+
     client.place_order(4242, &spy(), &revision).expect("the revision travels");
     match rx.try_recv().expect("something travels") {
         ControlCommand::Order(OrderRequest::Modify { order_id, price, .. }) => {
@@ -8254,4 +8264,35 @@ fn a_held_revision_that_is_withdrawn_leaves_the_terms_the_venue_holds() {
     let stated = client.core.open_orders.lock().unwrap()
         .get(&91).expect("the order is still tracked").order.lmt_price;
     assert_eq!(stated, 100.0, "the record states the terms the venue was given");
+}
+
+/// A revision that leaves the hold to be sent keeps its terms.
+///
+/// What is held leaves the hold as often to be sent as to be thrown away.
+/// Putting the terms back on the way out left the venue working the new price
+/// while the record stated the old one, and spent the copy kept against a
+/// refusal — so the venue's later refusal of those terms put nothing back, and
+/// every check the next replace makes was made against terms nobody held.
+#[test]
+fn a_revision_sent_out_of_the_hold_keeps_the_terms_it_states() {
+    let (client, rx, _shared) = test_client();
+    let order = |transmit: bool, price: f64| Order {
+        order_id: 93, action: "BUY".into(), total_quantity: 100.0,
+        order_type: "LMT".into(), lmt_price: price, tif: "DAY".into(),
+        transmit, ..Default::default()
+    };
+    client.place_order(93, &spy(), &order(true, 100.0)).expect("placed and sent");
+    let _ = rx.try_recv();
+    // A change kept rather than sent, and then a second that transmits: the
+    // first leaves the hold on the way out, behind the second.
+    client.place_order(93, &spy(), &order(false, 101.0)).expect("the change is kept");
+    client.place_order(93, &spy(), &order(true, 102.0)).expect("and this one goes");
+
+    let tracked = client.core.open_orders.lock().unwrap()
+        .get(&93).expect("still tracked").clone();
+    assert_eq!(tracked.order.lmt_price, 102.0, "the record states what went out");
+    assert_eq!(
+        tracked.before_the_replace.as_ref().map(|o| o.lmt_price), Some(100.0),
+        "and what the venue holds is still kept against a refusal of it",
+    );
 }

@@ -299,6 +299,21 @@ impl EClient {
         // heard of it neither in its answer nor afterwards. Registered first,
         // the worst that happens is the same holding stated twice, and a
         // holding states what it is rather than what changed.
+        // The same wait the plain answer makes, for the same reason: an
+        // account that has said nothing since the connection dropped reads
+        // exactly like one holding nothing, and this path answered from the
+        // pre-drop book without so much as a warning.
+        for _ in 0..1000 {
+            if self.shared.portfolio.account_download_complete() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !self.shared.portfolio.account_download_complete() {
+            let why = "the account had not finished stating its holdings within the wait, \
+                       so what follows is what this session already held rather than what \
+                       the account holds";
+            log::warn!("{why}");
+            wrapper.error(req_id, Refusal::VALIDATION as i64, why, "");
+        }
         self.positions_multi_requested.lock().unwrap().insert(req_id);
         let held: Vec<_> = self.shared.portfolio.position_infos()
             .into_iter()

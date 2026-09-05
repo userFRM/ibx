@@ -464,7 +464,8 @@ impl EClient {
         tx: &std::sync::mpsc::SyncSender<ControlCommand>,
         req_id: i64,
     ) -> PyResult<()> {
-        let (instrument, stop_news) = self.core.unregister_mkt_data(req_id);
+        let shared = self.shared_state()?;
+        let (instrument, stop_news) = self.core.unregister_mkt_data(&shared, req_id);
         // Asked separately, because the quotes stay up for another caller
         // while the headlines this one asked for stop. Withdrawn only
         // alongside the quotes, they carried on with nobody listening.

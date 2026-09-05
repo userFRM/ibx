@@ -222,10 +222,12 @@ pub(crate) fn handle_position_update(
     shared: &SharedState,
     event_tx: &Option<EventSink>,
 ) {
-    let con_id: i64 = match parsed.get(&6008).and_then(|s| s.parse().ok()) {
+    let con_id: i64 = match parsed.get(&6008).and_then(|s| s.parse::<i64>().ok()).filter(|id| *id != 0) {
         Some(v) => v,
         None => return,
     };
+    // Named by a download in progress, whatever else this frame carries.
+    shared.portfolio.note_restated(con_id);
     // An absent quantity means this frame carries no quantity, not that the
     // account is flat. Defaulting to 0 reconciled the engine's position to zero
     // off a marks-only frame and published a flat book to reqPositions and both
@@ -352,6 +354,7 @@ impl CcpState {
                         emit(event_tx, Event::PositionUpdate { instrument, con_id, position: qty, avg_cost });
                     }
                 }
+                shared.portfolio.note_restated(con_id);
                 self.auto_fetch_secdef_if_cold(con_id, ccp_conn, shared, hb);
             }
             con_id = v.parse().unwrap_or(0);
@@ -400,6 +403,7 @@ impl CcpState {
                 emit(event_tx, Event::PositionUpdate { instrument, con_id, position: qty, avg_cost });
             }
         }
+        shared.portfolio.note_restated(con_id);
         self.auto_fetch_secdef_if_cold(con_id, ccp_conn, shared, hb);
     }
     }

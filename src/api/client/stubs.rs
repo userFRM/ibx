@@ -279,7 +279,7 @@ impl EClient {
         // Knowing the contract is not watching it, and only a watched
         // contract has a model stated for it. Already watching, the question
         // is kept as it stands and the model is waited for.
-        let watched = self.core.cached_instrument(contract.con_id).is_some_and(|instrument| {
+        let watched = self.core.cached_instrument(&self.shared, contract.con_id).is_some_and(|instrument| {
             self.core.instrument_to_req.lock().unwrap().contains_key(&instrument)
         });
         if !watched && self.req_mkt_data(req_id, contract, "", false, false).is_err() {

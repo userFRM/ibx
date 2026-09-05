@@ -32,6 +32,9 @@ fn the_change_did_not_go(
         reject_type: 2,
         reason_code: -1,
         still_working: stands_as,
+        // Refused here, so it answers the change the caller has just made and
+        // nothing else.
+        answers_a_live_change: true,
         timestamp_ns: context.now_ns(),
     };
     shared.orders.push_cancel_reject(reject);

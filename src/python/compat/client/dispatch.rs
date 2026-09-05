@@ -550,6 +550,14 @@ impl EClient {
 
         // Drain inactive-order reasons -> error
         for (order_id, code, msg) in shared.orders.drain_order_inactive() {
+            // A refusal is the end of a preview: it states what an order would
+            // have cost, and nothing reached the book. Left standing, as it
+            // was on this surface alone, the record read as a working order —
+            // so the next placement under that number went out as a change to
+            // an order the venue had never been given.
+            if self.core.tracked_order(order_id).is_some_and(|o| o.what_if) {
+                self.core.untrack_order(order_id);
+            }
             call_wrapper!(self.wrapper, py, "error", (order_id as i64, 0i64, code as i64, msg.as_str(), ""));
         }
 

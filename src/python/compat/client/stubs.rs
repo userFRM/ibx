@@ -554,8 +554,8 @@ impl EClient {
 impl EClient {
     /// Whether something is already watching the contract, which is what makes
     /// the venue state a model for it.
-    fn watching_contract(&self, con_id: i64) -> bool {
-        self.core.cached_instrument(con_id).is_some_and(|instrument| {
+    fn watching_contract(&self, shared: &crate::bridge::SharedState, con_id: i64) -> bool {
+        self.core.cached_instrument(shared, con_id).is_some_and(|instrument| {
             self.core.instrument_to_req.lock().unwrap().contains_key(&instrument)
         })
     }
@@ -567,16 +567,17 @@ impl EClient {
         wants_volatility: bool, option_price: f64, under_price: f64,
     ) -> bool {
         let api = contract.to_api();
+        let Ok(shared) = self.shared_state() else { return false };
         // A subscription this client opens rather than the caller. Refusals
         // are reported by the subscribe itself and leave nothing watching,
         // which is what is read back here rather than the call's own result:
         // this surface answers a refusal on the error callback and returns
         // normally, so the result alone does not say whether it took.
-        if !self.watching_contract(api.con_id) {
+        if !self.watching_contract(&shared, api.con_id) {
             let opened = self.req_mkt_data(
                 py, req_id, contract, "", false, false, Vec::new(),
             );
-            if opened.is_err() || !self.watching_contract(api.con_id) {
+            if opened.is_err() || !self.watching_contract(&shared, api.con_id) {
                 return false;
             }
         }

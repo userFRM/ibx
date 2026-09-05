@@ -177,20 +177,39 @@ impl PortfolioState {
     /// Their rows are set to nothing here; the instrument slots beside them
     /// belong to the caller, which is the side that can name an instrument.
     #[doc(hidden)] pub fn set_account_download_complete(&self, ends: &str) -> Vec<i64> {
-        self.account_download_complete.store(true, Ordering::Release);
         // Only the request that was asked to restate everything since the
         // download began. Another request's end says nothing about what this
         // one has stated so far.
-        if self.restating_under.lock().unwrap().as_deref() != Some(ends) {
+        let mut under = self.restating_under.lock().unwrap();
+        if under.as_deref() != Some(ends) {
+            // A request still outstanding is what ends the download. Where
+            // none is, this is the opening sequence's own end and there is
+            // nothing to square — but where one is, this end belongs to some
+            // other request and says nothing about what that one has stated.
+            if under.is_none() {
+                self.account_download_complete.store(true, Ordering::Release);
+            }
             return Vec::new();
         }
-        *self.restating_under.lock().unwrap() = None;
+        *under = None;
+        drop(under);
         let unstated = std::mem::take(&mut *self.awaiting_restatement.lock().unwrap());
         let mut held = self.position_infos.lock().unwrap();
         let mut moved = self.position_changes.lock().unwrap();
         unstated.into_iter().filter(|con_id| match held.get_mut(con_id) {
             Some(info) if info.position != 0.0 => {
                 info.position = 0.0;
+                // And what the holding was worth, which is nothing. The basis
+                // in particular: a row closing a holding takes its basis with
+                // it, or the next position opened in the same contract is
+                // given the dead one's when its own row states none. The marks
+                // go for the same reason — a figure against a holding of
+                // nothing is not a figure.
+                info.avg_cost = 0;
+                info.market_price = 0;
+                info.market_value = 0;
+                info.unrealized_pnl = 0;
+                info.unrealized_stated = false;
                 // Recorded as a move like any other, so a caller watching
                 // holdings is told this one went to nothing rather than
                 // reading the last figure it was given for ever.
@@ -199,6 +218,18 @@ impl PortfolioState {
             }
             _ => false,
         }).collect()
+    }
+
+    /// The download is over, and every holding it left unstated has been
+    /// squared with it.
+    ///
+    /// Said last, and by the caller, because the caller owns the rest of the
+    /// squaring — the instrument slots and the engine's own book. Said first,
+    /// a reader waiting on it was let through while the holdings the download
+    /// never named were still standing, which is the answer this exists to
+    /// prevent.
+    #[doc(hidden)] pub fn account_download_is_settled(&self) {
+        self.account_download_complete.store(true, Ordering::Release);
     }
 
     /// True once the CCP init burst has been fully processed.
@@ -216,6 +247,10 @@ impl PortfolioState {
     /// connection was down is handed back as though it still stood.
     #[doc(hidden)] pub fn account_download_is_pending(&self) {
         self.account_download_complete.store(false, Ordering::Release);
+        // And whether anything has been heard at all. Stored once at the first
+        // account message of the session and cleared nowhere, every wait that
+        // reads it stopped meaning anything after that.
+        self.account_data_received.store(false, Ordering::Release);
         *self.awaiting_restatement.lock().unwrap() =
             self.position_infos.lock().unwrap().keys().copied().collect();
         // Nothing has been asked to restate them yet.
@@ -223,14 +258,32 @@ impl PortfolioState {
     }
 
     /// The account request now outstanding, which will restate every holding.
+    ///
+    /// The first one asked since the download began, and only that one. A
+    /// caller can ask for a refresh at any moment, and a later request taking
+    /// this over left the earlier request's unstated holdings to be settled by
+    /// the later one's end — so holdings the account still had, which the
+    /// first request had simply not reached yet, were closed on the strength
+    /// of a request that was never asked to state them.
     #[doc(hidden)] pub fn holdings_restated_under(&self, key: &str) {
-        *self.restating_under.lock().unwrap() = Some(key.to_string());
+        let mut under = self.restating_under.lock().unwrap();
+        if under.is_none() {
+            *under = Some(key.to_string());
+        }
+    }
+
+    /// The download in progress has named this contract.
+    ///
+    /// Naming it is what counts, not writing a row for it: an entry that names
+    /// a holding and carries no quantity states no quantity, and the venue
+    /// sends those — so read off the row write, a holding the venue had just
+    /// named was closed for never having been mentioned.
+    #[doc(hidden)] pub fn note_restated(&self, con_id: i64) {
+        self.awaiting_restatement.lock().unwrap().remove(&con_id);
     }
 
     #[doc(hidden)] pub fn set_position_info(&self, info: PositionInfo) {
         let con_id = info.con_id;
-        // Restated by the download in progress, where there is one.
-        self.awaiting_restatement.lock().unwrap().remove(&con_id);
         let mut map = self.position_infos.lock().unwrap();
         match map.get_mut(&info.con_id) {
             Some(existing) => {

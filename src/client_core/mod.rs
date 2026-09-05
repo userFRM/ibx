@@ -1067,26 +1067,18 @@ impl ClientCore {
     /// the command stayed queued to go out later behind something that
     /// transmits: a caller that withdrew a parent and then sent its stop-loss
     /// had the parent it had cancelled placed for it.
+    /// Takes what is held under an id out of the hold, and says whether there
+    /// was any.
+    ///
+    /// Only that. What is held leaves the hold to be sent as often as it
+    /// leaves to be thrown away, and this cannot tell the two apart — a
+    /// restatement put back here was put back on the way out, so the venue
+    /// worked the new terms while the record stated the old ones. The two
+    /// paths that do throw a revision away say so themselves.
     pub fn withdraw_held(&self, order_id: u64) -> bool {
         let mut held = self.held_orders.lock().unwrap();
-        let mut orders = self.open_orders.lock().unwrap();
         let before = held.len();
-        let mut a_revision_went = false;
-        held.retain(|other| {
-            if other.order_id != order_id {
-                return true;
-            }
-            if !other.places_the_order() {
-                a_revision_went = true;
-            }
-            false
-        });
-        // As above: what never left cannot stand in the record.
-        if a_revision_went
-            && let Some(tracked) = orders.get_mut(&order_id)
-        {
-            put_back_the_terms(tracked);
-        }
+        held.retain(|other| other.order_id != order_id);
         held.len() != before
     }
 
@@ -1228,8 +1220,17 @@ impl ClientCore {
         if !reached.is_empty() {
             for member in &family {
                 self.withdraw_held(member.order_id);
-                if !reached.contains(&member.order_id) && places_the_order(&member.command) {
+                if reached.contains(&member.order_id) {
+                    continue;
+                }
+                if places_the_order(&member.command) {
                     forgotten.push(member.order_id);
+                } else {
+                    // A revision that did not reach the engine is a revision
+                    // nothing has been given, and the record must not state
+                    // its terms: every later cancel and replace restates from
+                    // there.
+                    self.undo_restatement(member.order_id);
                 }
             }
         }
@@ -1392,7 +1393,15 @@ impl ClientCore {
     /// The instrument this conId is already known to hold. `0` means the
     /// contract carries no conId and answers for no one: the engine
     /// resolves those by descriptor, so only it can say which slot they got.
-    pub(crate) fn cached_instrument(&self, con_id: i64) -> Option<InstrumentId> {
+    /// Which slot this contract holds, as far as this client knows.
+    ///
+    /// Takes the session's state because it drops what the engine has given
+    /// back before it answers. Every reader needs that and one of them will
+    /// always forget, so the drop happens here rather than at each of them: a
+    /// freed slot goes to the next contract that needs one, and an answer from
+    /// here after that names a contract the caller never asked about.
+    pub(crate) fn cached_instrument(&self, shared: &SharedState, con_id: i64) -> Option<InstrumentId> {
+        self.forget_released_slots(shared);
         if con_id == 0 {
             return None;
         }
@@ -1535,7 +1544,6 @@ impl ClientCore {
         sec_type: &str,
         identity: &str,
     ) -> Result<InstrumentId, Refusal> {
-        self.forget_released_slots(shared);
         // The cache is skipped when the caller states an identity, because the
         // slot may have been allocated by a market-data subscription that had
         // none — and the engine is where the identity is stored. Short-circuiting
@@ -1543,7 +1551,7 @@ impl ClientCore {
         // expiry, so a future named its exchange and not its month. Registration
         // is idempotent: the engine returns the same slot and adopts the identity.
         if identity.is_empty()
-            && let Some(iid) = self.cached_instrument(con_id) {
+            && let Some(iid) = self.cached_instrument(shared, con_id) {
                 return Ok(iid);
             }
 
@@ -1681,7 +1689,7 @@ impl ClientCore {
         // bills nothing, and lets an account with no entitlement hear an end
         // it was never refused — off a stream it did not ask for.
         if !regulatory_snapshot
-            && let Some(instrument) = self.cached_instrument(con_id)
+            && let Some(instrument) = self.cached_instrument(shared, con_id)
             && self.follows_existing_subscription(instrument, req_id)
         {
             self.mdt_by_req.lock().unwrap().insert(
@@ -1734,7 +1742,7 @@ impl ClientCore {
                 // because the path that withdraws it needs a request this one
                 // no longer has.
                 if wants_news
-                    && let Some(instrument) = self.release_news(req_id)
+                    && let Some(instrument) = self.release_news(shared, req_id)
                 {
                     let _ = control_tx.send(ControlCommand::UnsubscribeNews { instrument });
                 }
@@ -1786,7 +1794,7 @@ impl ClientCore {
     /// Drop this request's claim on the headlines, and say whether that was
     /// the last one. Called on every path out of a withdrawal: the quotes may
     /// stay up for another caller while the headlines this one asked for stop.
-    pub(crate) fn release_news(&self, req_id: i64) -> Option<InstrumentId> {
+    pub(crate) fn release_news(&self, shared: &SharedState, req_id: i64) -> Option<InstrumentId> {
         let emptied = {
             let mut news = self.news_askers.lock().unwrap();
             let mut done: Option<i64> = None;
@@ -1804,7 +1812,7 @@ impl ClientCore {
         };
         // Named by the instrument, which is what a withdrawal states. Known by
         // now: nothing is withdrawn that was never registered.
-        self.cached_instrument(emptied)
+        self.cached_instrument(shared, emptied)
     }
 
     /// Unregister a market data subscription.
@@ -1815,7 +1823,7 @@ impl ClientCore {
     /// for end, and a caller told only that the quotes stay up sent nothing
     /// and left the headlines running.
     pub fn unregister_mkt_data(
-        &self, req_id: i64,
+        &self, shared: &SharedState, req_id: i64,
     ) -> (Option<InstrumentId>, Option<InstrumentId>) {
         // Whatever this id was waiting to finish, it is not waiting any
         // more. Left behind, the same id handed out again for an ordinary
@@ -1844,11 +1852,11 @@ impl ClientCore {
                     self.mdt_sent.lock().unwrap().remove(&req_id);
                     self.mdt_by_req.lock().unwrap().remove(&req_id);
                     if was_following {
-                        return (None, self.release_news(req_id));
+                        return (None, self.release_news(shared, req_id));
                     }
                     if let Some(next) = next {
                         self.instrument_to_req.lock().unwrap().insert(instrument, next);
-                        return (None, self.release_news(req_id));
+                        return (None, self.release_news(shared, req_id));
                     }
                 }
             }
@@ -1856,7 +1864,7 @@ impl ClientCore {
             self.last_quotes.lock().unwrap().remove(&instrument);
             self.mdt_sent.lock().unwrap().remove(&req_id);
             self.mdt_by_req.lock().unwrap().remove(&req_id);
-            let stop_news = self.release_news(req_id);
+            let stop_news = self.release_news(shared, req_id);
             self.forget_instrument(instrument);
             (Some(instrument), stop_news)
         } else {
@@ -2548,8 +2556,8 @@ impl ClientCore {
     /// Falls back to recording it afresh where nothing is held under the id,
     /// which is a caller replacing an order this client did not place.
     pub fn restate_order(
-        &self, shared: &SharedState, order_id: u64, contract: ApiContract, order: ApiOrder,
-        instrument: InstrumentId,
+        &self, venue: Option<&SharedState>, order_id: u64, contract: ApiContract,
+        mut order: ApiOrder, instrument: InstrumentId,
     ) {
         let mut orders = self.open_orders.lock().unwrap();
         match orders.get_mut(&order_id) {
@@ -2573,13 +2581,19 @@ impl ClientCore {
                 // quantity outstanding, a status of its own invention, and
                 // slot zero, which is a real slot and not this order's, so the
                 // next replace was refused for naming another contract.
-                let known = shared.orders.get_order_info(order_id);
+                let known = venue.and_then(|v| v.orders.get_order_info(order_id));
                 let filled = known.as_ref().map_or(0.0, |i| i.order.filled_quantity);
                 let status = known.as_ref().map_or_else(
                     || "PendingSubmit".to_string(), |i| i.order_state.status.clone(),
                 );
-                // And what the venue holds, for a refusal to put back.
-                let before_the_replace = known.map(|i| Box::new(i.order));
+                // And what the venue holds, for a refusal to put back. The
+                // client the order went out under comes from there too: this
+                // client did not place it, so the caller's own object says
+                // nothing about whose order it is.
+                let before_the_replace = known.map(|i| {
+                    order.client_id = i.order.client_id;
+                    Box::new(i.order)
+                });
                 let remaining = (order.total_quantity - filled).max(0.0);
                 orders.insert(order_id, TrackedOrder {
                     contract, order, status, filled, remaining,
@@ -2706,8 +2720,12 @@ impl ClientCore {
                 // above: a refusal from this side of the wire knows the change
                 // did not go without knowing where the order stands. A refused
                 // cancellation changed no terms, and rolling them back on one
-                // undid a replacement the venue may since have taken.
-                if reject.reject_type == 2 { put_back_the_terms(tracked); }
+                // undid a replacement the venue may since have taken — and a
+                // refusal of a change the venue has already answered is not
+                // about the change now outstanding, so it puts nothing back.
+                if reject.reject_type == 2 && reject.answers_a_live_change {
+                    put_back_the_terms(tracked);
+                }
             }
         }
         // 10147 is the order the venue could not find; 10148 is the order it
@@ -3074,6 +3092,7 @@ impl ClientCore {
         // is already in the venue's figures. Returning here reported
         // nothing at all to a caller that had asked to be told.
 
+        self.forget_released_slots(shared);
         let con_id_map = self.con_id_to_instrument.lock().unwrap();
         let mut total_daily: f64 = 0.0;
         let mut total_unrealized: f64 = 0.0;
@@ -3218,6 +3237,7 @@ impl ClientCore {
 
         let seeds: HashMap<i64, MidnightSeed> = shared.portfolio.midnight_seeds()
             .into_iter().map(|s| (s.con_id, s)).collect();
+        self.forget_released_slots(shared);
         let con_id_map = self.con_id_to_instrument.lock().unwrap();
         let mut last_cache = self.last_pnl_single.lock().unwrap();
         let mut results = Vec::new();
