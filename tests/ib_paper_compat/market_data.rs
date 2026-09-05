@@ -545,6 +545,14 @@ pub(super) fn phase_streaming_validation(conns: Conns) -> Conns {
     println!(
         "  {tick_count} ticks: bid_positive={bid_positive} ask_positive={ask_positive} spread_valid={spread_valid} price_reasonable={price_reasonable}"
     );
+    // A tick carrying no quote on either side is the venue saying there is
+    // none, which outside trading hours is every tick it sends: the close and
+    // the day's volume arrive, the book does not. The same answer as silence,
+    // and `no_market` still fails outright if the clock says regular hours.
+    if !bid_positive && !ask_positive {
+        no_market(&shared, "the venue states no quote on either side");
+        return conns;
+    }
     assert!(bid_positive, "Should have seen at least one positive bid");
     assert!(ask_positive, "Should have seen at least one positive ask");
     assert!(spread_valid, "Spread should not be crossed (ask >= bid)");
