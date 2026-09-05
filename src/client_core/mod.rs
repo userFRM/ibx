@@ -540,8 +540,6 @@ fn execution_matches(se: &StoredExecution, filter: &ExecutionFilter) -> bool {
 /// Shared between Rust and Python adapters via `ClientCore`.
 #[derive(Clone)]
 pub struct StoredExecution {
-    /// The request this answers.
-    pub req_id: i64,
     /// The contract it is on.
     pub contract: ApiContract,
     /// The fill itself.
@@ -559,7 +557,7 @@ pub struct StoredExecution {
 /// into them stays good.
 #[derive(Default)]
 pub struct ExecutionStore {
-    pub rows: Vec<StoredExecution>,
+    rows: Vec<StoredExecution>,
     by_id: HashMap<String, usize>,
 }
 
@@ -2326,7 +2324,7 @@ impl ClientCore {
     /// replay a caller summing the day's volume doubled it on every rebuilt
     /// connection. The cumulative quantity is what tells two otherwise
     /// identical prints of one order apart.
-    pub fn push_execution(&self, req_id: i64, contract: ApiContract, execution: ApiExecution, commission_and_fees: ApiCommissionAndFeesReport) {
+    pub fn push_execution(&self, contract: ApiContract, execution: ApiExecution, commission_and_fees: ApiCommissionAndFeesReport) {
         let mut store = self.executions.lock().unwrap();
         if execution.exec_id.is_empty() {
             let same = |stored: &StoredExecution| {
@@ -2347,7 +2345,7 @@ impl ClientCore {
             let at = store.rows.len();
             store.by_id.insert(execution.exec_id.clone(), at);
         }
-        store.rows.push(StoredExecution { req_id, contract, execution, commission_and_fees });
+        store.rows.push(StoredExecution { contract, execution, commission_and_fees });
     }
 
     /// File the executions the venue restated, announcing none of them.
@@ -2363,7 +2361,7 @@ impl ClientCore {
         for (contract, execution) in shared.orders.drain_restated_executions() {
             // Unsolicited, as a live fill is stored, and costed the same way:
             // what it cost arrives on a record of its own, if it arrives.
-            self.push_execution(-1, contract, execution, ApiCommissionAndFeesReport::default());
+            self.push_execution(contract, execution, ApiCommissionAndFeesReport::default());
         }
     }
 

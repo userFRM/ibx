@@ -228,7 +228,6 @@ impl EClient {
             price: (price * ps) as i64,
             qty: crate::types::qty_from_wire(qty),
             remaining: crate::types::qty_from_wire(remaining),
-            commission: (commission * ps) as i64,
             timestamp_ns: 100,
             // Single-print injection: the order total is this print.
             cum_qty: crate::types::qty_from_wire(qty),
@@ -292,16 +291,16 @@ impl EClient {
     #[doc(hidden)]
     #[pyo3(signature = (
         order_id, symbol, action, total_quantity, lmt_price, status="Submitted".to_string(),
-        acct_number="",
+        acct_number="", con_id=0,
     ))]
     fn _test_push_venue_order(
         &self, order_id: u64, symbol: &str, action: &str,
-        total_quantity: f64, lmt_price: f64, status: String, acct_number: &str,
+        total_quantity: f64, lmt_price: f64, status: String, acct_number: &str, con_id: i64,
     ) -> PyResult<()> {
         let shared = self.shared_state()?;
         shared.orders.push_order_info(order_id, crate::bridge::RichOrderInfo {
             contract: crate::types::model::Contract {
-                symbol: symbol.to_string(), sec_type: "STK".into(),
+                con_id, symbol: symbol.to_string(), sec_type: "STK".into(),
                 exchange: "SMART".into(), currency: "USD".into(),
                 ..Default::default()
             },

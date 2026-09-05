@@ -32,7 +32,6 @@ fn full_lifecycle() {
         price: 150 * PRICE_SCALE,
         qty: 100 * QTY_SCALE,
         remaining: 0,
-        commission: 0,
         timestamp_ns: 0,
         cum_qty: 100 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     };

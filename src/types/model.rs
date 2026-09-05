@@ -1221,7 +1221,7 @@ pub struct OrderAllocation {
 }
 
 /// ibapi-compatible OrderState (used in openOrder callback).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct OrderState {
     /// Where the order stands, as the venue names it.
     pub status: String,
@@ -1286,6 +1286,47 @@ pub struct OrderState {
     pub reject_reason: String,
     /// How an advisor's order divides across accounts.
     pub order_allocations: Vec<OrderAllocation>,
+}
+
+impl Default for OrderState {
+    /// Every figure unstated. The three charges take the reference's own
+    /// unset value rather than zero: an order the venue has not priced is
+    /// not an order that costs nothing, and a program written against the
+    /// reference tests for the sentinel before recording a cost.
+    fn default() -> Self {
+        Self {
+            status: Default::default(),
+            init_margin_before: Default::default(),
+            maint_margin_before: Default::default(),
+            equity_with_loan_before: Default::default(),
+            init_margin_change: Default::default(),
+            maint_margin_change: Default::default(),
+            equity_with_loan_change: Default::default(),
+            init_margin_after: Default::default(),
+            maint_margin_after: Default::default(),
+            equity_with_loan_after: Default::default(),
+            commission_and_fees: f64::MAX,
+            min_commission_and_fees: f64::MAX,
+            max_commission_and_fees: f64::MAX,
+            commission_and_fees_currency: Default::default(),
+            warning_text: Default::default(),
+            completed_time: Default::default(),
+            completed_status: Default::default(),
+            margin_currency: Default::default(),
+            init_margin_before_outside_rth: Default::default(),
+            maint_margin_before_outside_rth: Default::default(),
+            equity_with_loan_before_outside_rth: Default::default(),
+            init_margin_change_outside_rth: Default::default(),
+            maint_margin_change_outside_rth: Default::default(),
+            equity_with_loan_change_outside_rth: Default::default(),
+            init_margin_after_outside_rth: Default::default(),
+            maint_margin_after_outside_rth: Default::default(),
+            equity_with_loan_after_outside_rth: Default::default(),
+            suggested_size: Default::default(),
+            reject_reason: Default::default(),
+            order_allocations: Default::default(),
+        }
+    }
 }
 
 impl From<&WhatIfResponse> for OrderState {
@@ -1391,12 +1432,10 @@ pub struct ExecutionFilter {
     pub client_id: i64,
     /// Only fills on this account.
     pub acct_code: String,
-    /// Only fills after this moment.
-    ///
-    /// The venue keeps a limited window and refuses in full a request reaching
-    /// past it, rather than answering with the part it still holds. How far
-    /// back that reaches is the venue's and is not stated on the session, so a
-    /// caller wanting older fills reads them from a statement instead.
+    /// Only fills after this moment, applied to what this session has seen:
+    /// the answer comes from the session's own record of its fills, not from
+    /// the venue, so a caller wanting older fills reads them from a
+    /// statement instead.
     pub time: String,
     /// Only fills on this symbol.
     pub symbol: String,
@@ -1907,11 +1946,15 @@ mod tests {
 
     // ── OrderState ──
 
+    /// A default state has priced nothing: its charges are the reference's
+    /// unset value, not zero, which a program reads as a cost.
     #[test]
     fn order_state_default() {
         let os = OrderState::default();
         assert_eq!(os.status, "");
-        assert_eq!(os.commission_and_fees, 0.0);
+        assert_eq!(os.commission_and_fees, f64::MAX);
+        assert_eq!(os.min_commission_and_fees, f64::MAX);
+        assert_eq!(os.max_commission_and_fees, f64::MAX);
     }
 
     // ── Execution ──

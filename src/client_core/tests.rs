@@ -1466,7 +1466,7 @@ fn an_execution_is_stored_once_under_its_id() {
     let core = ClientCore::new();
     let stated = |id: &str| crate::types::model::Execution { exec_id: id.into(), ..Default::default() };
     for id in ["0001f4e8.1", "0001f4e8.1", "0001f4e8.2"] {
-        core.push_execution(-1, Default::default(), stated(id), Default::default());
+        core.push_execution(Default::default(), stated(id), Default::default());
     }
     let stored = core.snapshot_executions(&Default::default());
     let ids: Vec<&str> = stored.iter().map(|s| s.execution.exec_id.as_str()).collect();
@@ -1854,7 +1854,6 @@ fn a_replace_names_the_contract_the_venue_says_the_order_is_on() {
 #[test]
 fn a_time_bound_reads_only_what_the_venue_timed() {
     let at = |time: &str| StoredExecution {
-        req_id: 1,
         contract: ApiContract::default(),
         execution: crate::types::model::Execution { time: time.into(), ..Default::default() },
         commission_and_fees: Default::default(),
@@ -2057,7 +2056,7 @@ fn an_execution_with_no_id_is_stored_once_by_its_content() {
         ..Default::default()
     };
     for exec in [stated(100.0), stated(100.0), stated(200.0)] {
-        core.push_execution(-1, Default::default(), exec, Default::default());
+        core.push_execution(Default::default(), exec, Default::default());
     }
     let stored = core.snapshot_executions(&Default::default());
     let cum: Vec<f64> = stored.iter().map(|s| s.execution.cum_qty).collect();
@@ -2069,7 +2068,7 @@ fn an_execution_with_no_id_is_stored_once_by_its_content() {
 #[test]
 fn a_charge_naming_no_execution_stamps_none() {
     let core = ClientCore::new();
-    core.push_execution(-1, Default::default(), Default::default(), Default::default());
+    core.push_execution(Default::default(), Default::default(), Default::default());
     core.record_charge(&crate::types::model::CommissionAndFeesReport::charged("", 1.25, "USD"));
     let stored = core.snapshot_executions(&Default::default());
     assert_eq!(

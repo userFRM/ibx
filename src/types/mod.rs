@@ -258,8 +258,6 @@ pub struct Fill {
     pub qty: i64,
     /// How much of the order is still working.
     pub remaining: i64,
-    /// What it cost.
-    pub commission: Price,
     /// When it filled.
     pub timestamp_ns: u64,
     /// FIX tag 14 CumQty — filled across the whole order, not this print.

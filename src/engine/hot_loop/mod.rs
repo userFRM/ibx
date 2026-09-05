@@ -5798,7 +5798,6 @@ mod tests {
             price: 150_00000000,
             qty: 100 * QTY_SCALE,
             remaining: 0,
-            commission: 1_00000000,
             timestamp_ns: 0,
             cum_qty: 100 * QTY_SCALE, avg_price: 150_00000000,
         };

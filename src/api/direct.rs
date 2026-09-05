@@ -707,6 +707,9 @@ impl Client {
     /// and kept on the recorder as `exec_details` rows.
     pub fn executions(&self, filter: &crate::types::model::ExecutionFilter) {
         let mut r = self.recorded.lock().unwrap();
+        // This call's answer alone: appended to the last call's, two calls
+        // with different filters left their union standing.
+        r.executions.clear();
         self.inner.req_executions(self.stream_id(), filter, &mut *r);
     }
 
@@ -1009,7 +1012,6 @@ mod tests {
     fn the_executions_asked_for_are_kept() {
         let (client, _rx, _shared) = test_direct_client();
         client.inner.core.push_execution(
-            1,
             Contract { symbol: "AAPL".into(), ..Default::default() },
             crate::types::model::Execution { exec_id: "0001.1".into(), ..Default::default() },
             Default::default(),
@@ -1018,6 +1020,10 @@ mod tests {
         let recorded = client.recorded();
         assert_eq!(recorded.executions.len(), 1, "kept, not handed to nothing");
         assert_eq!(recorded.executions[0].1.exec_id, "0001.1");
+        drop(recorded);
+        // Each call answers with its own fills, not the previous call's as well.
+        client.executions(&Default::default());
+        assert_eq!(client.recorded().executions.len(), 1, "the previous answer does not stand under the new one");
     }
 
     /// A refusal that can never work keeps its own number.

@@ -6306,3 +6306,17 @@ fn a_figure_for_holdings_elsewhere_keeps_its_currency() {
         ("NetLiquidation".to_string(), "123.00".to_string(), "USD".to_string()),
     ]);
 }
+
+/// An execution report states no charge; what the fill cost arrives on a
+/// record of its own, afterwards. Read off a tag the report does not carry,
+/// every order stated that it cost exactly nothing, which a program written
+/// against the reference records as a cost because it is not the unset value.
+#[test]
+fn an_execution_report_states_no_charge_so_the_order_states_none() {
+    let (mut ccp, mut context, shared) = tracked_order_state();
+    ccp.handle_exec_report(&fill_frame(&[]), b"", &mut context, &shared, &None, "");
+    let state = shared.orders.get_order_info(42).expect("the order is reported").order_state;
+    assert_eq!(state.commission_and_fees, f64::MAX, "unstated, not nothing");
+    assert_eq!(state.min_commission_and_fees, f64::MAX);
+    assert_eq!(state.max_commission_and_fees, f64::MAX);
+}

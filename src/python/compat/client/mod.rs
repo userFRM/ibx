@@ -2092,7 +2092,7 @@ w = W()",
             shared.orders.push_fill(crate::types::Fill {
                 instrument: 0, order_id: 77, side: crate::types::Side::Buy,
                 price: 150 * crate::types::PRICE_SCALE, qty: 10 * crate::types::QTY_SCALE,
-                remaining: 0, commission: 0, timestamp_ns: 0,
+                remaining: 0, timestamp_ns: 0,
                 cum_qty: 10 * crate::types::QTY_SCALE,
                 avg_price: 150 * crate::types::PRICE_SCALE,
             });
@@ -2144,8 +2144,7 @@ w = W()",
             };
             let print = |qty: i64, remaining: i64| crate::types::Fill {
                 instrument: 0, order_id: 77, side: crate::types::Side::Buy,
-                price: 150 * crate::types::PRICE_SCALE, qty, remaining,
-                commission: 0, timestamp_ns: 0, cum_qty: qty,
+                price: 150 * crate::types::PRICE_SCALE, qty, remaining, timestamp_ns: 0, cum_qty: qty,
                 avg_price: 150 * crate::types::PRICE_SCALE,
             };
             shared.orders.push_fill_reported(

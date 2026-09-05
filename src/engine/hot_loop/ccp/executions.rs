@@ -373,7 +373,6 @@ impl CcpState {
         // Tag 14 as the report states it, or `None` where it is absent. Absent
         // is not 0: `14=0` is a bust of everything the order held.
         report_cum_qty: Option<i64>,
-        commission: f64,
         leaves_qty: i64,
         order_cum_qty: i64,
         order_avg_px: f64,
@@ -463,7 +462,6 @@ impl CcpState {
                     price: crate::types::price_from_f64(last_px),
                     qty: booked,
                     remaining: leaves_qty,
-                    commission: crate::types::price_from_f64(commission),
                     timestamp_ns: context.now_ns(),
                     cum_qty: order_cum_qty,
                     avg_price: crate::types::price_from_f64(order_avg_px),
@@ -999,7 +997,6 @@ impl CcpState {
         let order_avg_px = parsed.get(&6)
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(last_px);
-        let commission = parsed.get(&12).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
 
         if ord_status == "8" {
             // The venue says why it refused an order, and that was written to a
@@ -1193,7 +1190,7 @@ impl CcpState {
         let filled = if is_execution {
             self.book_fill(
                 parsed, clord_id, &dedup_key, is_resend, restates_history, last_px,
-                last_shares, report_cum_qty, commission, leaves_qty, order_cum_qty,
+                last_shares, report_cum_qty, leaves_qty, order_cum_qty,
                 order_avg_px, context, shared,
             )
         } else {
@@ -1503,9 +1500,13 @@ impl CcpState {
                 _ => String::new(),
             };
 
+            // What the fill cost is not on this report; it arrives on a
+            // record of its own and is reported from there. Read off a tag the
+            // report does not carry, every order stated that it cost exactly
+            // nothing, which a program written against the reference records
+            // as a cost because it is not the unset value.
             let order_state = api::OrderState {
                 status: status_str.to_string(),
-                commission_and_fees: commission,
                 completed_time,
                 completed_status,
                 // `completed_status` is the reject text alone, which is what

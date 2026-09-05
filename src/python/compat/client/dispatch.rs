@@ -320,16 +320,6 @@ impl EClient {
                 );
             }
             let (perm_id, parent_id) = self.core.perm_and_parent(shared, fill.order_id);
-            // `filled` and `avgFillPrice` describe the order so far;
-            // `lastFillPrice` describes this print.
-            let avg_price = fill.avg_price as f64 / PRICE_SCALE_F;
-            call_wrapper!(self.wrapper, py, "order_status", (fill.order_id as i64, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining),
-                 avg_price, perm_id, parent_id, price,
-                 // The client the order was placed under, as the other surface
-                 // reports it. Read off this client instead, a status about an
-                 // order this one did not place named whoever happened to be
-                 // watching.
-                 self.core.placing_client(shared, fill.order_id) as i64, "", 0.0f64));
 
             // Track execution for req_executions.
             //
@@ -372,12 +362,22 @@ impl EClient {
             // total, and one print's price as the order's average.
             let cum_qty = rich_info.as_ref().map(|i| i.last_exec.cum_qty).unwrap_or_default();
             let avg_price = rich_info.as_ref().map(|i| i.last_exec.avg_price).unwrap_or_default();
-            // Build api-level contract for shared storage
-            let api_contract = self.core.open_orders.lock().unwrap()
-                .get(&fill.order_id).map(|o| o.contract.clone())
-                .or_else(|| {
-                    rich_info.as_ref().map(|info| info.contract.clone())
+            // The contract the venue stated on the report, filled in from
+            // the reference cache by its id, and the one the caller typed
+            // only where there is no report. Placed by symbol, the caller's
+            // holds no contract id, and a program keying fills to positions
+            // by id matched nothing on this surface and everything on the
+            // other.
+            let api_contract = rich_info
+                .as_ref()
+                .map(|info| {
+                    if info.contract.con_id != 0 {
+                        self.core.get_contract(info.contract.con_id, shared).unwrap_or_else(|| info.contract.clone())
+                    } else {
+                        info.contract.clone()
+                    }
                 })
+                .or_else(|| self.core.open_orders.lock().unwrap().get(&fill.order_id).map(|o| o.contract.clone()))
                 .unwrap_or_default();
 
             // Everything the report stated, with the print's own numbers over
@@ -425,8 +425,20 @@ impl EClient {
             // The same record the replay keeps, in the shape a caller reads,
             // so the two cannot state different things about one fill.
             let exec_py = Py::new(py, Execution::from_api(&api_exec))?.into_any();
-            // Kept for `req_executions` to answer from.
-            self.core.push_execution(req_id, api_contract, api_exec, api_commission);
+            // Kept for `req_executions` to answer from, before either callback
+            // about the print: asking for executions from inside the status
+            // callback is ordinary, and a caller asking there was answered
+            // without the fill it was being told about.
+            self.core.push_execution(api_contract, api_exec, api_commission);
+            // `filled` and `avgFillPrice` describe the order so far;
+            // `lastFillPrice` describes this print.
+            call_wrapper!(self.wrapper, py, "order_status", (fill.order_id as i64, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining),
+                 fill.avg_price as f64 / PRICE_SCALE_F, perm_id, parent_id, price,
+                 // The client the order was placed under, as the other surface
+                 // reports it. Read off this client instead, a status about an
+                 // order this one did not place named whoever happened to be
+                 // watching.
+                 self.core.placing_client(shared, fill.order_id) as i64, "", 0.0f64));
             call_wrapper!(self.wrapper, py, "exec_details", (req_id, &c_py, &exec_py));
 
             // Update open order tracking

@@ -326,9 +326,7 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut phase = 1u8;
     let mut buy_price = 0i64;
-    let mut buy_comm = 0i64;
     let mut sell_price = 0i64;
-    let mut sell_comm = 0i64;
     let mut rejected_order: Option<u64> = None;
     let mut uncertain = false;
 
@@ -337,13 +335,11 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
             Ok(Event::Fill(fill)) => {
                 if phase == 1 && fill.side == Side::Buy {
                     buy_price = fill.price;
-                    buy_comm = fill.commission;
                     let sid = next_order_id();
                     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: sid, instrument: fill.instrument, side: Side::Sell, qty: ibx::types::QTY_SCALE, kind: OrderKind::Market, tif: b'0', attrs: OrderAttrs::default() })).unwrap();
                     phase = 2;
                 } else if phase == 2 && fill.side == Side::Sell {
                     sell_price = fill.price;
-                    sell_comm = fill.commission;
                     break;
                 }
             }
@@ -387,18 +383,23 @@ pub(super) fn phase_commission(conns: Conns) -> Conns {
     }
     let bp = buy_price as f64 / PRICE_SCALE as f64;
     let sp = sell_price as f64 / PRICE_SCALE as f64;
-    let bc = buy_comm as f64 / PRICE_SCALE as f64;
-    let sc = sell_comm as f64 / PRICE_SCALE as f64;
-    println!("  Buy:  ${bp:.2} commission=${bc:.4}");
-    println!("  Sell: ${sp:.2} commission=${sc:.4}");
+    println!("  Buy:  ${bp:.2}");
+    println!("  Sell: ${sp:.2}");
     assert!(buy_price > 0, "Buy fill price should be positive");
     assert!(sell_price > 0, "Sell fill price should be positive");
     assert!((bp - sp).abs() / bp < 0.05, "Buy/sell prices should be within 5%: buy={bp} sell={sp}");
-    if buy_comm > 0 {
-        assert!(bc < 10.0, "Commission unreasonably high: ${bc:.4}");
-        println!("  PASS (commission=${bc:.4})\n");
+    // What the fills cost arrives on a record of its own, after the report,
+    // and is read from where the engine files it; the report itself states
+    // no charge.
+    let charges = shared.orders.drain_charges();
+    for charge in &charges {
+        assert!(charge.commission_and_fees < 10.0, "Commission unreasonably high: {charge:?}");
+        println!("  Charge on {}: ${:.4} {}", charge.exec_id, charge.commission_and_fees, charge.currency);
+    }
+    if charges.is_empty() {
+        println!("  PASS (no charge record arrived within the window)\n");
     } else {
-        println!("  PASS (commission=0 — paper account does not report tag 12)\n");
+        println!("  PASS ({} charge records)\n", charges.len());
     }
     conns
 }

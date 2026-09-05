@@ -246,11 +246,6 @@ impl EClient {
             // `filled` and `avgFillPrice` describe the order so far;
             // `lastFillPrice` describes this print.
             let avg_price_f = fill.avg_price as f64 / PRICE_SCALE_F;
-            wrapper.order_status(
-                fill.order_id as i64, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining),
-                avg_price_f, perm_id, parent_id, price_f,
-                self.core.placing_client(&self.shared, fill.order_id) as i64, "", 0.0,
-            );
 
             let side_str = match fill.side {
                 Side::Buy => "BOT",
@@ -299,16 +294,20 @@ impl EClient {
             // Unsolicited executions carry request id -1. A market-data
             // subscription id does not identify a `reqExecutions` request.
             let req_id = NO_REQUEST;
-            // Stored before it is announced, not after. A caller that asks for
-            // its executions from inside this callback -- which is ordinary --
-            // was answered without the fill it was being told about.
+            // Stored before either callback about the print. A caller that
+            // asks for its executions from inside the status callback or this
+            // one -- which is ordinary -- was answered without the fill it was
+            // being told about.
             //
             // What it cost is not stated here. It arrives on a record of its
             // own and is reported from the drain below. Stored unstated so a
             // replay of this execution says the charge is unknown rather than
             // that it was nothing.
-            self.core.push_execution(
-                req_id, c.clone(), exec.clone(), CommissionAndFeesReport::default(),
+            self.core.push_execution(c.clone(), exec.clone(), CommissionAndFeesReport::default());
+            wrapper.order_status(
+                fill.order_id as i64, status, qty_to_f64(fill.cum_qty), qty_to_f64(fill.remaining),
+                avg_price_f, perm_id, parent_id, price_f,
+                self.core.placing_client(&self.shared, fill.order_id) as i64, "", 0.0,
             );
             wrapper.exec_details(req_id, &c, &exec);
 

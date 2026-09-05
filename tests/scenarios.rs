@@ -61,8 +61,7 @@ fn order_lifecycle_partial_then_full_fill() {
     // Step 2: Partial fill — 120 of 200 shares
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 100, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 120 * QTY_SCALE, remaining: 80 * QTY_SCALE,
-        commission: PRICE_SCALE / 2, timestamp_ns: 2000,
+        price: 150 * PRICE_SCALE, qty: 120 * QTY_SCALE, remaining: 80 * QTY_SCALE, timestamp_ns: 2000,
         cum_qty: 120 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     });
     w.events.clear();
@@ -79,8 +78,7 @@ fn order_lifecycle_partial_then_full_fill() {
     // Step 3: Remaining 80 fills
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 100, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 80 * QTY_SCALE, remaining: 0,
-        commission: PRICE_SCALE / 2, timestamp_ns: 3000,
+        price: 150 * PRICE_SCALE, qty: 80 * QTY_SCALE, remaining: 0, timestamp_ns: 3000,
         cum_qty: 80 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     });
     w.events.clear();
@@ -147,8 +145,7 @@ fn order_lifecycle_partial_fill_then_cancel() {
     // Partial fill: 30 of 100
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 70, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 30 * QTY_SCALE, remaining: 70 * QTY_SCALE,
-        commission: 0, timestamp_ns: 1000,
+        price: 150 * PRICE_SCALE, qty: 30 * QTY_SCALE, remaining: 70 * QTY_SCALE, timestamp_ns: 1000,
         cum_qty: 30 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     });
     let mut w = RecordingWrapper::default();
@@ -192,8 +189,7 @@ fn order_lifecycle_modify_then_fill() {
     // Fill at new price
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 80, side: Side::Buy,
-        price: 151 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: PRICE_SCALE, timestamp_ns: 0,
+        price: 151 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 0,
         cum_qty: 100 * QTY_SCALE, avg_price: 151 * PRICE_SCALE,
     });
     let mut w = RecordingWrapper::default();
@@ -284,8 +280,7 @@ fn order_lifecycle_algo_vwap_partial_fills() {
         let remaining = 1000 - total_filled;
         shared.orders.push_fill(Fill {
             instrument: 0, order_id: 110, side: Side::Buy,
-            price: prices[i], qty: qtys[i], remaining,
-            commission: PRICE_SCALE / 10, timestamp_ns: (i as u64 + 1) * 1000,
+            price: prices[i], qty: qtys[i], remaining, timestamp_ns: (i as u64 + 1) * 1000,
             cum_qty: qtys[i], avg_price: prices[i],
         });
     }
@@ -312,8 +307,7 @@ fn order_lifecycle_cancel_reject_on_filled_order() {
     // Order fills completely
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 120, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: 0, timestamp_ns: 1000,
+        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 1000,
         cum_qty: 100 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     });
     let mut w = RecordingWrapper::default();
@@ -476,8 +470,7 @@ fn account_round_trip_position() {
     // Buy 100 @ 150
     engine.inject_fill(&Fill {
         instrument: spy_id, order_id: 1, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: PRICE_SCALE, timestamp_ns: 1000,
+        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 1000,
         cum_qty: 100 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     });
     assert_eq!(engine.context_mut().position(spy_id), 100.0);
@@ -486,8 +479,7 @@ fn account_round_trip_position() {
     // Sell 100 @ 152
     engine.inject_fill(&Fill {
         instrument: spy_id, order_id: 2, side: Side::Sell,
-        price: 152 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: PRICE_SCALE, timestamp_ns: 2000,
+        price: 152 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 2000,
         cum_qty: 100 * QTY_SCALE, avg_price: 152 * PRICE_SCALE,
     });
     assert_eq!(engine.context_mut().position(spy_id), 0.0);
@@ -511,24 +503,21 @@ fn account_multi_instrument_positions() {
     // Buy 50 SPY
     engine.inject_fill(&Fill {
         instrument: spy_id, order_id: 1, side: Side::Buy,
-        price: 450 * PRICE_SCALE, qty: 50 * QTY_SCALE, remaining: 0,
-        commission: 0, timestamp_ns: 1000,
+        price: 450 * PRICE_SCALE, qty: 50 * QTY_SCALE, remaining: 0, timestamp_ns: 1000,
         cum_qty: 50 * QTY_SCALE, avg_price: 450 * PRICE_SCALE,
     });
 
     // Buy 100 AAPL
     engine.inject_fill(&Fill {
         instrument: aapl_id, order_id: 2, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: 0, timestamp_ns: 2000,
+        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 2000,
         cum_qty: 100 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     });
 
     // Sell 20 SPY
     engine.inject_fill(&Fill {
         instrument: spy_id, order_id: 3, side: Side::Sell,
-        price: 452 * PRICE_SCALE, qty: 20 * QTY_SCALE, remaining: 0,
-        commission: 0, timestamp_ns: 3000,
+        price: 452 * PRICE_SCALE, qty: 20 * QTY_SCALE, remaining: 0, timestamp_ns: 3000,
         cum_qty: 20 * QTY_SCALE, avg_price: 452 * PRICE_SCALE,
     });
 
@@ -748,8 +737,7 @@ fn engine_full_trade_lifecycle() {
     // Buy fill
     engine.inject_fill(&Fill {
         instrument: spy_id, order_id: 1, side: Side::Buy,
-        price: 450 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: PRICE_SCALE, timestamp_ns: 1000,
+        price: 450 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 1000,
         cum_qty: 100 * QTY_SCALE, avg_price: 450 * PRICE_SCALE,
     });
     assert_eq!(engine.context_mut().position(spy_id), 100.0);
@@ -763,8 +751,7 @@ fn engine_full_trade_lifecycle() {
     // Sell fill at higher price
     engine.inject_fill(&Fill {
         instrument: spy_id, order_id: 2, side: Side::Sell,
-        price: 455 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: PRICE_SCALE, timestamp_ns: 2000,
+        price: 455 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 2000,
         cum_qty: 100 * QTY_SCALE, avg_price: 455 * PRICE_SCALE,
     });
     assert_eq!(engine.context_mut().position(spy_id), 0.0);
@@ -804,8 +791,7 @@ fn engine_to_eclient_end_to_end() {
     // Now inject a fill through the engine
     engine.inject_fill(&Fill {
         instrument: spy_id, order_id: 42, side: Side::Buy,
-        price: 450 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: PRICE_SCALE, timestamp_ns: 1000,
+        price: 450 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 1000,
         cum_qty: 100 * QTY_SCALE, avg_price: 450 * PRICE_SCALE,
     });
 
@@ -826,8 +812,7 @@ fn engine_short_sell_then_cover() {
     // Short sell 50
     engine.inject_fill(&Fill {
         instrument: spy_id, order_id: 1, side: Side::ShortSell,
-        price: 450 * PRICE_SCALE, qty: 50 * QTY_SCALE, remaining: 0,
-        commission: 0, timestamp_ns: 1000,
+        price: 450 * PRICE_SCALE, qty: 50 * QTY_SCALE, remaining: 0, timestamp_ns: 1000,
         cum_qty: 50 * QTY_SCALE, avg_price: 450 * PRICE_SCALE,
     });
     assert_eq!(engine.context_mut().position(spy_id), -50.0);
@@ -835,8 +820,7 @@ fn engine_short_sell_then_cover() {
     // Buy to cover 50
     engine.inject_fill(&Fill {
         instrument: spy_id, order_id: 2, side: Side::Buy,
-        price: 445 * PRICE_SCALE, qty: 50 * QTY_SCALE, remaining: 0,
-        commission: 0, timestamp_ns: 2000,
+        price: 445 * PRICE_SCALE, qty: 50 * QTY_SCALE, remaining: 0, timestamp_ns: 2000,
         cum_qty: 50 * QTY_SCALE, avg_price: 445 * PRICE_SCALE,
     });
     assert_eq!(engine.context_mut().position(spy_id), 0.0);
@@ -863,8 +847,7 @@ fn mixed_ticks_during_fills() {
     // Fill arrives at same time
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 42, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: 0, timestamp_ns: 0,
+        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 0,
         cum_qty: 100 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     });
 
@@ -908,8 +891,7 @@ fn mixed_news_between_orders() {
     // Fill after news
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 50, side: Side::Buy,
-        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0,
-        commission: 0, timestamp_ns: 2000,
+        price: 150 * PRICE_SCALE, qty: 100 * QTY_SCALE, remaining: 0, timestamp_ns: 2000,
         cum_qty: 100 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     });
 
@@ -937,8 +919,7 @@ fn mixed_all_data_types_single_process() {
     // Fill
     shared.orders.push_fill(Fill {
         instrument: 0, order_id: 1, side: Side::Buy,
-        price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0,
-        commission: 0, timestamp_ns: 0,
+        price: PRICE_SCALE, qty: QTY_SCALE, remaining: 0, timestamp_ns: 0,
         cum_qty: QTY_SCALE, avg_price: PRICE_SCALE,
     });
 

@@ -345,7 +345,6 @@ fn fill_is_copy() {
         price: 150 * PRICE_SCALE,
         qty: 100 * QTY_SCALE,
         remaining: 0,
-        commission: 0,
         timestamp_ns: 123456789,
         cum_qty: 100 * QTY_SCALE, avg_price: 150 * PRICE_SCALE,
     };
@@ -433,7 +432,6 @@ fn what_if_response_is_copy() {
     // copied.
     let r2 = r.clone();
     assert_eq!(r.init_margin_after, r2.init_margin_after);
-    assert_eq!(r.commission, r2.commission);
     // The change is the difference, which the venue leaves to be taken.
     assert_eq!(r.init_margin_change(), r.init_margin_after - r.init_margin_before);
 }
