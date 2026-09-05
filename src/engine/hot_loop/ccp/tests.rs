@@ -4182,7 +4182,7 @@ fn a_reconnect_waits_for_the_new_statement_of_what_the_account_holds() {
     let shared = SharedState::new();
     let market = crate::engine::market_state::MarketState::new();
     let mut hb = HeartbeatState::new();
-    shared.portfolio.set_account_download_complete();
+    shared.portfolio.set_account_download_complete("");
 
     let (conn, _peer) = crate::protocol::connection::Connection::for_test();
     let mut ccp_conn: Option<Connection> = None;
@@ -4592,7 +4592,7 @@ fn an_account_refresh_asks_for_the_figures() {
     let mut hb = HeartbeatState::new();
     let mut buf = [0u8; 4096];
 
-    ccp.send_account_refresh("DU123456", &mut conn, &mut hb);
+    ccp.send_account_refresh("DU123456", &mut conn, &mut hb, &SharedState::new());
 
     let n = peer.read(&mut buf).unwrap();
     let text = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
@@ -4610,13 +4610,13 @@ fn an_account_refresh_asks_for_the_figures() {
     // A second request states a different key, and a second state does too:
     // the venue answers a key it is already serving with nothing, and a
     // connection outlives the loops that use it.
-    ccp.send_account_refresh("DU123456", &mut conn, &mut hb);
+    ccp.send_account_refresh("DU123456", &mut conn, &mut hb, &SharedState::new());
     let n = peer.read(&mut buf).unwrap();
     let second = key_of(&String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|"));
     assert_ne!(first, second, "a second request states a key of its own");
 
     let mut fresh = CcpState::new();
-    fresh.send_account_refresh("DU123456", &mut conn, &mut hb);
+    fresh.send_account_refresh("DU123456", &mut conn, &mut hb, &SharedState::new());
     let n = peer.read(&mut buf).unwrap();
     let third = key_of(&String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|"));
     assert_ne!(second, third, "and so does a request from a state built later");
@@ -5498,13 +5498,29 @@ fn a_holding_the_new_statement_never_names_is_closed() {
     let mut ccp_conn: Option<Connection> = None;
     ccp.reconnect(conn, &mut ccp_conn, &mut hb, "DU1", &context.market, &shared);
 
-    // The new connection states one of the two, and then says it is done.
-    let restated = b"35=UP\x016529=AR.1\x016068=SPY\x016064=300\x016008=756733\x01";
+    let asked_under = ccp.account_request_key.clone().expect("the reconnect asked");
+
+    // Another request's end says nothing about what this one has stated. A
+    // caller can ask for a refresh at any moment, and reconciling against
+    // whichever ended first would close every holding the account has.
     ccp.process_ccp_message(
-        restated, &mut None, &mut context, &shared, &None, &mut hb, "DU1",
+        b"35=EB\x016529=AR.999\x01", &mut None, &mut context, &shared, &None, &mut hb, "DU1",
+    );
+    assert_eq!(
+        shared.portfolio.position_info(140148322).map(|i| i.position), Some(3.0),
+        "an end that is not this request's closes nothing",
+    );
+
+    // The new connection states one of the two, and then says it is done.
+    let restated = format!(
+        "35=UP\x016529={asked_under}\x016068=SPY\x016064=300\x016008=756733\x01",
     );
     ccp.process_ccp_message(
-        b"35=EB\x016529=AR.1\x01", &mut None, &mut context, &shared, &None, &mut hb, "DU1",
+        restated.as_bytes(), &mut None, &mut context, &shared, &None, &mut hb, "DU1",
+    );
+    let done = format!("35=EB\x016529={asked_under}\x01");
+    ccp.process_ccp_message(
+        done.as_bytes(), &mut None, &mut context, &shared, &None, &mut hb, "DU1",
     );
 
     let held = |con_id: i64| shared.portfolio.position_info(con_id)

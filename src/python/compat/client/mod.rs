@@ -560,7 +560,6 @@ impl EClient {
                 ib_key_token_sub_type: config.ib_key_token_sub_type.clone(),
             },
         );
-
         let handle = thread::Builder::new()
             .name("ib-engine-hotloop".into())
             .spawn(move || {
@@ -2163,7 +2162,7 @@ w = W()",
         Python::initialize();
         Python::attach(|py| {
             let (client, _rx, shared, w) = wired_client(py);
-            shared.portfolio.set_account_download_complete();
+            shared.portfolio.set_account_download_complete("");
             let held = |qty: f64| PositionInfo {
                 con_id: 756733, position: qty, symbol: "SPY".into(),
                 sec_type: "STK".into(), currency: "USD".into(), ..Default::default()
@@ -2218,7 +2217,7 @@ w = W()",
             shared.portfolio.set_position_info(PositionInfo {
                 con_id: 756733, position: 1.0, ..Default::default()
             });
-            shared.portfolio.set_account_download_complete();
+            shared.portfolio.set_account_download_complete("");
             shared.portfolio.set_account(&Default::default());
 
             client.call_method0(py, "req_positions").unwrap();

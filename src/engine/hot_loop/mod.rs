@@ -715,7 +715,7 @@ impl HotLoop {
         // Asking on the way in is answered in under a second.
         let account = self.account_id.clone();
         if !account.is_empty() {
-            self.ccp.send_account_refresh(&account, &mut self.ccp_conn, &mut self.hb);
+            self.ccp.send_account_refresh(&account, &mut self.ccp_conn, &mut self.hb, &self.shared);
         }
 
         self.running = true;
@@ -1584,7 +1584,7 @@ impl HotLoop {
                     self.ccp.send_pnl_subscribe(req_id, &account, &mut self.ccp_conn, &mut self.hb);
                 }
                 ControlCommand::RefreshAccount { account } => {
-                    self.ccp.send_account_refresh(&account, &mut self.ccp_conn, &mut self.hb);
+                    self.ccp.send_account_refresh(&account, &mut self.ccp_conn, &mut self.hb, &self.shared);
                 }
                 ControlCommand::AdvisorConfig { command, partition, document } => {
                     self.ccp.send_advisor_config(

@@ -29,6 +29,14 @@ pub struct PortfolioState {
     /// the moment a download begins and emptied as the rows arrive, whatever
     /// is still here when the download ends went unstated.
     awaiting_restatement: Mutex<std::collections::HashSet<i64>>,
+    /// The account request whose end means every holding has been stated.
+    ///
+    /// A session asks the venue to restate the account more than once — a
+    /// caller can ask for a refresh at any moment — and each request ends with
+    /// a record of its own. Reconciled against whichever ended first, a
+    /// refresh issued before the reconnect's rows arrived would have read as
+    /// "the venue named nothing" and closed every holding the account has.
+    restating_under: Mutex<Option<String>>,
     /// Holdings that have moved since a caller last read them.
     ///
     /// `reqPositions` is a real-time subscription, so a caller is told each
@@ -63,6 +71,7 @@ impl PortfolioState {
             account_download_complete: AtomicBool::new(false),
             position_infos: Mutex::new(HashMap::new()),
             awaiting_restatement: Mutex::new(std::collections::HashSet::new()),
+            restating_under: Mutex::new(None),
             position_changes: Mutex::new(std::collections::BTreeSet::new()),
             positions_elsewhere: Mutex::new(HashMap::new()),
             values_elsewhere: Mutex::new(HashMap::new()),
@@ -167,8 +176,15 @@ impl PortfolioState {
     /// being reported as held and every exposure decision reads it that way.
     /// Their rows are set to nothing here; the instrument slots beside them
     /// belong to the caller, which is the side that can name an instrument.
-    #[doc(hidden)] pub fn set_account_download_complete(&self) -> Vec<i64> {
+    #[doc(hidden)] pub fn set_account_download_complete(&self, ends: &str) -> Vec<i64> {
         self.account_download_complete.store(true, Ordering::Release);
+        // Only the request that was asked to restate everything since the
+        // download began. Another request's end says nothing about what this
+        // one has stated so far.
+        if self.restating_under.lock().unwrap().as_deref() != Some(ends) {
+            return Vec::new();
+        }
+        *self.restating_under.lock().unwrap() = None;
         let unstated = std::mem::take(&mut *self.awaiting_restatement.lock().unwrap());
         let mut held = self.position_infos.lock().unwrap();
         let mut moved = self.position_changes.lock().unwrap();
@@ -202,6 +218,13 @@ impl PortfolioState {
         self.account_download_complete.store(false, Ordering::Release);
         *self.awaiting_restatement.lock().unwrap() =
             self.position_infos.lock().unwrap().keys().copied().collect();
+        // Nothing has been asked to restate them yet.
+        *self.restating_under.lock().unwrap() = None;
+    }
+
+    /// The account request now outstanding, which will restate every holding.
+    #[doc(hidden)] pub fn holdings_restated_under(&self, key: &str) {
+        *self.restating_under.lock().unwrap() = Some(key.to_string());
     }
 
     #[doc(hidden)] pub fn set_position_info(&self, info: PositionInfo) {

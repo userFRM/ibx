@@ -730,7 +730,7 @@ impl CcpState {
                 let ends = parsed.get(&6529).map(String::as_str).unwrap_or("");
                 if ends.starts_with("AR") {
                     log::info!("Account request {ends} is complete");
-                    for con_id in shared.portfolio.set_account_download_complete() {
+                    for con_id in shared.portfolio.set_account_download_complete(ends) {
                         let avg_cost = shared.portfolio.position_info(con_id)
                             .map(|i| i.avg_cost).unwrap_or_default();
                         let Some(instrument) = context.market.instrument_by_con_id(con_id)
@@ -1523,6 +1523,7 @@ impl CcpState {
         account: &str,
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
+        shared: &SharedState,
     ) {
         let Some(conn) = ccp_conn.as_mut() else { return };
         let ts = chrono_free_timestamp();
@@ -1541,6 +1542,7 @@ impl CcpState {
         // connection has already seen and is not answered at all. The opening
         // sequence has used AR.1.
         let key = self.next_account_request_key();
+        shared.portfolio.holdings_restated_under(&key);
         let _ = conn.send_fix(&[
             (fix::TAG_MSG_TYPE, "U"),
             (fix::TAG_SENDING_TIME, &ts),
@@ -2467,6 +2469,7 @@ impl CcpState {
             // for simply do not resume. Recorded too, so the unsubscribe that
             // follows closes the key this connection is actually served under.
             let key = self.next_account_request_key();
+            shared.portfolio.holdings_restated_under(&key);
             let _ = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, "U"), (fix::TAG_SENDING_TIME, &ts),
                 (6040, "6"), (6036, "1"), (6095, account_id), (6529, &key),
