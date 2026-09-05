@@ -45,7 +45,26 @@ impl EClient {
             return self.report_refusal(py, req_id, why);
         }
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        let acct = if account.is_empty() { self.account() } else { account.to_string() };
+        // Always the account this session opened under, whatever was named.
+        //
+        // The figures are worked out from one set of midnight seeds against
+        // one book of holdings, and both belong to this session's account. A
+        // subscription taken out for another account replaced those seeds with
+        // that account's and the next restatement replaced them back, so the
+        // figure reported under this request alternated between two accounts'
+        // realised legs measured against a third thing -- this account's
+        // positions. Named and not applied, with the caller told, as the
+        // holdings answer for another account already is.
+        if !account.is_empty() && account != self.account() {
+            let why = format!(
+                "account {account} was named and the profit that follows is {}'s, which \
+                 is the account this session opened under",
+                self.account(),
+            );
+            log::warn!("{why}");
+            self.report_refusal(py, req_id, Refusal::validation(why.clone()))?;
+        }
+        let acct = self.account();
         let _ = model_code;
         // Answered on the error callback and returned normally, as a request
         // made before connecting already is. Raising instead is a path a

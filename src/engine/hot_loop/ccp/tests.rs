@@ -5953,3 +5953,49 @@ fn a_request_waiting_to_be_named_is_withdrawn_with_the_rest() {
         "and the request the caller did not withdraw is still waiting",
     );
 }
+
+/// A holding the venue closes keeps no value and no profit.
+///
+/// The venue states a close as an explicit zero, and the frame that states it
+/// carries no marks. The marks are owned by the writer that reads them, so the
+/// row kept the last value and the last unrealised figure it had -- and a
+/// caller reading its profit on a position, or its portfolio, was shown both
+/// against stock nobody owns. Only what the venue stops naming altogether was
+/// squared, at the end of a download; a close it names was not.
+#[test]
+fn a_holding_the_venue_closes_keeps_no_value_and_no_profit() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    context.market.register(265598);
+
+    // Held, priced, and showing a profit.
+    ccp.handle_position_feed(
+        "6008=265598\x016064=100\x016101=150.0\x01".as_bytes(),
+        &mut None, &mut context, &shared, &None, &mut hb,
+    );
+    shared.portfolio.set_position_marks(
+        265598,
+        Some(160 * crate::types::PRICE_SCALE),
+        Some(16_000 * crate::types::PRICE_SCALE),
+        Some(1_000 * crate::types::PRICE_SCALE),
+        None,
+    );
+    let held = shared.portfolio.position_info(265598).expect("held");
+    assert_eq!(held.market_value, 16_000 * crate::types::PRICE_SCALE);
+    assert!(held.unrealized_stated);
+
+    // The venue closes it, and says nothing about what it is worth.
+    ccp.handle_position_feed(
+        "6008=265598\x016064=0\x01".as_bytes(),
+        &mut None, &mut context, &shared, &None, &mut hb,
+    );
+
+    let gone = shared.portfolio.position_info(265598).expect("still known");
+    assert_eq!(gone.position, 0.0, "the holding is closed");
+    assert_eq!(gone.market_value, 0, "and is worth nothing, not what it last was");
+    assert_eq!(gone.market_price, 0, "with no price standing against it");
+    assert_eq!(gone.unrealized_pnl, 0, "and no profit on stock nobody owns");
+    assert!(!gone.unrealized_stated, "which is unstated rather than stated as zero");
+}

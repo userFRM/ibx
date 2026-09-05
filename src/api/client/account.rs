@@ -127,7 +127,26 @@ impl EClient {
         if let Err(why) = self.core.subscribe_pnl(req_id) {
             return self.report_reason(req_id, &why);
         }
-        let account = if account.is_empty() { self.account_id.clone() } else { account.to_string() };
+        // Always the account this session opened under, whatever was named.
+        //
+        // The figures are worked out from one set of midnight seeds against
+        // one book of holdings, and both belong to this session's account. A
+        // subscription taken out for another account replaced those seeds with
+        // that account's and the next restatement replaced them back, so the
+        // figure reported under this request alternated between two accounts'
+        // realised legs measured against a third thing -- this account's
+        // positions. Named and not applied, with the caller told, as the
+        // holdings answer for another account already is.
+        if !account.is_empty() && account != self.account_id {
+            let why = format!(
+                "account {account} was named and the profit that follows is {}'s, which \
+                 is the account this session opened under",
+                self.account_id,
+            );
+            log::warn!("{why}");
+            self.report_reason(req_id, &Refusal::validation(why));
+        }
+        let account = self.account_id.clone();
         if let Err(why) = self.send(ControlCommand::SubscribePnl { req_id, account }) {
             self.report_reason(req_id, &why);
         }

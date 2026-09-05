@@ -4300,6 +4300,60 @@ fn an_executions_filter_reads_a_side_in_either_vocabulary() {
     assert_eq!(matching("").len(), 2, "and no side named is every fill");
 }
 
+/// A replay says nothing about what a fill cost until the venue has.
+///
+/// An execution is stored with its charge deliberately unstated, and every
+/// execution the venue replays at logon is stored that way and never charged.
+/// Reported regardless, the caller was handed a charge saying the fill cost
+/// nothing, in no currency, naming no execution -- the exact statement the
+/// unstated storage exists to avoid. A caller summing what its fills cost read
+/// those as zeroes.
+#[test]
+fn a_replayed_fill_says_nothing_about_a_cost_the_venue_has_not_stated() {
+    let (client, _rx, _shared) = test_client();
+    for (exec_id, charged) in [("costed", true), ("uncosted", false)] {
+        client.core.push_execution(
+            -1,
+            ApiContract { con_id: 265598, symbol: "AAPL".into(), ..Default::default() },
+            crate::types::model::Execution {
+                exec_id: exec_id.into(), side: "BOT".into(), ..Default::default()
+            },
+            Default::default(),
+        );
+        if charged {
+            client.core.record_charge(&crate::types::model::CommissionAndFeesReport {
+                exec_id: exec_id.into(), commission_and_fees: 1.25,
+                currency: "USD".into(), ..Default::default()
+            });
+        }
+    }
+
+    #[derive(Default)]
+    struct Costs(Vec<String>, Vec<String>);
+    impl crate::api::wrapper::Wrapper for Costs {
+        fn exec_details(
+            &mut self, _req_id: i64, _contract: &Contract,
+            execution: &crate::types::model::Execution,
+        ) {
+            self.0.push(execution.exec_id.clone());
+        }
+        fn commission_and_fees_report(
+            &mut self, report: &crate::types::model::CommissionAndFeesReport,
+        ) {
+            self.1.push(report.exec_id.clone());
+        }
+    }
+
+    let mut w = Costs::default();
+    client.req_executions(9, &crate::types::model::ExecutionFilter::default(), &mut w);
+
+    assert_eq!(w.0.len(), 2, "both fills are replayed: {:?}", w.0);
+    assert_eq!(
+        w.1, vec!["costed".to_string()],
+        "and only the one the venue priced says what it cost: {:?}", w.1,
+    );
+}
+
 /// A charge whose fill lands mid-pass is not read before the fill it names.
 ///
 /// The engine pushes a fill and then, off a message of its own, the charge
@@ -7974,13 +8028,23 @@ fn asking_for_the_accounts_pnl_asks_the_venue() {
         "the venue was not asked for the account's P&L",
     );
 
-    // And under the account named, where one is. The slot is held by the
-    // first request, so that one is cancelled before another may ask.
+    // And under this session's account whatever is named, because the figure
+    // is worked out from one set of seeds against one book of holdings and
+    // both belong to it. Taken at its word, a second account's seeds replaced
+    // this account's and the next restatement replaced them back, so the
+    // figure alternated between two accounts' realised legs measured against
+    // this account's positions. The slot is held by the first request, so that
+    // one is withdrawn before another may ask.
     client.cancel_pnl(9);
     client.req_pnl(10, "DU999", "");
-    assert!(rx.try_iter().any(|cmd| matches!(
-        cmd, ControlCommand::SubscribePnl { account, .. } if account == "DU999"
-    )));
+    let asked = rx.try_iter().find_map(|cmd| match cmd {
+        ControlCommand::SubscribePnl { account, .. } => Some(account),
+        _ => None,
+    });
+    assert_eq!(
+        asked, Some("DU123".to_string()),
+        "the profit reported is this account's, so this account is what is asked for",
+    );
 }
 
 /// `regulatory_snapshot` reaches the venue rather than being refused here, and

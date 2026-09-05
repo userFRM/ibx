@@ -322,6 +322,26 @@ impl PortfolioState {
                 if !info.multiplier.is_empty() { existing.multiplier = info.multiplier; }
                 // Marks are owned by set_position_marks; leave them untouched so
                 // the lean position feed can't zero them.
+                //
+                // Except where the holding has gone to nothing, which is the
+                // one case the mark cannot outlive: a figure against a holding
+                // of nothing is not a figure. The venue states a close as an
+                // explicit zero and the frame that states it carries no marks,
+                // so the row kept the last value and the last unrealised
+                // figure it had -- and a caller reading its profit on a
+                // position, or its portfolio, was shown both against stock
+                // nobody owns. The squaring at the end of a download already
+                // clears them for the holdings the venue simply stopped
+                // naming; this is the same rule where it names the close.
+                //
+                // Marks stated on the closing frame itself still stand: they
+                // are applied after this, by the writer that owns them.
+                if info.position == 0.0 {
+                    existing.market_price = 0;
+                    existing.market_value = 0;
+                    existing.unrealized_pnl = 0;
+                    existing.unrealized_stated = false;
+                }
             }
             None => { map.insert(info.con_id, info); }
         }

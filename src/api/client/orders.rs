@@ -813,7 +813,16 @@ impl EClient {
         // other.
         for se in self.core.snapshot_executions(filter) {
             wrapper.exec_details(req_id, &se.contract, &se.execution);
-            wrapper.commission_and_fees_report(&se.commission_and_fees);
+            // Only where the venue has said what it cost. An execution is
+            // stored with its charge deliberately unstated -- and every
+            // execution the venue replays at logon is stored that way and
+            // never charged -- so reporting it regardless said the fill cost
+            // nothing, in no currency, naming no execution. The empty name is
+            // the discriminator: a charge with one is refused where it is read
+            // off the wire, so an empty one can only mean nobody has said.
+            if !se.commission_and_fees.exec_id.is_empty() {
+                wrapper.commission_and_fees_report(&se.commission_and_fees);
+            }
         }
         wrapper.exec_details_end(req_id);
     }

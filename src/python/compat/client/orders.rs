@@ -884,16 +884,25 @@ impl EClient {
 
             self.deliver(py, "exec_details", (req_id, &c_py, &exec_py))?;
 
-            let report = CommissionAndFeesReport {
-                exec_id: se.commission_and_fees.exec_id.clone(),
-                commission_and_fees: se.commission_and_fees.commission_and_fees,
-                currency: se.commission_and_fees.currency.clone(),
-                realized_pnl: se.commission_and_fees.realized_pnl,
-                yield_amount: se.commission_and_fees.yield_amount,
-                yield_redemption_date: se.commission_and_fees.yield_redemption_date.clone(),
-            };
-            let report_py = Py::new(py, report)?.into_any();
-            self.deliver(py, "commission_and_fees_report", (&report_py,))?;
+            // Only where the venue has said what it cost. An execution is
+            // stored with its charge deliberately unstated -- and every
+            // execution the venue replays at logon is stored that way and
+            // never charged -- so reporting it regardless said the fill cost
+            // nothing, in no currency, naming no execution. The empty name is
+            // the discriminator: a charge with one is refused where it is read
+            // off the wire, so an empty one can only mean nobody has said.
+            if !se.commission_and_fees.exec_id.is_empty() {
+                let report = CommissionAndFeesReport {
+                    exec_id: se.commission_and_fees.exec_id.clone(),
+                    commission_and_fees: se.commission_and_fees.commission_and_fees,
+                    currency: se.commission_and_fees.currency.clone(),
+                    realized_pnl: se.commission_and_fees.realized_pnl,
+                    yield_amount: se.commission_and_fees.yield_amount,
+                    yield_redemption_date: se.commission_and_fees.yield_redemption_date.clone(),
+                };
+                let report_py = Py::new(py, report)?.into_any();
+                self.deliver(py, "commission_and_fees_report", (&report_py,))?;
+            }
         }
         self.deliver(py, "exec_details_end", (req_id,))?;
         Ok(())
