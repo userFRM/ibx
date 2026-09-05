@@ -845,7 +845,8 @@ pub mod tests {
             self.events.push(format!("order_status:{order_id}:{status}:{filled}:{remaining}:{avg_fill_price}"));
             self.parent_ids.push(parent_id);
         }
-        fn open_order(&mut self, order_id: i64, _contract: &Contract, _order: &Order, state: &OrderState) {
+        fn open_order(&mut self, order_id: i64, _contract: &Contract, order: &Order, state: &OrderState) {
+            self.parent_ids.push(order.parent_id);
             self.events.push(format!(
                 "open_order:{order_id}:{}:initB={}:initC={}:initA={}:maintB={}:maintC={}:maintA={}:eqlB={}:eqlC={}:eqlA={}:comm={}",
                 state.status,

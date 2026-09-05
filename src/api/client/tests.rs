@@ -5434,7 +5434,12 @@ fn process_msgs_dispatches_what_if() {
     });
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
-    assert!(w.events.iter().any(|e| e.starts_with("order_status:42:PreSubmitted")));
+    assert!(w.events.iter().any(|e| e.starts_with("open_order:42:PreSubmitted")));
+    assert!(
+        !w.events.iter().any(|e| e.starts_with("order_status:42")),
+        "a preview is answered on the order, and the venue states no status for one: {:?}",
+        w.events,
+    );
 }
 
 /// Regression: what-if dispatch must populate all 8 OrderState fields and call
@@ -5462,9 +5467,6 @@ fn process_msgs_what_if_emits_full_order_state() {
 
     let open_idx = w.events.iter().position(|e| e.starts_with("open_order:7:"))
         .expect("open_order callback missing for what-if");
-    let status_idx = w.events.iter().position(|e| e.starts_with("order_status:7:PreSubmitted"))
-        .expect("order_status callback missing for what-if");
-    assert!(open_idx < status_idx, "open_order must be emitted before order_status");
 
     let evt = &w.events[open_idx];
     // status, all 9 margin fields (before/change/after × init/maint/eql), commission.
@@ -8294,5 +8296,32 @@ fn a_revision_sent_out_of_the_hold_keeps_the_terms_it_states() {
     assert_eq!(
         tracked.before_the_replace.as_ref().map(|o| o.lmt_price), Some(100.0),
         "and what the venue holds is still kept against a refusal of it",
+    );
+}
+
+/// A number this session has placed under is not handed out again.
+///
+/// The allocator counts from the highest number the venue has named, and the
+/// venue has not named one this session has only just sent. A program keeping
+/// its own numbers — the reference client's own idiom — and then asking for
+/// one was given a number it had put on the market moments before, and the
+/// venue refuses the second order under it.
+#[test]
+fn a_number_this_session_has_spent_is_not_handed_out_again() {
+    let (client, rx, _shared) = test_client();
+    let order = |id: i64| Order {
+        order_id: id, action: "BUY".into(), total_quantity: 100.0,
+        order_type: "LMT".into(), lmt_price: 100.0, tif: "DAY".into(),
+        transmit: true, ..Default::default()
+    };
+    // Numbers of the caller's own choosing, none of which the venue has named.
+    for id in [10, 11, 12] {
+        client.place_order(id, &spy(), &order(id)).expect("placed");
+    }
+    while rx.try_recv().is_ok() {}
+
+    assert_eq!(
+        client.next_order_id(), 13,
+        "the next number is past everything this session has spent",
     );
 }

@@ -2309,11 +2309,16 @@ impl ClientCore {
     /// not one contract: what identifies it is the set of legs it is built
     /// from, and after a description is named the id on it is one leg's
     /// underlying — two different combinations on one underlying carry the
-    /// same id and register the same slot, so comparing ids could never have
-    /// told them apart.
+    /// same id and register the same slot, so comparing ids could never tell
+    /// them apart.
     ///
     /// Where one side states neither an id nor legs there is nothing to
-    /// compare, and the replace stands.
+    /// compare, and the replace stands. **No record the venue writes states
+    /// legs today** — neither the connect replay nor an execution report does
+    /// — so in practice a combination reaches that escape and is not compared
+    /// at all. The comparison below is what to do when one does; changing what
+    /// the venue's record carries is a question about the wire, not about
+    /// this.
     pub(crate) fn names_the_same_contract(known: &ApiContract, stated: &ApiContract) -> bool {
         if !known.combo_legs.is_empty() || !stated.combo_legs.is_empty() {
             if known.combo_legs.is_empty() || stated.combo_legs.is_empty() {
@@ -3201,6 +3206,15 @@ impl ClientCore {
         // by construction, so one unpriceable position sends the whole account
         // to them rather than reporting a partial sum as if it were the total.
         if priced == 0 || unpriceable > 0 {
+            // And only where the venue has stated them on this connection. A
+            // connection that has gone away leaves these standing at what they
+            // were before it, and after a drop nothing can be priced — so the
+            // fallback reported the pre-drop account as the current one, and
+            // the change-check below then found it unchanged and said nothing
+            // at all. Silence and a figure that has not moved read the same.
+            if !shared.portfolio.account_data_received() {
+                return None;
+            }
             let acct = shared.portfolio.account();
             total_daily = acct.daily_pnl as f64 / PRICE_SCALE_F;
             total_unrealized = acct.unrealized_pnl as f64 / PRICE_SCALE_F;

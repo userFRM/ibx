@@ -252,6 +252,19 @@ impl PortfolioState {
         // request was measuring belongs to the connection that is gone.
         self.awaiting_restatement.lock().unwrap().clear();
         *self.restating_under.lock().unwrap() = None;
+        // So do the marks. The download a rebuilt connection carries restates
+        // what the account holds and what each holding cost, and states no
+        // marks at all — those arrive on the venue's own unhurried schedule —
+        // so a holding came back with a fresh quantity and a price from before
+        // the drop, and the per-position figures for every option and future
+        // in the book were worked out against it. What a holding has realised
+        // stands: that is a fact about the day, not about the connection.
+        for info in self.position_infos.lock().unwrap().values_mut() {
+            info.market_price = 0;
+            info.market_value = 0;
+            info.unrealized_pnl = 0;
+            info.unrealized_stated = false;
+        }
     }
 
     /// The account request now outstanding, which will restate every holding.

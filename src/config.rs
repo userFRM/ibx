@@ -66,6 +66,14 @@ pub const IB_LOCALE: &str = "en_US";
 /// Network ports.
 pub const MISC_PORT: u16 = 4000;
 
+/// The key a session opens the account under, on tag 6529.
+///
+/// Named here because two sides need it and neither may reach for the other:
+/// the logon sends it as a session opens and as a dropped connection is
+/// rebuilt, and the loop has to know which request the download that follows
+/// belongs to. The counter the loop draws later keys starts past it.
+pub const OPENING_ACCOUNT_REQUEST: &str = "AR.1";
+
 /// Where the login is made.
 pub const AUTH_PORT: u16 = 4001;
 

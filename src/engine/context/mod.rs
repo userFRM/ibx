@@ -66,6 +66,12 @@ pub struct Context {
     pub(crate) pending_orders: OrderBuffer,
     pub(crate) account: AccountState,
     clock: Clock,
+    /// The counter behind the numbering helpers below, which the tests use to
+    /// build a book. It floors on the working set alone, which is the rule
+    /// that handed out an id a fill had spent — so it is not compiled into a
+    /// shipped build at all, and the numbers a session gives out come from the
+    /// mark every id the venue names raises.
+    #[cfg(test)]
     next_order_id: OrderId,
     /// ClOrdID version counter per order for modify chaining (orderId.0 → .1 → .2).
     pub(crate) modify_versions: HashMap<OrderId, u32>,
@@ -135,6 +141,7 @@ impl Context {
             account: AccountState::default(),
             clock: Clock::new(),
             // Settled on first use, against what the venue names as working.
+            #[cfg(test)]
             next_order_id: 0,
             recv_at: Instant::now(),
             loop_iterations: 0,
@@ -148,6 +155,7 @@ impl Context {
     /// while its order is live. The venue names what is live at every connect,
     /// and those land in `open_orders`, so there is nothing to carry between
     /// runs.
+    #[cfg(test)]
     fn take_order_ids(&mut self, n: OrderId) -> OrderId {
         let floor = self.open_orders.keys().copied().max().unwrap_or(0) + 1;
         let first = self.next_order_id.max(floor);
@@ -245,7 +253,8 @@ impl Context {
     ///
     /// The quantity is in whole shares. A fraction of one goes through
     /// [`Context::submit_limit_fractional`], which states it fixed-point.
-    pub fn submit(
+    #[cfg(test)]
+    pub(crate) fn submit(
         &mut self,
         instrument: InstrumentId,
         side: Side,
@@ -263,7 +272,8 @@ impl Context {
 
     /// Submit a bracket order: limit entry + take-profit limit + stop-loss stop.
     /// Returns (parent_id, take_profit_id, stop_loss_id).
-    pub fn submit_bracket(
+    #[cfg(test)]
+    pub(crate) fn submit_bracket(
         &mut self,
         instrument: InstrumentId,
         side: Side,
@@ -300,7 +310,8 @@ impl Context {
     /// This is [`Context::submit`] with the quantity already scaled. It
     /// carries the same request, so a fractional order goes out through the
     /// same encoder as every other order rather than a path of its own.
-    pub fn submit_limit_fractional(
+    #[cfg(test)]
+    pub(crate) fn submit_limit_fractional(
         &mut self,
         instrument: InstrumentId,
         side: Side,

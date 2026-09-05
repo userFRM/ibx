@@ -355,8 +355,12 @@ impl EClient {
             wrapper.error(order_id as i64, code as i64, &msg, "");
         }
 
-        // What-if → open_order(contract, order, OrderState) + order_status (iso with
-        // ibapi)
+        // A preview and nothing else, as the other surface already answers it.
+        // The venue answers what an order would cost, on the order itself: it
+        // states no status for it, nothing filled, no permanent number and no
+        // client, so a status beside it was eleven fields composed here about
+        // an order that was never placed. The reference client's own decode of
+        // an open order calls one callback and this is it.
         for wi in self.shared.orders.drain_what_if_responses() {
             let state = OrderState::from(&wi);
             let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
@@ -364,10 +368,6 @@ impl EClient {
                 .map(|t| (t.contract, t.order))
                 .unwrap_or_else(|| (Contract::default(), ApiOrder::default()));
             wrapper.open_order(wi.order_id as i64, &contract, &order, &state);
-            let parent_id = self.core.tracked_parent_id(wi.order_id).unwrap_or(0);
-            wrapper.order_status(
-                wi.order_id as i64, "PreSubmitted", 0.0, 0.0, 0.0, 0, parent_id, 0.0, 0, "", 0.0,
-            );
             self.core.open_orders.lock().unwrap().remove(&wi.order_id);
         }
     }

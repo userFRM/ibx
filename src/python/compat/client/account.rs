@@ -380,6 +380,13 @@ impl EClient {
             Some(s) => s,
             None => return Ok(None),
         };
+        // Nothing where the venue has not stated the account on this
+        // connection. Answered from what it last said instead, a caller
+        // sizing an order after a drop read the buying power and the excess
+        // liquidity from before it, with nothing to say so.
+        if !shared.portfolio.account_data_received() {
+            return Ok(None);
+        }
         let acct = shared.portfolio.account();
         Python::attach(|py| {
             let ps = PRICE_SCALE_F;

@@ -528,15 +528,24 @@ impl OrderState {
     ///
     /// A correction from the venue is not a replay and goes through
     /// [`push_order_correction`](Self::push_order_correction).
-    #[doc(hidden)] pub fn push_order_info(&self, order_id: u64, info: RichOrderInfo) {
-        // Every id the venue names, whatever became of the order under it. A
-        // withdrawn id is free again and a filled one is not, so counting past
-        // the working set alone handed out an id a fill had spent and the
-        // venue refused it.
+    /// The venue has named this id, whatever became of the order under it.
+    ///
+    /// A withdrawn id is free again and a filled one is not, so counting past
+    /// the working set alone handed out an id a fill had spent and the venue
+    /// refused it. Said on its own rather than as a consequence of keeping a
+    /// row: a record the venue replays and this client does not keep — the
+    /// history of an order that partly filled and then went — named an id all
+    /// the same, and every guard that stopped the row from being kept stopped
+    /// the mark with it.
+    #[doc(hidden)] pub fn note_the_venue_named(&self, order_id: u64) {
         self.working_id_watermark.fetch_max(order_id, Ordering::AcqRel);
         if order_id <= u32::MAX as u64 {
             self.narrow_id_watermark.fetch_max(order_id, Ordering::AcqRel);
         }
+    }
+
+    #[doc(hidden)] pub fn push_order_info(&self, order_id: u64, info: RichOrderInfo) {
+        self.note_the_venue_named(order_id);
         if crate::types::order_status::is_open_status(&info.order_state.status) {
             if self.recently_completed(order_id) {
                 return;

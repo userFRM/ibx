@@ -349,15 +349,18 @@ impl EClient {
                 .unwrap_or_default();
             let exec_exchange = rich_info.as_ref()
                 .map(|i| i.last_exec.exchange.as_str()).unwrap_or("").to_string();
-            let cum_qty = rich_info.as_ref()
-                .map(|i| i.last_exec.cum_qty).unwrap_or(qty_to_f64(fill.qty));
-            let avg_price = rich_info.as_ref()
-                .map(|i| i.last_exec.avg_price).unwrap_or(price);
+            // What the report stated about the order so far, and nothing where
+            // it stated nothing. Filled in from this print instead, a caller
+            // reading the cumulative quantity of a fill on an order this
+            // session never saw was handed one print's size as a running
+            // total, and one print's price as the order's average.
+            let cum_qty = rich_info.as_ref().map(|i| i.last_exec.cum_qty).unwrap_or_default();
+            let avg_price = rich_info.as_ref().map(|i| i.last_exec.avg_price).unwrap_or_default();
             // Build api-level contract for shared storage
             let api_contract = self.core.open_orders.lock().unwrap()
                 .get(&fill.order_id).map(|o| o.contract.clone())
                 .or_else(|| {
-                    rich_info.map(|info| info.contract)
+                    rich_info.as_ref().map(|info| info.contract.clone())
                 })
                 .unwrap_or_default();
 
@@ -380,15 +383,17 @@ impl EClient {
                 // request filtered by client matched nothing at all, and the
                 // same fill replayed named no client and no permanent id.
                 perm_id,
-                // What the report stated, and where it stated none, the client
-                // the order was placed under. Read off this client instead, a
-                // fill on an order somebody else placed was labelled with
-                // whoever happened to be asking — and `req_executions` filters
-                // on exactly that field.
-                client_id: if from_the_report.client_id != 0 {
-                    from_the_report.client_id
-                } else {
-                    i64::from(self.core.placing_client(shared, fill.order_id))
+                // The report's own, where there is a report; the client that
+                // placed the order where there is none. Chosen on the value
+                // instead, a fill the venue attributes to client zero — a real
+                // client, and the one a manually entered order carries — read
+                // as a fill the venue said nothing about, and was relabelled
+                // with whoever happened to be asking. The other surface
+                // chooses on the record, and `req_executions` filters on
+                // exactly this field.
+                client_id: match rich_info.as_ref() {
+                    Some(info) => info.last_exec.client_id,
+                    None => i64::from(self.core.placing_client(shared, fill.order_id)),
                 },
                 cum_qty,
                 avg_price,
@@ -464,10 +469,19 @@ impl EClient {
             if let Some(tracked) = tracked {
                 let contract_py = Py::new(py, Contract::from_api(py, &tracked.contract)?)?.into_any();
                 let order_py = Py::new(py, Order::from_api(py, &tracked.order)?)?.into_any();
-                let state_py = Py::new(py, OrderState {
+                // What the venue said about the order, under the status this
+                // client names it by. Built from the status alone, everything
+                // beside it — what the order would cost, the margin figures,
+                // the warning and the completed status — came back at nought
+                // on every change, to the caller this pair exists for. The
+                // completed answer already does it this way on both surfaces.
+                let stated = crate::types::model::OrderState {
                     status: status.to_string(),
-                    ..Default::default()
-                })?.into_any();
+                    ..shared.orders.get_order_info(update.order_id)
+                        .map(|i| i.order_state)
+                        .unwrap_or_default()
+                };
+                let state_py = Py::new(py, OrderState::from_api(&stated))?.into_any();
                 call_wrapper!(self.wrapper, py, "open_order",
                     (update.order_id as i64, &contract_py, &order_py, &state_py));
             }

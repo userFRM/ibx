@@ -867,6 +867,16 @@ impl CcpState {
             return;
         }
 
+        // The venue has named this id, and that is true of every report it can
+        // send about one — a working order, a fill, a refusal, the replayed
+        // history of an order that went before this session opened, a
+        // correction of one. Said here rather than where a record is kept: the
+        // id a partly filled and then cancelled order spent is named only by
+        // its replayed history, which is exactly the record this client does
+        // not keep, so the next session counted past the working set and
+        // walked straight onto an id the venue would refuse.
+        shared.orders.note_the_venue_named(clord_id);
+
         // Record the ClOrdID exactly as the server reports it so subsequent
         // cancel/modify can echo back the same string. Skip cancel-ack frames
         // (tag 11 starts with 'C' there) — those carry the cancel request's
@@ -1708,7 +1718,11 @@ impl CcpState {
         let orig_clord = parsed.get(&41).and_then(|s| {
             let stripped = s.strip_prefix('C').unwrap_or(s);
             let base = stripped.split('.').next().unwrap_or(stripped);
-            base.parse::<u64>().ok()
+            // Through the same range check every other id on the wire takes.
+            // Read bare, a number past the highest this client can carry
+            // reached the record it names and was reported back as a negative
+            // one, which is no order at all.
+            stated_order_id(base)
         });
         let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("Cancel rejected");
         let reject_type: u8 = parsed.get(&434).and_then(|s| s.parse().ok()).unwrap_or(1);

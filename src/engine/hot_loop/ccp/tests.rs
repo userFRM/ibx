@@ -5864,3 +5864,37 @@ fn a_rebuilt_connection_settles_under_the_key_its_opening_asked_with() {
     let counter_key = ccp.account_request_key.clone().expect("a second key was drawn");
     assert_ne!(counter_key, OPENING_ACCOUNT_REQUEST);
 }
+
+/// Every id the venue names raises the mark the next number is counted from,
+/// including one it only ever mentions in passing.
+///
+/// An order that partly filled and was then withdrawn is not in the working
+/// set a session opens with; the venue names it by replaying its execution
+/// behind everything else. That record is deliberately not kept — it is not an
+/// open order and it is not a completion — and the mark used to rise only as a
+/// consequence of keeping it. So the id that order spent was the one id the
+/// next session did not count past, and the venue refuses an order under an id
+/// a fill has spent.
+#[test]
+fn an_id_the_venue_only_mentions_still_counts() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+
+    // The replayed history of an order this session never placed: a partial
+    // fill, marked as a restatement, and no completion behind it.
+    let history = exec_report_frame(&[
+        (11, "7000"), (150, "1"), (39, "1"), (97, "Y"), (54, "1"),
+        (6008, "756733"), (38, "100"), (14, "10"), (151, "90"),
+    ]);
+    ccp.handle_exec_report(&history, b"", &mut context, &shared, &None, "DU1");
+
+    assert!(
+        shared.orders.get_order_info(7000).is_none(),
+        "the record itself is not kept: it is neither working nor completed",
+    );
+    assert_eq!(
+        shared.orders.working_id_watermark(), 7000,
+        "but the id it spent is counted past all the same",
+    );
+}

@@ -172,6 +172,14 @@ impl EClient {
             )));
         };
 
+        // The number this call is spending, so the allocator does not hand it
+        // out again. It counts from the highest the venue has named, and the
+        // venue has not named this one yet — a program keeping its own numbers
+        // off `next_valid_id`, which is the reference client's own idiom, then
+        // asked for one and was given a number it had put on the market
+        // moments before.
+        self.next_order_id.fetch_max(oid + 1, Ordering::AcqRel);
+
         // Before the slot a tracked order holds is compared with the one this
         // contract is cached under: the engine may have given that slot back.
         self.core.forget_released_slots(&self.shared);
@@ -706,6 +714,11 @@ impl EClient {
             // and loses the superseded one.
             for order_id in self.shared.orders.drain_order_corrections() {
                 archive.retain(|(_, order, _)| order.order_id != order_id as i64);
+                // And the eviction armed for it when it finished. A bust or a
+                // correction puts the order back to a working quantity, and an
+                // eviction still standing took its record away on the next pass —
+                // after which the order reads as one the venue is not working.
+                self.deferred_evictions.lock().unwrap().remove(&order_id);
             }
             for order in self.shared.orders.drain_completed_orders() {
                 let status_str = crate::types::order_status::order_status_str(order.status);

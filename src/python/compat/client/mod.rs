@@ -1264,7 +1264,16 @@ impl EClient {
     /// breath as the connection is floored at nothing. See `stated_order_id`.
     pub(crate) fn take_order_id(&self, py: Python<'_>) -> u64 {
         self.wait_for_the_replay(py);
-        let floor = self.stated_order_id();
+        // Past the highest the venue has named, uncapped. Taken from the
+        // number this client *states* instead, which is clamped so a caller is
+        // never told an id the wire cannot carry, the clamp handed back the
+        // very id the venue is working when the account reaches that end —
+        // where the other surface refuses. The refusal below is what states
+        // there is none left.
+        let floor = self
+            .shared_state()
+            .map(|shared| shared.orders.working_id_watermark().saturating_add(1))
+            .unwrap_or(1);
         let mut held = self.next_order_id.load(Ordering::Acquire);
         loop {
             let id = held.max(floor);

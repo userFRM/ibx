@@ -28,6 +28,7 @@ const _: () = assert!(
     "an engine deadline must be shorter than the wait the caller keeps",
 );
 
+pub(crate) use crate::config::OPENING_ACCOUNT_REQUEST;
 use crate::bridge::{Event, SharedState};
 use crate::engine::context::Context;
 use crate::protocol::datetime::chrono_free_timestamp;
@@ -491,13 +492,6 @@ pub(crate) struct PendingFanout {
     /// request, reported as one, not the ordinary way a fan-out finishes.
     pub deadline: Instant,
 }
-
-/// The key the logon opens the account under, before this loop exists.
-///
-/// Named once because two places need it: the logon sends it, and the loop has
-/// to know which request the download arriving at a session's start belongs
-/// to. The counter below starts past it.
-pub(crate) const OPENING_ACCOUNT_REQUEST: &str = "AR.1";
 
 impl CcpState {
     pub(crate) fn new() -> Self {
