@@ -772,27 +772,6 @@ mod resub_tests {
 use super::*;
 use std::collections::HashMap;
 
-/// The tag a 35=Y frame opens with sits after the marker, not on it.
-///
-/// Read a byte early and the value names no subscription at all, so the
-/// whole opening section of the book is delivered to nobody. Only a
-/// captured frame showed which of the two it was, so the byte range is
-/// pinned here rather than left to be rediscovered the same way.
-#[test]
-fn a_depth_frames_opening_tag_is_read_after_the_marker() {
-    // Two bytes, the 0x80 marker, then the tag in three.
-    let body = [0x00, 0x01, 0x80, 0x11, 0x22, 0x33, 0xff];
-    assert_eq!(FarmState::header_stag(&body), Some(0x11_22_33));
-
-    // The marker also arrives as 0x00, and the tag is in the same place.
-    let zero_marker = [0x00, 0x01, 0x00, 0x11, 0x22, 0x33];
-    assert_eq!(FarmState::header_stag(&zero_marker), Some(0x11_22_33));
-
-    // Short of a whole tag, the frame names nothing rather than a value
-    // built out of whatever follows it.
-    assert_eq!(FarmState::header_stag(&[0x00, 0x01, 0x80, 0x11, 0x22]), None);
-}
-
 fn tag_values(tags: &[(u32, String)], tag: u32) -> Vec<&str> {
     tags.iter().filter(|(t, _)| *t == tag).map(|(_, v)| v.as_str()).collect()
 }
@@ -1442,64 +1421,7 @@ mod depth_position_tests {
         }
     }
 
-    /// A frame can switch into a stream this session does not hold: the
-    /// withdrawal of a book is on its way to the venue while the frames it
-    /// already sent are still arriving. The switch names the stream the
-    /// levels that follow it belong to, so nothing after it is delivered
-    /// until a section names one this session holds.
-    #[test]
-    fn a_section_for_a_stream_this_session_does_not_hold_delivers_nothing() {
-        let mut farm = FarmState::new();
-        let shared = SharedState::new();
-        farm.depth_tag_to_req.push((0x1122, 1, false, 0.01, 1.0, "IEX".to_string()));
 
-        let mut msg = b"35=Y\x01".to_vec();
-        msg.extend_from_slice(&[
-            // Header: two bytes, a marker, and the opening section's tag.
-            0x00, 0x00, 0x80, 0x00, 0x11, 0x22,
-            // A level on the held stream, in the snapshot shape.
-            0xC4, b'T', b'E', b'S', b'T', 0x00, 0x00, 100, 0x80, 5,
-            // A switch naming a stream this session does not hold, and one of
-            // that stream's levels after it.
-            0x80, 0x00, 0x00, 0x05, 0x80,
-            0x80, 0x05, 0x00, 0x64, 0x80, 0x0A,
-            // The frame switches back to the held stream, with another level.
-            0x80, 0x00, 0x00, 0x11, 0x22,
-            0x80, 0x01, 0x00, 0xC8, 0x80, 0x07,
-        ]);
-
-        farm.handle_depth_35y(&msg, &shared);
-
-        let updates = shared.market.drain_depth_updates();
-        assert_eq!(updates.len(), 2, "only the held stream's levels: {updates:?}");
-        assert_eq!(updates[0].position, 0, "{updates:?}");
-        assert_eq!(updates[0].price, 1.0, "{updates:?}");
-        assert_eq!(updates[0].size, 5.0, "{updates:?}");
-        assert_eq!(updates[1].position, 1, "{updates:?}");
-        assert_eq!(updates[1].price, 2.0, "{updates:?}");
-        assert_eq!(updates[1].size, 7.0, "{updates:?}");
-        for u in &updates {
-            assert_eq!(u.req_id, 1, "nothing is delivered under a stream this session does not hold: {updates:?}");
-        }
-    }
-
-    /// A level requires both a price and a size. One alone would report the
-    /// other as zero, which is not a quoted level.
-    #[test]
-    fn a_half_stated_level_is_not_a_level() {
-        let farm = FarmState::new();
-        // A price with no size beside it.
-        let body = [0x00u8, 100];
-        let mut pos = 0;
-        assert!(
-            farm.parse_depth_fields(&body, &mut pos, 0.01, 1.0).is_none(),
-            "a price alone is not a level",
-        );
-        // And both together still read.
-        let body = [0x00u8, 100, 0x80, 5];
-        let mut pos = 0;
-        assert!(farm.parse_depth_fields(&body, &mut pos, 0.01, 1.0).is_some());
-    }
 }
 
 mod exchange_map_tests {
@@ -1760,5 +1682,209 @@ mod withdrawal_wire_tests {
             "the type it was asked for",
         );
         assert_eq!(values_of(msg, 264).first().map(String::as_str), Some("0"), "and a book");
+    }
+}
+
+mod depth_bit_tests {
+    use super::super::*;
+    use super::decode_publish_tests::push_bits;
+
+    /// One field as the wire carries it: the id (its meaning is `id >> 2`),
+    /// the value's width in bytes, and the value, signed.
+    struct Field { id: u64, len: usize, value: i64 }
+    /// One entry: the operation, the maker's name, the position and the fields.
+    struct Entry<'a> { op: u64, name: &'a str, position: u64, fields: Vec<Field> }
+
+    const BID_PX: u64 = 0;
+    const ASK_PX: u64 = 4;
+    const BID_SZ: u64 = 16;
+    const ASK_SZ: u64 = 20;
+
+    fn level(op: u64, name: &str, position: u64, px_id: u64, px: i64, sz_id: u64, sz: i64) -> Entry<'_> {
+        Entry { op, name, position, fields: vec![
+            Field { id: px_id, len: 2, value: px },
+            Field { id: sz_id, len: 2, value: sz },
+        ] }
+    }
+
+    /// One 35=Y frame, written the way the wire lays it out: a two-byte bit
+    /// count, then sections of entries of fields, each list closed by the
+    /// flag on its last item.
+    fn framed_35y(sections: &[(u32, Vec<Entry<'_>>)]) -> Vec<u8> {
+        let mut bits: Vec<u8> = Vec::new();
+        for (si, (tag, entries)) in sections.iter().enumerate() {
+            push_bits(&mut bits, u64::from(si + 1 < sections.len()), 1);
+            push_bits(&mut bits, u64::from(*tag), 31);
+            for (ei, e) in entries.iter().enumerate() {
+                push_bits(&mut bits, u64::from(ei + 1 < entries.len()), 1);
+                push_bits(&mut bits, 0, 1);
+                push_bits(&mut bits, e.op, 2);
+                push_bits(&mut bits, e.name.len() as u64, 4);
+                for b in e.name.bytes() { push_bits(&mut bits, u64::from(b), 8); }
+                push_bits(&mut bits, e.position, 8);
+                for (fi, f) in e.fields.iter().enumerate() {
+                    let more = u64::from(fi + 1 < e.fields.len());
+                    if f.id >= 31 {
+                        push_bits(&mut bits, 31, 5);
+                        push_bits(&mut bits, more, 1);
+                        push_bits(&mut bits, 0, 2);
+                        push_bits(&mut bits, f.id, 8);
+                        push_bits(&mut bits, f.len as u64, 8);
+                    } else {
+                        push_bits(&mut bits, f.id, 5);
+                        push_bits(&mut bits, more, 1);
+                        push_bits(&mut bits, (f.len - 1) as u64, 2);
+                    }
+                    push_bits(&mut bits, u64::from(f.value < 0), 1);
+                    push_bits(&mut bits, f.value.unsigned_abs(), 8 * f.len - 1);
+                }
+            }
+        }
+        let mut payload = vec![0u8; bits.len().div_ceil(8)];
+        for (i, &b) in bits.iter().enumerate() {
+            if b == 1 { payload[i >> 3] |= 1 << (7 - (i & 7)); }
+        }
+        let mut msg = b"35=Y\x01".to_vec();
+        msg.push((bits.len() >> 8) as u8);
+        msg.push((bits.len() & 0xFF) as u8);
+        msg.extend_from_slice(&payload);
+        msg
+    }
+
+    fn farm_holding(tag: u32, req_id: u32, venue: &str) -> (FarmState, SharedState) {
+        let mut farm = FarmState::new();
+        farm.depth_tag_to_req.push((tag, req_id, false, 0.01, 1.0, venue.to_string()));
+        (farm, SharedState::new())
+    }
+
+    /// A level arrives with the operation and the side the wire states, and
+    /// the maker's name where it states one — the venue where it does not.
+    #[test]
+    fn a_level_carries_its_operation_its_side_and_its_maker() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            level(0, "NSDQ", 0, BID_PX, 10050, BID_SZ, 500),
+            level(1, "", 1, ASK_PX, 10075, ASK_SZ, 300),
+        ])]), &shared);
+        let got: Vec<_> = shared.market.drain_depth_updates().into_iter()
+            .map(|u| (u.operation, u.side, u.position, u.price, u.size, u.market_maker))
+            .collect();
+        assert_eq!(got, [
+            (0, 1, 0, 100.50, 500.0, "NSDQ".to_string()),
+            (1, 0, 1, 100.75, 300.0, "IEX".to_string()),
+        ], "{got:?}");
+    }
+
+    /// A delete is an operation of its own, naming its side and no level.
+    /// Read by byte shape, its entry byte was neither shape looked for and
+    /// was skipped, so a book here could never shrink.
+    #[test]
+    fn a_delete_is_delivered_as_one_and_carries_no_level() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            Entry { op: 2, name: "", position: 3, fields: vec![] },
+            Entry { op: 3, name: "NSDQ", position: 0, fields: vec![] },
+            level(0, "", 4, BID_PX, 9900, BID_SZ, 10),
+        ])]), &shared);
+        let got: Vec<_> = shared.market.drain_depth_updates().into_iter()
+            .map(|u| (u.operation, u.side, u.position, u.price, u.size))
+            .collect();
+        assert_eq!(got, [
+            (2, 1, 3, 0.0, 0.0),
+            (2, 0, 0, 0.0, 0.0),
+            (0, 1, 4, 99.0, 10.0),
+        ], "{got:?}");
+    }
+
+    /// An entry at the top of the book with no maker named is an entry. Read
+    /// by byte shape it was a section switch, and it and every level after it
+    /// in the frame were lost.
+    #[test]
+    fn an_unnamed_entry_at_the_top_of_the_book_is_an_entry() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            level(0, "", 0, BID_PX, 10000, BID_SZ, 100),
+            level(0, "", 0, ASK_PX, 10001, ASK_SZ, 200),
+        ])]), &shared);
+        let got: Vec<_> = shared.market.drain_depth_updates().into_iter()
+            .map(|u| (u.side, u.position, u.price)).collect();
+        assert_eq!(got, [(1, 0, 100.0), (0, 0, 100.01)], "{got:?}");
+    }
+
+    /// A frame can switch into a stream this session does not hold: the
+    /// withdrawal of a book is on its way to the venue while the frames it
+    /// already sent are still arriving. Each section names the stream its
+    /// levels belong to, and nothing from a section this session does not
+    /// hold is delivered.
+    #[test]
+    fn a_section_for_a_stream_this_session_does_not_hold_delivers_nothing() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.handle_depth_35y(&framed_35y(&[
+            (0x1122, vec![level(0, "TEST", 0, BID_PX, 100, BID_SZ, 5)]),
+            (0x0005, vec![level(0, "", 0, BID_PX, 100, BID_SZ, 10)]),
+            (0x1122, vec![level(0, "", 1, BID_PX, 200, BID_SZ, 7)]),
+        ]), &shared);
+        let got: Vec<_> = shared.market.drain_depth_updates().into_iter()
+            .map(|u| (u.position, u.price, u.size, u.market_maker)).collect();
+        assert_eq!(got, [
+            (0, 1.0, 5.0, "TEST".to_string()),
+            (1, 2.0, 7.0, "IEX".to_string()),
+        ], "only the held stream's levels: {got:?}");
+    }
+
+    /// A field this client does not read is read past, whatever its width,
+    /// and a value's sign is its own bit.
+    #[test]
+    fn a_field_not_read_is_stepped_over_and_a_sign_is_honoured() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![Entry { op: 0, name: "", position: 2, fields: vec![
+            Field { id: 100, len: 3, value: -5 },
+            Field { id: 8, len: 1, value: 3 },
+            Field { id: BID_PX, len: 4, value: -1_234 },
+            Field { id: BID_SZ, len: 1, value: 42 },
+        ] }])]), &shared);
+        let got: Vec<_> = shared.market.drain_depth_updates().into_iter()
+            .map(|u| (u.position, u.price, u.size)).collect();
+        assert_eq!(got, [(2, -12.34, 42.0)], "{got:?}");
+    }
+
+    /// The frame ends where its bit count says, not where the bytes do.
+    #[test]
+    fn the_frame_ends_at_its_stated_bit_count() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let mut msg = framed_35y(&[(0x1122, vec![level(0, "", 0, BID_PX, 100, BID_SZ, 5)])]);
+        // Another whole level's worth of bytes after the count: not read.
+        let trailing = framed_35y(&[(0x1122, vec![level(0, "", 1, BID_PX, 300, BID_SZ, 9)])]);
+        msg.extend_from_slice(&trailing[b"35=Y\x01".len() + 2..]);
+        farm.handle_depth_35y(&msg, &shared);
+        assert_eq!(shared.market.drain_depth_updates().len(), 1, "one level, as counted");
+    }
+
+    /// A level is a price and a size. An entry stating one alone would report
+    /// the other as zero, which is not a quoted level, so it is left out and
+    /// the entries after it are read as before.
+    #[test]
+    fn a_half_stated_level_is_not_a_level() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            Entry { op: 0, name: "", position: 0, fields: vec![Field { id: BID_PX, len: 2, value: 10000 }] },
+            Entry { op: 1, name: "", position: 1, fields: vec![Field { id: ASK_SZ, len: 1, value: 9 }] },
+            level(0, "", 2, BID_PX, 9999, BID_SZ, 3),
+        ])]), &shared);
+        let got: Vec<_> = shared.market.drain_depth_updates().into_iter().map(|u| u.position).collect();
+        assert_eq!(got, [2], "the whole level, and neither half: {got:?}");
+    }
+
+    /// A level deeper than the rows asked for is not delivered.
+    #[test]
+    fn a_level_beyond_the_rows_asked_for_is_not_delivered() {
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.depth_rows.push((7, 2));
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            level(0, "", 1, BID_PX, 100, BID_SZ, 5),
+            level(0, "", 5, BID_PX, 100, BID_SZ, 5),
+        ])]), &shared);
+        let got: Vec<_> = shared.market.drain_depth_updates().into_iter().map(|u| u.position).collect();
+        assert_eq!(got, [1], "{got:?}");
     }
 }

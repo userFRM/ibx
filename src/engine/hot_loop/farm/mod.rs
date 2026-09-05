@@ -136,6 +136,33 @@ pub(crate) struct MdReqRecord {
     pub(crate) entries: Vec<MdReqEntry>,
 }
 
+/// A cursor over a book frame's bits, most significant bit first.
+struct BookBits<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    end: usize,
+}
+
+impl BookBits<'_> {
+    fn left(&self) -> usize {
+        self.end - self.at
+    }
+
+    /// The next `n` bits as a number, or nothing where fewer remain.
+    fn take(&mut self, n: usize) -> Option<u64> {
+        if n > self.left() || n > 64 {
+            return None;
+        }
+        let mut v = 0u64;
+        for _ in 0..n {
+            let bit = (self.bytes[self.at >> 3] >> (7 - (self.at & 7))) & 1;
+            v = (v << 1) | u64::from(bit);
+            self.at += 1;
+        }
+        Some(v)
+    }
+}
+
 pub(crate) struct FarmState {
     /// Subscriptions a reconnect has still to put back, and the earliest the
     /// next burst may go out.
@@ -2006,167 +2033,143 @@ impl FarmState {
         }
     }
 
-    /// The subscription a 35=Y frame's opening section belongs to.
+    /// A book frame's payload, read a bit at a time, most significant first.
     ///
-    /// Two bytes, a marker, then the tag in three — the width the venue assigns
-    /// it and the width the book's other shape already reads.
-    ///
-    /// Read from the marker instead and the tag is a byte early: it matches no
-    /// subscription, so the section names none and every level it carries waits
-    /// for a sentinel further in to name one. Captured frames put the same
-    /// three bytes at the same place in every one of them, whichever marker
-    /// precedes them.
-    fn header_stag(body: &[u8]) -> Option<u32> {
-        let tag = body.get(3..6)?;
-        Some(((tag[0] as u32) << 16) | ((tag[1] as u32) << 8) | (tag[2] as u32))
+    /// The frame states how many bits follow its two-byte count, and the
+    /// layout is not byte-aligned once a name of odd length has been read, so
+    /// nothing below indexes a byte directly.
+    fn book_bits(body: &[u8]) -> Option<BookBits<'_>> {
+        let bit_len = usize::from(u16::from_be_bytes([*body.first()?, *body.get(1)?]));
+        let bytes = &body[2..];
+        Some(BookBits { bytes, at: 0, end: bit_len.min(bytes.len() * 8) })
     }
 
-    /// Parse 35=Y depth entries (NASDAQ TotalView market-maker level).
-    /// Wire format (from wire capture):
-    ///   Header: [2B misc][1B marker][3B stag_be]
-    ///   Stag switch sentinel: [80|00][00][3B stag_be]
-    ///   Snapshot entry: [C4|44][4B market_maker][1B position][field_tags...]
-    ///   Compact entry:  [80|00][1B position][field_tags...]
-    ///     C4/80 = continuation, 44/00 = terminal (last entry for this stag section).
-    /// Field tag encoding: bit 7=size, bit 5=ask, bit 2=snapshot, bits 0-1=value_len
-    /// (00=1B,01=2B,10=3B).
+    /// Parse a 35=Y book frame and deliver its levels.
+    ///
+    /// The layout, as the wire states it, after the two-byte bit count:
+    ///
+    /// ```text
+    /// section := more:1  tag:31  entry+
+    /// entry   := more:1  _:1  op:2  name_len:4  name:8×name_len  position:8  field*
+    /// field   := id:5  more:1  len:2  sign:1  magnitude:(8·(len+1)−1)
+    /// ```
+    ///
+    /// `op` is 0 insert, 1 update, 2 delete on the bid, 3 delete on the ask,
+    /// and a delete carries no fields. A field's meaning is `id >> 2`: 0 the
+    /// bid price, 1 the ask price, 4 the bid size, 5 the ask size; an id of 31
+    /// opens a longer field (`id:8`, then `len:8`), and anything else is read
+    /// and left. A field list ends when a field says it is the last, an
+    /// entry list when an entry says it is, and the frame when a section says
+    /// it is or the bits run out.
+    ///
+    /// Read by byte shape before — a marker byte opening a section, a marker
+    /// byte opening an entry, a byte of field tag — which held wherever the
+    /// bits happened to line up and failed everywhere else: an update or a
+    /// delete, whose entry byte is neither of the two shapes looked for, was
+    /// skipped as an unknown byte, so a book here could never shrink; the
+    /// flag that says more fields follow was read as a snapshot flag and
+    /// turned into the insert/update distinction; and an entry whose position
+    /// byte was zero read as a section switch.
     fn handle_depth_35y(&self, msg: &[u8], shared: &SharedState) {
-        self.note_depth_wire("depth-35y", msg, shared);
         use crate::types::DepthUpdate;
-        let body = match find_body_after_tag(msg, b"35=Y\x01") {
-            Some(b) => b,
-            None => return,
-        };
+        self.note_depth_wire("depth-35y", msg, shared);
+        let Some(body) = find_body_after_tag(msg, b"35=Y\x01") else { return };
+        let Some(mut bits) = Self::book_bits(body) else { return };
 
-        // Two bytes of header, then a marker and the tag in three. A frame
-        // short of that whole opening names no subscription, and the sentinels
-        // below name one for the levels that follow them.
-        if body.len() < 4 { return; }
+        loop {
+            let (Some(more_sections), Some(tag)) = (bits.take(1), bits.take(31)) else { return };
+            let tag = tag as u32;
+            // Nothing is delivered from a section naming a stream this session
+            // does not hold: the withdrawal of a book is on its way to the
+            // venue while the frames it already sent are still arriving.
+            let held = self.lookup_depth_stag(tag);
+            let subscribers = if held.is_some() { self.depth_subscribers_of(tag) } else { Vec::new() };
+            let (min_tick, size_tick) = held.map_or((0.01, 1.0), |(_, _, mt, st, _)| (mt, st));
+            let counted_in = if size_tick > 0.0 { size_tick } else { 1.0 };
 
-        // Nothing is delivered until a section names the subscription it
-        // belongs to. Starting at zero and pushing regardless handed every
-        // level of a book to request zero, which no caller ever asked for and
-        // no caller could cancel.
-        //
-        // Each subscriber carries the venue this section of the book is from:
-        // the entries below carry no market maker of their own, and a level
-        // with no venue on it is a level a caller cannot place.
-        let mut subscribers: Vec<(u32, bool, String)> = Vec::new();
-        let mut min_tick: f64 = 0.01;
-        let mut size_tick: f64 = 1.0;
-        let mut pos = 2;
-
-        let hdr_stag = Self::header_stag(body).unwrap_or(u32::MAX);
-        if let Some((_, _, mt, st, _)) = self.lookup_depth_stag(hdr_stag) {
-            subscribers = self.depth_subscribers_of(hdr_stag);
-            min_tick = mt;
-            size_tick = st;
-            pos = 6;
-        }
-        log::debug!(
-            "book frame, other shape, tag {hdr_stag}, {} subscriber(s)",
-            subscribers.len(),
-        );
-        // If the header named no subscription, scanning starts at 2 and the
-        // first sentinel names the ones its levels belong to.
-
-        while pos < body.len() {
-            let b = body[pos];
-
-            // Stag switch sentinel: [80|00][00][3B stag_be] — bid_size=0
-            // repurposed. Both markers carry the tag in the same three bytes;
-            // 0x00 is the one that turns up at a message boundary.
-            if (b == 0x80 || b == 0x00) && pos + 5 <= body.len() && body[pos + 1] == 0x00 {
-                let candidate = ((body[pos + 2] as u32) << 16)
-                    | ((body[pos + 3] as u32) << 8)
-                    | (body[pos + 4] as u32);
-                if let Some((_, _, mt, st, _)) = self.lookup_depth_stag(candidate) {
-                    // Every request this section's levels belong to: the venue
-                    // answers a second subscription on a contract and venue it
-                    // already streams with the tag it already uses.
-                    subscribers = self.depth_subscribers_of(candidate);
-                    min_tick = mt;
-                    size_tick = st;
-                    pos += 5;
-                    continue;
+            loop {
+                let Some(more_entries) = bits.take(1) else { return };
+                let (Some(_), Some(op), Some(name_len)) = (bits.take(1), bits.take(2), bits.take(4)) else { return };
+                let mut name = String::with_capacity(name_len as usize);
+                for _ in 0..name_len {
+                    let Some(c) = bits.take(8) else { return };
+                    name.push(char::from(c as u8));
                 }
-                // A switch into a stream this session does not hold. The
-                // withdrawal of a book is on its way to the venue while the
-                // frames it already sent are still arriving, so a section can
-                // name a tag whose requests are gone. Its levels belong to
-                // that stream and to nobody here: nothing is delivered until
-                // a section names one this session holds. Left to the entry
-                // reading below, the switch's own bytes were pushed to the
-                // previous section's subscribers as a level of their book.
-                subscribers.clear();
-                pos += 5;
-                continue;
-            }
+                let Some(position) = bits.take(8) else { return };
+                let position = position as i32;
 
-            // Snapshot entry: [C4|44][4B market_maker][1B position][field_tags...]
-            if b == 0xC4 || b == 0x44 {
-                pos += 1;
-                if pos + 5 > body.len() { break; }
-                let mm = String::from_utf8_lossy(&body[pos..pos + 4]).trim().to_string();
-                pos += 4;
-                let book_position = body[pos] as i32;
-                pos += 1;
+                let mut price = None;
+                let mut size = None;
+                let mut side = None;
+                if op < 2 {
+                    loop {
+                        let (Some(id), Some(more_fields), Some(len)) = (bits.take(5), bits.take(1), bits.take(2)) else { return };
+                        let (id, len) = if id == 31 {
+                            let (Some(id), Some(len)) = (bits.take(8), bits.take(8)) else { return };
+                            (id, len as usize)
+                        } else {
+                            (id, len as usize + 1)
+                        };
+                        let width = 8 * len;
+                        if width == 0 || width > 64 {
+                            log::warn!("book field of {len} bytes; the frame is left at that field");
+                            return;
+                        }
+                        let (Some(sign), Some(magnitude)) = (bits.take(1), bits.take(width - 1)) else { return };
+                        let value = if sign == 1 { -(magnitude as i64) } else { magnitude as i64 };
+                        // The side is the first priced or sized field's, as
+                        // the reference client takes it.
+                        match id >> 2 {
+                            0 => { price = Some(value); side.get_or_insert(1); }
+                            1 => { price = Some(value); side.get_or_insert(0); }
+                            4 => { size = Some(value); side.get_or_insert(1); }
+                            5 => { size = Some(value); side.get_or_insert(0); }
+                            _ => {}
+                        }
+                        if more_fields == 0 { break; }
+                    }
+                }
 
-                if let Some((price, size, side, is_snapshot)) =
-                    self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
-                {
+                // A delete names its side in the operation and carries no
+                // level; an insert or update is a price and a size, and one
+                // stating either alone is not a quoted level.
+                let level = match op {
+                    2 | 3 => Some((2, if op == 2 { 1 } else { 0 }, 0.0, 0.0)),
+                    _ => match (price, size, side) {
+                        (Some(p), Some(s), Some(side)) => {
+                            Some((op as i32, side, p as f64 * min_tick, s as f64 * counted_in))
+                        }
+                        _ => {
+                            if price.is_some() || size.is_some() {
+                                log::debug!(
+                                    "book entry states {} alone; a level is a price and a size, so it is left out",
+                                    if price.is_some() { "a price" } else { "a size" },
+                                );
+                            }
+                            None
+                        }
+                    },
+                };
+                if let Some((operation, side, price, size)) = level {
                     for (req_id, is_smart, venue) in &subscribers {
-                        if !self.within_asked_depth(*req_id, book_position) { continue; }
-                        // The venue's name for the maker where it states
-                        // one, and otherwise the exchange this section of the
-                        // book is from: a level with neither is a level a
-                        // caller cannot place.
-                        let named = if mm.is_empty() { venue.clone() } else { mm.clone() };
+                        if !self.within_asked_depth(*req_id, position) { continue; }
+                        // The venue's name for the maker where it states one,
+                        // and otherwise the exchange this section of the book
+                        // is from: a level with neither is a level a caller
+                        // cannot place.
+                        let named = if name.trim().is_empty() { venue.clone() } else { name.trim().to_string() };
                         shared.market.push_depth_update(DepthUpdate {
-                            req_id: *req_id, position: book_position, market_maker: named,
-                            operation: if is_snapshot { 0 } else { 1 },
-                            side, price, size, is_smart_depth: *is_smart,
+                            req_id: *req_id, position, market_maker: named,
+                            operation, side, price, size, is_smart_depth: *is_smart,
                         });
                     }
                 }
-                continue;
+                if more_entries == 0 { break; }
             }
-
-            // Compact entry: [80|00][1B position][field_tags...]  (no market maker)
-            // 80 = continuation, 00 = terminal for this stag section.
-            // Guard: stag switch sentinel already checked above.
-            // Validate: position must be 0-29 and next byte must be a valid field tag.
-            if (b == 0x80 || b == 0x00) && pos + 2 < body.len() {
-                let candidate_pos = body[pos + 1];
-                let candidate_tag = body[pos + 2];
-                // Valid field tags: only bits 7,5,2,1,0 set (mask 0xAF). Reject bits
-                // 6,4,3.
-                if candidate_pos < 30 && candidate_tag & 0x50 == 0 && candidate_tag & 0x08 == 0 {
-                    pos += 1;
-                    let book_position = body[pos] as i32;
-                    pos += 1;
-
-                    if let Some((price, size, side, is_snapshot)) =
-                        self.parse_depth_fields(body, &mut pos, min_tick, size_tick)
-                    {
-                        for (req_id, is_smart, venue) in &subscribers {
-                            if !self.within_asked_depth(*req_id, book_position) { continue; }
-                            shared.market.push_depth_update(DepthUpdate {
-                                req_id: *req_id, position: book_position,
-                                market_maker: venue.clone(),
-                                operation: if is_snapshot { 0 } else { 1 },
-                                side, price, size, is_smart_depth: *is_smart,
-                            });
-                        }
-                    }
-                    continue;
-                }
-            }
-
-            // Unknown byte — skip
-            pos += 1;
+            if more_sections == 0 || bits.left() < 32 { return; }
         }
     }
+
 
     /// Every request this tag's levels belong to, as (req_id, is_smart, venue).
     ///
@@ -2188,77 +2191,6 @@ impl FarmState {
             .map(|(_, r, sm, mt, st, ex)| (*r, *sm, *mt, *st, ex.clone()))
     }
 
-    /// Parse one price + one size field tag pair. Returns (price, size, side,
-    /// is_snapshot).
-    /// Advances `pos` past consumed bytes.
-    fn parse_depth_fields(&self, body: &[u8], pos: &mut usize, min_tick: f64, size_tick: f64) -> Option<(f64, f64, i32, bool)> {
-        let mut price: f64 = 0.0;
-        let mut size: f64 = 0.0;
-        let mut side: i32 = 1; // default bid
-        let mut is_snapshot = false;
-        let mut has_price = false;
-        let mut has_size = false;
-
-        // Parse up to 2 field tags (one price + one size).
-        for _ in 0..2 {
-            if *pos >= body.len() { break; }
-            let tag = body[*pos];
-            // Valid field tags use bits 7,5,2,1,0. Reject if bit 6 or bit 4 set.
-            if tag & 0x50 != 0 { break; }
-            // Reject entry/stag prefixes that would start a new entry.
-            if tag == 0xC4 || tag == 0x44 { break; }
-            *pos += 1;
-
-            let is_size_field = tag & 0x80 != 0;
-            let is_ask = tag & 0x20 != 0;
-            if tag & 0x04 != 0 { is_snapshot = true; }
-            if is_ask { side = 0; } else { side = 1; }
-
-            let val_len = tag & 0x03;
-            let val: u32 = match val_len {
-                0 => {
-                    if *pos >= body.len() { break; }
-                    let v = body[*pos] as u32; *pos += 1; v
-                }
-                1 => {
-                    if *pos + 2 > body.len() { break; }
-                    let v = ((body[*pos] as u32) << 8) | (body[*pos + 1] as u32);
-                    *pos += 2; v
-                }
-                _ => {
-                    if *pos + 3 > body.len() { break; }
-                    let v = ((body[*pos] as u32) << 16) | ((body[*pos + 1] as u32) << 8) | (body[*pos + 2] as u32);
-                    *pos += 3; v
-                }
-            };
-
-            if is_size_field {
-                // A size is a count of what the venue said sizes move in for
-                // this contract, the same way a price is a count of what
-                // prices move in. Counted as whole ones, a crypto's depth
-                // reads a hundred million times over.
-                size = val as f64 * if size_tick > 0.0 { size_tick } else { 1.0 };
-                has_size = true;
-            } else {
-                price = val as f64 * min_tick;
-                has_price = true;
-            }
-        }
-
-        // A level requires both a price and a size. One alone would report
-        // the other as zero, which is not a quoted level.
-        if has_price && has_size {
-            Some((price, size, side, is_snapshot))
-        } else {
-            if has_price || has_size {
-                log::debug!(
-                    "book entry states {} alone; a level is a price and a size, so it is left out",
-                    if has_price { "a price" } else { "a size" },
-                );
-            }
-            None
-        }
-    }
 
     /// Give this farm up, and the socket it was carried on with it.
     ///

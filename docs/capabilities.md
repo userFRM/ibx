@@ -18,7 +18,7 @@ Verification runs against a paper account on IBKR production servers, and the or
 | Requests | 80. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
 | Order fields | 154. 114 are sent; 33 have no field in the protocol to carry them and the call says so rather than dropping them; 6 are what the venue fills on the way back, which an order does not carry out; 1 is acted on here rather than sent |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 2,982 offline, and 192 more that live in the suites run against a broker session |
+| Tests | 2,987 offline, and 192 more that live in the suites run against a broker session |
 
 ## API surface
 
@@ -63,7 +63,7 @@ nothing reaches and is counted as one on the limits page.
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 2,178 | No |
+| Rust unit and integration | 2,183 | No |
 | Rust, live | 9 | Yes |
 | Python | 804 | No |
 | Python, live | 137 | Yes |
@@ -105,7 +105,7 @@ test fails the same way against any server.
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | Top of book | ✅ Supported | Streaming and snapshot; US equities and FX; `scripts/sdk_sweep.py`, `tests/python/test_live_quotes.py`. Concurrent subscribers on one contract share one wire subscription |
-| Market depth (L2) | ✅ Supported | A book is asked for once, at the venue named, and every level names it; ten levels a side through ib_async's own ticker. Which venues answer depends on the account's entitlements — see the note below. `tests/python/test_live_depth.py`, `tests/python/test_ib_async_depth.py`, `src/bin/capture_depth.rs` |
+| Market depth (L2) | ✅ Supported | A book is asked for once, at the venue named, and every level names it; inserts, updates and deletes are delivered as the venue states them, ten levels a side through ib_async's own ticker. Which venues answer depends on the account's entitlements — see the note below. `tests/python/test_live_depth.py`, `tests/python/test_ib_async_depth.py`, `src/bin/capture_depth.rs` |
 | Historical bars | ✅ Supported | 9 markets in one session (`src/bin/capture_global.rs`); `keepUpToDate` verified in `tests/python/test_historical_and_scanner.py` |
 | Historical ticks and schedules | ✅ Supported | `scripts/sdk_sweep.py`; unsupported tick types return an error rather than substituting another series |
 | Tick-by-tick quotes | ✅ Supported | FX and US equities, concurrent streams, each record carrying its request id; `tests/python/test_live_python_wrappers.py` |
