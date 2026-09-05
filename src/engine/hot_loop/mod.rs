@@ -663,6 +663,13 @@ impl HotLoop {
             // Tick-by-tick rebuilds bid and ask from deltas against the last
             // pair it saw. Left in place, the next occupant's first delta
             // would be applied to the previous contract's prices.
+            //
+            // And the holding the slot carried. The engine's own book says the
+            // slot is flat or the check above would have kept it, but what a
+            // caller reads is a second copy of that figure: left as it was,
+            // the next contract to take the slot is read as holding the
+            // previous one's quantity until the venue states otherwise.
+            self.shared.portfolio.set_position(instrument, 0.0);
             log::info!("Reclaimed instrument slot {instrument}");
         }
     }
@@ -6084,6 +6091,11 @@ mod slot_reclamation_tests {
             "a working order holds its slot",
         );
 
+        // The copy a caller reads is a second one, and the reclaim is decided
+        // on the engine's own book: a slot given back while this still said
+        // 300 was read as holding 300 by whatever took it next.
+        hl.shared.portfolio.set_position(instrument, 300.0);
+
         hl.context.retire_order(42);
         hl.reclaim_slots_no_order_holds();
         assert_eq!(
@@ -6093,6 +6105,10 @@ mod slot_reclamation_tests {
         assert_eq!(
             hl.shared.market.take_released_con_ids(), vec![756733],
             "the surfaces are told, so they stop naming the slot it no longer holds",
+        );
+        assert_eq!(
+            hl.shared.portfolio.position(instrument), 0.0,
+            "and the holding a caller reads off the slot went with it",
         );
     }
 }
