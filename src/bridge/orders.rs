@@ -104,6 +104,14 @@ pub struct OrderState {
     /// parked with reason", so this is drained into `Wrapper::error` the
     /// same way a cancel/modify reject is.
     order_inactive: Mutex<Vec<(u64, i32, String)>>,
+    /// Orders whose outstanding replacement the venue has taken.
+    ///
+    /// The surfaces hold the terms an order had before a replacement, to put
+    /// back where the venue refuses it. What spends that copy is the venue
+    /// taking the replacement, and nothing but the venue's own word says so:
+    /// read off a status instead, a fill landing between the attempt and the
+    /// answer hid it, and the copy outlived the replacement it belonged to.
+    replacements_taken: Mutex<Vec<u64>>,
 }
 
 /// The highest id an order can be given.
@@ -154,6 +162,7 @@ impl OrderState {
             working_id_watermark: AtomicU64::new(0),
             narrow_id_watermark: AtomicU64::new(0),
             order_inactive: Mutex::new(Vec::with_capacity(8)),
+            replacements_taken: Mutex::new(Vec::with_capacity(4)),
         }
     }
 
@@ -306,6 +315,16 @@ impl OrderState {
 
     #[doc(hidden)] pub fn push_cancel_reject(&self, reject: CancelReject) {
         self.cancel_rejects.lock().unwrap().push(reject);
+    }
+
+    /// The venue has taken the replacement outstanding on this order.
+    #[doc(hidden)] pub fn note_replacement_taken(&self, order_id: u64) {
+        self.replacements_taken.lock().unwrap().push(order_id);
+    }
+
+    /// The orders whose replacement the venue has taken since this was asked.
+    pub fn drain_replacements_taken(&self) -> Vec<u64> {
+        self.replacements_taken.lock().unwrap().drain(..).collect()
     }
 
     #[doc(hidden)] pub fn push_order_inactive(&self, order_id: u64, code: i32, message: String) {

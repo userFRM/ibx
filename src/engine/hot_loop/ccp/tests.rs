@@ -5576,3 +5576,51 @@ fn a_refused_revision_travels_on_the_channel_a_refusal_travels_on() {
         "the venue's own words still reach the caller: {said:?}",
     );
 }
+
+/// The venue taking a replacement is said even when a fill took the status.
+///
+/// The surfaces keep the terms an order had before a replacement, to put back
+/// where the venue refuses it. They read the acceptance off a status — the
+/// venue working the order again — and the venue fills the order it holds
+/// while it is still deciding: the fill takes the more advanced status, the
+/// acknowledgement behind it is dropped as stale, and nothing announces it. So
+/// the copy outlived the replacement the venue had taken, and the next refusal
+/// put back terms from before it.
+#[test]
+fn the_venue_taking_a_replacement_is_said_behind_a_fill() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy,
+        100 * crate::types::QTY_SCALE, 150 * crate::types::PRICE_SCALE,
+        b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingReplace, false));
+
+    // Part of it fills while the venue is still deciding on the change.
+    let filled = exec_report_frame(&[
+        (11, "42.1"), (150, "1"), (39, "1"), (54, "1"), (38, "100"), (14, "10"), (151, "90"),
+    ]);
+    ccp.handle_exec_report(&filled, b"", &mut context, &shared, &None, "DU1");
+    assert_eq!(
+        context.order(42).map(|o| o.status),
+        Some(crate::types::OrderStatus::PartiallyFilled),
+        "the fill is the order's most advanced state",
+    );
+
+    // And then the venue takes the change.
+    let took = exec_report_frame(&[(11, "42.1"), (150, "5"), (39, "5")]);
+    ccp.handle_exec_report(&took, b"", &mut context, &shared, &None, "DU1");
+
+    assert_eq!(
+        shared.orders.drain_replacements_taken(), vec![42],
+        "the surfaces are told the venue took it",
+    );
+    assert_eq!(
+        context.order(42).map(|o| o.status),
+        Some(crate::types::OrderStatus::PartiallyFilled),
+        "and the order is still what the fill left it",
+    );
+}

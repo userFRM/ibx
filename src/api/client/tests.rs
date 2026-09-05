@@ -1328,22 +1328,22 @@ fn two_callers_racing_for_one_contract_ask_for_the_headlines_once() {
 fn a_cancelled_order_stops_being_tracked() {
     let (client, _rx, shared) = test_client();
 
-    client.core.update_order_status(&shared, 7, OrderStatus::Submitted, 0.0, 100.0);
+    client.core.update_order_status(&shared, 7, OrderStatus::Submitted, 0.0, 100.0, 0);
     assert_eq!(client.core.open_orders.lock().unwrap().len(), 1, "working, so tracked");
 
-    client.core.update_order_status(&shared, 7, OrderStatus::Cancelled, 0.0, 100.0);
+    client.core.update_order_status(&shared, 7, OrderStatus::Cancelled, 0.0, 100.0, 0);
     assert!(
         client.core.open_orders.lock().unwrap().is_empty(),
         "a cancelled order is kept for the life of the session",
     );
 
     // And one the venue refused.
-    client.core.update_order_status(&shared, 8, OrderStatus::Submitted, 0.0, 100.0);
-    client.core.update_order_status(&shared, 8, OrderStatus::Rejected, 0.0, 100.0);
+    client.core.update_order_status(&shared, 8, OrderStatus::Submitted, 0.0, 100.0, 0);
+    client.core.update_order_status(&shared, 8, OrderStatus::Rejected, 0.0, 100.0, 0);
     assert!(client.core.open_orders.lock().unwrap().is_empty(), "and a rejected one");
 
     // What is held back is the one that can return to working on its own.
-    client.core.update_order_status(&shared, 9, OrderStatus::Inactive, 0.0, 100.0);
+    client.core.update_order_status(&shared, 9, OrderStatus::Inactive, 0.0, 100.0, 0);
     assert_eq!(
         client.core.open_orders.lock().unwrap().len(), 1,
         "an inactive order returns to working when what holds it clears",
@@ -1352,8 +1352,8 @@ fn a_cancelled_order_stops_being_tracked() {
     // And one the venue states as filled, even where no fill record came
     // with the status: the fill's own path drops the record, but the status
     // can arrive without one.
-    client.core.update_order_status(&shared, 10, OrderStatus::Submitted, 0.0, 100.0);
-    client.core.update_order_status(&shared, 10, OrderStatus::Filled, 100.0, 0.0);
+    client.core.update_order_status(&shared, 10, OrderStatus::Submitted, 0.0, 100.0, 0);
+    client.core.update_order_status(&shared, 10, OrderStatus::Filled, 100.0, 0.0, 0);
     assert_eq!(
         client.core.open_orders.lock().unwrap().len(), 1,
         "a filled order is done, and only the inactive one remains",
@@ -2917,7 +2917,7 @@ fn a_change_to_an_order_that_finished_is_not_released_with_the_next_family() {
     assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
     // And then the order it was a change to fills.
     client.core.update_order_status(
-        &shared, 61, crate::types::OrderStatus::Filled, 100.0, 0.0,
+        &shared, 61, crate::types::OrderStatus::Filled, 100.0, 0.0, 0,
     );
     assert!(!client.core.is_held(61), "the change goes with the order it changed");
 
@@ -2988,7 +2988,7 @@ fn a_refused_replacement_leaves_the_terms_the_venue_holds() {
     client.place_order(66, &spy(), &order(100.0, 100.0)).expect("placed");
     let _ = rx.try_recv();
     client.core.update_order_status(
-        &shared, 66, crate::types::OrderStatus::Submitted, 0.0, 100.0,
+        &shared, 66, crate::types::OrderStatus::Submitted, 0.0, 100.0, 0,
     );
     // A replacement goes out, and the record takes it.
     client.place_order(66, &spy(), &order(200.0, 105.0)).expect("replaced");
@@ -3035,7 +3035,7 @@ fn replacing_an_order_keeps_what_it_has_already_filled() {
     let _ = rx.try_recv();
     // Thirty of it trades.
     client.core.update_order_status(
-        &shared, 77, crate::types::OrderStatus::PartiallyFilled, 30.0, 70.0,
+        &shared, 77, crate::types::OrderStatus::PartiallyFilled, 30.0, 70.0, 0,
     );
 
     client.place_order(77, &spy(), &order(120.0, 101.0)).expect("replaced");
@@ -5095,7 +5095,7 @@ fn a_refused_cancel_leaves_the_order_reading_as_working() {
     order.transmit = true;
     client.core.track_order(44, spy(), order, 0);
     client.core.update_order_status(
-        &shared, 44, crate::types::OrderStatus::PendingCancel, 0.0, 100.0,
+        &shared, 44, crate::types::OrderStatus::PendingCancel, 0.0, 100.0, 0,
     );
     assert_eq!(
         client.core.open_orders.lock().unwrap().get(&44).map(|o| o.status.clone()),

@@ -300,7 +300,7 @@ impl EClient {
                 .unwrap_or(if fill.remaining == 0 { "Filled" } else { "Submitted" });
             if let Some(u) = with_it {
                 self.core.update_order_status(
-                    shared, u.order_id, u.status, u.filled_qty, u.remaining_qty,
+                    shared, u.order_id, u.status, u.filled_qty, u.remaining_qty, u.instrument,
                 );
             }
             let (perm_id, parent_id) = self.core.perm_and_parent(shared, fill.order_id);
@@ -459,7 +459,7 @@ impl EClient {
                  self.client_id.load(Ordering::Acquire) as i64, "", 0.0f64));
 
             // Track open orders
-            self.core.update_order_status(shared, update.order_id, update.status, update.filled_qty, update.remaining_qty);
+            self.core.update_order_status(shared, update.order_id, update.status, update.filled_qty, update.remaining_qty, update.instrument);
         }
 
         for event in self.core.drain_group_events() {
@@ -529,6 +529,12 @@ impl EClient {
                      or_unstated_greek(comp.gamma), or_unstated_greek(comp.vega),
                      or_unstated_greek(comp.theta), or_unstated_price(comp.und_price)));
             }
+        }
+
+        // A replacement the venue has taken spends the terms kept against a
+        // refusal of it. Before the refusals below, as on the other surface.
+        for order_id in shared.orders.drain_replacements_taken() {
+            self.core.settle_replacement(order_id);
         }
 
         // Drain cancel rejects -> error

@@ -610,10 +610,6 @@ impl HeldOrder {
     }
 }
 
-/// The record of an order as this client has just placed it.
-///
-/// Written by more than one path — held back, or sent — so the shape of a
-/// freshly placed order is stated once.
 /// Put back what a restatement replaced, and square the outstanding quantity
 /// with it. Does nothing where nothing was kept.
 fn put_back_the_terms(tracked: &mut TrackedOrder) {
@@ -623,6 +619,10 @@ fn put_back_the_terms(tracked: &mut TrackedOrder) {
     }
 }
 
+/// The record of an order as this client has just placed it.
+///
+/// Written by more than one path — held back, or sent — so the shape of a
+/// freshly placed order is stated once.
 fn tracked_as_placed(
     contract: ApiContract, order: ApiOrder, instrument: InstrumentId,
 ) -> TrackedOrder {
@@ -2474,6 +2474,20 @@ impl ClientCore {
         ))
     }
 
+    /// The venue has taken the replacement outstanding on this order, so the
+    /// terms kept against a refusal are spent.
+    ///
+    /// Read off a status before this — the venue working the order again —
+    /// which is not the same fact: a fill landing between the attempt and the
+    /// answer took the more advanced status and the acknowledgement behind it
+    /// was never announced, so the copy outlived the replacement the venue had
+    /// taken and the next refusal put back terms from before it.
+    pub fn settle_replacement(&self, order_id: u64) {
+        if let Some(tracked) = self.open_orders.lock().unwrap().get_mut(&order_id) {
+            tracked.before_the_replace = None;
+        }
+    }
+
     /// Put back the terms a restatement replaced, where the attempt did not
     /// stand: the venue refused it, or it never left this process.
     pub fn undo_restatement(&self, order_id: u64) {
@@ -2493,7 +2507,10 @@ impl ClientCore {
     ///
     /// Falls back to recording it afresh where nothing is held under the id,
     /// which is a caller replacing an order this client did not place.
-    pub fn restate_order(&self, order_id: u64, contract: ApiContract, order: ApiOrder) {
+    pub fn restate_order(
+        &self, shared: &SharedState, order_id: u64, contract: ApiContract, order: ApiOrder,
+        instrument: InstrumentId,
+    ) {
         let mut orders = self.open_orders.lock().unwrap();
         match orders.get_mut(&order_id) {
             Some(tracked) => {
@@ -2509,10 +2526,24 @@ impl ClientCore {
                 tracked.order = order;
             }
             None => {
-                let remaining = order.total_quantity;
+                // A caller replacing an order the venue replayed at connect:
+                // this client did not place it, so what the venue has said is
+                // the only account of what it has done. Written without that,
+                // the record read as a fresh order — nothing filled, its whole
+                // quantity outstanding, a status of its own invention, and
+                // slot zero, which is a real slot and not this order's, so the
+                // next replace was refused for naming another contract.
+                let known = shared.orders.get_order_info(order_id);
+                let filled = known.as_ref().map_or(0.0, |i| i.order.filled_quantity);
+                let status = known.as_ref().map_or_else(
+                    || "PendingSubmit".to_string(), |i| i.order_state.status.clone(),
+                );
+                // And what the venue holds, for a refusal to put back.
+                let before_the_replace = known.map(|i| Box::new(i.order));
+                let remaining = (order.total_quantity - filled).max(0.0);
                 orders.insert(order_id, TrackedOrder {
-                    contract, order, status: "PendingSubmit".into(), filled: 0.0, remaining,
-                    instrument: 0, rejected: false, before_the_replace: None,});
+                    contract, order, status, filled, remaining,
+                    instrument, rejected: false, before_the_replace,});
             }
         }
     }
@@ -2650,28 +2681,14 @@ impl ClientCore {
     /// left `collect_open_orders` unable to tell it had just been withdrawn. A fresh
     /// entry seeds contract and order from the same enriched
     /// cache `collect_open_orders` reads, rather than leaving them blank.
-    pub fn update_order_status(&self, shared: &SharedState, order_id: u64, status: OrderStatus, filled: f64, remaining: f64) {
+    pub fn update_order_status(&self, shared: &SharedState, order_id: u64, status: OrderStatus, filled: f64, remaining: f64, instrument: InstrumentId) {
         let mut orders = self.open_orders.lock().unwrap();
-        // The venue working the order again is its answer to the replacement
-        // outstanding on it, so what was kept against a refusal is spent:
-        // kept past that, a later refusal of something else would put back
-        // terms from before a replacement the venue took.
-        //
-        // A fill is not that answer. The venue fills the order it holds while
-        // it is still deciding on the replacement, and spending the fallback
-        // there left a refusal that arrived behind the fill with nothing to
-        // put back — so the record stated terms the venue had said no to.
-        if matches!(status, OrderStatus::Submitted)
-            && let Some(tracked) = orders.get_mut(&order_id)
-        {
-            tracked.before_the_replace = None;
-        }
         let o = orders.entry(order_id).or_insert_with(|| {
             let (contract, order) = match shared.orders.get_order_info(order_id) {
                 Some(info) => (info.contract, info.order),
                 None => (ApiContract::default(), ApiOrder::default()),
             };
-            TrackedOrder { contract, order, status: String::new(), rejected: false, filled: 0.0, remaining: 0.0, instrument: 0, before_the_replace: None,}
+            TrackedOrder { contract, order, status: String::new(), rejected: false, filled: 0.0, remaining: 0.0, instrument, before_the_replace: None,}
         });
         o.status = order_status_str(status).into();
         o.rejected = status == OrderStatus::Rejected;

@@ -229,6 +229,7 @@ impl EClient {
             if let Some(u) = with_it {
                 self.core.update_order_status(
                     &self.shared, u.order_id, u.status, u.filled_qty, u.remaining_qty,
+                    u.instrument,
                 );
             }
             let (perm_id, parent_id) = self.core.perm_and_parent(&self.shared, fill.order_id);
@@ -318,7 +319,15 @@ impl EClient {
                 update.remaining_qty, avg, update.perm_id, parent_id, 0.0,
                 self.core.placing_client(&self.shared, update.order_id) as i64, "", 0.0,
             );
-            self.core.update_order_status(&self.shared, update.order_id, update.status, update.filled_qty, update.remaining_qty);
+            self.core.update_order_status(&self.shared, update.order_id, update.status, update.filled_qty, update.remaining_qty, update.instrument);
+        }
+
+        // A replacement the venue has taken spends the terms kept against a
+        // refusal of it. Before the refusals below, so an acceptance and a
+        // stale refusal arriving in one pass leave the record on what the
+        // venue holds.
+        for order_id in self.shared.orders.drain_replacements_taken() {
+            self.core.settle_replacement(order_id);
         }
 
         // Cancel rejects → error

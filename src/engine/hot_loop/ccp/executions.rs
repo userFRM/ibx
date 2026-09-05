@@ -1031,6 +1031,13 @@ impl CcpState {
             // against a refusal is spent. A stale refusal arriving behind the
             // acceptance must not put the old terms back over it.
             context.pre_replace.remove(&(clord_id, reported_revision));
+            // And said to the surfaces, which keep a copy of their own. They
+            // read the acceptance off a status before this: a fill landing
+            // between the attempt and the answer took the more advanced
+            // status, the acknowledgement behind it was dropped as stale, and
+            // the copy outlived the replacement the venue had taken — so the
+            // next refusal put back terms from before it.
+            shared.orders.note_replacement_taken(clord_id);
         }
         if revision_refused {
             // A revision the venue will not make leaves the order on the terms

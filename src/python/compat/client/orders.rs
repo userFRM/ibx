@@ -340,8 +340,10 @@ impl EClient {
         // this call returns, and a restatement written behind that answer put
         // the attempted terms over a refusal that had already put back the
         // real ones.
-        if replacing {
-            self.core.restate_order(oid, api_contract.clone(), tracked_order.clone());
+        if replacing && let Some(venue) = venue.as_deref() {
+            self.core.restate_order(
+                venue, oid, api_contract.clone(), tracked_order.clone(), instrument,
+            );
         }
         if api_order.transmit {
             if !replacing {

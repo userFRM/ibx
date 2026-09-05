@@ -267,7 +267,7 @@ impl EClient {
         // and a restatement written behind that answer put the attempted
         // terms over a refusal that had already put back the real ones.
         if replacing {
-            self.core.restate_order(oid, contract.clone(), placed.clone());
+            self.core.restate_order(&self.shared, oid, contract.clone(), placed.clone(), instrument);
         }
         if order.transmit {
             if !replacing {

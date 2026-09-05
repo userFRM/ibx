@@ -96,8 +96,8 @@ fn collect_open_orders_admits_inactive_but_excludes_rejected_locally_tracked() {
     core.track_order(80, ApiContract::default(), ApiOrder { order_id: 80, ..Default::default() }, 0);
     core.track_order(81, ApiContract::default(), ApiOrder { order_id: 81, ..Default::default() }, 0);
 
-    core.update_order_status(&shared, 80, OrderStatus::Inactive, 0.0, 100.0);
-    core.update_order_status(&shared, 81, OrderStatus::Rejected, 0.0, 100.0);
+    core.update_order_status(&shared, 80, OrderStatus::Inactive, 0.0, 100.0, 0);
+    core.update_order_status(&shared, 81, OrderStatus::Rejected, 0.0, 100.0, 0);
 
     let result = core.collect_open_orders(&shared);
     assert!(result.iter().any(|(id, _)| *id == 80),
@@ -1499,7 +1499,7 @@ fn a_replace_that_cannot_state_the_number_asked_for_is_refused() {
 /// refused cancellation rolling the terms back over a replacement the venue
 /// may since have taken, and a replacement kept for an order the venue was
 /// never asked to change.
-fn working_at(price: f64) -> (ClientCore, ApiOrder) {
+fn working_at(price: f64) -> (ClientCore, SharedState, ApiOrder) {
     let core = ClientCore::new();
     let order = |price: f64| ApiOrder {
         order_id: 42, action: "BUY".into(), total_quantity: 100.0,
@@ -1507,7 +1507,7 @@ fn working_at(price: f64) -> (ClientCore, ApiOrder) {
         ..Default::default()
     };
     core.track_order(42, ApiContract::default(), order(price), 0);
-    (core, order(price + 1.0))
+    (core, SharedState::new(), order(price + 1.0))
 }
 
 fn refusal(reject_type: u8) -> crate::types::CancelReject {
@@ -1523,12 +1523,11 @@ fn price_on_record(core: &ClientCore) -> f64 {
 
 #[test]
 fn a_fill_is_not_the_venues_answer_to_a_replacement() {
-    let (core, revision) = working_at(100.0);
-    core.restate_order(42, ApiContract::default(), revision);
+    let (core, shared, revision) = working_at(100.0);
+    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
     // The venue fills part of the order it holds while it is still deciding.
-    let shared = SharedState::new();
     core.update_order_status(
-        &shared, 42, crate::types::OrderStatus::PartiallyFilled, 10.0, 90.0,
+        &shared, 42, crate::types::OrderStatus::PartiallyFilled, 10.0, 90.0, 0,
     );
     // And then refuses the change.
     core.retire_rejected(&refusal(2));
@@ -1538,8 +1537,8 @@ fn a_fill_is_not_the_venues_answer_to_a_replacement() {
 
 #[test]
 fn a_refused_cancellation_does_not_roll_back_a_replacement() {
-    let (core, revision) = working_at(100.0);
-    core.restate_order(42, ApiContract::default(), revision);
+    let (core, shared, revision) = working_at(100.0);
+    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
     core.retire_rejected(&refusal(1));
 
     assert_eq!(
@@ -1549,11 +1548,16 @@ fn a_refused_cancellation_does_not_roll_back_a_replacement() {
 }
 
 #[test]
-fn the_venue_working_the_order_again_settles_the_replacement() {
-    let (core, revision) = working_at(100.0);
-    core.restate_order(42, ApiContract::default(), revision);
-    let shared = SharedState::new();
-    core.update_order_status(&shared, 42, crate::types::OrderStatus::Submitted, 0.0, 100.0);
+fn the_venue_taking_the_replacement_settles_it() {
+    let (core, shared, revision) = working_at(100.0);
+    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
+    // The venue fills part of the order it holds while it is still deciding,
+    // and then takes the replacement. The fill is not the answer; the taking
+    // is, and it is stated rather than read off a status.
+    core.update_order_status(
+        &shared, 42, crate::types::OrderStatus::PartiallyFilled, 10.0, 90.0, 0,
+    );
+    core.settle_replacement(42);
     // A refusal behind the acceptance names something the venue has answered.
     core.retire_rejected(&refusal(2));
 
@@ -1565,8 +1569,8 @@ fn the_venue_working_the_order_again_settles_the_replacement() {
 
 #[test]
 fn a_restatement_that_never_left_is_undone() {
-    let (core, revision) = working_at(100.0);
-    core.restate_order(42, ApiContract::default(), revision);
+    let (core, shared, revision) = working_at(100.0);
+    core.restate_order(&shared, 42, ApiContract::default(), revision, 0);
     core.undo_restatement(42);
 
     assert_eq!(price_on_record(&core), 100.0, "the record states what the venue holds");
@@ -1593,4 +1597,44 @@ fn a_slot_the_engine_gave_back_is_not_answered_from_the_cache() {
 
     assert_eq!(core.cached_instrument(756733), None, "the freed slot is not answered");
     assert_eq!(core.cached_instrument(265598), Some(5), "the others stand");
+}
+
+/// A replacement of an order the venue replayed records what the venue said.
+///
+/// The order was placed by an earlier session, so this client has no record of
+/// it and one has to be made. Made from the attempt alone it read as a fresh
+/// order — nothing filled, its whole quantity outstanding, a status of its own
+/// invention, and slot zero, which is a real slot and not this order's. The
+/// next replace was then refused for naming another contract, and a partly
+/// filled order came back as untouched.
+#[test]
+fn a_replayed_order_is_recorded_as_the_venue_states_it() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.orders.push_order_info(4242, RichOrderInfo {
+        contract: ApiContract { con_id: 756733, symbol: "SPY".into(), ..Default::default() },
+        order: ApiOrder {
+            order_id: 4242, action: "BUY".into(), total_quantity: 100.0,
+            order_type: "LMT".into(), lmt_price: 100.0, filled_quantity: 30.0,
+            ..Default::default()
+        },
+        order_state: ApiOrderState { status: "Submitted".into(), ..Default::default() },
+        last_exec: Default::default(),
+    });
+
+    let revision = ApiOrder {
+        order_id: 4242, action: "BUY".into(), total_quantity: 100.0,
+        order_type: "LMT".into(), lmt_price: 101.0, ..Default::default()
+    };
+    core.restate_order(&shared, 4242, ApiContract::default(), revision, 7);
+
+    let tracked = core.open_orders.lock().unwrap().get(&4242).cloned().expect("recorded");
+    assert_eq!(tracked.instrument, 7, "on the slot the call named");
+    assert_eq!(tracked.filled, 30.0, "with what the venue says has filled");
+    assert_eq!(tracked.remaining, 70.0, "and what is left of it");
+    assert_eq!(tracked.status, "Submitted", "under the venue's own status");
+    assert_eq!(
+        tracked.before_the_replace.as_ref().map(|o| o.lmt_price), Some(100.0),
+        "and the terms the venue holds, for a refusal to put back",
+    );
 }
