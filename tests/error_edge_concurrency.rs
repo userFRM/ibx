@@ -3,7 +3,7 @@
 //! Validates that the library handles bad inputs, boundary conditions,
 //! And concurrent access without panics or data races.
 
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::thread;
 
 use ibx::api::client::{EClient, Contract, Order};
@@ -480,8 +480,14 @@ fn concurrent_seqlock_quote_read_write() {
     let shared = Arc::new(SharedState::new());
     let writer_shared = shared.clone();
     let reader_shared = shared.clone();
+    // Started together, or the writer has finished before the reader begins
+    // and nothing here contends: a test that serialises by scheduling luck
+    // proves nothing about the lock.
+    let start = Arc::new(Barrier::new(2));
+    let go = start.clone();
 
     let writer = thread::spawn(move || {
+        go.wait();
         for i in 0..10_000i64 {
             let q = Quote {
                 bid: i * PRICE_SCALE,
@@ -494,6 +500,7 @@ fn concurrent_seqlock_quote_read_write() {
     });
 
     let reader = thread::spawn(move || {
+        start.wait();
         for _ in 0..10_000 {
             let q = reader_shared.market.quote(0);
             // Consistency check: if bid is set, ask should be bid + PRICE_SCALE
@@ -519,9 +526,12 @@ fn concurrent_seqlock_multiple_readers() {
     };
     shared.market.push_quote(0, &q);
 
+    let start = Arc::new(Barrier::new(4));
     let handles: Vec<_> = (0..4).map(|_| {
         let s = shared.clone();
+        let go = start.clone();
         thread::spawn(move || {
+            go.wait();
             for _ in 0..5_000 {
                 let q = s.market.quote(0);
                 assert!(q.bid == 0 || q.bid == 100 * PRICE_SCALE);
@@ -552,9 +562,12 @@ fn concurrent_quote_by_instrument() {
     };
     shared.market.push_quote(0, &q);
 
+    let start = Arc::new(Barrier::new(4));
     let handles: Vec<_> = (0..4).map(|_| {
         let c = client.clone();
+        let go = start.clone();
         thread::spawn(move || {
+            go.wait();
             for _ in 0..5_000 {
                 let q = c.quote_by_instrument(0).expect("in-range id");
                 assert!(q.bid == 0 || q.bid == 200 * PRICE_SCALE);
@@ -589,13 +602,17 @@ fn concurrent_disconnect_during_process_msgs() {
     }
 
     let client_process = client.clone();
+    let start = Arc::new(Barrier::new(2));
+    let go = start.clone();
     let process_thread = thread::spawn(move || {
+        go.wait();
         let mut w = RecordingWrapper::default();
         client_process.process_msgs(&mut w);
         w.events.len()
     });
 
-    // Disconnect from main thread
+    // Disconnect from main thread, once the dispatch has started.
+    start.wait();
     client.disconnect();
 
     // Should not panic
@@ -675,9 +692,12 @@ fn concurrent_place_order_and_process_msgs() {
     let client = Arc::new(EClient::from_parts(shared.clone(), tx, handle, "DU123".into()));
 
     // Thread A: process_msgs
+    let start = Arc::new(Barrier::new(2));
     let client_a = client.clone();
     let shared_a = shared.clone();
+    let go = start.clone();
     let process_handle = thread::spawn(move || {
+        go.wait();
         for i in 0..50 {
             shared_a.orders.push_fill(Fill {
                 instrument: 0, order_id: i, side: Side::Buy,
@@ -693,6 +713,7 @@ fn concurrent_place_order_and_process_msgs() {
     // Thread B: place_order
     let client_b = client.clone();
     let order_handle = thread::spawn(move || {
+        start.wait();
         for _ in 0..50 {
             let order = Order {
                 action: "BUY".into(), total_quantity: 1.0,
@@ -715,8 +736,11 @@ fn concurrent_place_order_and_process_msgs() {
 fn concurrent_account_read_write() {
     let shared = Arc::new(SharedState::new());
     let writer_shared = shared.clone();
+    let start = Arc::new(Barrier::new(2));
+    let go = start.clone();
 
     let writer = thread::spawn(move || {
+        go.wait();
         for i in 0..5_000i64 {
             let a = AccountState {
                 net_liquidation: i * PRICE_SCALE,
@@ -728,6 +752,7 @@ fn concurrent_account_read_write() {
     });
 
     let reader = thread::spawn(move || {
+        start.wait();
         for _ in 0..5_000 {
             let a = shared.portfolio.account();
             // buying_power should always be 2x net_liquidation
@@ -830,9 +855,11 @@ fn concurrent_drain_fills_no_duplicates() {
     // Two threads race to drain
     let s1 = shared.clone();
     let s2 = shared.clone();
+    let start = Arc::new(Barrier::new(2));
+    let go = start.clone();
 
-    let h1 = thread::spawn(move || s1.orders.drain_fills().len());
-    let h2 = thread::spawn(move || s2.orders.drain_fills().len());
+    let h1 = thread::spawn(move || { go.wait(); s1.orders.drain_fills().len() });
+    let h2 = thread::spawn(move || { start.wait(); s2.orders.drain_fills().len() });
 
     let count1 = h1.join().unwrap();
     let count2 = h2.join().unwrap();
