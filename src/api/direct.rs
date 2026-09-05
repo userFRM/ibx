@@ -43,6 +43,8 @@ pub struct Recorded {
     pub managed_accounts: Option<String>,
     /// The providers this account may read.
     pub news_providers: Vec<String>,
+    /// The fills a request for executions answered with, contract and print.
+    pub executions: Vec<(Contract, crate::types::model::Execution)>,
 }
 
 impl Wrapper for Recorded {
@@ -61,6 +63,9 @@ impl Wrapper for Recorded {
     // long it waited.
     fn news_providers(&mut self, providers: &[crate::types::NewsProvider]) {
         self.news_providers = providers.iter().map(|p| p.code.clone()).collect();
+    }
+    fn exec_details(&mut self, _req_id: i64, contract: &Contract, execution: &crate::types::model::Execution) {
+        self.executions.push((contract.clone(), execution.clone()));
     }
 }
 
@@ -693,8 +698,8 @@ impl Client {
         self.inner.cancel_scanner_subscription(req_id)
     }
 
-    /// Fills matching a filter. The venue holds a week, and a request reaching
-    /// further back is refused in full.
+    /// Fills matching a filter, answered from what this session has stored
+    /// and kept on the recorder as `exec_details` rows.
     pub fn executions(&self, filter: &crate::types::model::ExecutionFilter) {
         let mut r = self.recorded.lock().unwrap();
         self.inner.req_executions(self.stream_id(), filter, &mut *r);
@@ -990,6 +995,24 @@ mod tests {
             crate::types::NewsProvider { code: "BRFG".into(), name: "Briefing".into() },
         ]);
         assert_eq!(r.news_providers, ["BRFG"]);
+    }
+
+    /// The executions a caller asked for are kept where it can read them.
+    /// Recorded nowhere, the call pumped a request whose whole purpose is
+    /// the answer and returned nothing.
+    #[test]
+    fn the_executions_asked_for_are_kept() {
+        let (client, _rx, _shared) = test_direct_client();
+        client.inner.core.push_execution(
+            1,
+            Contract { symbol: "AAPL".into(), ..Default::default() },
+            crate::types::model::Execution { exec_id: "0001.1".into(), ..Default::default() },
+            Default::default(),
+        );
+        client.executions(&Default::default());
+        let recorded = client.recorded();
+        assert_eq!(recorded.executions.len(), 1, "kept, not handed to nothing");
+        assert_eq!(recorded.executions[0].1.exec_id, "0001.1");
     }
 
     /// A refusal that can never work keeps its own number.

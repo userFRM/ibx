@@ -267,6 +267,14 @@ impl EClient {
                 ex.shares = qty_to_f64(fill.qty);
                 ex.price = price_f;
                 ex.order_id = fill.order_id as i64;
+                // The client that placed it, where the report names none. The
+                // record knows which client the order went out under and the
+                // venue's report may carry no client at all; taken as stated,
+                // it filed this session's own fill under client zero while the
+                // status above was announced under the placing client.
+                if ex.client_id == 0 {
+                    ex.client_id = i64::from(self.core.placing_client(&self.shared, fill.order_id));
+                }
                 let contract = if info.contract.con_id != 0 {
                     self.core.get_contract(info.contract.con_id, &self.shared).unwrap_or(info.contract)
                 } else {

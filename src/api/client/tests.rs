@@ -8951,3 +8951,40 @@ fn req_pnl_single_says_whose_figures_it_answers_with() {
     );
 }
 
+/// A fill's client is the one that placed the order where the report names
+/// none. One pass announced `order_status` under the placing client and filed
+/// the same print under client zero, so a caller replaying its own fills by
+/// client id got none of them.
+#[test]
+fn a_fill_whose_report_names_no_client_is_filed_under_the_placing_client() {
+    #[derive(Default)]
+    struct Filed(Vec<i64>);
+    impl Wrapper for Filed {
+        fn exec_details(&mut self, _: i64, _: &Contract, e: &crate::types::model::Execution) {
+            self.0.push(e.client_id);
+        }
+    }
+    let (client, rx, shared) = test_client();
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), client_id: 5, ..Default::default()
+    };
+    client.place_order(86, &spy(), &order).expect("placed");
+    rx.try_recv().expect("the order goes out");
+    // The venue's record of it, carrying a report that names no client.
+    shared.orders.push_order_info(86, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: Order { order_id: 86, ..Default::default() },
+        order_state: Default::default(),
+        last_exec: crate::types::model::Execution { exec_id: "0001.86".into(), ..Default::default() },
+    });
+    shared.orders.push_fill(crate::types::Fill {
+        instrument: 0, order_id: 86, side: crate::types::Side::Buy,
+        price: 100 * PRICE_SCALE, qty: crate::types::QTY_SCALE, remaining: 0,
+        commission: 0, timestamp_ns: 0, cum_qty: crate::types::QTY_SCALE, avg_price: 100 * PRICE_SCALE,
+    });
+    let mut w = Filed::default();
+    client.process_msgs(&mut w);
+    assert_eq!(w.0, [5], "filed under the client that placed it");
+}
+

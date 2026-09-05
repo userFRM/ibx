@@ -382,7 +382,6 @@ impl EClient {
             let api_exec = ApiExecution {
                 exec_id: exec_id.clone(),
                 time: now_str.clone(),
-                acct_number: self.account(),
                 exchange: exec_exchange.clone(),
                 side: side_str.to_string(),
                 shares: qty_to_f64(fill.qty),
@@ -393,17 +392,18 @@ impl EClient {
                 // request filtered by client matched nothing at all, and the
                 // same fill replayed named no client and no permanent id.
                 perm_id,
-                // The report's own, where there is a report; the client that
-                // placed the order where there is none. Chosen on the value
-                // instead, a fill the venue attributes to client zero — a real
-                // client, and the one a manually entered order carries — read
-                // as a fill the venue said nothing about, and was relabelled
-                // with whoever happened to be asking. The other surface
-                // chooses on the record, and `req_executions` filters on
-                // exactly this field.
+                // The report's own where it names one, and the client that
+                // placed the order where it names none. That is also what a
+                // fill on an order this session did not place answers, since
+                // the record of one holds the venue's own value — so a manual
+                // order's fill still reads as client zero. Taken as stated, a
+                // report carrying no client filed this session's own fill under
+                // client zero while the status beside it was announced under
+                // the placing client, and `req_executions` filters on exactly
+                // this field. The other surface does the same.
                 client_id: match rich_info.as_ref() {
-                    Some(info) => info.last_exec.client_id,
-                    None => i64::from(self.core.placing_client(shared, fill.order_id)),
+                    Some(info) if info.last_exec.client_id != 0 => info.last_exec.client_id,
+                    _ => i64::from(self.core.placing_client(shared, fill.order_id)),
                 },
                 cum_qty,
                 avg_price,

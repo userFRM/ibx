@@ -561,6 +561,19 @@ pub struct StoredExecution {
     pub commission_and_fees: ApiCommissionAndFeesReport,
 }
 
+/// The session's executions, and where each named one sits.
+///
+/// Indexed by the venue's id: a fill and its charge arrive as two messages,
+/// and the charge finds its execution by name. Scanned instead, every fill
+/// and every charge cost a pass over the day so far, on the thread that also
+/// delivers the callbacks. Nothing leaves the rows but a `reset`, so an index
+/// into them stays good.
+#[derive(Default)]
+pub struct ExecutionStore {
+    pub rows: Vec<StoredExecution>,
+    by_id: HashMap<String, usize>,
+}
+
 // ── Order tracking ──
 
 /// A locally tracked order for `req_open_orders` / dispatch status updates.
@@ -778,7 +791,7 @@ pub struct ClientCore {
 
     // Execution replay store
     /// Fills held for a caller who asks for them again.
-    pub executions: Mutex<Vec<StoredExecution>>,
+    pub executions: Mutex<ExecutionStore>,
 
     // Open order tracking
     /// Every order this client placed and the venue has not finished.
@@ -972,7 +985,7 @@ impl ClientCore {
             last_stated_account: Mutex::new(HashMap::new()),
             account_end_sent: AtomicBool::new(false),
             last_portfolio: Mutex::new(None),
-            executions: Mutex::new(Vec::new()),
+            executions: Mutex::new(ExecutionStore::default()),
             open_orders: Mutex::new(HashMap::new()),
             spent_order_ids: Mutex::new(HashSet::new()),
             depth_reqs: Mutex::new(HashSet::new()),
@@ -1327,7 +1340,7 @@ impl ClientCore {
         self.last_stated_account.lock().unwrap().clear();
         self.account_end_sent.store(false, Ordering::Release);
         *self.last_portfolio.lock().unwrap() = None;
-        self.executions.lock().unwrap().clear();
+        *self.executions.lock().unwrap() = ExecutionStore::default();
         self.open_orders.lock().unwrap().clear();
         // A new session draws its numbers from the venue again, so what the
         // last one spent says nothing about this one.
@@ -2319,16 +2332,33 @@ impl ClientCore {
     ///
     /// Once per execution. The venue restates the day's executions at every
     /// logon, so the same one can arrive again; it is known again by the id
-    /// it carries. One carrying no id is kept, there being nothing to know it
-    /// by.
+    /// it carries. One carrying no id is known by its content, as the engine
+    /// knows it: an absent id is the shape a replay takes, and kept on every
+    /// replay a caller summing the day's volume doubled it on every rebuilt
+    /// connection. The cumulative quantity is what tells two otherwise
+    /// identical prints of one order apart.
     pub fn push_execution(&self, req_id: i64, contract: ApiContract, execution: ApiExecution, commission_and_fees: ApiCommissionAndFeesReport) {
-        let mut execs = self.executions.lock().unwrap();
-        if !execution.exec_id.is_empty()
-            && execs.iter().any(|stored| stored.execution.exec_id == execution.exec_id)
-        {
+        let mut store = self.executions.lock().unwrap();
+        if execution.exec_id.is_empty() {
+            let same = |stored: &StoredExecution| {
+                let e = &stored.execution;
+                e.exec_id.is_empty()
+                    && e.order_id == execution.order_id
+                    && e.time == execution.time
+                    && e.shares == execution.shares
+                    && e.price == execution.price
+                    && e.cum_qty == execution.cum_qty
+            };
+            if store.rows.iter().any(same) {
+                return;
+            }
+        } else if store.by_id.contains_key(&execution.exec_id) {
             return;
+        } else {
+            let at = store.rows.len();
+            store.by_id.insert(execution.exec_id.clone(), at);
         }
-        execs.push(StoredExecution { req_id, contract, execution, commission_and_fees });
+        store.rows.push(StoredExecution { req_id, contract, execution, commission_and_fees });
     }
 
     /// File the executions the venue restated, announcing none of them.
@@ -2352,11 +2382,14 @@ impl ClientCore {
     /// of it carries the charge the venue stated rather than the nothing it
     /// was stored with.
     pub fn record_charge(&self, charge: &ApiCommissionAndFeesReport) {
-        let mut execs = self.executions.lock().unwrap();
-        for stored in execs.iter_mut() {
-            if stored.execution.exec_id == charge.exec_id {
-                stored.commission_and_fees = charge.clone();
-            }
+        // A charge naming no execution stamps none. Matched on the empty name,
+        // it was written onto every execution stored without one.
+        if charge.exec_id.is_empty() {
+            return;
+        }
+        let mut store = self.executions.lock().unwrap();
+        if let Some(at) = store.by_id.get(&charge.exec_id).copied() {
+            store.rows[at].commission_and_fees = charge.clone();
         }
     }
 
@@ -2368,8 +2401,8 @@ impl ClientCore {
     /// the same mutex. Handing back indices to be dereferenced later also
     /// raced `reset()`, which clears the vector. Snapshotting closes both.
     pub fn snapshot_executions(&self, filter: &ExecutionFilter) -> Vec<StoredExecution> {
-        let execs = self.executions.lock().unwrap();
-        execs.iter().filter(|se| execution_matches(se, filter)).cloned().collect()
+        let store = self.executions.lock().unwrap();
+        store.rows.iter().filter(|se| execution_matches(se, filter)).cloned().collect()
     }
 
     // ── Open order tracking ──

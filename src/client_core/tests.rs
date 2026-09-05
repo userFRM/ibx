@@ -2000,3 +2000,36 @@ fn asking_for_the_account_again_restates_it() {
     assert!(again.finished, "and the end is said again");
 }
 
+/// An execution the venue states with no id is known by its content, as the
+/// engine already knows it: the day's executions are replayed at every logon,
+/// and an absent id is the shape a replay takes. Stored again on every replay,
+/// a caller summing the day's volume doubled it on every rebuilt connection.
+#[test]
+fn an_execution_with_no_id_is_stored_once_by_its_content() {
+    let core = ClientCore::new();
+    let stated = |cum_qty: f64| crate::types::model::Execution {
+        order_id: 84, time: "20260905  10:00:00".into(), shares: 100.0, price: 150.25, cum_qty,
+        ..Default::default()
+    };
+    for exec in [stated(100.0), stated(100.0), stated(200.0)] {
+        core.push_execution(-1, Default::default(), exec, Default::default());
+    }
+    let stored = core.snapshot_executions(&Default::default());
+    let cum: Vec<f64> = stored.iter().map(|s| s.execution.cum_qty).collect();
+    assert_eq!(cum, [100.0, 200.0], "the same print once, the next print once");
+}
+
+/// A charge naming no execution stamps none. Matched on the empty name, it
+/// was written onto every execution stored without one.
+#[test]
+fn a_charge_naming_no_execution_stamps_none() {
+    let core = ClientCore::new();
+    core.push_execution(-1, Default::default(), Default::default(), Default::default());
+    core.record_charge(&crate::types::model::CommissionAndFeesReport::charged("", 1.25, "USD"));
+    let stored = core.snapshot_executions(&Default::default());
+    assert_eq!(
+        stored[0].commission_and_fees.commission_and_fees, 0.0,
+        "nothing named, nothing stamped",
+    );
+}
+

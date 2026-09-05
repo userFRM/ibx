@@ -292,10 +292,11 @@ impl EClient {
     #[doc(hidden)]
     #[pyo3(signature = (
         order_id, symbol, action, total_quantity, lmt_price, status="Submitted".to_string(),
+        acct_number="",
     ))]
     fn _test_push_venue_order(
         &self, order_id: u64, symbol: &str, action: &str,
-        total_quantity: f64, lmt_price: f64, status: String,
+        total_quantity: f64, lmt_price: f64, status: String, acct_number: &str,
     ) -> PyResult<()> {
         let shared = self.shared_state()?;
         shared.orders.push_order_info(order_id, crate::bridge::RichOrderInfo {
@@ -310,7 +311,11 @@ impl EClient {
                 ..Default::default()
             },
             order_state: crate::types::model::OrderState { status, ..Default::default() },
-            last_exec: Default::default(),
+            // The report's own account, where the test states one; the venue
+            // names it on tag 1.
+            last_exec: crate::types::model::Execution {
+                acct_number: acct_number.to_string(), ..Default::default()
+            },
         });
         Ok(())
     }
