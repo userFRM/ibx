@@ -1602,7 +1602,7 @@ fn a_modify_of_a_venue_named_order_is_judged_against_the_venues_statement() {
 fn a_venue_named_order_restates_itself_under_the_reference_name() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    for (id, name) in [(42u64, "MIDPRICE"), (43, "SNAP MKT"), (44, "SNAP PRI")] {
+    for (id, name) in [(42u64, "MIDPRICE"), (43, "SNAP MKT"), (44, "SNAP PRI"), (45, "SNAP PRIM"), (46, "SNAP MIDPT"), (47, "PEG MIDPT")] {
         let named = ApiOrder {
             order_id: id as i64, action: "BUY".into(), total_quantity: 1.0,
             order_type: name.into(), lmt_price: 100.0, aux_price: 0.05, tif: "DAY".into(), ..Default::default()

@@ -303,10 +303,9 @@ impl EClient {
         // does — the venue can answer the replace before this call returns,
         // and a restatement written behind that answer put the attempted
         // terms over a refusal that had already put back the real ones.
-        // Whether this client placed the order, read before the restatement
-        // below tracks it: an order the venue named at connect is in no book
-        // here until then.
-        let placed_here = self.core.is_order_tracked(oid);
+        // Whether this client placed the order, as against learning of it
+        // from the venue through a status or an earlier restatement.
+        let placed_here = self.core.placed_here(oid);
         if replacing {
             self.core.restate_order(Some(&self.shared), oid, contract.clone(), placed.clone(), instrument);
         }

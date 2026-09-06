@@ -84,6 +84,10 @@ pub struct Context {
     /// without it a replaced order silently lost its algo, its all-or-none
     /// instruction and every other attribute it was placed with.
     pub(crate) submitted: HashMap<OrderId, Box<crate::types::OrderSpec>>,
+    /// The orders whose record is the caller's statement rather than a
+    /// placement made here. Every statement of such an order is the caller's,
+    /// so the latest stands; a placement's record is never replaced by one.
+    pub(crate) described: std::collections::HashSet<OrderId>,
     /// How many cancels have been sent for an order. A cancel names itself on
     /// tag 11, and a retry that reuses the previous name is a duplicate the
     /// server is entitled to drop — which is exactly the case a retry exists
@@ -141,6 +145,7 @@ impl Context {
             modify_versions: HashMap::new(),
             last_clord: HashMap::new(),
             submitted: HashMap::new(),
+            described: std::collections::HashSet::new(),
             cancel_attempts: HashMap::new(),
             pre_replace: HashMap::new(),
             account: AccountState::default(),
@@ -573,6 +578,7 @@ impl Context {
     pub fn retire_order(&mut self, order_id: OrderId) {
         self.remove_order(order_id);
         self.modify_versions.remove(&order_id);
+        self.described.remove(&order_id);
         self.last_clord.remove(&order_id);
         self.submitted.remove(&order_id);
         self.cancel_attempts.remove(&order_id);

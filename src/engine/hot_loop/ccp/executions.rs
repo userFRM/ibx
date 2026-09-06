@@ -527,12 +527,17 @@ impl CcpState {
         };
         let qty = parse_qty_tag(parsed.get(&38))
             .unwrap_or_else(|| prior.map_or(0, |o| o.qty));
-        // The shares this very report books, where it is an execution; the
-        // booking below adds them, so the recovered figure must not.
-        let own_shares = if matches!(parsed.get(&150).map(String::as_str), Some("F" | "1" | "2" | "G" | "H")) {
-            parse_qty_tag(parsed.get(&32)).unwrap_or(0)
-        } else {
-            0
+        // The shares this very report books, where the booking below adds
+        // them, so the recovered figure must not count them too. Only a
+        // positive print on an execution that is neither a correction nor a
+        // bust is booked that way: those are booked by reconciling the
+        // cumulative figure against the record, where the same subtraction
+        // turned a forty-share correction into a forty-share purchase; and a
+        // negative print books nothing, so the cumulative figure stands whole.
+        let corrects = matches!(parsed.get(&20).map(String::as_str), Some("1" | "2"));
+        let own_shares = match parsed.get(&150).map(String::as_str) {
+            Some("F" | "1" | "2") if !corrects => parse_qty_tag(parsed.get(&32)).unwrap_or(0).max(0),
+            _ => 0,
         };
         let limit_price_i64: i64 = parsed.get(&44)
             .and_then(|s| s.parse::<f64>().ok())

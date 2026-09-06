@@ -42,3 +42,18 @@ def test_the_statement_goes_ahead_of_the_replace():
     sent = c._test_take_commands()
     kinds = [("Describe" if "Describe" in s else "Modify" if "Modify" in s else s) for s in sent]
     assert kinds == ["Describe", "Modify"], sent
+
+
+def test_every_replace_of_a_venue_named_order_is_stated_again():
+    c = EClient(EWrapper())
+    c._test_connect()
+    c._test_take_commands()
+    c._test_push_venue_order(REPLAYED, "SPY", "BUY", 100.0, 100.0)
+    c._test_map_con_id(SPY_CON_ID, 0)
+
+    c.place_order(REPLAYED, spy(), limit(REPLAYED, 101.0))
+    c.place_order(REPLAYED, spy(), limit(REPLAYED, 102.0))
+
+    sent = c._test_take_commands()
+    kinds = [("Describe" if "Describe" in s else "Modify" if "Modify" in s else s) for s in sent]
+    assert kinds == ["Describe", "Modify", "Describe", "Modify"], sent

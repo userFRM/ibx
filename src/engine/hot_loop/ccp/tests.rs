@@ -2149,6 +2149,45 @@ fn a_report_stating_no_type_leaves_a_tracked_peg_named_as_a_peg() {
     }
 }
 
+/// A correction that recovers an order does not book the corrected shares as
+/// a fill, and a bust stated as a negative print does not raise the figure.
+///
+/// The seed that keeps a first fill from counting twice subtracts the
+/// report's own shares from the cumulative figure, because the booking that
+/// follows adds them. A correction or a bust is booked by reconciling the
+/// cumulative figure against the record instead, where the seed is subtracted
+/// — so the same subtraction there turned a forty-share correction into a
+/// forty-share purchase, and a negative print into a higher figure.
+#[test]
+fn a_correction_that_recovers_an_order_books_no_purchase() {
+    // An order the book holds as uncertain after a drop, filled a hundred.
+    let (mut ccp, mut context, shared) = (CcpState::new(), Context::new(), SharedState::new());
+    let instrument = context.register_instrument(756733);
+    let mut held = crate::types::Order::new(42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 500 * PRICE_SCALE, b'2', b'0', 0);
+    held.filled = 100 * crate::types::QTY_SCALE;
+    held.status = crate::types::OrderStatus::PartiallyFilled;
+    context.insert_order(held);
+    context.mark_orders_uncertain();
+    let position_before = context.position(instrument);
+    let correction: std::collections::HashMap<u32, String> = [
+        (11u32, "42.0"), (150, "1"), (20, "1"), (39, "1"), (54, "1"), (6008, "756733"), (38, "100"),
+        (32, "40"), (14, "60"), (31, "500.0"), (55, "SPY"), (17, "exec-c"),
+    ].into_iter().map(|(t, v)| (t, v.to_string())).collect();
+    ccp.handle_exec_report(&correction, b"", &mut context, &shared, &None, "DU1");
+    assert_eq!(context.order(42).expect("kept").filled, 60 * crate::types::QTY_SCALE, "the venue's cumulative figure");
+    assert!(context.position(instrument) <= position_before, "a correction is not a purchase");
+    assert!(shared.orders.drain_fills().iter().all(|(f, _)| f.order_id != 42), "and no fill is announced for it");
+
+    // A bust stated as a negative print, on an order the book lacks.
+    let (mut ccp, mut context, shared) = (CcpState::new(), Context::new(), SharedState::new());
+    let bust: std::collections::HashMap<u32, String> = [
+        (11u32, "43.0"), (150, "F"), (39, "1"), (54, "1"), (6008, "756733"), (38, "100"),
+        (32, "-40"), (14, "60"), (31, "500.0"), (55, "SPY"), (17, "exec-b"),
+    ].into_iter().map(|(t, v)| (t, v.to_string())).collect();
+    ccp.handle_exec_report(&bust, b"", &mut context, &shared, &None, "DU1");
+    assert_eq!(context.order(43).expect("recovered").filled, 60 * crate::types::QTY_SCALE, "not raised by a negative print");
+}
+
 /// A fill that is the first this session hears of an order books its shares
 /// once.
 ///

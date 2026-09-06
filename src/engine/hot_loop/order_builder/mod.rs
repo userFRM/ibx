@@ -110,7 +110,12 @@ pub(crate) fn drain_and_send_orders(
         // in the order the commands arrived, so the replace behind it
         // restates from it.
         if let OrderRequest::Describe { order_id, spec } = order_req {
-            context.submitted.entry(order_id).or_insert(spec);
+            // The latest statement stands where the record is a statement;
+            // a record made at placement is the engine's own and stays.
+            if !context.submitted.contains_key(&order_id) || context.described.contains(&order_id) {
+                context.submitted.insert(order_id, spec);
+                context.described.insert(order_id);
+            }
             continue;
         }
         // Once a write has abandoned the transport nothing else can leave on

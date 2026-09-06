@@ -136,6 +136,22 @@ fn a_replace_is_preceded_by_the_callers_statement_of_the_order() {
         other => panic!("the statement goes first, got {other:?}"),
     }
     assert!(matches!(rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::Modify { order_id: 9302, .. }))));
+
+    // The venue's status has been dispatched, which tracks the order here
+    // without making it one this client placed; and the statement goes with
+    // every replace of it, the latest standing at the engine.
+    client.core.update_order_status(&shared, 9302, OrderStatus::Submitted, 0.0, 1.0, 0);
+    let recapped = Order { lmt_price: 102.0, ..capped };
+    client.place_order(9302, &spy(), &recapped).unwrap();
+    let mut seen = Vec::new();
+    while let Ok(cmd) = rx.try_recv() {
+        seen.push(match cmd {
+            ControlCommand::Order(OrderRequest::Describe { .. }) => "statement",
+            ControlCommand::Order(OrderRequest::Modify { .. }) => "replace",
+            _ => "other",
+        });
+    }
+    assert_eq!(seen, ["statement", "replace"], "a second replace of a venue-named order is stated again");
 }
 
 /// The statement goes with a replace that is built and held as well, or the

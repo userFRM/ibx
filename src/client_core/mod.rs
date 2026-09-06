@@ -593,6 +593,11 @@ pub struct TrackedOrder {
     /// uses this flag as the discriminator instead of widening
     /// `is_open_status`.
     pub rejected: bool,
+    /// Whether this client placed the order, as against learning of it from
+    /// the venue — through a status, or by restating one the venue named.
+    /// A replace of an order placed here restates the engine's own record;
+    /// a replace of any other goes behind the caller's statement of it.
+    pub placed_here: bool,
 }
 
 // ── ClientCore ──
@@ -649,7 +654,7 @@ fn tracked_as_placed(
     let remaining = order.total_quantity;
     TrackedOrder {
         contract, order, status: "PendingSubmit".into(), filled: 0.0, remaining, instrument,
-        rejected: false, before_the_replace: None,
+        rejected: false, before_the_replace: None, placed_here: true,
     }
 }
 
@@ -2411,6 +2416,13 @@ impl ClientCore {
         self.open_orders.lock().unwrap().contains_key(&order_id)
     }
 
+    /// Whether this client placed the order. An order it learnt of from the
+    /// venue is tracked here too, once a status has arrived or a replace has
+    /// restated it, and is not this.
+    pub fn placed_here(&self, order_id: u64) -> bool {
+        self.open_orders.lock().unwrap().get(&order_id).is_some_and(|t| t.placed_here)
+    }
+
     /// Whether this id names an order the venue is working.
     ///
     /// A held order is tracked here and unknown to the venue, so the two are
@@ -2587,8 +2599,8 @@ impl ClientCore {
         ) || (restating_itself
             && matches!(
                 ty.as_str(),
-                "TRAIL" | "TRAIL LIMIT" | "PEG MID" | "MIDPX" | "MIDPRICE" | "SNAP MID"
-                    | "SNAP MKT" | "SNAP PRI" | "LIT"
+                "TRAIL" | "TRAIL LIMIT" | "PEG MID" | "PEG MIDPT" | "MIDPX" | "MIDPRICE"
+                    | "SNAP MID" | "SNAP MIDPT" | "SNAP MKT" | "SNAP PRI" | "SNAP PRIM" | "LIT"
             ))
         {
             return None;
@@ -2777,7 +2789,9 @@ impl ClientCore {
                 let remaining = (order.total_quantity - filled).max(0.0);
                 orders.insert(order_id, TrackedOrder {
                     contract, order, status, filled, remaining,
-                    instrument, rejected: false, before_the_replace,});
+                    instrument, rejected: false, before_the_replace,
+                    placed_here: false,
+                });
             }
         }
     }
@@ -2960,7 +2974,10 @@ impl ClientCore {
                 Some(info) => (info.contract, info.order),
                 None => (ApiContract::default(), ApiOrder::default()),
             };
-            TrackedOrder { contract, order, status: String::new(), rejected: false, filled: 0.0, remaining: 0.0, instrument, before_the_replace: None,}
+            TrackedOrder {
+                contract, order, status: String::new(), rejected: false, filled: 0.0, remaining: 0.0,
+                instrument, before_the_replace: None, placed_here: false,
+            }
         });
         o.status = order_status_str(status).into();
         o.rejected = status == OrderStatus::Rejected;
@@ -3043,7 +3060,8 @@ impl ClientCore {
                         filled: o.filled,
                         remaining: o.remaining,
                         instrument: o.instrument,
-                        rejected: o.rejected, before_the_replace: None,}));
+                        rejected: o.rejected, before_the_replace: None, placed_here: o.placed_here,
+                    }));
                 }
             }
         }
@@ -3074,7 +3092,8 @@ impl ClientCore {
                     filled,
                     remaining,
                     instrument: 0,
-                    rejected: false, before_the_replace: None,}));
+                    rejected: false, before_the_replace: None, placed_here: false,
+                }));
             }
         }
 

@@ -382,9 +382,8 @@ impl EClient {
         // this call returns, and a restatement written behind that answer put
         // the attempted terms over a refusal that had already put back the
         // real ones.
-        // Whether this client placed the order, read before the restatement
-        // below tracks it, as on the other surface.
-        let placed_here = self.core.is_order_tracked(oid);
+        // Whether this client placed the order, as on the other surface.
+        let placed_here = self.core.placed_here(oid);
         if replacing {
             // Whether or not the session state is still here. Skipped where it
             // was not, the record went unchanged for a change that did go out

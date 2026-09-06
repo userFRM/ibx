@@ -3510,6 +3510,67 @@ fn a_replace_of_an_order_this_session_did_not_place_restates_what_the_caller_sta
     }
 }
 
+/// The caller's latest statement of a venue-named order is the one restated,
+/// and a record the engine made at placement is never replaced by one.
+///
+/// Every statement of an order this session did not place is the caller's,
+/// so the latest stands, as it does on the reference client, where each
+/// modify carries the whole order. An order placed here keeps the record of
+/// its placement, whatever a caller states later.
+#[test]
+fn the_latest_statement_of_a_venue_named_order_stands_and_a_placement_is_kept() {
+    use std::io::Read;
+    use crate::types::{OrderKind as K, PRICE_SCALE as P};
+    let statement = |order_id: u64, display_size: u32| crate::types::OrderRequest::Describe {
+        order_id,
+        spec: Box::new(crate::types::OrderSpec {
+            kind: K::PegMid { offset: 0, price_cap: 100 * P },
+            attrs: crate::types::OrderAttrs { display_size, ..Default::default() },
+        }),
+    };
+    let modify = |order_id: u64| crate::types::OrderRequest::Modify {
+        order_id, price: 0, qty: 2 * crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let mut buf = [0u8; 8192];
+    let mut frame = |context: &mut Context| {
+        drain_and_send_orders(&mut conn, context, "DU1", &mut hb, false, &shared, false, &None);
+        let n = peer.read(&mut buf).unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    };
+
+    // Named by the venue, stated twice: the second statement shows an iceberg.
+    context.insert_order(crate::types::Order::new(
+        77, instrument, Side::Buy, crate::types::QTY_SCALE, 0, crate::types::ORD_PEG_MID, b'0', 0,
+    ));
+    context.pending_orders.push(statement(77, 0));
+    context.pending_orders.push(statement(77, 10));
+    context.pending_orders.push(modify(77));
+    let msg = frame(&mut context);
+    assert_eq!(stated(&msg, "111=").first().map(String::as_str), Some("10"), "the latest statement: {msg}");
+
+    // Placed here, then stated by a caller: the placement stands.
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        con_id: 0, order_id: 78, instrument, side: Side::Buy, qty: crate::types::QTY_SCALE,
+        kind: K::PegMid { offset: 0, price_cap: 100 * P }, tif: b'0', attrs: crate::types::OrderAttrs::default(),
+    });
+    let _placed = frame(&mut context);
+    context.pending_orders.push(statement(78, 10));
+    context.pending_orders.push(modify(78));
+    let msg = frame(&mut context);
+    assert_eq!(stated(&msg, "35=").first().map(String::as_str), Some("G"), "{msg}");
+    assert!(stated(&msg, "111=").is_empty(), "a placement's record is not replaced by a statement: {msg}");
+}
+
 /// A replace the venue refused moved nothing, so the shape goes back with the
 /// terms, and the next replace restates the placed number.
 #[test]
