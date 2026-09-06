@@ -1614,6 +1614,38 @@ mod hmds_correlation_tests {
         assert_eq!(hmds.pending_head_ts.len(), 1, "and both are still waiting");
         assert_eq!(hmds.pending_histogram.len(), 1);
     }
+/// An unreadable end-of-query page withdraws the five-second stream at the
+/// venue, as a stated refusal of it does. Removed only locally, the bars kept
+/// arriving under a number the caller was told had failed.
+#[test]
+fn an_unreadable_eoq_page_withdraws_the_stream_at_the_venue() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let (conn, mut peer) = Connection::for_test();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(500))).unwrap();
+    let mut conn = Some(conn);
+    hmds.pending_historical.push(("hist_1".to_string(), 9));
+    hmds.keep_up_to_date_reqs.insert(9);
+    hmds.rtbar_subs.push(("hist_1".to_string(), 9, Some(4002), 0.01, 1.0));
+    hmds.held.push(HeldSeries {
+        req_id: 9, fold: Fold::None, con_id: 0, sec_type: String::new(), exchange: String::new(),
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None,
+        actions: None, complete: false,
+    });
+    let xml = "<ResultSetBar><id>hist_1</id><eoq>true</eoq><tz>US/Eastern</tz>\
+               <Events><Bar><time>not-a-time</time></Bar></Events></ResultSetBar>";
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"35=W\x016118=");
+    msg.extend_from_slice(xml.as_bytes());
+    msg.push(0x01);
+    hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+    assert!(!hmds.keep_up_to_date_reqs.contains(&9), "the request is failed on the unreadable page");
+    let cancel = String::from_utf8_lossy(&super::read_frame(&mut peer)).into_owned();
+    assert!(cancel.contains("ticker:4002"), "the stream is withdrawn at the venue: {cancel:?}");
+}
+
 /// The venue refusing the stream half of a request kept up to date fails the
 /// whole request, and the number is freed with it. Left flagged, every later
 /// request under the number was refused as a duplicate of one the caller had

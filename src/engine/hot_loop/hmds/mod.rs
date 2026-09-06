@@ -1025,10 +1025,12 @@ impl HmdsState {
                                 if !self.keep_up_to_date_reqs.contains(&req_id) || still_assembling {
                                     self.pending_historical.remove(pos);
                                     self.held.retain(|a| a.req_id != req_id);
+                                    // Withdraw the stream at the venue, not just
+                                    // locally: left running, the bars keep arriving
+                                    // under a number the caller is told has failed,
+                                    // as a stated refusal of it already does.
                                     if self.keep_up_to_date_reqs.remove(&req_id) {
-                                        self.rtbar_subs.retain(|(_, rid, ..)| *rid != req_id);
-                                        self.rtbar_resub.retain(|r| r.req_id != req_id);
-                                        self.forming_bars.retain(|f| f.req_id != req_id);
+                                        self.withdraw_the_stream_half(req_id, hmds_conn, hb);
                                     }
                                     released_req_id = Some(req_id);
                                     from_historical = true;
