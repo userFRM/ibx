@@ -1,13 +1,13 @@
 """A fill states how an option came to be exercised, or that it was not.
 
-The reference client's `Execution` carries `optExerciseOrLapseType`, -1 where
-the report states none. It was not here, so a program reading it off every
-fill raised AttributeError.
+The reference client's `Execution` carries `optExerciseOrLapseType`, the
+`OptionExerciseType.NoneItem` member where the report states none. It was not
+here, so a program reading it off every fill raised AttributeError.
 
 Run: pytest tests/python/test_a_fill_states_no_exercise_type.py -v
 """
 
-from ibx import Contract, EClient, EWrapper, Execution, Order
+from ibx import Contract, EClient, EWrapper, Execution, OptionExerciseType, Order
 
 
 class Recorder(EWrapper):
@@ -24,7 +24,7 @@ class Recorder(EWrapper):
 
 
 def test_a_fresh_execution_states_none():
-    assert Execution().optExerciseOrLapseType == -1
+    assert Execution().optExerciseOrLapseType is OptionExerciseType.NoneItem
 
 
 def test_a_fill_states_none():
@@ -40,4 +40,4 @@ def test_a_fill_states_none():
     assert not recorder.errors, recorder.errors
     client._test_push_fill(1, 1, "BUY", 10.0, 1, 0)
     client._test_dispatch_once()
-    assert [fill.optExerciseOrLapseType for fill in recorder.fills] == [-1]
+    assert [fill.optExerciseOrLapseType for fill in recorder.fills] == [OptionExerciseType.NoneItem]

@@ -122,17 +122,21 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// client's spelling: the alias table first, then the words split at the
 /// capitals, then the letters alone. `None` where no field answers.
 ///
+/// Asked of the class, not the instance: the class lists a field without
+/// running its getter, which for a list field builds the whole list, and
+/// without reaching the instance, whose own `__getattr__` is what asked.
+///
 /// Split at every capital, `reqPnL` is `req_pn_l` and names nothing, so a
 /// caller asking for a running profit was told this object carries none.
 /// Matched on the letters alone it is `req_pnl`, which is the call. That
 /// last pass runs only for a name the split changed, which is what a name
-/// from the other client looks like: asked about `__dict__` it would reach
-/// the object's own listing, and that listing asks the object for `__dict__`.
-/// Names opening on an underscore are left out: this crate's own workings
-/// are not reachable under a second spelling.
+/// from the other client looks like. Names opening on an underscore are
+/// left out: this crate's own workings are not reachable under a second
+/// spelling.
 fn reference_name(obj: &Bound<'_, PyAny>, name: &str, aliases: &[(&str, &str)]) -> PyResult<Option<String>> {
+    let class = obj.get_type();
     if let Some((_, ours)) = aliases.iter().find(|(theirs, _)| *theirs == name)
-        && obj.hasattr(*ours)?
+        && class.hasattr(*ours)?
     {
         return Ok(Some((*ours).to_string()));
     }
@@ -150,22 +154,42 @@ fn reference_name(obj: &Bound<'_, PyAny>, name: &str, aliases: &[(&str, &str)]) 
     if snake == name {
         return Ok(None);
     }
-    if obj.hasattr(snake.as_str())? {
+    if class.hasattr(snake.as_str())? {
         return Ok(Some(snake));
     }
     let flattened = name.to_lowercase();
-    for carried in obj.dir()?.iter() {
+    for carried in class.dir()?.iter() {
         let Ok(carried) = carried.extract::<String>() else {
             continue;
         };
         if carried.starts_with('_') || carried.replace('_', "") != flattened {
             continue;
         }
-        if obj.hasattr(carried.as_str())? {
-            return Ok(Some(carried));
-        }
+        return Ok(Some(carried));
     }
     Ok(None)
+}
+
+/// The reference client's enumeration member for a code this client holds,
+/// by that client's own lookup (`member_for`: the first listed where none
+/// matches). The enumerations are Python classes, as they are there, so a
+/// program's `is` against a member holds.
+pub(super) fn enum_member<'py>(py: Python<'py>, class: &str, code: impl IntoPyObject<'py>) -> PyResult<Py<PyAny>> {
+    let shapes = py.import("ibx._reference_shapes")?;
+    let cls = shapes.getattr(class)?;
+    Ok(shapes.getattr("member_for")?.call1((cls, code))?.unbind())
+}
+
+/// The code under what a program sets: a member's `value[0]`, or the value
+/// itself where a program states the code.
+pub(super) fn enum_code<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    if let Ok(held) = value.getattr("value")
+        && let Ok(pair) = held.cast::<pyo3::types::PyTuple>()
+        && !pair.is_empty()
+    {
+        return pair.get_item(0);
+    }
+    Ok(value.clone())
 }
 
 fn no_attribute(obj: &Bound<'_, PyAny>, name: &str) -> PyErr {
@@ -186,26 +210,19 @@ pub(super) fn by_reference_name(
     }
 }
 
-/// A write under either spelling, for a `__setattr__`: the name as written
-/// first, and where the object refuses it, the field the reference client's
-/// spelling names. A name neither spelling names raises as the write did.
+/// A write under either spelling, for a `__setattr__`: the field the reference
+/// spelling names where there is one, else the name as written, which raises
+/// as the plain write would where the class carries no such field.
 pub(super) fn set_by_reference_name(
     obj: &Bound<'_, PyAny>,
     name: &str,
     value: &Bound<'_, PyAny>,
     aliases: &[(&str, &str)],
 ) -> PyResult<()> {
-    let py = obj.py();
-    let object = py.import("builtins")?.getattr("object")?;
-    let refused = match object.call_method1("__setattr__", (obj, name, value)) {
-        Ok(_) => return Ok(()),
-        Err(e) if e.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) => e,
-        Err(e) => return Err(e),
-    };
-    match reference_name(obj, name, aliases)? {
-        Some(ours) if ours != name => object.call_method1("__setattr__", (obj, ours.as_str(), value)).map(|_| ()),
-        _ => Err(refused),
-    }
+    let target = reference_name(obj, name, aliases)?;
+    let object = obj.py().import("builtins")?.getattr("object")?;
+    object.call_method1("__setattr__", (obj, target.as_deref().unwrap_or(name), value))?;
+    Ok(())
 }
 
 #[cfg(test)]

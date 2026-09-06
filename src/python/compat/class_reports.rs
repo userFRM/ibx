@@ -1,7 +1,7 @@
 //! What the venue reports back: fills, their cost, bars, and news.
 
 // The other families, and the two helpers every class here uses.
-use super::contract::{by_reference_name, set_by_reference_name};
+use super::contract::{by_reference_name, enum_code, enum_member, set_by_reference_name};
 use pyo3::prelude::*;
 
 use super::{camel_aliases_copy, camel_aliases_owned};
@@ -113,9 +113,9 @@ pub struct Execution {
     pub last_liquidity: i32,
     #[pyo3(get, set)]
     pub pending_price_revision: bool,
-    /// How an option's fill came about, by the reference client's numbering;
-    /// -1 where none is stated, and this client reads none off a report.
-    #[pyo3(get, set)]
+    /// How an option's fill came about, as the reference client codes it;
+    /// -1 where none is stated, and this client reads none off a report. Read
+    /// and written as that client's `OptionExerciseType` member.
     pub opt_exercise_or_lapse_type: i32,
 }
 
@@ -173,6 +173,16 @@ impl Execution {
     /// spelling lands on this client's field.
     fn __setattr__(slf: Bound<'_, Self>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
         set_by_reference_name(slf.as_any(), name, &value, &[])
+    }
+
+    #[getter]
+    fn get_opt_exercise_or_lapse_type(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        enum_member(py, "OptionExerciseType", self.opt_exercise_or_lapse_type)
+    }
+    #[setter]
+    fn set_opt_exercise_or_lapse_type(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.opt_exercise_or_lapse_type = enum_code(value)?.extract()?;
+        Ok(())
     }
 
     #[new]

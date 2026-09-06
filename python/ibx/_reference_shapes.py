@@ -17,6 +17,7 @@ those classes live beside the classes that carry them.
 import math
 import sys
 from decimal import Decimal
+from enum import Enum
 
 #: An integer field nobody set.
 UNSET_INTEGER = 2**31 - 1
@@ -268,6 +269,17 @@ class FaDataTypeEnum:
 #: A mid-offset that means "up to the midpoint" rather than a distance.
 COMPETE_AGAINST_BEST_OFFSET_UP_TO_MID = DOUBLE_INFINITY
 
+# The module-level names the reference client's `order`, `contract`, `scanner`
+# and `news` modules publish, which a program star-importing one of them uses
+# unqualified: its own `Order.__init__` writes `self.origin = CUSTOMER`.
+(CUSTOMER, FIRM, UNKNOWN) = range(3)
+(AUCTION_UNSET, AUCTION_MATCH, AUCTION_IMPROVEMENT, AUCTION_TRANSPARENT) = range(4)
+(SAME_POS, OPEN_POS, CLOSE_POS, UNKNOWN_POS) = range(4)
+NO_ROW_NUMBER_SPECIFIED = -1
+NEWS_MSG = 1
+EXCHANGE_AVAIL_MSG = 2
+EXCHANGE_UNAVAIL_MSG = 3
+
 
 def getTimeStrFromMillis(time):
     """A millisecond clock reading written for a person, and nothing for none."""
@@ -286,6 +298,49 @@ def getEnumTypeName(cls, value):
             return name
     named = [n for n in vars(cls) if not n.startswith("_")]
     return named[0] if named else ""
+
+
+class OptionExerciseType(Enum):
+    """How an option position came to be exercised, as the reference client
+    numbers it: each member is (the code, the name)."""
+    NoneItem = (-1, "None")
+    Exercise = (1, "Exercise")
+    Lapse = (2, "Lapse")
+    DoNothing = (3, "DoNothing")
+    Assigned = (100, "Assigned ")
+    AutoexerciseClearing = (101, "AutoexerciseClearing")
+    Expired = (102, "Expired")
+    Netting = (103, "Netting")
+    AutoexerciseTrading = (200, "AutoexerciseTrading")
+
+
+class FundAssetType(Enum):
+    """A fund's asset class, as the reference client lists it: (the code, the name)."""
+    NoneItem = ("None", "None")
+    Others = ("000", "Others")
+    MoneyMarket = ("001", "Money Market")
+    FixedIncome = ("002", "Fixed Income")
+    MultiAsset = ("003", "Multi-asset")
+    Equity = ("004", "Equity")
+    Sector = ("005", "Sector")
+    Guaranteed = ("006", "Guaranteed")
+    Alternative = ("007", "Alternative")
+
+
+class FundDistributionPolicyIndicator(Enum):
+    """Whether a fund accumulates or pays out, as the reference client lists it."""
+    NoneItem = ("None", "None")
+    AccumulationFund = ("N", "Accumulation Fund")
+    IncomeFund = ("Y", "Income Fund")
+
+
+def member_for(cls, code):
+    """The member whose code this is, or the first listed where none is: the
+    reference client's own lookup, which is how it reads a code off the wire."""
+    for member in cls:
+        if member.value[0] == code:
+            return member
+    return next(iter(cls))
 
 class RealTimeBar:
     """One five-second bar, as a callback hands it over.

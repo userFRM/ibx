@@ -1,7 +1,7 @@
 //! The contract classes a caller works in, as the Python API names them.
 
 // The other families, and the two helpers every class here uses.
-use super::contract::{by_reference_name, set_by_reference_name, set_from_keywords};
+use super::contract::{by_reference_name, enum_code, enum_member, set_by_reference_name, set_from_keywords};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use std::sync::OnceLock;
@@ -756,9 +756,11 @@ pub struct ContractDetails {
     pub fund_blue_sky_states: String,
     #[pyo3(get, set)]
     pub fund_blue_sky_territories: String,
-    #[pyo3(get, set)]
+    /// The code the definition states; read and written as the reference
+    /// client's `FundDistributionPolicyIndicator` member.
     pub fund_distribution_policy_indicator: String,
-    #[pyo3(get, set)]
+    /// The code the definition states; read and written as the reference
+    /// client's `FundAssetType` member.
     pub fund_asset_type: String,
     /// When the contract trades, stated in UTC.
     ///
@@ -818,6 +820,25 @@ impl ContractDetails {
                 ("fundSubsequentMinimumPurchase", "fund_minimum_subsequent_purchase"),
             ],
         )
+    }
+
+    #[getter]
+    fn get_fund_distribution_policy_indicator(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        enum_member(py, "FundDistributionPolicyIndicator", self.fund_distribution_policy_indicator.as_str())
+    }
+    #[setter]
+    fn set_fund_distribution_policy_indicator(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.fund_distribution_policy_indicator = enum_code(value)?.extract()?;
+        Ok(())
+    }
+    #[getter]
+    fn get_fund_asset_type(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        enum_member(py, "FundAssetType", self.fund_asset_type.as_str())
+    }
+    #[setter]
+    fn set_fund_asset_type(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.fund_asset_type = enum_code(value)?.extract()?;
+        Ok(())
     }
 
     #[new]

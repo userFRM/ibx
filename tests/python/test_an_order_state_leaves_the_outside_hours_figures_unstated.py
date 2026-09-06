@@ -12,9 +12,9 @@ Run: pytest tests/python/test_an_order_state_leaves_the_outside_hours_figures_un
 from ibx import UNSET_DOUBLE, Contract, EClient, EWrapper, Order, OrderState
 
 FIGURES = [
-    "initMarginBeforeOutsideRth", "maintMarginBeforeOutsideRth", "equityWithLoanBeforeOutsideRth",
-    "initMarginChangeOutsideRth", "maintMarginChangeOutsideRth", "equityWithLoanChangeOutsideRth",
-    "initMarginAfterOutsideRth", "maintMarginAfterOutsideRth", "equityWithLoanAfterOutsideRth",
+    "initMarginBeforeOutsideRTH", "maintMarginBeforeOutsideRTH", "equityWithLoanBeforeOutsideRTH",
+    "initMarginChangeOutsideRTH", "maintMarginChangeOutsideRTH", "equityWithLoanChangeOutsideRTH",
+    "initMarginAfterOutsideRTH", "maintMarginAfterOutsideRTH", "equityWithLoanAfterOutsideRTH",
 ]
 
 

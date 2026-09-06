@@ -1933,3 +1933,20 @@ camel_aliases_owned! {
         get_sl_order_type_alias set_sl_order_type_alias slOrderType sl_order_type String;
     }
 }
+
+// The reference client spells the outside-hours figures with the three
+// capitals; split at each, the name reaches nothing, and the read fell to the
+// letters-only pass on every call.
+camel_aliases_copy! {
+    OrderState {
+        get_init_margin_before_outside_rth_alias set_init_margin_before_outside_rth_alias initMarginBeforeOutsideRTH init_margin_before_outside_rth f64;
+        get_maint_margin_before_outside_rth_alias set_maint_margin_before_outside_rth_alias maintMarginBeforeOutsideRTH maint_margin_before_outside_rth f64;
+        get_equity_with_loan_before_outside_rth_alias set_equity_with_loan_before_outside_rth_alias equityWithLoanBeforeOutsideRTH equity_with_loan_before_outside_rth f64;
+        get_init_margin_change_outside_rth_alias set_init_margin_change_outside_rth_alias initMarginChangeOutsideRTH init_margin_change_outside_rth f64;
+        get_maint_margin_change_outside_rth_alias set_maint_margin_change_outside_rth_alias maintMarginChangeOutsideRTH maint_margin_change_outside_rth f64;
+        get_equity_with_loan_change_outside_rth_alias set_equity_with_loan_change_outside_rth_alias equityWithLoanChangeOutsideRTH equity_with_loan_change_outside_rth f64;
+        get_init_margin_after_outside_rth_alias set_init_margin_after_outside_rth_alias initMarginAfterOutsideRTH init_margin_after_outside_rth f64;
+        get_maint_margin_after_outside_rth_alias set_maint_margin_after_outside_rth_alias maintMarginAfterOutsideRTH maint_margin_after_outside_rth f64;
+        get_equity_with_loan_after_outside_rth_alias set_equity_with_loan_after_outside_rth_alias equityWithLoanAfterOutsideRTH equity_with_loan_after_outside_rth f64;
+    }
+}
