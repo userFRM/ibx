@@ -61,15 +61,17 @@ impl PriceCondition {
     /// caller never stated.
     pub fn to_internal(&self) -> Result<OrderCondition, String> {
         crate::client_core::require_finite_price("a price condition's price", self.price)?;
-        // What the trigger method can state on a condition: 0 is the default,
-        // 1 last, 2 bid/ask, 3 bid and 4 ask. Anything else narrows to one of
-        // those or wraps on the cast, which is a different condition.
+        // What the trigger method can state, as the reference client's
+        // `TriggerMethodEnum` names it and the order carries it: 0 default,
+        // 1 last, 2 bid/ask, 3 bid, 4 ask, 7 last-or-bid/ask, 8 midpoint.
+        // Anything else narrows to one of those or wraps on the cast, which
+        // is a different condition.
         let trigger_method = match self.trigger_method {
-            0..=4 => self.trigger_method as u8,
+            0..=4 | 7 | 8 => self.trigger_method as u8,
             other => return Err(format!(
                 "a price condition's trigger method {other} is not one the venue \
-                 carries on a condition: it is 0 to 4, and anything else would go \
-                 out as a different trigger than the one stated",
+                 carries on a condition: it is 0 to 4, 7 or 8, and anything else \
+                 would go out as a different trigger than the one stated",
             )),
         };
         Ok(OrderCondition::Price {
@@ -382,6 +384,35 @@ pub(crate) fn condition_from_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A price condition carries the trigger methods the reference client's
+    /// `TriggerMethodEnum` names and the order already carries: 0 to 4, plus 7
+    /// (last-or-bid/ask) and 8 (midpoint). They were refused on a condition
+    /// while the order accepted them, so a program that set one on a condition
+    /// could not place the order at all.
+    #[test]
+    fn a_price_condition_carries_the_reference_trigger_methods() {
+        for tm in [0i32, 4, 7, 8] {
+            let c = PriceCondition {
+                con_id: 1, exchange: "SMART".into(), price: 100.0,
+                is_more: true, trigger_method: tm, is_conjunction_connection: true,
+            };
+            match c.to_internal().unwrap_or_else(|e| panic!("trigger {tm} refused on a condition: {e}")) {
+                OrderCondition::Price { trigger_method, .. } => assert_eq!(trigger_method as i32, tm),
+                other => panic!("not a price condition: {other:?}"),
+            }
+        }
+        // 5 and 6 are not in the enum; a condition stating one is refused
+        // rather than sent as a different trigger.
+        for tm in [5i32, 6] {
+            let c = PriceCondition {
+                con_id: 1, exchange: "SMART".into(), price: 100.0,
+                is_more: true, trigger_method: tm, is_conjunction_connection: true,
+            };
+            assert!(c.to_internal().is_err(), "trigger {tm} is not one the venue carries");
+        }
+    }
+
 
     /// An order read back states what it is waiting for.
     ///

@@ -2242,3 +2242,35 @@ fn a_summary_parked_behind_the_download_is_answered_when_the_session_ends() {
         "answered with what there is once the session is over",
     );
 }
+
+
+/// `validate_order` carries a price condition whose trigger is 7 or 8, as it
+/// carries them on the order itself. The condition guard refused them while
+/// the order-level guard accepted them, so the same trigger was carried on an
+/// order and refused on its condition.
+#[test]
+fn a_condition_trigger_of_7_or_8_is_carried() {
+    let priced = || ApiOrder {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+    for tm in [0u8, 4, 7, 8] {
+        let mut order = priced();
+        order.conditions.push(crate::types::OrderCondition::Price {
+            con_id: 756733, exchange: "SMART".into(), price: 100,
+            is_more: true, trigger_method: tm, is_conjunction_connection: false,
+        });
+        ClientCore::validate_order(&order, "").unwrap_or_else(|e| panic!("condition trigger {tm} refused: {e:?}"));
+    }
+    for tm in [5u8, 6] {
+        let mut order = priced();
+        order.conditions.push(crate::types::OrderCondition::Price {
+            con_id: 756733, exchange: "SMART".into(), price: 100,
+            is_more: true, trigger_method: tm, is_conjunction_connection: false,
+        });
+        assert!(
+            ClientCore::validate_order(&order, "").is_err(),
+            "condition trigger {tm} is not one the venue carries",
+        );
+    }
+}

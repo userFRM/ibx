@@ -3848,16 +3848,17 @@ impl ClientCore {
                     }
                 }
             }
-            // A price condition's trigger method states 0 to 4: the default,
-            // last, bid/ask, bid and ask. Another value is a caller's mistake
-            // and is reported rather than sent as a different trigger.
+            // A price condition's trigger method states the set the order
+            // carries and the reference enumerates: 0 to 4, 7 or 8. Another
+            // value is a caller's mistake and is reported rather than sent as
+            // a different trigger.
             if let crate::types::OrderCondition::Price { trigger_method, .. } = condition
-                && *trigger_method > 4
+                && !matches!(*trigger_method, 0..=4 | 7 | 8)
             {
                 return Err(Refusal::stated(TRIGGER_METHOD_INVALID, format!(
                     "a price condition's trigger method {trigger_method} is not one \
-                     the venue carries on a condition: it is 0 to 4, and anything \
-                     else would go out as a different trigger than the one stated",
+                     the venue carries on a condition: it is 0 to 4, 7 or 8, and \
+                     anything else would go out as a different trigger than the one stated",
                 )));
             }
         }
