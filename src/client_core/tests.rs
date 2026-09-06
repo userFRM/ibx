@@ -1591,6 +1591,33 @@ fn a_modify_of_a_venue_named_order_is_judged_against_the_venues_statement() {
     assert!(core.modify_refusal(42, &retyped, Some(&shared)).is_some(), "a change of type is still refused");
 }
 
+/// The types a replace restates as themselves, under the names the venue's
+/// statement of an order carries.
+///
+/// A midprice order the venue named reads as `MIDPRICE`, the reference name,
+/// where the table knew only the wire's `MIDPX`; a snap to the market and a
+/// snap to the primary were each placed, replaced twice and withdrawn on a
+/// paper session and are admitted on that answer.
+#[test]
+fn a_venue_named_order_restates_itself_under_the_reference_name() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    for (id, name) in [(42u64, "MIDPRICE"), (43, "SNAP MKT"), (44, "SNAP PRI")] {
+        let named = ApiOrder {
+            order_id: id as i64, action: "BUY".into(), total_quantity: 1.0,
+            order_type: name.into(), lmt_price: 100.0, aux_price: 0.05, tif: "DAY".into(), ..Default::default()
+        };
+        shared.orders.push_order_info(id, crate::bridge::RichOrderInfo {
+            contract: ApiContract::default(),
+            order: named.clone(),
+            order_state: crate::types::model::OrderState { status: "Submitted".into(), ..Default::default() },
+            last_exec: Default::default(),
+        });
+        let moved = ApiOrder { lmt_price: 101.0, aux_price: 0.10, ..named };
+        assert!(core.modify_refusal(id, &moved, Some(&shared)).is_none(), "{name} restates itself");
+    }
+}
+
 /// The terms a restatement replaced come back when the venue refuses it, and
 /// stay put when it refuses something else.
 ///

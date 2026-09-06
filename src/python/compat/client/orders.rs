@@ -394,22 +394,23 @@ impl EClient {
                 venue_now, oid, api_contract.clone(), tracked_order.clone(), instrument,
             );
         }
+        // The caller's statement of an order this client did not place,
+        // ahead of the replace and whether or not it transmits now, as on
+        // the other surface.
+        if replacing
+            && !placed_here
+            && let Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) =
+                ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract))
+        {
+            let _ = Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Describe {
+                order_id: oid, spec: Box::new(crate::types::OrderSpec { kind, attrs }),
+            }));
+        }
         if api_order.transmit {
             if !replacing {
                 self.core.track_order(
                     oid, api_contract.clone(), tracked_order.clone(), instrument,
                 );
-            }
-            // The caller's statement of an order this client did not place,
-            // ahead of the replace, as on the other surface.
-            if replacing
-                && !placed_here
-                && let Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) =
-                    ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract))
-            {
-                let _ = Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Describe {
-                    order_id: oid, spec: Box::new(crate::types::OrderSpec { kind, attrs }),
-                }));
             }
             let sent = self.core.transmit_family(oid, api_order.parent_id, cmd, |c| {
                 Self::send_control(py, &tx, c).is_ok()

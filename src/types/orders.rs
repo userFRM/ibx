@@ -155,6 +155,17 @@ pub const ORD_PASSV_REL: u8 = 12;
 pub const ORD_PEG_BEST: u8 = 13;
 
 
+/// The execution instruction a type byte implies, where the name alone does
+/// not tell the type: both pegs travel as `P` and are told apart by it. Read
+/// back with no instruction, both came back as a trailing stop.
+pub fn ord_type_instruction(t: u8) -> &'static str {
+    match t {
+        ORD_PEG_MKT => "P",
+        ORD_PEG_MID => "M",
+        _ => "",
+    }
+}
+
 /// Convert an `ord_type` discriminant to the FIX tag 40 string.
 /// Single-char types (ASCII >= 32) are stored as-is; multi-char types use constants
 /// above.

@@ -2570,6 +2570,11 @@ impl ClientCore {
         // than on a reading. Each was placed with the market open, replaced,
         // and found still working afterwards.
         //
+        // `MIDPRICE` is the reference client's name for `MIDPX`, and the name
+        // the venue's own statement of such an order carries. A snap to the
+        // market and a snap to the primary were each placed, replaced twice
+        // and withdrawn on a paper session, with the market closed.
+        //
         // `REL` is the one that was not. Its replace drew no answer at all, and
         // neither did the withdrawal that followed — the order stopped
         // answering for anything, which is the outcome the refusals here were
@@ -2582,7 +2587,8 @@ impl ClientCore {
         ) || (restating_itself
             && matches!(
                 ty.as_str(),
-                "TRAIL" | "TRAIL LIMIT" | "PEG MID" | "MIDPX" | "SNAP MID" | "LIT"
+                "TRAIL" | "TRAIL LIMIT" | "PEG MID" | "MIDPX" | "MIDPRICE" | "SNAP MID"
+                    | "SNAP MKT" | "SNAP PRI" | "LIT"
             ))
         {
             return None;

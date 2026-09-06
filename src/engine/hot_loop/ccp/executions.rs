@@ -527,6 +527,13 @@ impl CcpState {
         };
         let qty = parse_qty_tag(parsed.get(&38))
             .unwrap_or_else(|| prior.map_or(0, |o| o.qty));
+        // The shares this very report books, where it is an execution; the
+        // booking below adds them, so the recovered figure must not.
+        let own_shares = if matches!(parsed.get(&150).map(String::as_str), Some("F" | "1" | "2" | "G" | "H")) {
+            parse_qty_tag(parsed.get(&32)).unwrap_or(0)
+        } else {
+            0
+        };
         let limit_price_i64: i64 = parsed.get(&44)
             .and_then(|s| s.parse::<f64>().ok())
             .map(crate::types::price_from_f64)
@@ -590,7 +597,13 @@ impl CcpState {
                 // Without it a fresh process believes nothing has filled,
                 // and the replayed executions behind this record all look
                 // like new quantity.
+                // What the order had filled before this report. A report that
+                // both recovers the order and books a fill counts its own
+                // shares in the cumulative figure, and the booking that
+                // follows adds them again: taken whole, an order that had
+                // filled forty read as eighty.
                 filled: parse_qty_tag(parsed.get(&14))
+                    .map(|cum| (cum - own_shares).max(0))
                     .unwrap_or_else(|| prior.map_or(0, |o| o.filled)),
                 // An order this session never saw is working by the fact of
                 // being in the push. One whose state was not known stays
@@ -839,7 +852,16 @@ impl CcpState {
         // replaced, under the version the replace gave it, and never reached
         // the book — so when this session withdrew it, the venue's cancelled
         // report matched nothing and no caller heard the order was gone.
-        let recovering = !status.is_terminal() && !marked_resend
+        //
+        // And not from a refusal. A drop marks every order uncertain, and a
+        // refusal of the revision outstanding at the drop arrives as a
+        // non-terminal report on an uncertain order; taken as the venue
+        // naming what it holds, it reconciled the revision — dropping the
+        // fallback kept against exactly this refusal — before the handler
+        // below could put the terms back, so the record kept the refused
+        // terms and the name moved to the refused revision.
+        let revision_refused = matches!(parsed.get(&378).map(String::as_str), Some("102" | "103"));
+        let recovering = !status.is_terminal() && !marked_resend && !revision_refused
             && clord_id != 0 && !already_finished
             && (context.order(clord_id).is_none() || unknown);
         if recovering {
@@ -1045,7 +1067,6 @@ impl CcpState {
             .map(|c| revision_of(c))
             .unwrap_or_else(|| *context.modify_versions.get(&clord_id).unwrap_or(&0));
         let restatement_reason = parsed.get(&378).map(|s| s.as_str()).unwrap_or("");
-        let revision_refused = matches!(restatement_reason, "102" | "103");
         let is_replace_ack = ord_status == "5" && !revision_refused;
         if is_replace_ack {
             // The venue holds what the attempt stated, so the fallback kept
@@ -1407,7 +1428,10 @@ impl CcpState {
                     crate::types::Side::Sell | crate::types::Side::ShortSell => "SELL",
                 };
                 let t = decode_tif(ctx_order.tif);
-                let o = crate::types::ord_type_api_name(crate::types::ord_type_fix_str(ctx_order.ord_type), "");
+                let o = crate::types::ord_type_api_name(
+                    crate::types::ord_type_fix_str(ctx_order.ord_type),
+                    crate::types::ord_type_instruction(ctx_order.ord_type),
+                );
                 (a, t, o)
             } else {
                 ("", "", "")

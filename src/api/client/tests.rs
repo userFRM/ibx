@@ -138,6 +138,38 @@ fn a_replace_is_preceded_by_the_callers_statement_of_the_order() {
     assert!(matches!(rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::Modify { order_id: 9302, .. }))));
 }
 
+/// The statement goes with a replace that is built and held as well, or the
+/// transmit that follows it finds the order recorded here and sends none.
+#[test]
+fn a_held_replace_of_a_venue_named_order_still_states_it() {
+    let (client, rx, shared) = test_client();
+    let named = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "PEG MID".into(),
+        lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+    shared.orders.push_order_info(9303, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: Order { order_id: 9303, ..named.clone() },
+        order_state: crate::types::model::OrderState { status: "Submitted".into(), ..Default::default() },
+        last_exec: Default::default(),
+    });
+    let held = Order { lmt_price: 101.0, transmit: false, ..named.clone() };
+    client.place_order(9303, &spy(), &held).unwrap();
+    assert!(
+        matches!(rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::Describe { order_id: 9303, .. }))),
+        "the statement travels with the held replace",
+    );
+    assert!(rx.try_recv().is_err(), "and the replace itself is held");
+
+    let sent = Order { lmt_price: 101.0, transmit: true, ..named };
+    client.place_order(9303, &spy(), &sent).unwrap();
+    let mut saw_modify = false;
+    while let Ok(cmd) = rx.try_recv() {
+        saw_modify |= matches!(cmd, ControlCommand::Order(OrderRequest::Modify { order_id: 9303, .. }));
+    }
+    assert!(saw_modify, "the transmit sends the replace");
+}
+
 /// Nothing on an execution report carries a parent order id, so the engine
 /// reports none. This client placed the order and was told the parent, so it
 /// can answer where the engine cannot — and an order it did not place keeps

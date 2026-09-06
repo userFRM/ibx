@@ -2129,6 +2129,47 @@ fn a_replayed_pegs_replace_carries_the_shape_a_placements_does() {
     assert!(shared.orders.drain_order_inactive().is_empty());
 }
 
+/// A report that states no type leaves a tracked peg named as a peg.
+///
+/// Both pegs travel as `P` and are told apart by the instruction beside it;
+/// the fallback from this client's own byte supplied no instruction, so a
+/// report without tag 40 renamed a midpoint peg `TRAIL` in the row a caller
+/// reads, and a replace of it was then judged against that.
+#[test]
+fn a_report_stating_no_type_leaves_a_tracked_peg_named_as_a_peg() {
+    for (byte, name) in [(crate::types::ORD_PEG_MID, "PEG MID"), (crate::types::ORD_PEG_MKT, "PEG MKT")] {
+        let (mut ccp, mut context, shared) = ord_status_test_state();
+        context.insert_order(crate::types::Order::new(
+            42, 0, Side::Buy, crate::types::QTY_SCALE, 100 * PRICE_SCALE, byte, b'0', 0,
+        ));
+        let frame = exec_report_frame(&[(39, "0"), (150, "0"), (100, "ARCA")]);
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+        let order = shared.orders.get_order_info(42).expect("published").order;
+        assert_eq!(order.order_type, name, "byte {byte}");
+    }
+}
+
+/// A fill that is the first this session hears of an order books its shares
+/// once.
+///
+/// Such a report recovers the order and books the fill in one pass. Recovery
+/// took the filled quantity from the report's cumulative figure, which already
+/// counts this report's own shares, and the booking then added them again: an
+/// order that had filled forty read as eighty, while the position moved by
+/// forty.
+#[test]
+fn a_fill_that_recovers_an_order_books_its_shares_once() {
+    let (mut ccp, mut context, shared) = (CcpState::new(), Context::new(), SharedState::new());
+    let frame: std::collections::HashMap<u32, String> = [
+        (11u32, "77.0"), (150, "1"), (39, "1"), (6008, "756733"), (38, "100"), (55, "SPY"), (54, "1"),
+        (40, "2"), (44, "100"), (32, "40"), (31, "100"), (14, "40"), (151, "60"), (17, "exec-1"),
+    ].into_iter().map(|(t, v)| (t, v.to_string())).collect();
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "DU1");
+    let order = context.order(77).expect("recovered by its first fill");
+    assert_eq!(order.filled, 40 * crate::types::QTY_SCALE, "filled once, not once by recovery and once by the booking");
+    assert_eq!(context.position(order.instrument), 40.0, "and the position moved by the fill");
+}
+
 /// An unrecognised or absent tag 59 leaves the wire match with nothing to
 /// report, so the fallback that knows what the caller submitted can run. An
 /// arm producing `DAY` for those cases keeps the fallback from ever
@@ -5715,6 +5756,52 @@ fn a_refused_revision_travels_on_the_channel_a_refusal_travels_on() {
     );
 }
 
+/// A refusal that arrives while the order is uncertain still puts the terms
+/// the venue holds back.
+///
+/// A drop marks every order uncertain, and a report on an uncertain order is
+/// taken as the venue naming what it holds — which reconciles the revision
+/// and drops the fallbacks kept against a refusal. A refusal of the revision
+/// outstanding at the drop is not the venue naming anything: taken as one,
+/// it wiped its own fallback before the handler that needed it ran, the
+/// record kept the refused terms, the name moved to the refused revision, and
+/// the caller was told the refusal answered no change of theirs.
+#[test]
+fn a_refusal_arriving_while_the_order_is_uncertain_still_puts_the_terms_back() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 150 * crate::types::PRICE_SCALE, b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    let before = *context.order(42).expect("tracked");
+    // The attempt: revision 1 at 151, recorded ahead of the answer.
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string(), None));
+    context.modify_versions.insert(42, 1);
+    context.last_clord.insert(42, "42.1".to_string());
+    let mut attempt = before;
+    attempt.price = 151 * crate::types::PRICE_SCALE;
+    attempt.status = crate::types::OrderStatus::PendingReplace;
+    context.insert_order(attempt);
+    // The connection goes, and every order with it.
+    context.mark_orders_uncertain();
+
+    let refused = exec_report_frame(&[
+        (11, "42.1"), (150, "8"), (39, "0"), (378, "102"), (54, "1"), (38, "100"), (6008, "756733"),
+        (58, "the price is through the band"),
+    ]);
+    ccp.handle_exec_report(&refused, b"", &mut context, &shared, &None, "DU1");
+
+    let order = context.order(42).expect("still tracked");
+    assert_eq!(order.price, 150 * crate::types::PRICE_SCALE, "the terms the venue holds are back");
+    assert_eq!(context.last_clord.get(&42).map(String::as_str), Some("42.0"), "and so is the name it holds");
+    assert!(context.pre_replace.is_empty(), "the fallback was spent on the refusal, not wiped ahead of it");
+    let refusals = shared.orders.drain_cancel_rejects();
+    assert!(refusals.iter().any(|r| r.order_id == 42 && r.answers_a_live_change), "{refusals:?}");
+}
+
 /// The venue taking a replacement is said even when a fill took the status.
 ///
 /// The surfaces keep the terms an order had before a replacement, to put back
@@ -5896,6 +5983,16 @@ fn a_connection_that_dies_takes_the_lookups_waiting_on_it_with_it() {
     // request each waiting on the naming of their contract.
     ccp.pending_secdef.push((0xF000_0001, true, later));
     ccp.auto_fetched_conids.insert(4_762, 0xF000_0001);
+    // A scan parked behind the naming of its rows, which those lookups were
+    // asking for.
+    ccp.pending_scanner_enrichment.push(PendingScannerEnrichment {
+        api_req_id: 13,
+        result: crate::control::scanner::ScannerResult {
+            con_ids: vec![4_762], entries: Vec::new(), scan_time: String::new(), error_text: String::new(),
+        },
+        awaiting: [4_762i64].into_iter().collect(),
+        deadline: later,
+    });
     ccp.resolve_for_subscribe(PendingSubscribe {
         con_id: 0, instrument: 4, symbol: "SPY".into(), exchange: "SMART".into(),
         sec_type: "STK".into(), currency: "USD".into(), last_trade_date: String::new(),
@@ -5918,7 +6015,7 @@ fn a_connection_that_dies_takes_the_lookups_waiting_on_it_with_it() {
             && ccp.pending_matching_symbols.is_empty() && ccp.pending_option_params.is_empty()
             && ccp.pending_schedule_pair.is_empty() && ccp.pending_md_subscribe.is_empty()
             && ccp.pending_named.is_empty() && ccp.auto_fetched_conids.is_empty()
-            && ccp.details_delivered.is_empty(),
+            && ccp.details_delivered.is_empty() && ccp.pending_scanner_enrichment.is_empty(),
         "nothing waits on a connection that is gone",
     );
     let gone = crate::error_codes::Refusal::NOT_CONNECTED;

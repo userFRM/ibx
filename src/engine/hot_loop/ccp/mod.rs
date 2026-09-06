@@ -2511,6 +2511,11 @@ impl CcpState {
         for p in &mut self.pending_schedule_pair { p.deadline = Instant::now(); }
         self.sweep_pending_schedule_pairs(shared, event_tx);
         self.details_delivered.clear();
+        // A scan parked behind the naming of its rows is released with the
+        // rows it has, the way its own deadline releases it: the lookups it
+        // waited on went with the connection.
+        for pe in &mut self.pending_scanner_enrichment { pe.deadline = Instant::now(); }
+        self.sweep_scanner_enrichments(shared);
         let mut refused: Vec<u32> = self.pending_matching_symbols.drain(..).map(|(rid, _)| rid).collect();
         refused.extend(self.pending_option_params.drain(..).map(|(rid, ..)| rid));
         // A subscription waiting on the naming of its contract is told, and
