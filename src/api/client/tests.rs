@@ -215,6 +215,24 @@ fn a_bracket_leg_replaced_before_its_acknowledgement_is_replaced_not_placed_agai
     assert_eq!(seen, ["replace"], "a leg this client placed is replaced from the engine's own record");
 }
 
+/// The legs are recorded as the wire states them, since the open-order reads
+/// answer from the record for the life of the order.
+#[test]
+fn a_brackets_legs_are_recorded_as_the_wire_states_them() {
+    let (client, _rx, _shared) = test_client();
+    let [parent, tp, sl] = client.place_bracket(&spy(), "SSHORT", 1.0, 100.0, 90.0, 110.0).unwrap();
+    let entry = client.core.tracked_order(parent as u64).expect("tracked");
+    assert_eq!((entry.action.as_str(), entry.tif.as_str(), entry.oca_group.as_str(), entry.oca_type, entry.parent_id), ("SSHORT", "DAY", "", 0, 0));
+    for (id, order_type, lmt, aux) in [(tp, "LMT", 90.0, 0.0), (sl, "STP", 0.0, 110.0)] {
+        let exit = client.core.tracked_order(id as u64).expect("tracked");
+        assert_eq!(
+            (exit.action.as_str(), exit.order_type.as_str(), exit.lmt_price, exit.aux_price, exit.tif.as_str(), exit.oca_group.as_str(), exit.oca_type, exit.parent_id),
+            ("BUY", order_type, lmt, aux, "GTC", format!("OCA_{parent}").as_str(), 3, parent),
+            "leg {id}",
+        );
+    }
+}
+
 /// Nothing on an execution report carries a parent order id, so the engine
 /// reports none. This client placed the order and was told the parent, so it
 /// can answer where the engine cannot — and an order it did not place keeps
@@ -9157,6 +9175,39 @@ fn a_fill_whose_report_names_no_client_is_filed_under_the_placing_client() {
     let mut w = Filed::default();
     client.process_msgs(&mut w);
     assert_eq!(w.0, [5], "filed under the client that placed it");
+}
+
+/// A fill on a bracket's leg is filed under the client the venue names.
+///
+/// The leg's record names no client, and a record here used to win over the
+/// venue's statement whatever it said, so the fill was filed under client
+/// zero. A record naming none defers to the venue, which is what zero means.
+#[test]
+fn a_fill_on_a_brackets_leg_is_filed_under_the_client_the_venue_names() {
+    #[derive(Default)]
+    struct Filed(Vec<i64>);
+    impl Wrapper for Filed {
+        fn exec_details(&mut self, _: i64, _: &Contract, e: &crate::types::model::Execution) {
+            self.0.push(e.client_id);
+        }
+    }
+    let (client, rx, shared) = test_client();
+    let [_, tp, _] = client.place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 90.0).unwrap();
+    while rx.try_recv().is_ok() {}
+    shared.orders.push_order_info(tp as u64, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: Order { order_id: tp, client_id: 7, ..Default::default() },
+        order_state: Default::default(),
+        last_exec: crate::types::model::Execution { exec_id: "0001.tp".into(), ..Default::default() },
+    });
+    shared.orders.push_fill(crate::types::Fill {
+        instrument: 0, order_id: tp as u64, side: crate::types::Side::Sell,
+        price: 110 * PRICE_SCALE, qty: crate::types::QTY_SCALE, remaining: 0, timestamp_ns: 0,
+        cum_qty: crate::types::QTY_SCALE, avg_price: 110 * PRICE_SCALE,
+    });
+    let mut w = Filed::default();
+    client.process_msgs(&mut w);
+    assert_eq!(w.0, [7], "the client the venue names, not the zero the leg's record carries");
 }
 
 /// `SCHEDULE` is a series of its own on the reference client's historical

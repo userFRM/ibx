@@ -935,13 +935,21 @@ impl EClient {
         // bracket.
         let (action, exit_action) = match side {
             crate::types::Side::Buy => ("BUY", "SELL"),
-            _ => ("SELL", "BUY"),
+            crate::types::Side::Sell => ("SELL", "BUY"),
+            crate::types::Side::ShortSell => ("SSHORT", "BUY"),
         };
         let oca_group = format!("OCA_{parent_id}");
+        // Each record as the wire states the leg: the entry lives a day and
+        // stands alone; each exit is good till cancelled, in the group, and
+        // reduces the other on a fill. Recorded otherwise, the two open-order
+        // reads described the exits as day orders for their whole life.
         let leg = |order_id: i64, action: &str, order_type: &str, lmt_price: f64, aux_price: f64, parent: i64| {
+            let exit = parent != 0;
             crate::types::model::Order {
                 order_id, action: action.into(), total_quantity: quantity, order_type: order_type.into(),
-                lmt_price, aux_price, tif: "DAY".into(), parent_id: parent, oca_group: oca_group.clone(),
+                lmt_price, aux_price, tif: if exit { "GTC" } else { "DAY" }.into(), parent_id: parent,
+                oca_group: if exit { oca_group.clone() } else { String::new() },
+                oca_type: if exit { 3 } else { 0 },
                 transmit: true, ..Default::default()
             }
         };

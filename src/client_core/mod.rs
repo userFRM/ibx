@@ -2873,8 +2873,13 @@ impl ClientCore {
         // order went out under from the moment it went; the venue's book knows
         // nothing about it until the venue names it, so asked of that alone an
         // order this session had just placed was reported under client zero.
-        if let Some(tracked) = self.open_orders.lock().unwrap().get(&order_id) {
-            return tracked.order.client_id;
+        // A record naming no client — a bracket's leg is recorded with none —
+        // defers to the venue, which is what zero means here.
+        if let Some(client) = self.open_orders.lock().unwrap().get(&order_id)
+            .map(|t| t.order.client_id)
+            .filter(|c| *c != 0)
+        {
+            return client;
         }
         // And for an order this client did not place, what the venue says.
         shared.orders.get_order_info(order_id).map_or(0, |info| info.order.client_id)

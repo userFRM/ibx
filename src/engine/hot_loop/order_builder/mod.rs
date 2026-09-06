@@ -612,13 +612,6 @@ pub(crate) fn drain_and_send_orders(
                 // subsequent cancel before the modify-ack still references the
                 // right version.
                 context.last_clord.insert(order_id, clord_str.clone());
-                // The replacement restates the order the caller already
-                // holds, as the reference client's replace does: one id, one
-                // record, one entry in the open book. The next replace
-                // restates from it, so what this one preserved is still there.
-                if let Some(spec) = spec.clone() {
-                    context.submitted.insert(order_id, spec);
-                }
 
                 let qty_str = format_qty(qty);
                 let price_str = format_price(price);

@@ -5854,6 +5854,44 @@ fn a_refusal_arriving_while_the_order_is_uncertain_still_puts_the_terms_back() {
     assert!(refusals.iter().any(|r| r.order_id == 42 && r.answers_a_live_change), "{refusals:?}");
 }
 
+/// An accepted revision spends the fallbacks of every revision below it.
+///
+/// Two revisions can be outstanding at once. The venue accepting the second
+/// spent the second's fallback alone, so a refusal of the first arriving
+/// behind the acceptance put back the terms from before the first — over the
+/// terms the venue had just accepted — and moved the name back two revisions,
+/// so the next cancel named a revision the venue had superseded.
+#[test]
+fn an_accepted_revision_spends_the_fallbacks_below_it() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    let at = |price: i64| {
+        let mut o = crate::types::Order::new(42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, price * crate::types::PRICE_SCALE, b'2', b'0', 0);
+        o.status = crate::types::OrderStatus::Submitted;
+        o
+    };
+    context.insert_order(at(150));
+    context.pre_replace.insert((42, 1), (at(150), "42.0".to_string(), None));
+    context.pre_replace.insert((42, 2), (at(151), "42.1".to_string(), None));
+    context.modify_versions.insert(42, 2);
+    context.last_clord.insert(42, "42.2".to_string());
+    let mut pending = at(152);
+    pending.status = crate::types::OrderStatus::PendingReplace;
+    context.insert_order(pending);
+
+    let accepted = exec_report_frame(&[(11, "42.2"), (41, "42.1"), (150, "5"), (39, "5"), (44, "152"), (54, "1"), (38, "100"), (6008, "756733")]);
+    ccp.handle_exec_report(&accepted, b"", &mut context, &shared, &None, "DU1");
+    let refused = exec_report_frame(&[(11, "42.1"), (150, "8"), (39, "0"), (378, "102"), (58, "through the band")]);
+    ccp.handle_exec_report(&refused, b"", &mut context, &shared, &None, "DU1");
+
+    let order = context.order(42).expect("tracked");
+    assert_eq!(order.price, 152 * crate::types::PRICE_SCALE, "the accepted terms stand");
+    assert_eq!(context.last_clord.get(&42).map(String::as_str), Some("42.2"), "and the accepted name");
+    assert!(context.pre_replace.is_empty(), "nothing is left to put back: {:?}", context.pre_replace.keys().collect::<Vec<_>>());
+}
+
 /// The venue taking a replacement is said even when a fill took the status.
 ///
 /// The surfaces keep the terms an order had before a replacement, to put back

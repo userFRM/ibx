@@ -1078,6 +1078,13 @@ impl CcpState {
             // against a refusal is spent. A stale refusal arriving behind the
             // acceptance must not put the old terms back over it.
             let ours = context.pre_replace.remove(&(clord_id, reported_revision)).is_some();
+            // And every revision below it: the venue holds the accepted terms,
+            // so a refusal of an earlier revision arriving behind the
+            // acceptance has nothing left to put back. Spent one at a time, it
+            // put the terms from before the earlier revision over the accepted
+            // ones and moved the name back to a revision the venue had
+            // superseded.
+            context.pre_replace.retain(|(id, ver), _| *id != clord_id || *ver > reported_revision);
             // And said to the surfaces, which keep a copy of their own. Only
             // where the change was this session's: an acknowledgement of one
             // made elsewhere, or replayed at connect, spends nothing here and
