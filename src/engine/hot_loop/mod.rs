@@ -172,6 +172,11 @@ pub struct HotLoop {
     /// limits mean anything for a farm that is the only thing down.
     hmds_budget: crate::reliability::RecoveryBudget,
     secdef_budget: crate::reliability::RecoveryBudget,
+    /// The market-data farm's own, for the same reason: spent against the
+    /// session's, a quote feed the venue would not serve again left the
+    /// trading connection's next drop with nothing to retry on, and a farm
+    /// given up on kept the session's budget from ever settling.
+    farm_budget: crate::reliability::RecoveryBudget,
     /// The reconnects this loop has in flight, and the flag that takes them
     /// back. A stop or a spent budget sets the flag; the workers check it
     /// between the phases of a handshake, so neither opens a session at the
@@ -418,6 +423,7 @@ impl HotLoop {
             farm_halted: None,
             secdef_halted: None,
             hmds_budget: crate::reliability::RecoveryBudget::new(),
+            farm_budget: crate::reliability::RecoveryBudget::new(),
             secdef_budget: crate::reliability::RecoveryBudget::new(),
             reconnect_cancel: Arc::new(AtomicBool::new(false)),
             reconnect_workers: Vec::new(),
@@ -863,13 +869,18 @@ impl HotLoop {
                 self.poll_hmds_reconnect();
                 self.poll_secdef_reconnect();
             }
-            // The stability clock starts only when both transports the retry
-            // budget covers are carrying traffic. One side alone does not
-            // refund attempts.
+            // The session's budget is the trading connection's: settled on
+            // that connection alone. Settled on the quote feed as well, a
+            // feed given up on for the session kept the budget from ever
+            // settling, and the trading connection's next drop was given up
+            // on at once.
             self.budget.settle(
                 Instant::now(),
                 self.reconnect_cfg.stable_window,
-                !self.farm.disconnected && !self.ccp.disconnected,
+                !self.ccp.disconnected,
+            );
+            self.farm_budget.settle(
+                Instant::now(), self.reconnect_cfg.stable_window, !self.farm.disconnected,
             );
             // Each optional farm's own, on its own connection: one of them
             // holding together says nothing about the other, and nothing
@@ -2369,7 +2380,7 @@ impl HotLoop {
                 log::error!(
                     "market-data farm recovery abandoned after {} attempts — the limits the \
                      caller set are spent; market data is unavailable for the rest of this session",
-                    self.budget.attempts(),
+                    self.farm_budget.attempts(),
                 );
             }
             self.farm_halted = Some(retry::DisconnectReason::RecoveryExhausted);
@@ -2437,7 +2448,10 @@ impl HotLoop {
         // first must not speak for the other: a network cut takes down both,
         // and announcing on the first recovery told the caller everything was
         // back while half of it still was not.
-        if self.farm.disconnected || self.ccp.disconnected { return; }
+        // A quote feed given up on for the session is not one to wait for:
+        // its loss was said under its own numbers, and waiting on it kept the
+        // trading connection's return from ever being announced.
+        if self.ccp.disconnected || (self.farm.disconnected && self.farm_halted.is_none()) { return; }
         self.loss_announced = false;
         log::info!("Connection restored — subscriptions re-established");
         self.shared.set_connection_restored();
@@ -2468,7 +2482,7 @@ impl HotLoop {
         if self.reconnect_halted.is_some() || self.farm_halted.is_some() {
             return;
         }
-        if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) {
+        if !self.farm_budget.may_retry(&self.reconnect_cfg, Instant::now()) {
             // Not while the trading connection is still dialling on an attempt
             // this budget allowed. The count says how many more may start, not
             // how long the one running may take, and giving up here takes that
@@ -2502,7 +2516,7 @@ impl HotLoop {
             }
             Some(due) if Instant::now() >= due => {
                 self.farm_next_attempt_at = None;
-                self.budget.record_attempt(Instant::now());
+                self.farm_budget.record_attempt(Instant::now());
                 self.spawn_farm_reconnect();
                 if self.pending_farm_reconnect.is_none() {
                     // Could not spawn (no cached credentials): re-check in a
@@ -2631,7 +2645,7 @@ impl HotLoop {
                 self.reconnect_farm(conn);
                 self.farm_connected_at = Some(Instant::now());
                 self.clear_halt_if_it_was_not_settled();
-                self.budget.record_connected(Instant::now());
+                self.farm_budget.record_connected(Instant::now());
                 // Said whether or not a loss was ever announced, because the
                 // break was said the same way.
                 announce_venue_data(
@@ -4402,7 +4416,7 @@ mod tests {
 
         // Spend it.
         for _ in 0..2 {
-            hl.budget.record_attempt(Instant::now());
+            hl.farm_budget.record_attempt(Instant::now());
         }
         hl.maybe_spawn_farm_reconnect();
 
@@ -4853,6 +4867,43 @@ mod tests {
             "the trading socket is held for the whole of the outage",
         );
         assert!(hl.farm_conn.is_none(), "and the quote feed's with it");
+    }
+
+    /// A quote feed given up on leaves the trading connection its recovery.
+    ///
+    /// The feed spent the session's budget and, halted for good, kept it from
+    /// ever settling; the trading connection's next drop, hours later, was
+    /// given up on with no attempt made and every buffered order refused.
+    #[test]
+    fn a_farm_given_up_on_leaves_the_trading_connection_its_recovery() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.set_reconnect_config(crate::reliability::ReconnectConfig::default().with_max_attempts(1));
+        hl.farm.disconnected = true;
+        hl.farm_budget.record_attempt(Instant::now());
+        hl.maybe_spawn_farm_reconnect();
+        assert!(hl.farm_halted.is_some(), "the feed is given up on");
+
+        hl.ccp.disconnected = true;
+        hl.maybe_spawn_ccp_reconnect();
+        assert!(shared.reference.session_over().is_none(), "the session stands");
+        assert!(hl.ccp_next_attempt_at.is_some(), "and the trading connection gets its attempt");
+    }
+
+    /// The trading connection's return is announced whether or not a quote
+    /// feed given up on for the session is still down: that feed's loss was
+    /// said under its own numbers.
+    #[test]
+    fn a_return_is_announced_past_a_farm_given_up_on() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.loss_announced = true;
+        hl.farm.disconnected = true;
+        hl.farm_halted = Some(retry::DisconnectReason::RecoveryExhausted);
+        hl.ccp.disconnected = false;
+        hl.announce_reconnected();
+        assert!(shared.take_connection_restored(), "the return is announced");
+        assert!(!hl.loss_announced);
     }
 
     /// The market-data farm running out of recovery ends the market-data farm,

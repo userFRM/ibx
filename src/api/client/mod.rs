@@ -222,6 +222,10 @@ pub struct EClient {
     /// True once `connection_closed` has been delivered, so it fires at most
     /// once per session.
     pub(crate) close_notified: AtomicBool,
+    /// Whether this client asked for the session to end. The engine records
+    /// the same, after the fact; this is known the moment the caller asks, so
+    /// the end is said as the caller's own and not as a loss.
+    pub(crate) stopped_by_caller: AtomicBool,
     /// Whether the caller asked for positions and has not withdrawn the ask.
     ///
     /// `req_positions` subscribes to a real-time feed, so a holding that
@@ -632,6 +636,7 @@ impl EClient {
             accounts,
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
+            stopped_by_caller: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
             positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
@@ -664,6 +669,7 @@ impl EClient {
             account_id,
             connected: AtomicBool::new(true),
             close_notified: AtomicBool::new(false),
+            stopped_by_caller: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
             positions_multi_requested: Mutex::new(std::collections::HashSet::new()),
@@ -765,6 +771,7 @@ impl EClient {
     /// Disconnect from IB.  Sends `Shutdown` to the hot loop, waits for the
     /// background thread to exit, and marks the client as disconnected.
     pub fn disconnect(&self) {
+        self.stopped_by_caller.store(true, Ordering::Release);
         // The session is ending, so the venue is told before the engine stops.
         let _ = self.control_tx.send(ControlCommand::Logout);
         let _ = self.control_tx.send(ControlCommand::Shutdown);

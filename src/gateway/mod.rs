@@ -301,10 +301,6 @@ pub struct Gateway {
     /// URL set was pushed (callers should then fall back to a documented literal,
     /// e.g. `api.ibkr.com` for `region_dam`).
     pub misc_urls: std::collections::HashMap<String, String>,
-    /// CCP HMAC signing key (kb[64..84]) for selective signing of XML messages.
-    pub ccp_sign_key: Vec<u8>,
-    /// CCP HMAC initial IV (kb[48..64]) for selective signing.
-    pub ccp_sign_iv: Vec<u8>,
     /// Historical-data farm routing parsed from the auth-server response,
     /// retained for HMDS reconnect.
     pub hmds_host: String,
@@ -458,6 +454,9 @@ pub fn connect_farm(
         .map_err(|e| io::Error::new(e.kind(), format!("{farm_id} TCP connect: {e}")))?;
     farm_tcp.set_nodelay(true)?;
     farm_tcp.set_read_timeout(Some(Duration::from_secs(TIMEOUT_FARM_CONNECT)))?;
+    // Bounded both ways, as the auth dials are: a write that never drains
+    // would otherwise hold the handshake open for as long as the peer likes.
+    farm_tcp.set_write_timeout(Some(Duration::from_secs(TIMEOUT_FARM_CONNECT)))?;
 
     // Key exchange (raw TCP)
     let mut channel = SecureChannel::new();
@@ -1929,18 +1928,6 @@ impl Gateway {
         if !logged_in_at.is_empty() {
             ccp_conn.logged_in_at = Some(logged_in_at.clone());
         }
-        // CCP HMAC signing IV: derived by AES-CBC encrypting the logon message.
-        // The logon was sent as plaintext over TLS, but the AES-CBC computation
-        // evolves the IV — last 16 bytes of ciphertext = new IV for HMAC signing.
-        let ccp_sign_key = channel.key_block().map(|kb| kb[64..84].to_vec()).unwrap_or_default();
-        let ccp_sign_iv = if let Some(kb) = channel.key_block() {
-            let aes_key = &kb[0..16];
-            let initial_iv = &kb[32..48];
-            let ciphertext = crate::auth::crypto::aes_cbc_encrypt(aes_key, initial_iv, &logon_msg);
-            ciphertext[ciphertext.len() - 16..].to_vec()
-        } else {
-            Vec::new()
-        };
         // The init burst, seeded into the connection's buffer so the hot loop
         // reads the account data it carries.
         ccp_conn.seed_buffer(&init_data);
@@ -2061,8 +2048,6 @@ impl Gateway {
             raw_enabled_features,
             white_branding_id,
             misc_urls: parse_misc_urls(&raw_misc_urls),
-            ccp_sign_key,
-            ccp_sign_iv,
             hmds_host: hmds_host_for_gw,
             hmds_farm: hmds_farm_for_gw,
             trading_host: trading_host_for_gw,

@@ -1713,8 +1713,8 @@ fn an_answering_call_does_not_swallow_the_notice_that_the_session_closed() {
     let mut w = RecordingWrapper::default();
     client.process_msgs(&mut w);
     assert!(
-        w.events.iter().any(|e| e.starts_with("connection_closed")),
-        "the caller was never told the session went away",
+        w.events.iter().any(|e| e.starts_with("error:-1:1100:")),
+        "the caller was never told the session went away: {:?}", w.events,
     );
 }
 
@@ -7004,16 +7004,32 @@ fn engine_connection_loss_fires_connection_closed_once() {
     assert!(client.is_connected());
     assert!(w.events.is_empty(), "no callbacks before the connection is lost");
 
-    // Engine signals the end of the session.
+    // A loss the engine is still working to recover: said under 1100, as the
+    // other surface says it, not as the session's end.
     shared.set_connection_lost();
     client.process_msgs(&mut w);
+    assert!(w.events.iter().any(|e| e.starts_with("error:-1:1100:")), "{:?}", w.events);
+    assert!(!w.events.iter().any(|e| e == "connection_closed"), "the session is not over: {:?}", w.events);
+    assert!(!client.is_connected(), "is_connected must turn false");
 
-    assert_eq!(w.events, vec!["connection_closed"]);
+    // Its return.
+    shared.set_connection_restored();
+    client.process_msgs(&mut w);
+    assert!(w.events.iter().any(|e| e.starts_with("error:-1:1102:")), "{:?}", w.events);
+    assert!(client.is_connected());
+
+    // The session's end.
+    shared.reference.set_session_over("the venue ended it");
+    shared.set_connection_lost();
+    client.process_msgs(&mut w);
+    assert_eq!(w.events.iter().filter(|e| *e == "connection_closed").count(), 1, "{:?}", w.events);
     assert!(!client.is_connected(), "is_connected must turn false");
 
     // Polling again must not repeat it.
+    let said = w.events.len();
     client.process_msgs(&mut w);
-    assert_eq!(w.events, vec!["connection_closed"]);
+    assert_eq!(w.events.len(), said, "nothing is said twice: {:?}", w.events);
+    assert_eq!(w.events.iter().filter(|e| *e == "connection_closed").count(), 1);
 }
 
 /// The health check reads the session's own state, not only what a pump
@@ -7030,22 +7046,6 @@ fn is_connected_says_false_once_the_session_is_over() {
         crate::reliability::retry::DisconnectReason::EngineStopped.as_str(),
     );
     assert!(!client.is_connected(), "an ended session is not connected");
-}
-
-#[test]
-fn connection_loss_raises_no_error_callback() {
-    // The reference client fires connection_closed with no error code on a
-    // lost socket; the connectivity codes are server-pushed, never local.
-    let (client, _rx, shared) = test_client();
-    let mut w = RecordingWrapper::default();
-
-    shared.set_connection_lost();
-    client.process_msgs(&mut w);
-
-    assert!(
-        !w.events.iter().any(|e| e.starts_with("error:")),
-        "no error callback expected, got: {:?}", w.events,
-    );
 }
 
 #[test]
@@ -7068,10 +7068,12 @@ fn queued_data_is_dispatched_before_connection_closed() {
     let mut w = RecordingWrapper::default();
 
     shared.reference.push_contract_details_end(7);
+    shared.reference.set_session_over("the venue ended it");
     shared.set_connection_lost();
     client.process_msgs(&mut w);
 
-    assert_eq!(w.events, vec!["contract_details_end:7", "connection_closed"]);
+    assert_eq!(w.events.first().map(String::as_str), Some("contract_details_end:7"), "{:?}", w.events);
+    assert_eq!(w.events.last().map(String::as_str), Some("connection_closed"), "{:?}", w.events);
 }
 
 /// The code provider must reach the session config for the authenticator factor
@@ -7496,9 +7498,9 @@ fn the_last_thing_the_connection_did_is_what_a_caller_is_told() {
     client.process_msgs(&mut w);
 
     assert!(!client.is_connected(), "the connection went and did not come back");
-    assert!(
-        w.events.iter().any(|e| e == "connection_closed"),
-        "and the caller is told once",
+    assert_eq!(
+        w.events.iter().filter(|e| e.starts_with("error:-1:1100:")).count(), 1,
+        "and the caller is told once: {:?}", w.events,
     );
 
     // The other way round: a recovery after a loss stands.

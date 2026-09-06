@@ -97,17 +97,38 @@ impl EClient {
     /// already produced.
     fn dispatch_connection(&self, wrapper: &mut impl Wrapper) {
         use std::sync::atomic::Ordering;
-        if self.shared.take_connection_lost() {
-            self.connected.store(false, Ordering::Release);
-        }
+        let went = self.shared.take_connection_lost();
+        let came_back = self.shared.take_connection_restored();
         // A recovered session is connected again, and `close_notified` has to
         // come back with it: left latched, the next loss would pass without
         // firing `connection_closed` at all.
-        if self.shared.take_connection_restored() {
+        if came_back {
             self.connected.store(true, Ordering::Release);
             self.close_notified.store(false, Ordering::Release);
+            // 1102 rather than 1101: the reconnect re-establishes the
+            // subscriptions, so nothing the caller held is lost.
+            wrapper.error(-1, 1102, "Connectivity between client and server has been restored - data maintained", "");
         }
-        if !self.connected.load(Ordering::Acquire)
+        if went {
+            self.connected.store(false, Ordering::Release);
+            // A loss the engine is still working to recover is said under
+            // 1100, as the other surface says it and as this surface's own
+            // contract states; `connection_closed` answered it instead, and a
+            // program that stands down on that stood down on an outage the
+            // engine recovered from. A stop the caller asked for says nothing
+            // here: the reference client answers `disconnect()` with
+            // `connection_closed` alone.
+            if !self.shared.connection_lost_by_design() && !self.stopped_by_caller.load(Ordering::Acquire) {
+                wrapper.error(-1, 1100, "Connectivity between client and server has been lost", "");
+            }
+        }
+        // The session over — ended by the caller, or given up on — is what
+        // `connection_closed` says, once.
+        let over = self.shared.reference.session_over().is_some()
+            || self.shared.connection_lost_by_design()
+            || self.stopped_by_caller.load(Ordering::Acquire);
+        if over
+            && !self.connected.load(Ordering::Acquire)
             && !self.close_notified.swap(true, Ordering::AcqRel)
         {
             wrapper.connection_closed();

@@ -273,12 +273,14 @@ fn is_connection_notice(code: i64) -> bool {
 struct LeaveTheCloseNoticeForTheCaller<'a> {
     client: &'a EClient,
     told_before: bool,
+    connected_before: bool,
 }
 
 impl<'a> LeaveTheCloseNoticeForTheCaller<'a> {
     fn new(client: &'a EClient) -> Self {
         let told_before = client.close_notified.load(std::sync::atomic::Ordering::Acquire);
-        Self { client, told_before }
+        let connected_before = client.connected.load(std::sync::atomic::Ordering::Acquire);
+        Self { client, told_before, connected_before }
     }
 }
 
@@ -286,6 +288,16 @@ impl Drop for LeaveTheCloseNoticeForTheCaller<'_> {
     fn drop(&mut self) {
         if !self.told_before {
             self.client.close_notified.store(false, std::sync::atomic::Ordering::Release);
+        }
+        // A loss said under 1100 during the wait was said to the collector.
+        // Where no record of the caller's own was pumped beside it, the flag
+        // is raised again so the caller's next pass hears it; where one was,
+        // the caller's record already holds it.
+        let went_during = self.connected_before
+            && !self.client.connected.load(std::sync::atomic::Ordering::Acquire);
+        let heard_by_the_caller = self.client.kept.lock().map(|k| k.is_some()).unwrap_or(false);
+        if went_during && !heard_by_the_caller {
+            self.client.shared.set_connection_lost();
         }
     }
 }
