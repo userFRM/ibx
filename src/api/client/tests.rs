@@ -9210,6 +9210,50 @@ fn a_fill_on_a_brackets_leg_is_filed_under_the_client_the_venue_names() {
     assert_eq!(w.0, [7], "the client the venue names, not the zero the leg's record carries");
 }
 
+/// A leg replaced with a bare order keeps its parent, its group and its type
+/// in the record, as the wire keeps them, and a caller stating a client keeps
+/// that client.
+///
+/// The restatement wrote the caller's object over the record wholesale, so a
+/// leg replaced with a fresh order read as detached and ungrouped for the life
+/// of the order while the venue held it linked and grouped, and a caller who
+/// stated a client on the replace had the record's zero written over it.
+#[test]
+fn a_leg_replaced_with_a_bare_order_keeps_its_links_in_the_record() {
+    let (client, rx, _shared) = test_client();
+    let [parent, tp, _] = client.place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 90.0).unwrap();
+    while rx.try_recv().is_ok() {}
+    let bare = Order {
+        action: "SELL".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 111.0, tif: "GTC".into(), transmit: true, client_id: 5, ..Default::default()
+    };
+    client.place_order(tp, &spy(), &bare).unwrap();
+    let record = client.core.tracked_order(tp as u64).expect("tracked");
+    assert_eq!(
+        (record.parent_id, record.oca_group.as_str(), record.oca_type, record.client_id),
+        (parent, format!("OCA_{parent}").as_str(), 3, 5),
+    );
+}
+
+/// The open-order read names the client the venue names where the record
+/// names none, as the fill does, or two callbacks about one leg named two
+/// clients.
+#[test]
+fn the_open_order_read_names_the_client_the_venue_names_where_the_record_names_none() {
+    let (client, rx, shared) = test_client();
+    let [_, tp, _] = client.place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 90.0).unwrap();
+    while rx.try_recv().is_ok() {}
+    shared.orders.push_order_info(tp as u64, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: Order { order_id: tp, client_id: 7, ..Default::default() },
+        order_state: crate::types::model::OrderState { status: "Submitted".into(), ..Default::default() },
+        last_exec: Default::default(),
+    });
+    let named = client.core.collect_open_orders(&shared).into_iter()
+        .find(|(id, _)| *id == tp as u64).map(|(_, o)| o.order.client_id);
+    assert_eq!(named, Some(7));
+}
+
 /// `SCHEDULE` is a series of its own on the reference client's historical
 /// request, and the other surface serves it there; this one refused it as a
 /// bar type it could not send, while carrying a call of its own for it.

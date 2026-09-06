@@ -2758,12 +2758,26 @@ impl ClientCore {
                 }
                 tracked.remaining = (order.total_quantity - tracked.filled).max(0.0);
                 tracked.contract = contract;
-                // The client the order went out under is the order's, not the
-                // caller's object's: a replace states terms, and for an order
-                // the venue replayed the caller's object states client zero.
-                let placed_by = tracked.order.client_id;
+                // What the wire keeps across a replace, kept here too. The
+                // engine restates the parent link, the group and its type from
+                // the record of the placement whatever the replace states, so
+                // a caller's empty value there does not detach the order. The
+                // client the order went out under is the record's where the
+                // record names one — for an order the venue replayed the
+                // caller's object states client zero — and the caller's where
+                // it does not.
+                let kept = (tracked.order.client_id, tracked.order.parent_id, tracked.order.oca_group.clone(), tracked.order.oca_type);
                 tracked.order = order;
-                tracked.order.client_id = placed_by;
+                if kept.0 != 0 {
+                    tracked.order.client_id = kept.0;
+                }
+                if kept.1 != 0 {
+                    tracked.order.parent_id = kept.1;
+                }
+                if !kept.2.is_empty() {
+                    tracked.order.oca_group = kept.2;
+                    tracked.order.oca_type = kept.3;
+                }
             }
             None => {
                 // A caller replacing an order the venue replayed at connect:
@@ -3023,6 +3037,12 @@ impl ClientCore {
                     }
                     if o.order.perm_id == 0 {
                         o.order.perm_id = info.order.perm_id;
+                    }
+                    // A record naming no client defers to the venue's, as the
+                    // fill's does, or the two callbacks about one order named
+                    // two clients.
+                    if o.order.client_id == 0 {
+                        o.order.client_id = info.order.client_id;
                     }
                 }
             }
