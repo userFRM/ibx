@@ -9231,8 +9231,76 @@ fn a_leg_replaced_with_a_bare_order_keeps_its_links_in_the_record() {
     let record = client.core.tracked_order(tp as u64).expect("tracked");
     assert_eq!(
         (record.parent_id, record.oca_group.as_str(), record.oca_type, record.client_id),
-        (parent, format!("OCA_{parent}").as_str(), 3, 5),
+        (parent, format!("OCA_{parent}").as_str(), 3, 0),
+        "the links the wire keeps, and the client the placement recorded",
     );
+}
+
+/// A replace stating a parent or a group the placement did not records
+/// neither: the replace carries neither to the venue, so the order is as
+/// unlinked as it was placed, and the record says so.
+#[test]
+fn a_replace_stating_links_the_placement_did_not_records_none() {
+    let (client, rx, _shared) = test_client();
+    let plain = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), transmit: true, ..Default::default()
+    };
+    client.place_order(9305, &spy(), &plain).unwrap();
+    while rx.try_recv().is_ok() {}
+    let linked = Order { lmt_price: 101.0, parent_id: 42, oca_group: "G1".into(), oca_type: 2, ..plain };
+    client.place_order(9305, &spy(), &linked).unwrap();
+    let record = client.core.tracked_order(9305).expect("tracked");
+    assert_eq!((record.parent_id, record.oca_group.as_str(), record.oca_type), (0, "", 0));
+}
+
+/// A change of type on an order with a parent or a group is refused.
+///
+/// The replace states the links only where it restates the type the order
+/// was placed under; a change of type goes out without them, and the venue
+/// reads their absence as their removal — measured, a leg replaced with no
+/// group and no parent left its bracket. A plain order changes type as before.
+#[test]
+fn a_change_of_type_on_a_linked_order_is_refused() {
+    let (client, rx, _shared) = test_client();
+    let [_, tp, _] = client.place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 90.0).unwrap();
+    while rx.try_recv().is_ok() {}
+    let as_stop = Order {
+        action: "SELL".into(), total_quantity: 1.0, order_type: "STP".into(),
+        aux_price: 109.0, tif: "GTC".into(), transmit: true, ..Default::default()
+    };
+    let refused = client.place_order(tp, &spy(), &as_stop);
+    assert!(refused.is_err_and(|why| why.message.contains("change type")), "a linked leg keeps its type");
+    assert!(rx.try_recv().is_err(), "and nothing went to the engine for it");
+
+    let plain = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), transmit: true, ..Default::default()
+    };
+    client.place_order(9306, &spy(), &plain).unwrap();
+    while rx.try_recv().is_ok() {}
+    let stop = Order { order_type: "STP".into(), lmt_price: 0.0, aux_price: 99.0, ..plain };
+    assert!(client.place_order(9306, &spy(), &stop).is_ok(), "an unlinked order changes type as before");
+}
+
+/// The open-order read names the venue's client without writing it into the
+/// record, or what a later replace kept depended on whether a read had
+/// happened in between.
+#[test]
+fn the_open_order_read_leaves_the_record_alone() {
+    let (client, rx, shared) = test_client();
+    let [_, tp, _] = client.place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 90.0).unwrap();
+    while rx.try_recv().is_ok() {}
+    shared.orders.push_order_info(tp as u64, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: Order { order_id: tp, client_id: 7, ..Default::default() },
+        order_state: crate::types::model::OrderState { status: "Submitted".into(), ..Default::default() },
+        last_exec: Default::default(),
+    });
+    let named = client.core.collect_open_orders(&shared).into_iter()
+        .find(|(id, _)| *id == tp as u64).map(|(_, o)| o.order.client_id);
+    assert_eq!(named, Some(7), "the read names the venue's client");
+    assert_eq!(client.core.tracked_order(tp as u64).map(|o| o.client_id), Some(0), "and the record still names none");
 }
 
 /// The open-order read names the client the venue names where the record

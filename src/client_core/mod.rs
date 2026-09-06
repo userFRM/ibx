@@ -2698,6 +2698,21 @@ impl ClientCore {
                 tracked.order_type,
             )));
         }
+        // A change of type on an order with a parent or a group. The replace
+        // states the links only where it restates the type the order was
+        // placed under; a change of type goes out without them, and the venue
+        // reads their absence as their removal — measured, a leg replaced with
+        // no group and no parent left its bracket. Refused rather than sent.
+        if !restating_itself
+            && let Some(t) = tracked.as_ref()
+            && (t.parent_id != 0 || !t.oca_group.is_empty())
+        {
+            return Some(Refusal::stated(CHANGE_CANNOT_CHANGE_TYPE, format!(
+                "a {} order with a parent or a group cannot change type: the replace carries \
+                 neither across a change of type, and the venue would work the order detached",
+                t.order_type,
+            )));
+        }
         let why = tracked
             .and_then(|tracked| Self::replace_cannot_restate(&tracked, restating_itself))
             .or_else(|| Self::replace_cannot_restate(incoming, restating_itself))?;
@@ -2758,26 +2773,28 @@ impl ClientCore {
                 }
                 tracked.remaining = (order.total_quantity - tracked.filled).max(0.0);
                 tracked.contract = contract;
-                // What the wire keeps across a replace, kept here too. The
-                // engine restates the parent link, the group and its type from
-                // the record of the placement whatever the replace states, so
-                // a caller's empty value there does not detach the order. The
-                // client the order went out under is the record's where the
-                // record names one — for an order the venue replayed the
-                // caller's object states client zero — and the caller's where
-                // it does not.
+                // What the wire keeps across a replace, kept here too, in both
+                // directions. The engine restates the parent link, the group
+                // and its type from the record of the placement whatever the
+                // replace states, so a caller's empty value there does not
+                // detach the order and a caller's new one does not attach it.
+                // The client is the record's: a replace states no client, and
+                // where the record names none the venue's answer is read in
+                // its place wherever the client is reported.
                 let kept = (tracked.order.client_id, tracked.order.parent_id, tracked.order.oca_group.clone(), tracked.order.oca_type);
+                if (order.parent_id != 0 && order.parent_id != kept.1)
+                    || (!order.oca_group.is_empty() && order.oca_group != kept.2)
+                {
+                    log::warn!(
+                        "order {order_id}: the replace states a parent or a group the order was not \
+                         placed with; a replace carries neither, so the order stays as it was placed",
+                    );
+                }
                 tracked.order = order;
-                if kept.0 != 0 {
-                    tracked.order.client_id = kept.0;
-                }
-                if kept.1 != 0 {
-                    tracked.order.parent_id = kept.1;
-                }
-                if !kept.2.is_empty() {
-                    tracked.order.oca_group = kept.2;
-                    tracked.order.oca_type = kept.3;
-                }
+                tracked.order.client_id = kept.0;
+                tracked.order.parent_id = kept.1;
+                tracked.order.oca_group = kept.2;
+                tracked.order.oca_type = kept.3;
             }
             None => {
                 // A caller replacing an order the venue replayed at connect:
@@ -3038,12 +3055,6 @@ impl ClientCore {
                     if o.order.perm_id == 0 {
                         o.order.perm_id = info.order.perm_id;
                     }
-                    // A record naming no client defers to the venue's, as the
-                    // fill's does, or the two callbacks about one order named
-                    // two clients.
-                    if o.order.client_id == 0 {
-                        o.order.client_id = info.order.client_id;
-                    }
                 }
             }
         }
@@ -3063,6 +3074,13 @@ impl ClientCore {
         // Local tracked orders (non-terminal, or genuinely-Inactive and
         // still reactivatable —), enriched from secdef cache
         {
+            // The client the venue names, read into the answer where the
+            // record names none, as the fill's is — and into the answer
+            // alone: written into the record, what a later replace kept
+            // depended on whether a read had happened in between.
+            let named_client: HashMap<u64, i32> = shared_orders.iter()
+                .map(|(oid, info)| (*oid, info.order.client_id))
+                .collect();
             let orders = self.open_orders.lock().unwrap();
             for (&oid, o) in orders.iter() {
                 // A margin preview states what an order would cost; nothing
@@ -3078,9 +3096,13 @@ impl ClientCore {
                     } else {
                         o.contract.clone()
                     };
+                    let mut order = o.order.clone();
+                    if order.client_id == 0 {
+                        order.client_id = named_client.get(&oid).copied().unwrap_or(0);
+                    }
                     result.push((oid, TrackedOrder {
                         contract,
-                        order: o.order.clone(),
+                        order,
                         status: o.status.clone(),
                         filled: o.filled,
                         remaining: o.remaining,
