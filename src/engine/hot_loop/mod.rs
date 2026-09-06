@@ -994,9 +994,26 @@ impl HotLoop {
         let historical_was_up = self.hmds_conn.is_some();
         self.hmds.poll(&mut self.hmds_conn, &self.shared, &self.event_tx, &mut self.hb);
         if historical_was_up && self.hmds_conn.is_none() {
-            self.ccp.pending_scanner_enrichment.clear();
-            self.hmds.scanner_batches.clear();
+            self.abandon_parked_scans();
         }
+    }
+
+    /// Drop the scan rows parked behind their contract lookups. The scans
+    /// they belong to are failed when the historical connection is given
+    /// up, so releasing their rows on the sweep would hand a caller an
+    /// answer to a scan it was just told had failed.
+    fn abandon_parked_scans(&mut self) {
+        self.ccp.pending_scanner_enrichment.clear();
+        self.hmds.scanner_batches.clear();
+    }
+
+    /// Give up the historical connection and drop what was parked behind
+    /// it. Every path that abandons this connection outside `poll_historical`
+    /// routes through here, so the parked scans go with it however the drop
+    /// is seen.
+    fn give_up_historical(&mut self) {
+        self.hmds.disconnect(&mut self.hmds_conn, &self.shared, &self.event_tx);
+        self.abandon_parked_scans();
     }
 
     fn poll_control_commands(&mut self) {
@@ -2076,7 +2093,7 @@ impl HotLoop {
             if since_recv > HeartbeatState::farm_test_after(stated) {
                 if since_recv > HeartbeatState::farm_dead_after(stated) {
                     log::error!("HMDS liveness timeout ({since_recv}s silent) — connection lost");
-                    self.hmds.disconnect(&mut self.hmds_conn, &self.shared, &self.event_tx);
+                    self.give_up_historical();
                 } else if self.hb.pending_hmds_test.is_none() {
                     let test_id = self.hb.next_test_id();
                     let _ = conn.send_fix(&[
@@ -2268,7 +2285,7 @@ impl HotLoop {
             && self.hmds_conn.as_ref().is_some_and(|c| c.write_failed() || c.read_failed())
         {
             log::error!("HMDS transport can no longer carry traffic — giving it up");
-            self.hmds.disconnect(&mut self.hmds_conn, &self.shared, &self.event_tx);
+            self.give_up_historical();
         }
         // The calendar's connection, on the same terms as the other three. Its
         // read path gives it up when the socket goes, but a write that fails
@@ -2359,10 +2376,19 @@ impl HotLoop {
         if self.pending_farm_reconnect.is_none() && self.pending_ccp_reconnect.is_none() {
             return;
         }
-        if !self.budget.out_of_time(&self.reconnect_cfg, now) {
+        // Each transport spends its own recovery clock: the trading budget
+        // for the trading connection, the farm's for the farm. Measured
+        // against the trading budget, a farm-only recovery was ended by a
+        // deadline the farm had not reached — or, with the trading clock
+        // never started, bounded by no deadline at all.
+        let (which, budget) = if self.pending_ccp_reconnect.is_some() {
+            ("ccp", &self.budget)
+        } else {
+            ("farm", &self.farm_budget)
+        };
+        if !budget.out_of_time(&self.reconnect_cfg, now) {
             return;
         }
-        let which = if self.pending_ccp_reconnect.is_some() { "ccp" } else { "farm" };
         self.report_recovery_exhausted(which);
     }
 
@@ -7145,4 +7171,86 @@ mod withdrawal_tests {
         assert_eq!(errors.len(), 1, "the caller is told: {errors:?}");
         assert_eq!((errors[0].0, errors[0].1), (9, 365), "under the number that names it");
     }
+    /// A farm-only recovery is bounded by the farm's own clock, not the
+    /// trading connection's. Measured against the trading budget, a farm dial
+    /// with no trading outage behind it was bounded by no deadline at all.
+    #[test]
+    fn a_farm_only_recovery_is_bounded_by_the_farms_own_clock() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared, None, None);
+        hl.set_reconnect_config(
+            crate::reliability::ReconnectConfig::default().with_max_elapsed(std::time::Duration::from_secs(30)),
+        );
+        let t = Instant::now();
+        hl.farm.disconnected = true;
+        hl.farm_budget.record_attempt(t);
+        let (worker, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Connection>>(1);
+        drop(worker);
+        hl.pending_farm_reconnect = Some(rx);
+
+        hl.abandon_recovery_past_its_deadline(t + std::time::Duration::from_secs(29));
+        assert!(hl.farm_halted.is_none(), "not past the farm's own deadline yet");
+        hl.abandon_recovery_past_its_deadline(t + std::time::Duration::from_secs(31));
+        assert!(hl.farm_halted.is_some(), "the farm's own deadline ends its recovery");
+    }
+
+    /// A trading connection that recovered and spent its clock does not end a
+    /// farm recovery that started later and has not reached its own deadline.
+    #[test]
+    fn a_spent_trading_clock_does_not_end_a_fresh_farm_recovery() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared, None, None);
+        hl.set_reconnect_config(
+            crate::reliability::ReconnectConfig::default().with_max_elapsed(std::time::Duration::from_secs(30)),
+        );
+        let t = Instant::now();
+        // The trading connection recovered earlier and spent its clock.
+        hl.budget.record_attempt(t);
+        // The farm drops later and starts its own attempt.
+        hl.farm.disconnected = true;
+        hl.farm_budget.record_attempt(t + std::time::Duration::from_secs(20));
+        let (worker, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Connection>>(1);
+        drop(worker);
+        hl.pending_farm_reconnect = Some(rx);
+
+        // Past the trading clock's 30s, not the farm's.
+        hl.abandon_recovery_past_its_deadline(t + std::time::Duration::from_secs(31));
+        assert!(
+            hl.farm_halted.is_none(),
+            "the farm's recovery is not ended by the trading connection's spent clock",
+        );
+    }
+
+    /// A historical liveness timeout takes the parked scan rows with it, as a
+    /// drop seen by the poll does. The scans were failed when the connection
+    /// was given up; releasing their rows on the sweep would answer a scan the
+    /// caller was just told had failed.
+    #[test]
+    fn a_historical_liveness_timeout_takes_the_parked_scan_rows() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared, None, None);
+        let (conn, peer) = crate::protocol::connection::Connection::for_test();
+        drop(peer);
+        hl.hmds_conn = Some(conn);
+        // Silent well past the dead-after threshold, and not a stall in this
+        // process (the check ran a moment ago).
+        hl.hb.last_liveness_check = Instant::now();
+        hl.hb.last_hmds_recv = Instant::now() - std::time::Duration::from_secs(600);
+        hl.ccp.pending_scanner_enrichment.push(crate::engine::hot_loop::ccp::PendingScannerEnrichment {
+            api_req_id: 9,
+            result: crate::control::scanner::ScannerResult {
+                con_ids: Vec::new(), entries: Vec::new(), scan_time: String::new(), error_text: String::new(),
+            },
+            awaiting: Default::default(),
+            deadline: Instant::now() + std::time::Duration::from_secs(60),
+        });
+
+        hl.check_heartbeats();
+        assert!(hl.hmds_conn.is_none(), "the silent connection is given up");
+        assert!(
+            hl.ccp.pending_scanner_enrichment.is_empty(),
+            "and the parked rows go with it, not on to the sweep",
+        );
+    }
+
 }

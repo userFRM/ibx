@@ -66,19 +66,24 @@ impl EClient {
             return;
         }
         let _turn = self.asking.lock().unwrap_or_else(|e| e.into_inner());
-        self.read_the_session(wrapper);
+        self.read_the_session(wrapper, true);
     }
 
     /// The same read, for a caller that already holds the turn.
     ///
     /// The turn is not re-entrant, and a question that took it before sending
     /// pumps this loop while it waits.
-    pub(crate) fn read_the_session(&self, wrapper: &mut impl Wrapper) {
+    /// `durable` is false for the pump an answering call runs into a
+    /// collector with no session record behind it: the venue-data notices
+    /// are left queued for the caller's own loop rather than drained into a
+    /// collector that drops them and the quote baseline forgotten with
+    /// nothing said.
+    pub(crate) fn read_the_session(&self, wrapper: &mut impl Wrapper, durable: bool) {
         // Said for the length of the read, so a question asked from inside one
         // of the callbacks below is told why it cannot be answered rather than
         // left waiting on this thread's own turn.
         let _reading = super::Reading::begin(self.which_session());
-        self.dispatch_venue_data(wrapper);
+        self.dispatch_venue_data(wrapper, durable);
         self.dispatch_positions(wrapper);
         self.dispatch_orders(wrapper);
         self.dispatch_quotes(wrapper);
@@ -143,7 +148,14 @@ impl EClient {
     /// quotes at the drop, and diffed against what the caller had heard those
     /// noughts went out as prices; diffed against nothing, only what the venue
     /// restates goes out.
-    fn dispatch_venue_data(&self, wrapper: &mut impl Wrapper) {
+    fn dispatch_venue_data(&self, wrapper: &mut impl Wrapper, durable: bool) {
+        // No session record behind the collector: leave the notices queued
+        // so the caller's own loop delivers them, rather than drain them
+        // into a collector that drops them and forget the quote baseline
+        // with nothing said.
+        if !durable {
+            return;
+        }
         for (which, up) in self.shared.drain_venue_data_notices() {
             if matches!(which, crate::bridge::VenueDataConnection::MarketData) && !up {
                 self.core.forget_last_quotes();

@@ -320,9 +320,9 @@ impl EClient {
             Some(record) => {
                 let mut held = record.lock().unwrap_or_else(|e| e.into_inner());
                 let mut both = crate::api::wrapper::Tee { asked: collector, kept: &mut *held };
-                self.read_the_session(&mut both);
+                self.read_the_session(&mut both, true);
             }
-            None => self.read_the_session(collector),
+            None => self.read_the_session(collector, false),
         }
     }
 

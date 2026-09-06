@@ -1695,6 +1695,34 @@ fn a_refusal_against_no_request_is_not_reported_against_request_zero() {
     );
 }
 
+/// An answering call does not swallow a venue-data notice.
+///
+/// The pump an answering call runs reads the dispatch into a collector of its
+/// own; a bare client keeps no session record behind it, so a notice drained
+/// there reaches nothing and the caller's own loop never sees it, while the
+/// quote baseline is forgotten with nothing said.
+#[test]
+fn an_answering_call_does_not_swallow_a_venue_data_notice() {
+    let (client, _rx, shared) = test_client();
+    shared.push_venue_data_notice(crate::bridge::VenueDataConnection::MarketData, false);
+
+    // The pump an answering call runs, into a collector with no session record.
+    let mut collector = RecordingWrapper::default();
+    client.pump_for_ask(&mut collector);
+    assert!(
+        !collector.events.iter().any(|e| e.starts_with("error:-1:2103:")),
+        "the notice went to the ask collector and is gone: {:?}", collector.events,
+    );
+
+    // The caller's own loop still hears it.
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:-1:2103:")),
+        "the caller was never told the market-data connection broke: {:?}", w.events,
+    );
+}
+
 /// A session that goes away while a question is being answered still tells the
 /// caller so.
 ///
