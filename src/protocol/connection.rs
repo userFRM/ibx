@@ -295,6 +295,12 @@ impl Connection {
         self.write_failed
     }
 
+    /// Mark the write side failed, for tests that exercise a refused write.
+    #[cfg(test)]
+    pub(crate) fn fail_writes(&mut self) {
+        self.write_failed = true;
+    }
+
     /// Whether a frame failed to verify, which finishes the connection for
     /// reading.
     ///

@@ -1341,7 +1341,6 @@ impl FarmState {
         req_id: u32,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
-        shared: &SharedState,
     ) {
         self.news_subscriptions.push((instrument, req_id, providers.to_string(), con_id, sec_type.to_string()));
         // Filed before it is sent: the venue numbers a generic tick apart from
@@ -1371,17 +1370,14 @@ impl FarmState {
         hb.last_farm_sent = Instant::now();
         match sent {
             Ok(()) => log::info!("Sent news subscribe: con_id={con_id} req_id={req_id} providers={providers}"),
-            // Not live. Recorded as sent, a write the socket refused left the
-            // caller reading a subscription the venue never received, with no
-            // headline until the next rebuild asked again.
+            // The write failing means the socket is going: the write-dead
+            // sweep gives the farm up and its 2103 tells the caller the feed
+            // is broken, and the reconnect rebuild re-sends this from
+            // `news_subscriptions`. So the entry is left in place — not taken
+            // out of the one list that re-asks — and not refused under an
+            // internal request id the caller never issued.
             Err(e) => {
                 log::warn!("news subscribe did not go out: con_id={con_id} req_id={req_id}: {e}");
-                self.news_subscriptions.retain(|(_, rid, ..)| *rid != req_id);
-                self.forget_news(req_id, instrument);
-                shared.reference.push_historical_error(
-                    req_id, crate::error_codes::Refusal::NOT_CONNECTED,
-                    format!("the news subscription could not be sent: {e}"),
-                );
             }
         }
     }
@@ -2310,7 +2306,7 @@ impl FarmState {
         // part of what the venue pushes back. Left alone they went quiet for
         // good, with the connection reporting healthy the whole time.
         for (instrument, req_id, providers, con_id, sec_type) in std::mem::take(&mut self.news_subscriptions) {
-            self.send_news_subscribe(con_id, instrument, &sec_type, &providers, req_id, farm_conn, hb, shared);
+            self.send_news_subscribe(con_id, instrument, &sec_type, &providers, req_id, farm_conn, hb);
         }
         // Queued rather than sent here. The first burst goes out on this pass
         // and the rest on the passes that follow, so the pacing costs the

@@ -98,11 +98,33 @@ mod news_tests {
         let mut context = Context::new();
         let shared = SharedState::new();
         let instrument = context.market.register(756733);
-        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new(), &crate::bridge::SharedState::new());
+        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new());
 
         farm.handle_ticker_setup(b"35=L\x01756733,0.01,44011", &mut context, &shared);
         farm.handle_generic_tick(&framed_news(44011, &one_article()), &mut context, &shared, &None);
         assert_eq!(shared.market.drain_tick_news().len(), 1, "the headline reaches the caller");
+    }
+
+    /// A news subscribe whose write the socket refused keeps its entry for the
+    /// reconnect rebuild, rather than dropping it and refusing under an
+    /// internal request id the caller never issued. The write failing means the
+    /// socket is going; the drop's 2103 tells the caller and the rebuild
+    /// re-sends from `news_subscriptions`.
+    #[test]
+    fn a_news_subscribe_write_failure_keeps_the_entry_for_the_rebuild() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let instrument = context.market.register(756733);
+        let (mut conn, _peer) = Connection::for_test();
+        conn.fail_writes();
+        let mut conn = Some(conn);
+
+        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut conn, &mut HeartbeatState::new());
+
+        assert_eq!(
+            farm.news_subscriptions.len(), 1,
+            "the subscription is kept for the reconnect rebuild when the write fails",
+        );
     }
 
     /// Forgotten, a news subscription's tag goes with it, and the request
@@ -113,7 +135,7 @@ mod news_tests {
         let mut context = Context::new();
         let shared = SharedState::new();
         let instrument = context.market.register(756733);
-        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new(), &crate::bridge::SharedState::new());
+        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new());
         farm.handle_subscription_ack(b"35=Q\x0133082,7,0.01,0,3", &mut context, &shared);
         farm.forget_news(7, instrument);
 

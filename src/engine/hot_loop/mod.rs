@@ -1297,7 +1297,7 @@ impl HotLoop {
                         // Recorded where the acknowledgement arrives, or the
                         // tag is never filed and no headline is delivered.
                         self.farm.send_news_subscribe(
-                            con_id, id, &sec_type, &providers, req_id, &mut self.farm_conn, &mut self.hb, &self.shared,
+                            con_id, id, &sec_type, &providers, req_id, &mut self.farm_conn, &mut self.hb,
                         );
                     }
                 }
@@ -2702,25 +2702,11 @@ impl HotLoop {
                         + retry::delay_for(reason, reconnect_backoff(self.farm_reconnect_attempt)),
                 );
                 self.pending_farm_reconnect = None;
-                // Notify once after three straight failures; retries continue
-                // on the backoff ladder — the old 3-attempt hard cap gave up
-                // sooner than the gateway would.
-                //
-                // On the count reaching three or passing it, and only while no
-                // loss stands. The count is not reset by a recovery — it is
-                // what the backoff ladder climbs, and resetting it on a venue
-                // that flaps would restart the ladder every time — so a second
-                // outage within the stable window continued from four and the
-                // test for exactly three was never true again. Both surfaces
-                // read connected for the whole of it. `loss_announced` is the
-                // per-outage latch, cleared only once both transports are
-                // back, so this still speaks once per outage.
-                if self.farm_reconnect_attempt >= 3 && !self.loss_announced {
-                    log::error!("Farm auto-reconnect failed 3 times — notifying (retries continue)");
-                    self.loss_announced = true;
-                    self.shared.set_connection_lost();
-                    emit(&self.event_tx, Event::Disconnected);
-                }
+                // The drop already told the caller the market-data feed is
+                // broken, under 2103. A retry that also fails is that feed's
+                // own connection, not the trading socket 1100 speaks for, so it
+                // is not raised as a session loss; retries continue on the
+                // backoff ladder.
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -2730,19 +2716,13 @@ impl HotLoop {
                 // other: one the machine had no thread to give, or one that
                 // stopped before it sent. Left with no schedule the next pass
                 // dials at once and every pass after it, and left out of the
-                // notice below a caller is never told the connection is gone
-                // however often this repeats — the session reads as connected
-                // on both surfaces for the whole of an outage nothing is
-                // getting out of.
                 self.farm_next_attempt_at = Some(
                     Instant::now() + reconnect_backoff(self.farm_reconnect_attempt),
                 );
-                if self.farm_reconnect_attempt >= 3 && !self.loss_announced {
-                    log::error!("Farm auto-reconnect failed 3 times — notifying (retries continue)");
-                    self.loss_announced = true;
-                    self.shared.set_connection_lost();
-                    emit(&self.event_tx, Event::Disconnected);
-                }
+                // A worker that never answered is a failed attempt of the
+                // market-data feed's own connection, said at the drop under
+                // 2103. It is not the trading socket 1100 speaks for, so it is
+                // not raised as a session loss; retries continue on the ladder.
             }
         }
     }
@@ -5037,6 +5017,39 @@ mod tests {
         assert_eq!(losses, 1, "one loss, and one notice of it");
     }
 
+    /// The market-data feed's own reconnect failing is not a session loss.
+    ///
+    /// The drop already told the caller the feed is broken under 2103. A retry
+    /// that also fails is that feed's own connection, not the trading socket
+    /// 1100 speaks for, and raising a session 1100 for it left a caller reading
+    /// a healthy trading session as gone, with no 1102 ever to follow.
+    #[test]
+    fn a_farm_only_reconnect_failure_is_not_a_session_loss() {
+        let shared = Arc::new(SharedState::new());
+        let (tx, heard) = std::sync::mpsc::sync_channel(64);
+        let mut hl = HotLoop::new(
+            shared.clone(), Some(EventSink::new(tx, Default::default())), None,
+        );
+        // The feed alone is down, its retries failing; the trading connection
+        // never dropped, so no session loss stands.
+        hl.farm.disconnected = true;
+        hl.farm_reconnect_attempt = 3;
+        let (worker, rx) = std::sync::mpsc::sync_channel::<io::Result<Connection>>(1);
+        drop(worker);
+        hl.pending_farm_reconnect = Some(rx);
+
+        hl.poll_farm_reconnect();
+
+        assert!(
+            heard.try_recv().is_err(),
+            "the feed's own retry failing is not a session Disconnected",
+        );
+        assert!(
+            !shared.take_connection_lost(),
+            "and not a session 1100: it speaks for the trading socket alone",
+        );
+    }
+
     /// A reconnect worker that never answered is a spent attempt like any
     /// other.
     ///
@@ -5236,40 +5249,38 @@ mod tests {
         assert!(!shared.take_connection_restored(), "and reaches it once");
     }
 
-    /// A second outage is announced too, not only the first.
+    /// A second market-data-farm outage is announced too, not only the first.
     ///
-    /// The notice was sent when the attempt count reached exactly three. That
-    /// count is what the backoff ladder climbs and is not reset by a recovery
-    /// -- resetting it on a venue that flaps would restart the ladder every
-    /// time -- so a second outage inside the stable window continued from four
-    /// and the test was never true again. Both surfaces read connected for the
-    /// whole of the second outage, however long it lasted, and orders were
-    /// buffered behind a session the caller believed was up.
+    /// The drop tells the caller the feed is broken under 2103; a retry that
+    /// fails is that feed's own connection, not the trading socket 1100 speaks
+    /// for, so it is not raised as a session loss. Every drop announces, so a
+    /// second outage after a recovery reaches the caller as well.
     #[test]
     fn an_outage_after_a_recovery_is_announced_as_well() {
         let shared = Arc::new(SharedState::new());
         let mut hl = HotLoop::new(shared.clone(), None, None);
-        let refused = || io::Error::new(io::ErrorKind::ConnectionRefused, "no answer");
+        let mut context = Context::new();
+        let is_feed_broken =
+            |ns: &[(crate::bridge::VenueDataConnection, bool)]| {
+                ns.iter().any(|(w, up)| {
+                    matches!(w, crate::bridge::VenueDataConnection::MarketData) && !up
+                })
+            };
 
-        // The first outage, announced on the third straight failure.
-        hl.answer_farm_reconnect_for_test(3, Err(refused()));
-        hl.poll_farm_reconnect_for_test();
-        assert!(shared.take_connection_lost(), "the first outage is announced");
-        assert!(hl.loss_announced);
-
-        // It comes back, and the count is left where it is for the ladder.
-        hl.announce_reconnected();
-        assert!(shared.take_connection_restored(), "the recovery is announced");
-        assert!(!hl.loss_announced);
-
-        // It goes again before the count is old enough to reset, so the next
-        // failed dial is the fourth rather than the first.
-        hl.answer_farm_reconnect_for_test(4, Err(refused()));
-        hl.poll_farm_reconnect_for_test();
+        // The farm drops: 2103, and not a session 1100.
+        hl.farm.handle_disconnect(&mut hl.farm_conn, &mut context, &None, &shared);
+        let first = shared.drain_venue_data_notices();
+        assert!(is_feed_broken(&first), "the drop is announced under 2103: {first:?}");
         assert!(
-            shared.take_connection_lost(),
-            "the second outage reaches the caller too",
+            !shared.take_connection_lost(),
+            "the market-data feed going is not the trading session ending",
         );
+
+        // It comes back (its notice consumed), then drops again: announced
+        // again, not swallowed after the first.
+        hl.farm.handle_disconnect(&mut hl.farm_conn, &mut context, &None, &shared);
+        let second = shared.drain_venue_data_notices();
+        assert!(is_feed_broken(&second), "the second outage reaches the caller too: {second:?}");
     }
 
     /// The servers go down for maintenance most nights and come back on their
