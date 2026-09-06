@@ -953,7 +953,10 @@ impl ContractDetails {
             long_name: String::new(),
             last_trade_date: String::new(),
             multiplier: String::new(),
-            market_rule_id: 0,
+            // -1 for "the venue stated none", as `from_definition` records it;
+            // 0 is a real rule id, so a fresh details reading 0 was
+            // indistinguishable from one whose venue named rule 0.
+            market_rule_id: -1,
             market_rule_ids: String::new(),
             strike: 0.0,
             right: String::new(),

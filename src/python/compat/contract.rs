@@ -306,7 +306,9 @@ mod tests {
     fn contract_default_values() {
         // What the reference client leaves a fresh contract holding: nothing.
         // Defaulting to a US stock on SMART sends those terms beside an id that
-        // names something else.
+        // names something else. Strike stays 0.0 here rather than the
+        // reference's unset marker: a fresh contract is used as a request
+        // filter, and the unset marker there would match no strike at all.
         let c = Contract::default();
         assert_eq!(c.con_id, 0);
         assert_eq!(c.symbol, "");
