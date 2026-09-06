@@ -390,13 +390,15 @@ pub(crate) struct CcpState {
     /// ties a reply back to it, and the conId is held because the callback
     /// names the underlying the caller asked about.
     pub(crate) pending_option_params: Vec<(u32, String, i64, Instant)>,
-    /// HMAC signing key for XML-carrying CCP messages (selective signing).
-    pub(crate) ccp_sign_key: Vec<u8>,
-    /// HMAC signing IV — advances only for signed messages, independent of unsigned
-    /// ones.
-    pub(crate) ccp_sign_iv: std::sync::Mutex<Vec<u8>>,
     /// Secdef replies awaiting paired schedule reply (joined by tag 6256).
     pub(crate) pending_schedule_pair: Vec<PendingSchedulePair>,
+    /// Profit-and-loss subscriptions standing, by request number and account.
+    ///
+    /// The venue serves one on the connection that asked for it, so a rebuilt
+    /// connection is asked for each again, as it is for the account and the
+    /// positions. A subscription the caller withdrew is taken out of here and
+    /// not renewed.
+    pub(crate) pnl_subscriptions: Vec<(i64, String)>,
     /// Counter for internal schedule subscribe req IDs.
     pub(crate) next_schedule_sub_id: u32,
     /// Fan-out state for by-symbol secdef requests. Each entry tracks the
@@ -512,9 +514,8 @@ impl CcpState {
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
             pending_option_params: Vec::new(),
-            ccp_sign_key: Vec::new(),
-            ccp_sign_iv: std::sync::Mutex::new(Vec::new()),
             pending_schedule_pair: Vec::new(),
+            pnl_subscriptions: Vec::new(),
             next_schedule_sub_id: 1,
             pending_fanout: Vec::new(),
             details_delivered: std::collections::HashMap::new(),
@@ -1732,6 +1733,10 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
+        // Recorded whether or not the transport is up: a rebuilt connection
+        // asks for every standing subscription again.
+        self.pnl_subscriptions.retain(|(id, _)| *id != req_id);
+        self.pnl_subscriptions.push((req_id, account.to_string()));
         if let Some(conn) = ccp_conn.as_mut() {
             // The key names the request; the account rides tag 1 beside it, as
             // the protocol defines it and as the opening sequence in
@@ -1750,6 +1755,14 @@ impl CcpState {
             hb.last_ccp_sent = Instant::now();
             log::info!("Sent P&L subscribe: req_id={req_id} account={account}");
         }
+    }
+
+    /// Forget a profit-and-loss subscription, so a reconnect does not renew it.
+    ///
+    /// Nothing withdraws one at the venue on this wire; what stops is the
+    /// renewal, and the reporting once the session ends.
+    pub(crate) fn withdraw_pnl_subscription(&mut self, req_id: i64) {
+        self.pnl_subscriptions.retain(|(id, _)| *id != req_id);
     }
 
     /// Say goodbye before going.
@@ -2646,11 +2659,26 @@ impl CcpState {
                 (6040, "6"), (6036, "1"), (6095, account_id), (6529, &key),
             ]);
 
+            // Every profit-and-loss subscription standing, asked for again on
+            // this connection: the venue serves one on the connection that
+            // asked, and the marks a caller reads otherwise stop moving with
+            // nothing said.
+            for (req_id, account) in &self.pnl_subscriptions {
+                let pnl_key = format!("PLR.{req_id}");
+                let _ = conn.send_fix(&[
+                    (fix::TAG_MSG_TYPE, "U"), (fix::TAG_SENDING_TIME, &ts),
+                    (6040, "142"), (6529, &pnl_key), (1, account),
+                ]);
+            }
+
             // Resting open orders are pushed unsolicited by CCP as 35=8 with
             // 150=0/39=0 carrying originating clientId (6119) and orderId (6121),
             // terminated by 11='*' sentinel.
             hb.last_ccp_sent = Instant::now();
-            log::info!("CCP reconnected, sent account/position re-subscribe");
+            log::info!(
+                "CCP reconnected, sent account/position re-subscribe and {} P&L renewal(s)",
+                self.pnl_subscriptions.len(),
+            );
         }
 
     }

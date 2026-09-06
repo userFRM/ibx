@@ -6708,3 +6708,38 @@ fn an_execution_report_states_no_charge_so_the_order_states_none() {
     assert_eq!(state.min_commission_and_fees, f64::MAX);
     assert_eq!(state.max_commission_and_fees, f64::MAX);
 }
+
+/// A profit-and-loss subscription outlives the connection it was asked on.
+///
+/// The venue serves the subscription on the connection that asked for it,
+/// and a rebuilt connection has not been asked. The position and account
+/// requests were renewed on a reconnect; this one was not, so the marks a
+/// caller reads stopped moving with nothing said. A subscription the caller
+/// withdrew before the drop is not renewed.
+#[test]
+fn a_pnl_subscription_is_renewed_on_a_reconnect_unless_withdrawn() {
+    use std::io::Read;
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let (first, mut first_peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp_conn: Option<Connection> = Some(first);
+    ccp.send_pnl_subscribe(5, "DU1", &mut ccp_conn, &mut hb);
+    ccp.send_pnl_subscribe(6, "DU1", &mut ccp_conn, &mut hb);
+    let mut buf = [0u8; 8192];
+    let _ = first_peer.read(&mut buf);
+    ccp.withdraw_pnl_subscription(6);
+    ccp_conn = None;
+
+    let (second, mut second_peer) = crate::protocol::connection::Connection::for_test();
+    second_peer.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+    ccp.reconnect(second, &mut ccp_conn, &mut hb, "DU1", &shared);
+    let mut sent = Vec::new();
+    while let Ok(n) = second_peer.read(&mut buf) {
+        if n == 0 { break; }
+        sent.extend_from_slice(&buf[..n]);
+    }
+    let msg = String::from_utf8_lossy(&sent).replace('\u{1}', "|");
+    assert!(msg.contains("|6040=142|6529=PLR.5|1=DU1|"), "the standing subscription is asked for again: {msg}");
+    assert!(!msg.contains("PLR.6"), "and the withdrawn one is not: {msg}");
+}

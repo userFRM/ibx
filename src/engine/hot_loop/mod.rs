@@ -368,8 +368,6 @@ impl HotLoop {
         // the bound out spent it, and a global cancel issued straight after
         // waited nothing and said nothing.
         hot_loop.shared.orders.replay_is_pending();
-        hot_loop.ccp.ccp_sign_key = gateway.ccp_sign_key.clone();
-        hot_loop.ccp.ccp_sign_iv = std::sync::Mutex::new(gateway.ccp_sign_iv.clone());
         hot_loop.hmds_conn = hmds_conn;
         hot_loop.secdef_conn = secdef_conn;
         (hot_loop, tx)
@@ -1730,8 +1728,10 @@ impl HotLoop {
                 ControlCommand::CancelPnl { req_id } => {
                     // No withdrawal message for this subscription has been
                     // observed on the wire, so none is sent. Updates continue
-                    // until the session ends. Logged so the caller learns this
-                    // from the log rather than from continuing updates.
+                    // until the session ends, and a reconnect no longer renews
+                    // the subscription. Logged so the caller learns this from
+                    // the log rather than from continuing updates.
+                    self.ccp.withdraw_pnl_subscription(req_id);
                     log::warn!(
                         "P&L subscription {req_id} was asked to stop; this client sends no \
                          withdrawal for one, so the venue goes on reporting it",
