@@ -1106,6 +1106,20 @@ impl ClientCore {
         let withdrew = held.len() != before;
         if withdrew && placement {
             orders.remove(&order_id);
+            // What hangs from a withdrawn placement goes with it. A child left
+            // held under it left the hold later, sent as an exit naming a
+            // parent the venue was never given, with its record standing here
+            // as a working order's.
+            let mut parents = vec![order_id];
+            while let Some(parent) = parents.pop() {
+                let hangs_from = |h: &HeldOrder| h.parent_id == parent as i64 && h.places_the_order();
+                let children: Vec<u64> = held.iter().filter(|h| hangs_from(h)).map(|h| h.order_id).collect();
+                held.retain(|h| !hangs_from(h));
+                for child in children {
+                    orders.remove(&child);
+                    parents.push(child);
+                }
+            }
         } else if a_revision_went
             && let Some(tracked) = orders.get_mut(&order_id)
         {

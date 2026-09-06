@@ -238,6 +238,13 @@ pub fn unnamed_execution_fields(data: &[u8]) -> Vec<(u32, String)> {
     out
 }
 
+/// A price the venue stated, or nothing where it stated none.
+fn stated_price(val: Option<&String>) -> Option<crate::types::Price> {
+    val.and_then(|s| s.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
+        .map(crate::types::price_from_f64)
+}
+
 /// Answer a preview, and say whether it was the whole of this report.
 ///
 /// The venue prices an order it has not placed on the same message as one it
@@ -252,6 +259,18 @@ fn take_what_if(
     shared: &SharedState,
     event_tx: &Option<EventSink>,
 ) -> bool {
+        // A preview the venue refuses: no figures, the reject status and a
+        // reason. Answered as a refusal of the preview and nothing else —
+        // read through the ordinary report path it became a rejected order,
+        // a status said for an order never placed, and the number the caller
+        // previewed under read as spent.
+        if parsed.get(&39).map(String::as_str) == Some("8") && context.order(clord_id).is_some() {
+            let reason = stated_reason(parsed);
+            log::warn!("WhatIf refused: clord={clord_id} reason='{reason}'");
+            shared.orders.push_order_inactive(clord_id, ORDER_REJECTED_ERROR_CODE, reason);
+            context.retire_order(clord_id);
+            return true;
+        }
         const MARGIN_TAGS: [u32; 6] = [6826, 6827, 6828, 6092, 6093, 6094];
         let is_data_frame = MARGIN_TAGS.iter().any(|tag| {
             parsed.get(tag)
@@ -270,8 +289,10 @@ fn take_what_if(
                     maint_margin_after: parse_price_tag(parsed.get(&6093)),
                     equity_with_loan_after: parse_price_tag(parsed.get(&6094)),
                     commission: parse_price_tag(parsed.get(&6378)),
-                    min_commission: parse_price_tag(parsed.get(&6379)),
-                    max_commission: parse_price_tag(parsed.get(&6380)),
+                    // Stated or not: a bound the venue did not state is not a
+                    // bound of nought.
+                    min_commission: stated_price(parsed.get(&6379)),
+                    max_commission: stated_price(parsed.get(&6380)),
                     commission_currency: parsed.get(&6381).cloned().unwrap_or_default(),
                     // Tag 6361 carries the warning, not the order's text.
                     warning_text: parsed.get(&6361).cloned().unwrap_or_default(),

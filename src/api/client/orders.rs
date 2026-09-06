@@ -508,6 +508,11 @@ impl EClient {
         if perm_id == 0 {
             return Err("cancel_order_by_perm_id: perm_id must be non-zero".into());
         }
+        // Read after the venue has named the working set, as the withdrawal
+        // by number reads: the order this exists for is one carried over from
+        // a previous session, and that is the order absent until the naming
+        // lands.
+        let _ = self.shared.orders.wait_for_replay();
         let order_id = self.core.collect_open_orders(&self.shared)
             .into_iter()
             .find(|(_, tracked)| tracked.order.perm_id == perm_id)
@@ -797,14 +802,28 @@ impl EClient {
                 let entry = if let Some(info) = self.shared.orders.get_order_info(order.order_id) {
                     let mut state = info.order_state;
                     state.status = status_str.into();
-                    // Enrich contract with secdef cache at read time
-                    let contract = if info.contract.con_id != 0 {
-                        self.core.get_contract(info.contract.con_id, &self.shared)
-                            .unwrap_or(info.contract)
-                    } else {
-                        info.contract
+                    // The contract as the venue was told it where the order
+                    // was placed here — the record carries the legs and the
+                    // hedge the caller stated, which no definition of one
+                    // contract carries — and the venue's own, enriched from
+                    // the definition cache, where it was not.
+                    let placed_on = self.core.open_orders.lock().unwrap()
+                        .get(&order.order_id).map(|placed| placed.contract.clone());
+                    let contract = match placed_on {
+                        Some(contract) => contract,
+                        None if info.contract.con_id != 0 => self.core
+                            .get_contract(info.contract.con_id, &self.shared)
+                            .unwrap_or(info.contract),
+                        None => info.contract,
                     };
-                    (contract, info.order, state)
+                    // The client that placed it, where the venue names none:
+                    // the venue states no client on this wire, and the record
+                    // of a placement made here knows whose it was.
+                    let mut order = info.order;
+                    if order.client_id == 0 {
+                        order.client_id = self.core.placing_client(&self.shared, order.order_id as u64);
+                    }
+                    (contract, order, state)
                 } else {
                     (
                         Contract::default(),

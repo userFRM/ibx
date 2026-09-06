@@ -335,8 +335,8 @@ fn a_what_if_preview_reports_the_parent_the_child_was_given() {
         init_margin_before: 0, maint_margin_before: 0, equity_with_loan_before: 0,
         init_margin_after: 0, maint_margin_after: 0, equity_with_loan_after: 0,
         commission: 0,
-        min_commission: 0,
-        max_commission: 0,
+        min_commission: None,
+        max_commission: None,
         commission_currency: String::new(),
         warning_text: String::new(),
     });
@@ -5969,8 +5969,8 @@ fn process_msgs_dispatches_what_if() {
         maint_margin_after: 3000 * PRICE_SCALE,
         equity_with_loan_after: 0,
         commission: PRICE_SCALE,
-        min_commission: 0,
-        max_commission: 0,
+        min_commission: None,
+        max_commission: None,
         commission_currency: String::new(),
         warning_text: String::new(),
     });
@@ -5999,8 +5999,8 @@ fn process_msgs_what_if_emits_full_order_state() {
         maint_margin_after:    500 * PRICE_SCALE,
         equity_with_loan_after: 600 * PRICE_SCALE,
         commission:            7 * PRICE_SCALE,
-        min_commission: 0,
-        max_commission: 0,
+        min_commission: None,
+        max_commission: None,
         commission_currency: String::new(),
         warning_text: String::new(),
     });
@@ -6043,7 +6043,7 @@ fn a_preview_is_never_reported_as_a_working_order() {
         order_id: 6101, instrument: 0,
         init_margin_before: 0, maint_margin_before: 0, equity_with_loan_before: 0,
         init_margin_after: crate::types::PRICE_SCALE, maint_margin_after: 0,
-        equity_with_loan_after: 0, commission: 0, min_commission: 0, max_commission: 0,
+        equity_with_loan_after: 0, commission: 0, min_commission: None, max_commission: None,
         commission_currency: String::new(), warning_text: String::new(),
     });
     let mut w = RecordingWrapper::default();
@@ -9483,4 +9483,92 @@ fn a_dropped_data_connection_fabricates_no_ticks() {
     client.process_msgs(&mut w);
     let ticks: Vec<&String> = w.events.iter().filter(|e| e.starts_with("tick_price") || e.starts_with("tick_size") || e.starts_with("tick_generic")).collect();
     assert_eq!(ticks, [&"tick_price:1:1:150".to_string()], "only what the venue restated: {:?}", w.events);
+}
+
+/// A withdrawal by permanent id waits for the venue to name the working set,
+/// as a withdrawal by number does.
+///
+/// The order it exists for is one carried over from a previous session, and
+/// that is the order absent until the replay lands: read at once, the method
+/// refused a withdrawal of an order the venue was working.
+#[test]
+fn a_withdrawal_by_permanent_id_waits_for_the_venue_to_name_the_working_set() {
+    let (client, rx, shared) = test_client();
+    shared.orders.replay_is_pending();
+    let later = shared.clone();
+    let naming = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        later.orders.push_order_info(4242, crate::bridge::RichOrderInfo {
+            contract: spy(),
+            order: Order {
+                order_id: 4242, perm_id: 777_001, action: "BUY".into(), total_quantity: 100.0,
+                order_type: "LMT".into(), lmt_price: 100.0, ..Default::default()
+            },
+            order_state: crate::types::model::OrderState { status: "Submitted".into(), ..Default::default() },
+            last_exec: Default::default(),
+        });
+        later.orders.set_replay_done();
+    });
+    client.cancel_order_by_perm_id(777_001).expect("the order the venue names is withdrawn");
+    naming.join().unwrap();
+    assert!(
+        matches!(rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::Cancel { order_id: 4242 }))),
+        "the withdrawal names the order the venue named",
+    );
+}
+
+/// Withdrawing a held parent takes what hangs from it out of the hold.
+///
+/// The children stayed held under the cancelled parent's number: when the
+/// caller later transmitted the stop-loss, the family gathered under that
+/// number went out as exits naming a parent the venue was never given, and
+/// their records read as working orders.
+#[test]
+fn withdrawing_a_held_parent_withdraws_the_children_held_under_it() {
+    let (client, rx, _shared) = test_client();
+    let leg = |id: i64, parent: i64| Order {
+        order_id: id, parent_id: parent, transmit: false,
+        action: if parent == 0 { "BUY".into() } else { "SELL".into() },
+        total_quantity: 100.0, order_type: "LMT".into(), lmt_price: 100.0, tif: "DAY".into(),
+        ..Default::default()
+    };
+    client.place_order(90, &spy(), &leg(90, 0)).expect("held");
+    client.place_order(91, &spy(), &leg(91, 90)).expect("held under it");
+    client.cancel_order(90, "").expect("withdrawn");
+    assert!(client.core.tracked_order(91).is_none(), "the child's record goes with the parent's");
+    assert!(!client.core.withdraw_held(91), "and nothing is held under the child's number");
+    assert!(rx.try_recv().is_err(), "nothing reached the engine");
+}
+
+/// A completed order names the client that placed it, on this surface as on
+/// the other, where the venue names none.
+#[test]
+fn a_completed_order_names_the_client_that_placed_it() {
+    let (client, rx, shared) = test_client();
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), client_id: 5, ..Default::default()
+    };
+    client.place_order(86, &spy(), &order).expect("placed");
+    rx.try_recv().expect("the order goes out");
+    shared.orders.push_order_info(86, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: Order { order_id: 86, action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(), lmt_price: 100.0, ..Default::default() },
+        order_state: crate::types::model::OrderState { status: "Filled".into(), ..Default::default() },
+        last_exec: Default::default(),
+    });
+    shared.orders.push_completed_order(crate::types::CompletedOrder {
+        order_id: 86, instrument: 0, status: crate::types::OrderStatus::Filled,
+        filled_qty: crate::types::QTY_SCALE, timestamp_ns: 0,
+    });
+    #[derive(Default)]
+    struct Named(Vec<(i64, i32)>);
+    impl Wrapper for Named {
+        fn completed_order(&mut self, _: &Contract, order: &Order, _: &crate::types::model::OrderState) {
+            self.0.push((order.order_id, order.client_id));
+        }
+    }
+    let mut named = Named::default();
+    client.req_completed_orders(false, &mut named);
+    assert_eq!(named.0, [(86, 5)], "the client that placed it");
 }

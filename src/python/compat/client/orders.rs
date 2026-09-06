@@ -624,6 +624,8 @@ impl EClient {
         }
         let Some(_tx) = self.tx_or_report_for_trading(-1)? else { return Ok(()) };
         let shared = self.shared_state()?;
+        // After the venue has named the working set, as on the other surface.
+        self.wait_for_the_replay(py);
         let found = self.core.collect_open_orders(&shared)
             .into_iter()
             .find(|(_, tracked)| tracked.order.perm_id == perm_id)
@@ -916,10 +918,13 @@ impl EClient {
                 .ok()
                 .is_some_and(|v| !v.is_none(py) && v.bind(py).len().is_ok_and(|n| n > 0));
             if (last_n_days != 0 && last_n_days != i64::from(i32::MAX)) || dates_stated {
-                return self.report_refusal(py, req_id, Refusal::validation(
+                self.report_refusal(py, req_id, Refusal::validation(
                     "req_executions: lastNDays and specificDates are not applied here; \
                      executions are this session's, filtered by the other fields",
-                ));
+                ))?;
+                // The end still comes, as it does for every request refused on
+                // this surface: a caller waiting on it has nothing else to wait for.
+                return self.deliver(py, "exec_details_end", (req_id,));
             }
             ExecutionFilter {
                 symbol: get("symbol"),
@@ -1024,9 +1029,15 @@ impl EClient {
                         status: status_str.into(),
                         ..rich_info.as_ref().map(|i| i.order_state.clone()).unwrap_or_default()
                     };
-                    let (contract, order) = match (tracked, rich_info) {
-                        (Some(o), _) => (o.contract, o.order),
+                    // The venue's own order where it stated one, as on the
+                    // other surface, with the client that placed it where the
+                    // venue names none.
+                    let (contract, mut order) = match (tracked, rich_info) {
+                        // The record's contract carries the legs and the hedge
+                        // the caller stated, which no definition carries.
+                        (Some(o), Some(info)) => (o.contract, info.order),
                         (None, Some(info)) => (info.contract, info.order),
+                        (Some(o), None) => (o.contract, o.order),
                         (None, None) => (
                             crate::types::model::Contract::default(),
                             crate::types::model::Order {
@@ -1035,6 +1046,9 @@ impl EClient {
                             },
                         ),
                     };
+                    if order.client_id == 0 {
+                        order.client_id = self.core.placing_client(&shared, co.order_id);
+                    }
                     // Filled out from what the venue has said about the
                     // contract, as the open-order answer already is on both
                     // surfaces and as the other surface's completed answer is.

@@ -1355,8 +1355,8 @@ impl From<&WhatIfResponse> for OrderState {
             // in. Left off, a preview reported a cost of zero for every order
             // whose commission the venue could only bound, and a warning it
             // had attached went nowhere.
-            min_commission_and_fees: wi.min_commission as f64 / PRICE_SCALE_F,
-            max_commission_and_fees: wi.max_commission as f64 / PRICE_SCALE_F,
+            min_commission_and_fees: wi.min_commission.map_or(f64::MAX, |p| p as f64 / PRICE_SCALE_F),
+            max_commission_and_fees: wi.max_commission.map_or(f64::MAX, |p| p as f64 / PRICE_SCALE_F),
             commission_and_fees_currency: wi.commission_currency.clone(),
             warning_text: wi.warning_text.clone(),
             ..Default::default()

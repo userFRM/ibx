@@ -302,7 +302,7 @@ pub fn ord_type_api_name<'a>(ord_type: &'a str, exec_inst: &str) -> &'a str {
 
 /// What-If margin/commission preview response (execution report with tag 6091=1).
 /// Returned when a what-if order is submitted — the order is NOT placed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WhatIfResponse {
     /// The preview this answers.
     pub order_id: OrderId,
@@ -325,9 +325,9 @@ pub struct WhatIfResponse {
     /// Where a commission is given as a range rather than a number, and the
     /// money it is quoted in. A preview that states the margin and not the cost
     /// is half a preview.
-    pub min_commission: Price,
+    pub min_commission: Option<Price>,
     /// The most.
-    pub max_commission: Price,
+    pub max_commission: Option<Price>,
     /// What those figures are in.
     pub commission_currency: String,
     /// What the venue warned about, which is its own text and not the order's.

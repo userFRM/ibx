@@ -423,8 +423,8 @@ fn what_if_response_is_copy() {
         maint_margin_after: 814_351 * (PRICE_SCALE / 100),
         equity_with_loan_after: 75_425_514 * (PRICE_SCALE / 100),
         commission: PRICE_SCALE,
-        min_commission: 0,
-        max_commission: 0,
+        min_commission: None,
+        max_commission: None,
         commission_currency: String::new(),
         warning_text: String::new(),
     };
@@ -452,8 +452,8 @@ fn a_preview_carries_the_cost_the_venue_quoted() {
         maint_margin_after: 0,
         equity_with_loan_after: 0,
         commission: 0,
-        min_commission: 175 * (PRICE_SCALE / 100),
-        max_commission: 320 * (PRICE_SCALE / 100),
+        min_commission: Some(175 * (PRICE_SCALE / 100)),
+        max_commission: Some(320 * (PRICE_SCALE / 100)),
         commission_currency: "USD".into(),
         warning_text: "this order will be routed away".into(),
     };
@@ -606,4 +606,17 @@ fn a_replace_states_only_the_types_it_can_restate() {
     assert_eq!(restated("TRAIL"), 0, "a replace cannot restate a trailing stop");
     assert_eq!(restated("PEG MID"), 0, "nor a midpoint peg");
     assert_eq!(restated("SOMETHING NEW"), 0, "nor a type nobody here knows");
+}
+
+/// A preview whose commission the venue did not bound reports the bounds as
+/// unset, not as nought.
+#[test]
+fn a_preview_without_commission_bounds_reports_them_unset() {
+    let unbounded = WhatIfResponse { min_commission: None, max_commission: None, ..Default::default() };
+    let state = crate::types::model::OrderState::from(&unbounded);
+    assert_eq!(state.min_commission_and_fees, f64::MAX);
+    assert_eq!(state.max_commission_and_fees, f64::MAX);
+    let bounded = WhatIfResponse { min_commission: Some(PRICE_SCALE), max_commission: Some(2 * PRICE_SCALE), ..Default::default() };
+    let state = crate::types::model::OrderState::from(&bounded);
+    assert_eq!((state.min_commission_and_fees, state.max_commission_and_fees), (1.0, 2.0));
 }

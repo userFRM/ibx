@@ -438,8 +438,8 @@ impl EClient {
             maint_margin_after: (maint_margin_after * ps) as i64,
             equity_with_loan_after: (equity_with_loan_after * ps) as i64,
             commission: (commission * ps) as i64,
-            min_commission: 0,
-            max_commission: 0,
+            min_commission: None,
+            max_commission: None,
             commission_currency: String::new(),
             warning_text: String::new(),
         });

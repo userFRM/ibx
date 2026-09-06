@@ -6782,3 +6782,26 @@ fn a_pnl_subscription_is_renewed_on_a_reconnect_unless_withdrawn() {
     assert!(msg.contains("|6040=142|6529=PLR.5|1=DU1|"), "the standing subscription is asked for again: {msg}");
     assert!(!msg.contains("PLR.6"), "and the withdrawn one is not: {msg}");
 }
+
+/// A preview the venue refuses is a refusal of the preview and nothing else.
+///
+/// Read through the ordinary report path it became a rejected order: a status
+/// for an order never placed, and the number the caller previewed under read
+/// as spent, so placing under it afterwards was refused as a number already
+/// worked and finished.
+#[test]
+fn a_refused_preview_is_a_refusal_and_not_a_rejected_order() {
+    let (mut ccp, mut context, shared) = what_if_test_state();
+    let mut frame = what_if_frame(&[]);
+    frame.insert(39, "8".to_string());
+    frame.insert(150, "8".to_string());
+    frame.insert(58, "no margin for a preview of this size".to_string());
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+    let refused = shared.orders.drain_order_inactive();
+    assert!(refused.iter().any(|(id, code, why)| *id == 42 && *code == 201 && why.contains("no margin")), "{refused:?}");
+    assert!(
+        shared.orders.drain_order_updates().iter().all(|u| u.order_id != 42),
+        "no status is said for an order that was never placed",
+    );
+    assert!(context.order(42).is_none(), "and the preview is over");
+}

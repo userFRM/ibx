@@ -232,8 +232,8 @@ fn order_lifecycle_what_if_preview() {
         maint_margin_after: 10000 * PRICE_SCALE,
         equity_with_loan_after: 85000 * PRICE_SCALE,
         commission: 2 * PRICE_SCALE,
-        min_commission: 0,
-        max_commission: 0,
+        min_commission: None,
+        max_commission: None,
         commission_currency: String::new(),
         warning_text: String::new(),
     });
