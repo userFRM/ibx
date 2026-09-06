@@ -47,6 +47,15 @@ impl ListField {
     }
 }
 
+impl std::fmt::Debug for ListField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.get() {
+            Some(list) => Python::attach(|py| write!(f, "{:?}", list.bind(py))),
+            None => f.write_str("[]"),
+        }
+    }
+}
+
 impl Clone for ListField {
     /// The same list, as Python assignment shares it. A set slot proves an
     /// interpreter exists, so attaching here attaches to one that is there;
@@ -642,8 +651,11 @@ pub struct ContractDetails {
     pub cusip: String,
     /// The identifiers the definition states, each a `TagValue` as the
     /// reference client holds them.
+    /// The identifiers the definition states, a shared list so an append
+    /// reaches the field — the shape the reference client's decoder builds it
+    /// in.
     #[pyo3(get, set)]
-    pub sec_id_list: Vec<TagValue>,
+    pub sec_id_list: ListField,
     #[pyo3(get, set)]
     pub min_size: f64,
     /// Unset until stated, as the reference client holds it; this client
@@ -968,7 +980,7 @@ impl ContractDetails {
             country: String::new(),
             isin: String::new(),
             cusip: String::new(),
-            sec_id_list: Vec::new(),
+            sec_id_list: ListField::new(),
             min_size: 0.0,
             min_algo_size: f64::MAX,
             maturity: String::new(),
@@ -1090,7 +1102,7 @@ impl ContractDetails {
             country: def.country.clone(),
             isin: def.isin.clone(),
             cusip: def.cusip.clone(),
-            sec_id_list: def.sec_id_list.iter().map(|(tag, value)| TagValue { tag: tag.clone(), value: value.clone() }).collect(),
+            sec_id_list: ListField::of(py, def.sec_id_list.iter().map(|(tag, value)| TagValue { tag: tag.clone(), value: value.clone() })).unwrap_or_default(),
             min_size: def.min_size,
             min_algo_size: f64::MAX,
             maturity: if bond { def.last_trade_date.clone() } else { String::new() },
@@ -1204,8 +1216,10 @@ impl SmartComponentPy {
 pub struct ContractDescription {
     #[pyo3(get, set)]
     pub contract: Py<Contract>,
+    /// The derivative types on the underlying, a shared list so an append
+    /// reaches the field, as the reference client's decoder builds it.
     #[pyo3(get, set)]
-    pub derivative_sec_types: Vec<String>,
+    pub derivative_sec_types: ListField,
 }
 
 #[pymethods]
@@ -1237,7 +1251,7 @@ impl ContractDescription {
             contract: Py::new(py, Contract {
                 con_id, symbol, sec_type, currency, primary_exchange, ..Default::default()
             })?,
-            derivative_sec_types,
+            derivative_sec_types: ListField::of(py, derivative_sec_types).unwrap_or_default(),
         })
     }
 

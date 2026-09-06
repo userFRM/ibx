@@ -948,7 +948,7 @@ impl EClient {
                         primary_exchange: m.primary_exchange.clone(),
                         ..Default::default()
                     }).unwrap(),
-                    derivative_sec_types: m.derivative_types.clone(),
+                    derivative_sec_types: crate::python::compat::class_contracts::ListField::of(py, m.derivative_types.clone()).unwrap_or_default(),
                 }).unwrap()
             }).collect();
             let list = pyo3::types::PyList::new(py, &descriptions)?;

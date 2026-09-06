@@ -61,3 +61,22 @@ def test_any_other_type_states_its_expiry_and_no_maturity():
     d = _details_for("OPT", "20260918")
     assert d.maturity == ""
     assert d.contract.lastTradeDateOrContractMonth == "20260918"
+
+
+def test_the_security_id_list_shares_so_an_append_reaches_the_field():
+    """The reference client's decoder builds secIdList by appending to it; the
+    field is the shared list, so an append is kept rather than lost on a copy."""
+    d = ContractDetails()
+    d.secIdList.append(TagValue("ISIN", "US0378331005"))
+    d.secIdList.append(TagValue("CUSIP", "037833100"))
+    assert [(t.tag, t.value) for t in d.secIdList] == [
+        ("ISIN", "US0378331005"), ("CUSIP", "037833100"),
+    ]
+
+
+def test_the_derivative_sec_types_share_so_an_append_reaches_the_field():
+    from ibx import ContractDescription
+    cd = ContractDescription(265598, "SPY", "STK", "USD", "SMART", [])
+    cd.derivativeSecTypes.append("OPT")
+    cd.derivativeSecTypes.append("WAR")
+    assert list(cd.derivativeSecTypes) == ["OPT", "WAR"]
