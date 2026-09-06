@@ -107,6 +107,10 @@ pub struct Execution {
     pub last_liquidity: i32,
     #[pyo3(get, set)]
     pub pending_price_revision: bool,
+    /// How an option's fill came about, by the reference client's numbering;
+    /// -1 where none is stated, and this client reads none off a report.
+    #[pyo3(get, set)]
+    pub opt_exercise_or_lapse_type: i32,
 }
 
 impl Execution {
@@ -138,6 +142,7 @@ impl Execution {
             model_code: e.model_code.clone(),
             last_liquidity: e.last_liquidity,
             pending_price_revision: e.pending_price_revision,
+            opt_exercise_or_lapse_type: -1,
         }
     }
 }
@@ -160,7 +165,7 @@ impl Execution {
 
     #[new]
     #[pyo3(signature = ())]
-    fn new() -> Self { Self::default() }
+    fn new() -> Self { Self { opt_exercise_or_lapse_type: -1, ..Self::default() } }
 }
 
 /// ibapi-compatible NewsProvider class.

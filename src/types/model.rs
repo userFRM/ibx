@@ -551,8 +551,9 @@ pub struct Order {
     /// or ask.
     pub reference_price_type: i32,
     /// Send a marketable order to the best bid or offer
-    /// rather than working it.
-    pub route_marketable_to_bbo: bool,
+    /// rather than working it. `None` until stated; written
+    /// only when true, as the wire carries it.
+    pub route_marketable_to_bbo: Option<bool>,
     /// What kind of trader this is, under Rule 80A.
     pub rule80a: String,
     /// Whether the ladder starts again once it is worked through.
@@ -585,8 +586,9 @@ pub struct Order {
     /// venue. Setting the ladder's own fields has the same effect.
     pub scale_table: String,
     /// Whether the venue may seek a better price than the
-    /// limit.
-    pub seek_price_improvement: bool,
+    /// limit. `None` until stated; written only when true, as
+    /// the wire carries it.
+    pub seek_price_improvement: Option<bool>,
     /// Which firm settles the trade.
     pub settling_firm: String,
     /// The shareholder an order is placed for.
@@ -656,8 +658,9 @@ pub struct Order {
     /// anything.
     pub trail_stop_price: f64,
     /// Whether the venue's price management algorithm works
-    /// the order.
-    pub use_price_mgmt_algo: i32,
+    /// the order. `None` until stated; written only when above
+    /// nought, as the wire carries it.
+    pub use_price_mgmt_algo: Option<i32>,
     /// The volatility a volatility order is worked at, as the number of
     /// percent: 25 is a quarter. Carried to the wire as it stands.
     pub volatility: f64,
@@ -796,7 +799,7 @@ impl Default for Order {
             reference_contract_id: 0,
             reference_exchange_id: String::new(),
             reference_price_type: 0,
-            route_marketable_to_bbo: false,
+            route_marketable_to_bbo: None,
             rule80a: String::new(),
             scale_auto_reset: false,
             scale_init_fill_qty: i32::MAX,
@@ -809,7 +812,7 @@ impl Default for Order {
             scale_random_percent: false,
             scale_subs_level_size: i32::MAX,
             scale_table: String::new(),
-            seek_price_improvement: false,
+            seek_price_improvement: None,
             settling_firm: String::new(),
             shareholder: String::new(),
             short_sale_slot: 0,
@@ -826,7 +829,7 @@ impl Default for Order {
             stock_ref_price: f64::MAX,
             submitter: String::new(),
             trail_stop_price: f64::MAX,
-            use_price_mgmt_algo: 0,
+            use_price_mgmt_algo: None,
             volatility: f64::MAX,
             volatility_type: 0,
             what_if_type: i32::MAX,
@@ -954,7 +957,7 @@ impl Order {
             // Stated by a caller and carried nowhere until now: an order that
             // asked to be re-priced as the underlying moved, or to stay inside
             // a band of underlying prices, was accepted and sent without either.
-            seek_price_improvement: self.seek_price_improvement,
+            seek_price_improvement: self.seek_price_improvement.unwrap_or(false),
             manual_order_time: self.manual_order_time.clone(),
             advanced_error_override: self.advanced_error_override.clone(),
             active_start_time: self.active_start_time.clone(),
@@ -962,7 +965,7 @@ impl Order {
             post_only: self.post_only,
             solicited: self.solicited,
             manual_order_indicator: self.manual_order_indicator,
-            route_marketable_to_bbo: self.route_marketable_to_bbo,
+            route_marketable_to_bbo: self.route_marketable_to_bbo.unwrap_or(false),
             imbalance_only: self.imbalance_only,
             allow_pre_open: self.allow_pre_open,
             ignore_open_auction: self.ignore_open_auction,
@@ -977,7 +980,7 @@ impl Order {
             mifid2_execution_algo: self.mifid2_execution_algo.clone(),
             mid_offset_at_whole: self.mid_offset_at_whole,
             mid_offset_at_half: self.mid_offset_at_half,
-            use_price_mgmt_algo: self.use_price_mgmt_algo,
+            use_price_mgmt_algo: self.use_price_mgmt_algo.unwrap_or(0),
             duration: self.duration,
             min_compete_size: if self.min_compete_size == i32::MAX { 0 } else { self.min_compete_size },
             compete_against_best_offset: self.compete_against_best_offset,
@@ -1133,7 +1136,7 @@ impl Order {
             || self.oca_type > 0
             || (self.volatility != f64::MAX && self.volatility > 0.0)
             || self.volatility_type > 0
-            || self.seek_price_improvement
+            || self.seek_price_improvement == Some(true)
             || !self.manual_order_time.is_empty()
             || !self.advanced_error_override.is_empty()
             || !self.active_start_time.is_empty()
@@ -1141,7 +1144,7 @@ impl Order {
             || self.post_only
             || self.solicited
             || (self.manual_order_indicator != i32::MAX && self.manual_order_indicator > 0)
-            || self.route_marketable_to_bbo
+            || self.route_marketable_to_bbo == Some(true)
             || self.imbalance_only
             || self.allow_pre_open
             || self.ignore_open_auction
@@ -1156,7 +1159,7 @@ impl Order {
             || !self.mifid2_execution_algo.is_empty()
             || self.mid_offset_at_whole != f64::MAX
             || self.mid_offset_at_half != f64::MAX
-            || self.use_price_mgmt_algo > 0
+            || self.use_price_mgmt_algo.unwrap_or(0) > 0
             || self.duration != i32::MAX
             || (self.min_compete_size != i32::MAX && self.min_compete_size > 0)
             || self.compete_against_best_offset != f64::MAX
@@ -1314,15 +1317,15 @@ impl Default for OrderState {
             completed_time: Default::default(),
             completed_status: Default::default(),
             margin_currency: Default::default(),
-            init_margin_before_outside_rth: Default::default(),
-            maint_margin_before_outside_rth: Default::default(),
-            equity_with_loan_before_outside_rth: Default::default(),
-            init_margin_change_outside_rth: Default::default(),
-            maint_margin_change_outside_rth: Default::default(),
-            equity_with_loan_change_outside_rth: Default::default(),
-            init_margin_after_outside_rth: Default::default(),
-            maint_margin_after_outside_rth: Default::default(),
-            equity_with_loan_after_outside_rth: Default::default(),
+            init_margin_before_outside_rth: f64::MAX,
+            maint_margin_before_outside_rth: f64::MAX,
+            equity_with_loan_before_outside_rth: f64::MAX,
+            init_margin_change_outside_rth: f64::MAX,
+            maint_margin_change_outside_rth: f64::MAX,
+            equity_with_loan_change_outside_rth: f64::MAX,
+            init_margin_after_outside_rth: f64::MAX,
+            maint_margin_after_outside_rth: f64::MAX,
+            equity_with_loan_after_outside_rth: f64::MAX,
             suggested_size: Default::default(),
             reject_reason: Default::default(),
             order_allocations: Default::default(),
@@ -1743,6 +1746,19 @@ pub struct ContractDetails {
     pub sec_id_list: Vec<(String, String)>,
     /// The smallest quantity the contract trades in, which is not always one.
     pub min_size: f64,
+    /// The smallest quantity an algorithmic order trades in. `f64::MAX`:
+    /// this client reads none off a definition.
+    pub min_algo_size: f64,
+    /// A bond's date, which sits here and not on the contract's expiry,
+    /// as the reference client files it.
+    pub maturity: String,
+    /// An event contract's underlying. Empty: this client reads none off
+    /// a definition.
+    pub event_contract1: String,
+    /// The first line of an event contract's terms. Empty, as above.
+    pub event_contract_description1: String,
+    /// The second line of an event contract's terms. Empty, as above.
+    pub event_contract_description2: String,
 }
 
 impl Contract {
@@ -2090,7 +2106,7 @@ mod tests {
             ("auto_cancel_date", |o| o.auto_cancel_date = "20261231".into()),
             ("clearing_account", |o| o.clearing_account = "U123".into()),
             ("clearing_intent", |o| o.clearing_intent = "IB".into()),
-            ("seek_price_improvement", |o| o.seek_price_improvement = true),
+            ("seek_price_improvement", |o| o.seek_price_improvement = Some(true)),
             ("manual_order_time", |o| o.manual_order_time = "20260101-09:30:00".into()),
             ("advanced_error_override", |o| o.advanced_error_override = "1".into()),
             ("active_start_time", |o| o.active_start_time = "20260101-09:30:00".into()),
@@ -2098,7 +2114,7 @@ mod tests {
             ("post_only", |o| o.post_only = true),
             ("solicited", |o| o.solicited = true),
             ("manual_order_indicator", |o| o.manual_order_indicator = 1),
-            ("route_marketable_to_bbo", |o| o.route_marketable_to_bbo = true),
+            ("route_marketable_to_bbo", |o| o.route_marketable_to_bbo = Some(true)),
             ("imbalance_only", |o| o.imbalance_only = true),
             ("allow_pre_open", |o| o.allow_pre_open = true),
             ("ignore_open_auction", |o| o.ignore_open_auction = true),
@@ -2113,7 +2129,7 @@ mod tests {
             ("mifid2_execution_algo", |o| o.mifid2_execution_algo = "EA".into()),
             ("mid_offset_at_whole", |o| o.mid_offset_at_whole = 0.01),
             ("mid_offset_at_half", |o| o.mid_offset_at_half = 0.005),
-            ("use_price_mgmt_algo", |o| o.use_price_mgmt_algo = 1),
+            ("use_price_mgmt_algo", |o| o.use_price_mgmt_algo = Some(1)),
             ("duration", |o| o.duration = 60),
             ("min_compete_size", |o| o.min_compete_size = 100),
             ("compete_against_best_offset", |o| o.compete_against_best_offset = 0.02),

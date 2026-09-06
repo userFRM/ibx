@@ -1480,11 +1480,10 @@ impl CcpState {
             };
             let algo_strategy = parsed.get(&847).cloned().unwrap_or_default();
             // Tag 8339 is its own field, not derived from the algo strategy on
-            // tag 847.
-            let use_price_mgmt_algo = i32::from(
-                parsed.get(&TAG_USE_PRICE_MGMT_ALGO)
-                    .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
-            );
+            // tag 847; a report that does not carry it states nothing about it.
+            let use_price_mgmt_algo = parsed
+                .get(&TAG_USE_PRICE_MGMT_ALGO)
+                .map(|v| i32::from(v == "1" || v.eq_ignore_ascii_case("true")));
             let trail_stop_price: f64 = parsed.get(&6117)
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(f64::MAX);

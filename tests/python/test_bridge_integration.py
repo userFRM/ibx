@@ -13,7 +13,7 @@ from ibx import (
     TickAttrib, TickAttribLast, TickAttribBidAsk, TickTypeEnum,
     PriceCondition, TimeCondition, MarginCondition,
     ExecutionCondition, VolumeCondition, PercentChangeCondition,
-    ContractDescription,
+    ContractDescription, UNSET_DOUBLE,
 )
 from conftest import NotConnectedProbe
 
@@ -740,9 +740,9 @@ class TestWhatIfDispatch:
         assert state["equity_with_loan_after"] == "600.00"
         assert state["equity_with_loan_change"] == "300.00"  # 600 - 300
         assert abs(state["commission_and_fees"] - 7.0) < 1e-6
-        # ibapi-iso fields default to empty/zero when wire data doesn't carry them
+        # extension fields are empty, or unset, where the wire states none
         assert state["margin_currency"] == ""
-        assert state["init_margin_after_outside_rth"] == 0.0
+        assert state["init_margin_after_outside_rth"] == UNSET_DOUBLE
         assert state["suggested_size"] == ""
         assert state["reject_reason"] == ""
         assert state["order_allocations"] == []

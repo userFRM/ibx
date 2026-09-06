@@ -640,10 +640,28 @@ pub struct ContractDetails {
     pub isin: String,
     #[pyo3(get, set)]
     pub cusip: String,
+    /// The identifiers the definition states, each a `TagValue` as the
+    /// reference client holds them.
     #[pyo3(get, set)]
-    pub sec_id_list: Vec<(String, String)>,
+    pub sec_id_list: Vec<TagValue>,
     #[pyo3(get, set)]
     pub min_size: f64,
+    /// Unset until stated, as the reference client holds it; this client
+    /// reads none off a definition.
+    #[pyo3(get, set)]
+    pub min_algo_size: f64,
+    /// A bond's date, which the reference client files here and not on
+    /// the contract.
+    #[pyo3(get, set)]
+    pub maturity: String,
+    /// Empty until stated, as the reference client holds them; this
+    /// client reads none off a definition.
+    #[pyo3(get, set)]
+    pub event_contract1: String,
+    #[pyo3(get, set)]
+    pub event_contract_description1: String,
+    #[pyo3(get, set)]
+    pub event_contract_description2: String,
     #[pyo3(get, set)]
     pub industry: String,
     #[pyo3(get, set)]
@@ -872,6 +890,11 @@ impl Clone for ContractDetails {
             cusip: self.cusip.clone(),
             sec_id_list: self.sec_id_list.clone(),
             min_size: self.min_size,
+            min_algo_size: self.min_algo_size,
+            maturity: self.maturity.clone(),
+            event_contract1: self.event_contract1.clone(),
+            event_contract_description1: self.event_contract_description1.clone(),
+            event_contract_description2: self.event_contract_description2.clone(),
             trading_hours: self.trading_hours.clone(),
             liquid_hours: self.liquid_hours.clone(),
             time_zone_id: self.time_zone_id.clone(),
@@ -906,6 +929,11 @@ impl ContractDetails {
             cusip: String::new(),
             sec_id_list: Vec::new(),
             min_size: 0.0,
+            min_algo_size: f64::MAX,
+            maturity: String::new(),
+            event_contract1: String::new(),
+            event_contract_description1: String::new(),
+            event_contract_description2: String::new(),
             industry: String::new(),
             subcategory: String::new(),
             price_magnifier: 0,
@@ -973,6 +1001,10 @@ impl ContractDetails {
             }
         }
 
+        // The reference client files a bond's date as the details' maturity
+        // and leaves the contract's expiry empty; every other type's date is
+        // the contract's.
+        let bond = matches!(def.sec_type, crate::control::contracts::SecurityType::Bond);
         let c = Contract {
             con_id: def.con_id as i64,
             // Official API string ("STK"), not the Debug derive ("Stock"): the
@@ -984,7 +1016,7 @@ impl ContractDetails {
             currency: def.currency.clone(),
             local_symbol: def.local_symbol.clone(),
             trading_class: def.trading_class.clone(),
-            last_trade_date_or_contract_month: def.last_trade_date.clone(),
+            last_trade_date_or_contract_month: if bond { String::new() } else { def.last_trade_date.clone() },
             strike: def.strike,
             // Under the official API's letters, as the security type above is.
             // Left off, a call and a put on the same strike are the same
@@ -1017,8 +1049,13 @@ impl ContractDetails {
             country: def.country.clone(),
             isin: def.isin.clone(),
             cusip: def.cusip.clone(),
-            sec_id_list: def.sec_id_list.clone(),
+            sec_id_list: def.sec_id_list.iter().map(|(tag, value)| TagValue { tag: tag.clone(), value: value.clone() }).collect(),
             min_size: def.min_size,
+            min_algo_size: f64::MAX,
+            maturity: if bond { def.last_trade_date.clone() } else { String::new() },
+            event_contract1: String::new(),
+            event_contract_description1: String::new(),
+            event_contract_description2: String::new(),
             industry: def.industry.clone(),
             subcategory: def.subcategory.clone(),
             price_magnifier: def.price_magnifier,

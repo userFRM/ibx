@@ -679,14 +679,16 @@ impl EClient {
     }
 
     #[doc(hidden)]
-    #[pyo3(signature = (req_id, con_id, symbol, right=""))]
-    fn _test_push_contract_details(&self, req_id: u32, con_id: u32, symbol: &str, right: &str) -> PyResult<()> {
-        use crate::control::contracts::OptionRight;
+    #[pyo3(signature = (req_id, con_id, symbol, right="", sec_type="", last_trade_date=""))]
+    fn _test_push_contract_details(&self, req_id: u32, con_id: u32, symbol: &str, right: &str, sec_type: &str, last_trade_date: &str) -> PyResult<()> {
+        use crate::control::contracts::{OptionRight, SecurityType};
         let shared = self.shared.lock().unwrap().clone()
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("not connected"))?;
         let def = crate::control::contracts::ContractDefinition {
             con_id,
             symbol: symbol.to_string(),
+            sec_type: SecurityType::from_fix(sec_type),
+            last_trade_date: last_trade_date.to_string(),
             right: match right {
                 "C" => Some(OptionRight::Call),
                 "P" => Some(OptionRight::Put),

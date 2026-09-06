@@ -544,3 +544,31 @@ camel_aliases_copy! {
         get_is_conjunction_connection_alias set_is_conjunction_connection_alias isConjunctionConnection is_conjunction_connection bool;
     }
 }
+
+/// The kind a condition is, as the reference client states it: the number
+/// under `condType` and `type()`, and the joins `And()` and `Or()`, which set
+/// how the next condition attaches and hand the same condition back.
+macro_rules! condition_kind {
+    ($cls:ident, $kind:expr) => {
+        #[pymethods]
+        impl $cls {
+            #[getter(condType)]
+            fn cond_type_alias(&self) -> i32 { $kind }
+            #[getter]
+            fn cond_type(&self) -> i32 { $kind }
+            #[pyo3(name = "type")]
+            fn kind(&self) -> i32 { $kind }
+            #[pyo3(name = "And")]
+            fn and_join(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> { slf.is_conjunction_connection = true; slf }
+            #[pyo3(name = "Or")]
+            fn or_join(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> { slf.is_conjunction_connection = false; slf }
+        }
+    };
+}
+
+condition_kind!(PriceCondition, 1);
+condition_kind!(TimeCondition, 3);
+condition_kind!(MarginCondition, 4);
+condition_kind!(ExecutionCondition, 5);
+condition_kind!(VolumeCondition, 6);
+condition_kind!(PercentChangeCondition, 7);

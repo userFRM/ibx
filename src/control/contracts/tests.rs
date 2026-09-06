@@ -1595,3 +1595,23 @@ fn a_chain_reply_states_the_underlying_it_is_about() {
         scopes.iter().map(|s| s.underlying_con_id).collect::<Vec<_>>(),
     );
 }
+
+/// A bond's date is the details' maturity and not the contract's expiry, as
+/// the reference client files it; every other type's date is the expiry.
+#[test]
+fn a_bond_definition_states_its_maturity_and_no_expiry() {
+    let bond = super::ContractDefinition {
+        sec_type: super::SecurityType::Bond,
+        last_trade_date: "20300615".into(),
+        ..Default::default()
+    };
+    let details = crate::types::model::ContractDetails::from_definition(&bond);
+    assert_eq!((details.maturity.as_str(), details.contract.last_trade_date_or_contract_month.as_str()), ("20300615", ""));
+    let option = super::ContractDefinition {
+        sec_type: super::SecurityType::Option,
+        last_trade_date: "20260918".into(),
+        ..Default::default()
+    };
+    let details = crate::types::model::ContractDetails::from_definition(&option);
+    assert_eq!((details.maturity.as_str(), details.contract.last_trade_date_or_contract_month.as_str()), ("", "20260918"));
+}

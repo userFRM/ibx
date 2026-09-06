@@ -258,8 +258,10 @@ pub struct Order {
     pub reference_exchange_id: String,
     #[pyo3(get, set)]
     pub reference_price_type: i32,
+    /// Unstated until set, as the reference client holds it; the submit
+    /// writes a stated one only.
     #[pyo3(get, set)]
-    pub route_marketable_to_bbo: bool,
+    pub route_marketable_to_bbo: Option<bool>,
     #[pyo3(get, set)]
     pub rule80a: String,
     #[pyo3(get, set)]
@@ -284,8 +286,10 @@ pub struct Order {
     pub scale_subs_level_size: i32,
     #[pyo3(get, set)]
     pub scale_table: String,
+    /// Unstated until set, as the reference client holds it; the submit
+    /// writes a stated one only.
     #[pyo3(get, set)]
-    pub seek_price_improvement: bool,
+    pub seek_price_improvement: Option<bool>,
     #[pyo3(get, set)]
     pub settling_firm: String,
     #[pyo3(get, set)]
@@ -314,8 +318,10 @@ pub struct Order {
     pub submitter: String,
     #[pyo3(get, set)]
     pub trail_stop_price: f64,
+    /// Unstated until set, as the reference client holds it; the submit
+    /// writes a stated one only.
     #[pyo3(get, set)]
-    pub use_price_mgmt_algo: i32,
+    pub use_price_mgmt_algo: Option<i32>,
     #[pyo3(get, set)]
     pub volatility: f64,
     #[pyo3(get, set)]
@@ -610,7 +616,7 @@ impl Default for Order {
             reference_contract_id: 0,
             reference_exchange_id: String::new(),
             reference_price_type: 0,
-            route_marketable_to_bbo: false,
+            route_marketable_to_bbo: None,
             rule80a: String::new(),
             scale_auto_reset: false,
             scale_init_fill_qty: i32::MAX,
@@ -623,7 +629,7 @@ impl Default for Order {
             scale_random_percent: false,
             scale_subs_level_size: i32::MAX,
             scale_table: String::new(),
-            seek_price_improvement: false,
+            seek_price_improvement: None,
             settling_firm: String::new(),
             shareholder: String::new(),
             short_sale_slot: 0,
@@ -638,7 +644,7 @@ impl Default for Order {
             stock_ref_price: f64::MAX,
             submitter: String::new(),
             trail_stop_price: f64::MAX,
-            use_price_mgmt_algo: 0,
+            use_price_mgmt_algo: None,
             volatility: f64::MAX,
             volatility_type: 0,
             what_if_type: i32::MAX,
@@ -1387,15 +1393,15 @@ impl Default for OrderState {
             completed_time: String::new(),
             completed_status: String::new(),
             margin_currency: String::new(),
-            init_margin_before_outside_rth: 0.0,
-            maint_margin_before_outside_rth: 0.0,
-            equity_with_loan_before_outside_rth: 0.0,
-            init_margin_change_outside_rth: 0.0,
-            maint_margin_change_outside_rth: 0.0,
-            equity_with_loan_change_outside_rth: 0.0,
-            init_margin_after_outside_rth: 0.0,
-            maint_margin_after_outside_rth: 0.0,
-            equity_with_loan_after_outside_rth: 0.0,
+            init_margin_before_outside_rth: f64::MAX,
+            maint_margin_before_outside_rth: f64::MAX,
+            equity_with_loan_before_outside_rth: f64::MAX,
+            init_margin_change_outside_rth: f64::MAX,
+            maint_margin_change_outside_rth: f64::MAX,
+            equity_with_loan_change_outside_rth: f64::MAX,
+            init_margin_after_outside_rth: f64::MAX,
+            maint_margin_after_outside_rth: f64::MAX,
+            equity_with_loan_after_outside_rth: f64::MAX,
             suggested_size: String::new(),
             reject_reason: String::new(),
             order_allocations: Vec::new(),
@@ -1840,7 +1846,7 @@ camel_aliases_copy! {
         get_reference_change_amount_alias set_reference_change_amount_alias referenceChangeAmount reference_change_amount f64;
         get_reference_contract_id_alias set_reference_contract_id_alias referenceContractId reference_contract_id i32;
         get_reference_price_type_alias set_reference_price_type_alias referencePriceType reference_price_type i32;
-        get_route_marketable_to_bbo_alias set_route_marketable_to_bbo_alias routeMarketableToBbo route_marketable_to_bbo bool;
+        get_route_marketable_to_bbo_alias set_route_marketable_to_bbo_alias routeMarketableToBbo route_marketable_to_bbo Option<bool>;
         get_scale_auto_reset_alias set_scale_auto_reset_alias scaleAutoReset scale_auto_reset bool;
         get_scale_init_fill_qty_alias set_scale_init_fill_qty_alias scaleInitFillQty scale_init_fill_qty i32;
         get_scale_init_level_size_alias set_scale_init_level_size_alias scaleInitLevelSize scale_init_level_size i32;
@@ -1851,7 +1857,7 @@ camel_aliases_copy! {
         get_scale_profit_offset_alias set_scale_profit_offset_alias scaleProfitOffset scale_profit_offset f64;
         get_scale_random_percent_alias set_scale_random_percent_alias scaleRandomPercent scale_random_percent bool;
         get_scale_subs_level_size_alias set_scale_subs_level_size_alias scaleSubsLevelSize scale_subs_level_size i32;
-        get_seek_price_improvement_alias set_seek_price_improvement_alias seekPriceImprovement seek_price_improvement bool;
+        get_seek_price_improvement_alias set_seek_price_improvement_alias seekPriceImprovement seek_price_improvement Option<bool>;
         get_short_sale_slot_alias set_short_sale_slot_alias shortSaleSlot short_sale_slot i32;
         get_sl_order_id_alias set_sl_order_id_alias slOrderId sl_order_id i32;
         get_starting_price_alias set_starting_price_alias startingPrice starting_price f64;
@@ -1863,7 +1869,7 @@ camel_aliases_copy! {
         get_trailing_percent_alias set_trailing_percent_alias trailingPercent trailing_percent f64;
         get_trigger_method_alias set_trigger_method_alias triggerMethod trigger_method i32;
         get_trigger_price_alias set_trigger_price_alias triggerPrice trigger_price f64;
-        get_use_price_mgmt_algo_alias set_use_price_mgmt_algo_alias usePriceMgmtAlgo use_price_mgmt_algo i32;
+        get_use_price_mgmt_algo_alias set_use_price_mgmt_algo_alias usePriceMgmtAlgo use_price_mgmt_algo Option<i32>;
         get_volatility_type_alias set_volatility_type_alias volatilityType volatility_type i32;
         get_what_if_alias set_what_if_alias whatIf what_if bool;
         get_what_if_type_alias set_what_if_type_alias whatIfType what_if_type i32;

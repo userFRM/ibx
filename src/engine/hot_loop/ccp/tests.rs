@@ -4481,10 +4481,10 @@ fn a_refused_cancel_carries_the_reason_the_venue_gave() {
 #[test]
 fn price_management_is_read_from_its_own_field() {
     for (adaptive, stated, wanted) in [
-        ("Adaptive", None, 0),
-        ("Adaptive", Some("1"), 1),
-        ("", Some("1"), 1),
-        ("", None, 0),
+        ("Adaptive", None, None),
+        ("Adaptive", Some("1"), Some(1)),
+        ("", Some("1"), Some(1)),
+        ("", None, None),
     ] {
         let (mut ccp, mut context, shared) = ord_status_test_state();
         let mut pairs = vec![("39", "0"), ("150", "0"), ("55", "SPY")];

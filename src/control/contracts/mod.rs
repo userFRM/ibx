@@ -1851,6 +1851,10 @@ pub fn delivered_exchange(
 impl crate::types::model::ContractDetails {
     /// Everything the venue stated about a contract, as a caller reads it.
     pub fn from_definition(def: &ContractDefinition) -> Self {
+        // The reference client files a bond's date as the details' maturity
+        // and leaves the contract's expiry empty; every other type's date is
+        // the contract's.
+        let bond = matches!(def.sec_type, SecurityType::Bond);
         let c = crate::types::model::Contract {
             con_id: def.con_id as i64,
             symbol: def.symbol.clone(),
@@ -1860,7 +1864,7 @@ impl crate::types::model::ContractDetails {
             currency: def.currency.clone(),
             local_symbol: def.local_symbol.clone(),
             trading_class: def.trading_class.clone(),
-            last_trade_date_or_contract_month: def.last_trade_date.clone(),
+            last_trade_date_or_contract_month: if bond { String::new() } else { def.last_trade_date.clone() },
             strike: def.strike,
             // Never carried across, so every option came back with its right
             // unset and a call was indistinguishable from a put outside the
@@ -1942,6 +1946,11 @@ impl crate::types::model::ContractDetails {
             cusip: def.cusip.clone(),
             sec_id_list: def.sec_id_list.clone(),
             min_size: def.min_size,
+            min_algo_size: f64::MAX,
+            maturity: if bond { def.last_trade_date.clone() } else { String::new() },
+            event_contract1: String::new(),
+            event_contract_description1: String::new(),
+            event_contract_description2: String::new(),
         }
     }
 }

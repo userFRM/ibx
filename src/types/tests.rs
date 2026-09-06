@@ -620,3 +620,26 @@ fn a_preview_without_commission_bounds_reports_them_unset() {
     let state = crate::types::model::OrderState::from(&bounded);
     assert_eq!((state.min_commission_and_fees, state.max_commission_and_fees), (1.0, 2.0));
 }
+
+/// A state whose outside-hours figures the venue did not state reports them
+/// as unset, as it does the commission bounds, not as nought.
+#[test]
+fn a_state_without_outside_hours_figures_reports_them_unset() {
+    let state = crate::types::model::OrderState::default();
+    let figures = [
+        state.init_margin_before_outside_rth, state.maint_margin_before_outside_rth, state.equity_with_loan_before_outside_rth,
+        state.init_margin_change_outside_rth, state.maint_margin_change_outside_rth, state.equity_with_loan_change_outside_rth,
+        state.init_margin_after_outside_rth, state.maint_margin_after_outside_rth, state.equity_with_loan_after_outside_rth,
+    ];
+    assert!(figures.iter().all(|f| *f == f64::MAX), "{figures:?}");
+}
+
+/// An order states no routing choice until the caller does, and an unstated
+/// choice reaches the wire as the absent one it always was.
+#[test]
+fn an_order_states_no_routing_choice_until_the_caller_does() {
+    let order = crate::types::model::Order::default();
+    assert_eq!((order.route_marketable_to_bbo, order.seek_price_improvement, order.use_price_mgmt_algo), (None, None, None));
+    let attrs = order.attrs();
+    assert_eq!((attrs.route_marketable_to_bbo, attrs.seek_price_improvement, attrs.use_price_mgmt_algo), (false, false, 0));
+}
