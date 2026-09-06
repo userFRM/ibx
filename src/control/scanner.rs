@@ -65,16 +65,47 @@ pub fn build_scanner_params_request(seq: u32) -> Vec<u8> {
 }
 
 /// Build the XML payload for a scanner subscription request.
-pub fn build_scanner_subscribe_xml(sub: &ScannerSubscription, scan_id: &str) -> String {
+/// Text as an XML document carries it: the five characters that would
+/// otherwise read as markup, escaped. A value with an ampersand in it went
+/// out as a document the venue could not read, and nothing refused it.
+pub fn xml_text(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Whether a filter's tag can be an XML element name: a letter or an
+/// underscore first, then letters, digits, underscores, hyphens and dots.
+/// A tag that cannot be one is refused rather than written into a document
+/// the venue cannot read.
+fn is_element_name(tag: &str) -> bool {
+    let mut chars = tag.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+pub fn build_scanner_subscribe_xml(sub: &ScannerSubscription, scan_id: &str) -> Result<String, String> {
     let mut filter = String::new();
     if !sub.filters.is_empty() {
         filter.push_str("<Filter varName=\"filter\">");
         for (code, value) in &sub.filters {
-            filter.push_str(&format!("<{code}>{value}</{code}>"));
+            if !is_element_name(code) {
+                return Err(format!("scanner filter tag {code:?} cannot be written into the request"));
+            }
+            filter.push_str(&format!("<{code}>{}</{code}>", xml_text(value)));
         }
         filter.push_str("</Filter>");
     }
-    format!(
+    Ok(format!(
         "<ScanSubscription>\
          <id>{id}</id>\
          <instrument>{instrument}</instrument>\
@@ -88,11 +119,11 @@ pub fn build_scanner_subscribe_xml(sub: &ScannerSubscription, scan_id: &str) -> 
          <aggGroup>-1</aggGroup>\
          </ScanSubscription>",
         id = scan_id,
-        instrument = sub.instrument,
-        locations = sub.location_code,
-        scan_code = sub.scan_code,
+        instrument = xml_text(&sub.instrument),
+        locations = xml_text(&sub.location_code),
+        scan_code = xml_text(&sub.scan_code),
         max_items = sub.max_items,
-    )
+    ))
 }
 
 /// Build the XML payload for cancelling a scanner subscription.
@@ -164,7 +195,7 @@ mod tests {
             max_items: 50,
             filters: Vec::new(),
         };
-        let xml = build_scanner_subscribe_xml(&sub, "APISCAN1:1");
+        let xml = build_scanner_subscribe_xml(&sub, "APISCAN1:1").expect("built");
         assert!(!xml.contains("<Filter"), "no filters means no filter element: {xml}");
         assert!(xml.contains("<id>APISCAN1:1</id>"));
         assert!(xml.contains("<instrument>STK</instrument>"));
@@ -190,7 +221,7 @@ mod tests {
                 ("stkTypes".to_string(), "inc:ETF".to_string()),
             ],
         };
-        let xml = build_scanner_subscribe_xml(&sub, "APISCAN1:1");
+        let xml = build_scanner_subscribe_xml(&sub, "APISCAN1:1").expect("built");
         assert!(xml.contains("<Filter varName=\"filter\">"), "{xml}");
         assert!(xml.contains("<priceAbove>10</priceAbove>"), "{xml}");
         assert!(xml.contains("<stkTypes>inc:ETF</stkTypes>"), "{xml}");
@@ -271,4 +302,21 @@ mod tests {
         assert!(parse_scanner_response("<ResultSetBar>...</ResultSetBar>").is_none());
         assert!(parse_scanner_response("not xml at all").is_none());
     }
+
+    /// A filter value reaches the request as XML carries text, and a filter
+    /// tag that cannot be an element name is refused. An ampersand in a value
+    /// went out as a document the venue could not read, and nothing said so.
+    #[test]
+    fn scanner_subscribe_xml_carries_text_as_xml_and_refuses_a_tag_that_is_none() {
+        let sub = |filters: Vec<(String, String)>| ScannerSubscription {
+            instrument: "STK".to_string(), location_code: "STK.US.MAJOR".to_string(),
+            scan_code: "TOP_PERC_GAIN".to_string(), max_items: 50, filters,
+        };
+        let xml = build_scanner_subscribe_xml(&sub(vec![("stkTypes".to_string(), "inc:A&B".to_string())]), "APISCAN1:1")
+            .expect("built");
+        assert!(xml.contains("<stkTypes>inc:A&amp;B</stkTypes>"), "{xml}");
+        let refused = build_scanner_subscribe_xml(&sub(vec![("bad tag".to_string(), "1".to_string())]), "APISCAN1:1");
+        assert!(refused.is_err(), "a tag with a space in it is no element name");
+    }
+
 }

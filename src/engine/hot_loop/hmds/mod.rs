@@ -1088,12 +1088,22 @@ impl HmdsState {
                                 log::warn!("scan response carried no payload (msg_len={})", msg.len());
                             }
                             if let Some(xml) = payload
-                                && let Some(result) = crate::control::scanner::parse_scanner_response(xml)
-                                        .or_else(|| {
-                                            log::warn!("scan response payload did not parse ({} bytes)", xml.len());
-                                            None
-                                        })
-                                    && let Some(req_id) = self.scanner_answered(xml) {
+                                && let Some(req_id) = self.scanner_answered(xml) {
+                                    let Some(result) = crate::control::scanner::parse_scanner_response(xml) else {
+                                        // Said to the caller rather than dropped: the scan stays
+                                        // subscribed and a batch simply went missing, with nothing
+                                        // recorded of what arrived.
+                                        log::warn!("scan response payload did not parse ({} bytes)", xml.len());
+                                        shared.market.note_unread_wire("scanner", format!("a batch of scan {req_id} named a contract id that cannot be read"));
+                                        // 162, the historical service's error number, as the
+                                        // refusals beside this carry it.
+                                        super::push_hmds_refusal(
+                                            shared, req_id, 162,
+                                            "a batch of this scan named a contract id that cannot be read, so the batch was not delivered".to_string(),
+                                            false,
+                                        );
+                                        return;
+                                    };
                                         // A row is a contract id and the time it
                                         // entered the scan, and nothing else —
                                         // measured on the wire, not assumed — so
@@ -2213,19 +2223,43 @@ fn build_tbt_query(
         };
         let scan_id = format!("APISCAN{}:{}", self.next_scanner_id, req_id);
         self.next_scanner_id += 1;
-        let xml = crate::control::scanner::build_scanner_subscribe_xml(&sub, &scan_id);
-        if let Some(conn) = hmds_conn.as_mut() {
-            let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
-                (fix::TAG_MSG_TYPE, "U"),
-                (fix::TAG_SENDING_TIME, &ts),
-                (6040, "10003"),
-                (6118, &xml),
-            ]);
-            hb.last_hmds_sent = Instant::now();
-            log::info!("Sent scanner subscribe: req_id={req_id} scan_code={scan_code}");
+        let xml = match crate::control::scanner::build_scanner_subscribe_xml(&sub, &scan_id) {
+            Ok(xml) => xml,
+            Err(why) => {
+                super::push_hmds_refusal(shared, req_id, crate::error_codes::Refusal::VALIDATION, why, false);
+                return;
+            }
+        };
+        // Recorded as running only if it went out, as the news request beside
+        // this is. Recorded regardless, a write the socket refused was logged
+        // as sent and the caller waited on a scan the venue never received,
+        // with no deadline to end the wait.
+        let sent = match hmds_conn.as_mut() {
+            Some(conn) => {
+                let ts = chrono_free_timestamp();
+                conn.send_fix(&[
+                    (fix::TAG_MSG_TYPE, "U"),
+                    (fix::TAG_SENDING_TIME, &ts),
+                    (6040, "10003"),
+                    (6118, &xml),
+                ]).map_err(|e| e.to_string())
+            }
+            None => Err("no connection to the historical service".to_string()),
+        };
+        match sent {
+            Ok(()) => {
+                hb.last_hmds_sent = Instant::now();
+                log::info!("Sent scanner subscribe: req_id={req_id} scan_code={scan_code}");
+                self.pending_scanner.push((scan_id, req_id));
+            }
+            Err(e) => {
+                log::warn!("scanner subscribe did not go out: req_id={req_id} scan_code={scan_code}: {e}");
+                super::push_hmds_refusal(
+                    shared, req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+                    format!("the scan could not be sent: {e}"), false,
+                );
+            }
         }
-        self.pending_scanner.push((scan_id, req_id));
     }
 
     /// Which scan a response answers.
@@ -2260,14 +2294,19 @@ fn build_tbt_query(
         let xml = crate::control::scanner::build_scanner_cancel_xml(scan_id);
         if let Some(conn) = hmds_conn.as_mut() {
             let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
+            let sent = conn.send_fix(&[
                 (fix::TAG_MSG_TYPE, "U"),
                 (fix::TAG_SENDING_TIME, &ts),
                 (6040, "10004"),
                 (6118, &xml),
             ]);
             hb.last_hmds_sent = Instant::now();
-            log::info!("Sent scanner cancel: scan_id={scan_id}");
+            match sent {
+                Ok(()) => log::info!("Sent scanner cancel: scan_id={scan_id}"),
+                // Said as what it is: logged as sent, a withdrawal that never
+                // left reads as one the venue took.
+                Err(e) => log::warn!("scanner cancel for scan_id={scan_id} was not sent: {e}; the venue goes on running it until the session ends"),
+            }
         }
     }
 
@@ -2634,14 +2673,19 @@ fn build_tbt_query(
         let Some(conn) = hmds_conn.as_mut() else { return };
         let xml = crate::control::xml::cancel_query(&query_id);
         let ts = chrono_free_timestamp();
-        let _ = conn.send_fix(&[
+        // Said as what it is where it did not go: logged as sent, a withdrawal
+        // that never left reads as one the venue took.
+        let sent = conn.send_fix(&[
             (fix::TAG_MSG_TYPE, "U"),
             (fix::TAG_SENDING_TIME, &ts),
             (6040, "10031"),
             (6118, &xml),
         ]);
         hb.last_hmds_sent = Instant::now();
-        log::info!("Sent historical news cancel: req_id={req_id}");
+        match sent {
+            Ok(()) => log::info!("Sent historical news cancel: req_id={req_id}"),
+            Err(e) => log::warn!("historical news cancel for req_id={req_id} was not sent: {e}; the venue may go on answering it"),
+        }
     }
 
     pub(crate) fn send_histogram_request(&mut self, req_id: u32, con_id: u32, sec_type: &str, exchange: &str, use_rth: bool, period: &str, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState) {

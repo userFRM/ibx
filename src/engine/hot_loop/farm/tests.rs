@@ -98,7 +98,7 @@ mod news_tests {
         let mut context = Context::new();
         let shared = SharedState::new();
         let instrument = context.market.register(756733);
-        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new());
+        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new(), &crate::bridge::SharedState::new());
 
         farm.handle_ticker_setup(b"35=L\x01756733,0.01,44011", &mut context, &shared);
         farm.handle_generic_tick(&framed_news(44011, &one_article()), &mut context, &shared, &None);
@@ -113,7 +113,7 @@ mod news_tests {
         let mut context = Context::new();
         let shared = SharedState::new();
         let instrument = context.market.register(756733);
-        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new());
+        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut HeartbeatState::new(), &crate::bridge::SharedState::new());
         farm.handle_subscription_ack(b"35=Q\x0133082,7,0.01,0,3", &mut context, &shared);
         farm.forget_news(7, instrument);
 

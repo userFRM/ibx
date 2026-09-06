@@ -750,10 +750,7 @@ impl HotLoop {
             );
 
             // 1b. Busy-poll historical socket for tick-by-tick data
-            self.hmds.poll(
-                &mut self.hmds_conn, &self.shared,
-                &self.event_tx, &mut self.hb,
-            );
+            self.poll_historical();
 
             // 1c. The security definition farm, which carries the calendar.
             self.secdef.poll(
@@ -975,6 +972,20 @@ impl HotLoop {
 
     fn emit_hmds_unavailable(&self, req_id: u32, from_historical: bool) {
         push_hmds_unavailable(&self.shared, req_id, from_historical);
+    }
+
+    /// Poll the historical connection, and where the poll saw it go, take the
+    /// scan rows parked behind their naming with the scans the drop failed.
+    /// Every scan is the historical service's; left parked, a batch was
+    /// released at its deadline and the caller handed rows and an end for a
+    /// scan it had just been told had failed.
+    pub(crate) fn poll_historical(&mut self) {
+        let historical_was_up = self.hmds_conn.is_some();
+        self.hmds.poll(&mut self.hmds_conn, &self.shared, &self.event_tx, &mut self.hb);
+        if historical_was_up && self.hmds_conn.is_none() {
+            self.ccp.pending_scanner_enrichment.clear();
+            self.hmds.scanner_batches.clear();
+        }
     }
 
     fn poll_control_commands(&mut self) {
@@ -1258,7 +1269,7 @@ impl HotLoop {
                         // Recorded where the acknowledgement arrives, or the
                         // tag is never filed and no headline is delivered.
                         self.farm.send_news_subscribe(
-                            con_id, id, &sec_type, &providers, req_id, &mut self.farm_conn, &mut self.hb,
+                            con_id, id, &sec_type, &providers, req_id, &mut self.farm_conn, &mut self.hb, &self.shared,
                         );
                     }
                 }
@@ -1590,6 +1601,10 @@ impl HotLoop {
                     self.hmds.send_fundamental_cancel(req_id, &mut self.hmds_conn, &mut self.hb, &self.shared);
                 }
                 ControlCommand::CancelHistoricalNews { req_id } => {
+                    // As its neighbours: the answers already queued go with it,
+                    // or a withdrawn query was answered under its number — or
+                    // under whatever request had reused it since.
+                    self.shared.reference.purge_historical_news_for(req_id);
                     self.hmds.send_news_cancel(req_id, &mut self.hmds_conn, &mut self.hb, &self.shared);
                 }
                 ControlCommand::CancelCorporateActions { req_id } => {
@@ -6407,6 +6422,43 @@ mod tests {
         assert!(hl.ccp.pending_named.is_empty(), "the parked request is withdrawn");
         let told = shared.reference.drain_historical_errors();
         assert!(told.is_empty(), "and a withdrawal that acted says nothing beside it: {told:?}");
+    }
+
+    /// A withdrawn news query's queued answer goes with it, as its
+    /// neighbours' answers do. Left queued, a withdrawn query was answered
+    /// under its number, or under whatever request had reused it since.
+    #[test]
+    fn withdrawing_a_news_query_takes_its_queued_answer_with_it() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        shared.reference.push_historical_news(9, Vec::new(), false);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        tx.send(ControlCommand::CancelHistoricalNews { req_id: 9 }).unwrap();
+        hl.poll_control_commands();
+        assert!(shared.reference.drain_historical_news().is_empty(), "the queued answer went with the withdrawal");
+    }
+
+    /// A historical drop takes the scan rows parked behind their naming with
+    /// the scans it failed. Left parked, their deadline released them and the
+    /// caller was handed rows and an end for a scan it had just been told had
+    /// failed.
+    #[test]
+    fn a_historical_drop_takes_the_parked_scan_rows_with_it() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (conn, peer) = crate::protocol::connection::Connection::for_test();
+        drop(peer);
+        hl.hmds_conn = Some(conn);
+        hl.ccp.pending_scanner_enrichment.push(crate::engine::hot_loop::ccp::PendingScannerEnrichment {
+            api_req_id: 9,
+            result: crate::control::scanner::ScannerResult { con_ids: Vec::new(), entries: Vec::new(), scan_time: String::new(), error_text: String::new() },
+            awaiting: Default::default(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(60),
+        });
+        hl.poll_historical();
+        assert!(hl.hmds_conn.is_none(), "the drop is seen");
+        assert!(hl.ccp.pending_scanner_enrichment.is_empty(), "and the parked rows go with the scans");
     }
 
     /// A contract numbered beyond what a request carries is refused on a

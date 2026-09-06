@@ -1714,7 +1714,7 @@ pub(super) fn phase_what_the_gated_wires_answer(mut conns: Conns) -> Conns {
             filters: Vec::new(),
         },
         scan_id,
-    );
+    ).expect("a fixed scan builds");
     let ts = now_ib_timestamp();
     if let Err(e) = hmds.send_fix(&[
         (ibx::protocol::fix::TAG_MSG_TYPE, "U"),

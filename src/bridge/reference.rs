@@ -471,6 +471,11 @@ impl ReferenceState {
         self.fundamental_data.lock().unwrap().retain(|(id, _)| *id != req_id);
     }
 
+    /// Throw away headlines still queued under a request.
+    pub fn purge_historical_news_for(&self, req_id: u32) {
+        self.historical_news.lock().unwrap().retain(|(id, ..)| *id != req_id);
+    }
+
     /// Throw away a histogram still queued under a request.
     pub fn purge_histogram_for(&self, req_id: u32) {
         self.histogram_data.lock().unwrap().retain(|(id, _)| *id != req_id);

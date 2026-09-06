@@ -2101,3 +2101,37 @@ fn an_unreadable_page_ends_a_kept_up_to_date_request_still_assembling() {
     assert!(shared.reference.drain_historical_errors().iter().any(|e| e.0 == 9), "the caller is told");
     assert!(shared.reference.drain_historical_data().iter().any(|(rid, r)| *rid == 9 && r.is_complete), "and given its end");
 }
+
+/// A scan whose subscribe did not go out is refused, not recorded as running.
+///
+/// Recorded regardless and logged as sent, the caller waited on a scan the
+/// venue never received, with no deadline to end the wait.
+#[test]
+fn a_scan_that_did_not_go_out_is_refused_and_not_recorded() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    hmds.send_scanner_subscribe(9, "STK", "STK.US.MAJOR", "TOP_PERC_GAIN", 50, Vec::new(), &mut None, &mut hb, &shared);
+    assert!(hmds.pending_scanner.is_empty(), "nothing is running");
+    let told = shared.reference.drain_historical_errors();
+    assert!(told.iter().any(|e| e.0 == 9 && e.1 == crate::error_codes::Refusal::NOT_CONNECTED), "{told:?}");
+}
+
+/// A scan batch that names a contract id nobody can read is said to the
+/// caller and recorded, rather than dropped in silence while the scan stays
+/// subscribed.
+#[test]
+fn a_scan_batch_with_an_unreadable_row_is_said_not_dropped() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+    hmds.pending_scanner.push(("APISCAN1:9".to_string(), 9));
+    let xml = "<ScanResponse><id>APISCAN1:9</id><scanTime>2026-09-06 13:00:00</scanTime><Contract><contractID>not-a-contract</contractID></Contract></ScanResponse>";
+    let msg = fix::fix_build(&[(fix::TAG_MSG_TYPE, "U"), (6040, "10005"), (6118, xml)], 1);
+    hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+    let told = shared.reference.drain_historical_errors();
+    assert!(told.iter().any(|e| e.0 == 9 && e.1 == 162), "the caller is told: {told:?}");
+    assert!(shared.market.unread_wire().iter().any(|(k, _)| *k == "scanner"), "and the batch is recorded as unread");
+    assert!(hmds.scanner_batches.is_empty(), "and nothing half-read is handed on");
+}
