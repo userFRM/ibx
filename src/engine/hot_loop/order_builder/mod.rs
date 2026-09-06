@@ -292,7 +292,7 @@ pub(crate) fn drain_and_send_orders(
                         },
                     })
                 };
-                context.submitted.insert(
+                context.record_placement(
                     parent_id,
                     bracket_leg(crate::types::OrderKind::Limit { price: entry_price }, false),
                 );
@@ -329,7 +329,7 @@ pub(crate) fn drain_and_send_orders(
                     b'1',
                     0,
                 ));
-                context.submitted.insert(
+                context.record_placement(
                     tp_id,
                     bracket_leg(crate::types::OrderKind::Limit { price: take_profit }, true),
                 );
@@ -362,7 +362,7 @@ pub(crate) fn drain_and_send_orders(
                 context.insert_order(crate::types::Order::new(
                     sl_id, instrument, exit_side, qty, stop_loss, b'3', b'1', stop_loss,
                 ));
-                context.submitted.insert(
+                context.record_placement(
                     sl_id,
                     bracket_leg(crate::types::OrderKind::Stop { stop_price: stop_loss }, true),
                 );
@@ -605,7 +605,7 @@ pub(crate) fn drain_and_send_orders(
                 // it ahead of the answer, and a refusal has to put both back.
                 context.pre_replace.insert(
                     (order_id, new_ver),
-                    (orig, orig_clord.clone(), context.submitted.get(&order_id).map(|s| s.kind.clone())),
+                    (orig, orig_clord.clone(), context.submitted.get(&order_id).cloned()),
                 );
                 context.modify_versions.insert(order_id, new_ver);
                 // Pre-seed `last_clord` with the id about to be emitted, so a
@@ -846,10 +846,10 @@ pub(crate) fn drain_and_send_orders(
                     // against a refusal goes with it — the revision it was
                     // recorded under is the one this send was building.
                     let ver = *context.modify_versions.get(&oid).unwrap_or(&0);
-                    if let Some((_, _, Some(kind))) = context.pre_replace.remove(&(oid, ver))
+                    if let Some((_, _, Some(record))) = context.pre_replace.remove(&(oid, ver))
                         && let Some(placed) = context.submitted.get_mut(&oid)
                     {
-                        placed.kind = kind;
+                        *placed = record;
                     }
                 }
                 // Every leg is marked, not just the one the outcome was
@@ -1300,7 +1300,7 @@ fn send_order_ex(
     ));
     // Kept so a replace can restate it. A replace is a full statement of the
     // order: an attribute this submit set and the replace omits is lost.
-    context.submitted.insert(
+    context.record_placement(
         order_id,
         Box::new(crate::types::OrderSpec { kind: kind.clone(), attrs: attrs.clone() }),
     );

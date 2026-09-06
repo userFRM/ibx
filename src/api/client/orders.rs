@@ -937,6 +937,26 @@ impl EClient {
             take_profit: scaled(take_profit),
             stop_loss: scaled(stop_loss),
         }))?;
+        // Each leg is recorded as placed here, under its own number. A leg
+        // replaced ahead of the venue's acknowledgement was otherwise a fresh
+        // placement under its number, which overwrote the engine's record of
+        // the leg with one carrying no parent and no group, and the next
+        // replace restated the leg detached from its bracket.
+        let (action, exit_action) = match side {
+            crate::types::Side::Buy => ("BUY", "SELL"),
+            _ => ("SELL", "BUY"),
+        };
+        let oca_group = format!("OCA_{parent_id}");
+        let leg = |order_id: i64, action: &str, order_type: &str, lmt_price: f64, aux_price: f64, parent: i64| {
+            crate::types::model::Order {
+                order_id, action: action.into(), total_quantity: quantity, order_type: order_type.into(),
+                lmt_price, aux_price, tif: "DAY".into(), parent_id: parent, oca_group: oca_group.clone(),
+                transmit: true, ..Default::default()
+            }
+        };
+        self.core.track_order(parent_id as u64, contract.clone(), leg(parent_id, action, "LMT", entry, 0.0, 0), instrument);
+        self.core.track_order(tp_id as u64, contract.clone(), leg(tp_id, exit_action, "LMT", take_profit, 0.0, parent_id), instrument);
+        self.core.track_order(sl_id as u64, contract.clone(), leg(sl_id, exit_action, "STP", 0.0, stop_loss, parent_id), instrument);
         Ok([parent_id, tp_id, sl_id])
     }
 }

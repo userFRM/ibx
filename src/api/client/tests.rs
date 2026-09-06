@@ -186,6 +186,35 @@ fn a_held_replace_of_a_venue_named_order_still_states_it() {
     assert!(saw_modify, "the transmit sends the replace");
 }
 
+/// A bracket's legs are orders this client placed, so a leg replaced ahead of
+/// the venue's acknowledgement is replaced, not placed again.
+///
+/// The legs went out under their numbers and were recorded nowhere here, so a
+/// replace of one before the acknowledgement read as a fresh placement under
+/// the leg's number, and the engine's record of the leg — its parent, its
+/// group — was overwritten by one carrying neither.
+#[test]
+fn a_bracket_leg_replaced_before_its_acknowledgement_is_replaced_not_placed_again() {
+    let (client, rx, _shared) = test_client();
+    let [_, tp_id, _] = client.place_bracket(&spy(), "BUY", 1.0, 100.0, 110.0, 90.0).unwrap();
+    while rx.try_recv().is_ok() {}
+    let moved = Order {
+        action: "SELL".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 111.0, tif: "DAY".into(), transmit: true, ..Default::default()
+    };
+    client.place_order(tp_id, &spy(), &moved).unwrap();
+    let mut seen = Vec::new();
+    while let Ok(cmd) = rx.try_recv() {
+        seen.push(match cmd {
+            ControlCommand::Order(OrderRequest::Modify { .. }) => "replace",
+            ControlCommand::Order(OrderRequest::SubmitEx { .. }) => "placement",
+            ControlCommand::Order(OrderRequest::Describe { .. }) => "statement",
+            _ => "other",
+        });
+    }
+    assert_eq!(seen, ["replace"], "a leg this client placed is replaced from the engine's own record");
+}
+
 /// Nothing on an execution report carries a parent order id, so the engine
 /// reports none. This client placed the order and was told the parent, so it
 /// can answer where the engine cannot — and an order it did not place keeps

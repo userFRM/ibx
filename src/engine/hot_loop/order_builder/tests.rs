@@ -3571,6 +3571,63 @@ fn the_latest_statement_of_a_venue_named_order_stands_and_a_placement_is_kept() 
     assert!(stated(&msg, "111=").is_empty(), "a placement's record is not replaced by a statement: {msg}");
 }
 
+/// A refusal puts the whole statement back, attributes included.
+///
+/// A later statement of a venue-named order can change its attributes as well
+/// as its shape. The fallback kept against a refusal carried the shape alone,
+/// so a refusal of the first revision put back its shape under the second
+/// statement's attributes, and the next replace restated that hybrid.
+#[test]
+fn a_refusal_puts_the_whole_statement_back() {
+    use std::io::Read;
+    use crate::types::{OrderKind as K, PRICE_SCALE as P};
+    let statement = |display_size: u32| crate::types::OrderRequest::Describe {
+        order_id: 77,
+        spec: Box::new(crate::types::OrderSpec {
+            kind: K::PegMid { offset: 0, price_cap: 100 * P },
+            attrs: crate::types::OrderAttrs { display_size, ..Default::default() },
+        }),
+    };
+    let modify = |price: i64, qty: i64| crate::types::OrderRequest::Modify {
+        order_id: 77, price, qty, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.insert_order(crate::types::Order::new(
+        77, instrument, Side::Buy, crate::types::QTY_SCALE, 0, crate::types::ORD_PEG_MID, b'0', 0,
+    ));
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let mut buf = [0u8; 8192];
+    let mut frame = |context: &mut Context| {
+        drain_and_send_orders(&mut conn, context, "DU1", &mut hb, false, &shared, false, &None);
+        let n = peer.read(&mut buf).unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    };
+    context.pending_orders.push(statement(0));
+    context.pending_orders.push(modify(101 * P, crate::types::QTY_SCALE));
+    let first = frame(&mut context);
+    assert_eq!(stated(&first, "44=").first().map(String::as_str), Some("101"), "{first}");
+    context.pending_orders.push(statement(10));
+    context.pending_orders.push(modify(0, 2 * crate::types::QTY_SCALE));
+    let second = frame(&mut context);
+    assert_eq!(stated(&second, "111=").first().map(String::as_str), Some("10"), "{second}");
+
+    // The venue refuses the first revision, and every later one with it.
+    context.restore_pre_replace(77, 1);
+
+    context.pending_orders.push(modify(0, 3 * crate::types::QTY_SCALE));
+    let third = frame(&mut context);
+    assert_eq!(stated(&third, "44=").first().map(String::as_str), Some("100"), "the shape before the refused revision: {third}");
+    assert!(stated(&third, "111=").is_empty(), "and its attributes, not the later statement's: {third}");
+}
+
 /// A replace the venue refused moved nothing, so the shape goes back with the
 /// terms, and the next replace restates the placed number.
 #[test]

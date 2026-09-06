@@ -51,6 +51,10 @@ impl Clock {
 
 /// The context passed to strategy callbacks. Provides market data access and
 /// order management. All hot-path data is pre-allocated.
+/// What a refusal of a revision puts back: the terms and the name the venue is
+/// known to hold, and the record of the placement where the order has one.
+pub(crate) type PreReplace = (Order, String, Option<Box<crate::types::OrderSpec>>);
+
 pub struct Context {
     pub(crate) market: MarketState,
     positions: Box<[f64]>,
@@ -103,11 +107,12 @@ pub struct Context {
     /// Keyed by the order rather than held beside the send, because the
     /// refusal arrives as a message of its own, later, on another path.
     ///
-    /// The placed shape goes with them where the order has one. A replace
-    /// restates the shape with what it names written in, so a refusal has to
-    /// put the shape back too, or the next replace restates terms the venue
-    /// never held.
-    pub(crate) pre_replace: HashMap<(OrderId, u32), (Order, String, Option<crate::types::OrderKind>)>,
+    /// The record of the placement goes with them where the order has one. A
+    /// replace restates the shape with what it names written in, and a later
+    /// statement of a venue-named order can change the attributes too, so a
+    /// refusal has to put the whole record back, or the next replace restates
+    /// terms the venue never held.
+    pub(crate) pre_replace: HashMap<(OrderId, u32), PreReplace>,
     /// Timestamp when the last farm socket recv returned data (for decode latency
     /// measurement).
     pub(crate) recv_at: Instant,
@@ -422,6 +427,14 @@ impl Context {
         self.market.try_register(con_id)
     }
 
+    /// Record what an order was placed as. A placement's record is the
+    /// engine's own: a statement recorded earlier under the same number is
+    /// superseded, and no later statement replaces it.
+    pub fn record_placement(&mut self, order_id: OrderId, spec: Box<crate::types::OrderSpec>) {
+        self.submitted.insert(order_id, spec);
+        self.described.remove(&order_id);
+    }
+
     pub fn set_symbol(&mut self, id: InstrumentId, symbol: String) {
         self.market.set_symbol(id, symbol);
     }
@@ -636,9 +649,9 @@ impl Context {
         // Every later revision was built on terms the venue never held, so its
         // fallback records a state that never existed. They go with this one.
         self.pre_replace.retain(|(id, ver), _| *id != order_id || *ver <= revision);
-        let Some((mut prior, name, kind)) = self.pre_replace.remove(&(order_id, revision)) else { return };
-        if let (Some(kind), Some(spec)) = (kind, self.submitted.get_mut(&order_id)) {
-            spec.kind = kind;
+        let Some((mut prior, name, record)) = self.pre_replace.remove(&(order_id, revision)) else { return };
+        if let (Some(record), Some(spec)) = (record, self.submitted.get_mut(&order_id)) {
+            *spec = record;
         }
         if let Some(current) = self.open_orders.get(&order_id) {
             prior.filled = current.filled;

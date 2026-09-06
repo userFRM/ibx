@@ -2186,6 +2186,19 @@ fn a_correction_that_recovers_an_order_books_no_purchase() {
     ].into_iter().map(|(t, v)| (t, v.to_string())).collect();
     ccp.handle_exec_report(&bust, b"", &mut context, &shared, &None, "DU1");
     assert_eq!(context.order(43).expect("recovered").filled, 60 * crate::types::QTY_SCALE, "not raised by a negative print");
+
+    // A correction by execution type rather than by transaction type, on an
+    // order the book lacks: reconciled, so nothing is booked as a purchase.
+    let (mut ccp, mut context, shared) = (CcpState::new(), Context::new(), SharedState::new());
+    let typed: std::collections::HashMap<u32, String> = [
+        (11u32, "44.0"), (150, "G"), (39, "1"), (54, "1"), (6008, "756733"), (38, "100"),
+        (32, "40"), (14, "60"), (31, "500.0"), (55, "SPY"), (17, "exec-g"),
+    ].into_iter().map(|(t, v)| (t, v.to_string())).collect();
+    ccp.handle_exec_report(&typed, b"", &mut context, &shared, &None, "DU1");
+    let order = context.order(44).expect("recovered");
+    assert_eq!(order.filled, 60 * crate::types::QTY_SCALE);
+    assert_eq!(context.position(order.instrument), 0.0, "a correction is not a purchase");
+    assert!(shared.orders.drain_fills().iter().all(|(f, _)| f.order_id != 44));
 }
 
 /// A fill that is the first this session hears of an order books its shares
