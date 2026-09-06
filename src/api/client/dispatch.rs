@@ -108,11 +108,17 @@ impl EClient {
         // come back with it: left latched, the next loss would pass without
         // firing `connection_closed` at all.
         if came_back {
-            self.connected.store(true, Ordering::Release);
+            let was_connected = self.connected.swap(true, Ordering::AcqRel);
             self.close_notified.store(false, Ordering::Release);
-            // 1102 rather than 1101: the reconnect re-establishes the
-            // subscriptions, so nothing the caller held is lost.
-            wrapper.error(-1, 1102, "Connectivity between client and server has been restored - data maintained", "");
+            // 1102 pairs with a 1100: it is a recovery from a loss the caller
+            // was told about. Where a poll spanned a whole outage and recovery
+            // the two flags collapse to the restore alone, and a 1102 with no
+            // 1100 before it reads as a recovery from nothing — so it is said
+            // only where this surface believed it was disconnected. 1102 rather
+            // than 1101 because the reconnect re-establishes the subscriptions.
+            if !was_connected {
+                wrapper.error(-1, 1102, "Connectivity between client and server has been restored - data maintained", "");
+            }
         }
         if went {
             self.connected.store(false, Ordering::Release);

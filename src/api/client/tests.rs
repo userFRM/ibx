@@ -1723,6 +1723,37 @@ fn an_answering_call_does_not_swallow_a_venue_data_notice() {
     );
 }
 
+/// A restore the caller never saw the matching loss of is not announced.
+///
+/// When a poll spans a whole outage and recovery the lost and restored flags
+/// collapse to the restore alone; a 1102 with no 1100 before it reads as a
+/// recovery from nothing. It is said only where this surface believed it was
+/// disconnected.
+#[test]
+fn a_restore_without_a_loss_the_caller_saw_is_not_announced() {
+    let (client, _rx, shared) = test_client();
+
+    // The surface believes it is connected — it never processed a loss. A
+    // restore lands on its own.
+    shared.set_connection_restored();
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(
+        !w.events.iter().any(|e| e.starts_with("error:-1:1102:")),
+        "a 1102 with no 1100 the caller saw reads as a recovery from nothing: {:?}", w.events,
+    );
+
+    // A loss the caller is told about, then a recovery, is announced.
+    shared.set_connection_lost();
+    client.process_msgs(&mut w);
+    shared.set_connection_restored();
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error:-1:1102:")),
+        "a recovery from a loss the caller saw is announced: {:?}", w.events,
+    );
+}
+
 /// A session that goes away while a question is being answered still tells the
 /// caller so.
 ///
