@@ -138,9 +138,13 @@ trailing stop limit's limit offset on `lmtPriceOffset`. The one number a modify
 cannot move is a trailing percent, and a modify naming a new one is refused
 rather than sent. A modify of an order this session did not place — one the
 venue named at connect — is restated from the caller's own statement of it,
-which is what the reference client sends. A change of type on an order with a
+which is what the reference client sends — links included, on every replace,
+so a statement that omits the group drops it at the venue whatever the type,
+as it does on the reference client. A change of type on an order with a
 parent or a group is refused: the replace carries neither across a change of
-type, and the venue reads their absence as their removal.
+type, and the venue reads their absence as their removal. A replace stating a
+parent or a group other than the one an order placed here was placed with is
+refused too, for the same reason.
 
 A relative order is refused a modify as well. It answers both ways: sometimes
 the venue takes the replace and the order goes on working, and sometimes

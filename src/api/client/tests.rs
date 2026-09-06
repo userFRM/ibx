@@ -9211,13 +9211,13 @@ fn a_fill_on_a_brackets_leg_is_filed_under_the_client_the_venue_names() {
 }
 
 /// A leg replaced with a bare order keeps its parent, its group and its type
-/// in the record, as the wire keeps them, and a caller stating a client keeps
-/// that client.
+/// in the record, as the wire keeps them, and the record's client stands: a
+/// replace states no client, and a caller's statement of one is not what the
+/// venue names.
 ///
 /// The restatement wrote the caller's object over the record wholesale, so a
 /// leg replaced with a fresh order read as detached and ungrouped for the life
-/// of the order while the venue held it linked and grouped, and a caller who
-/// stated a client on the replace had the record's zero written over it.
+/// of the order while the venue held it linked and grouped.
 #[test]
 fn a_leg_replaced_with_a_bare_order_keeps_its_links_in_the_record() {
     let (client, rx, _shared) = test_client();
@@ -9236,11 +9236,11 @@ fn a_leg_replaced_with_a_bare_order_keeps_its_links_in_the_record() {
     );
 }
 
-/// A replace stating a parent or a group the placement did not records
-/// neither: the replace carries neither to the venue, so the order is as
-/// unlinked as it was placed, and the record says so.
+/// A replace stating a parent or a group an order placed here was not placed
+/// with is refused: the replace carries neither to the venue, so the order
+/// would go on as it was placed while the caller believed it linked.
 #[test]
-fn a_replace_stating_links_the_placement_did_not_records_none() {
+fn a_replace_stating_other_links_for_an_order_placed_here_is_refused() {
     let (client, rx, _shared) = test_client();
     let plain = Order {
         action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
@@ -9249,9 +9249,46 @@ fn a_replace_stating_links_the_placement_did_not_records_none() {
     client.place_order(9305, &spy(), &plain).unwrap();
     while rx.try_recv().is_ok() {}
     let linked = Order { lmt_price: 101.0, parent_id: 42, oca_group: "G1".into(), oca_type: 2, ..plain };
-    client.place_order(9305, &spy(), &linked).unwrap();
+    let refused = client.place_order(9305, &spy(), &linked);
+    assert!(refused.is_err_and(|why| why.message.contains("cannot be modified")), "told, not silently ignored");
+    assert!(rx.try_recv().is_err(), "and nothing went to the engine");
     let record = client.core.tracked_order(9305).expect("tracked");
-    assert_eq!((record.parent_id, record.oca_group.as_str(), record.oca_type), (0, "", 0));
+    assert_eq!((record.parent_id, record.oca_group.as_str(), record.oca_type), (0, "", 0), "the record is as placed");
+}
+
+/// The record of an order this client did not place follows the caller's
+/// latest statement of it, since that statement is what the venue receives
+/// on every replace of such an order.
+///
+/// The links were kept from the record whatever the caller stated, which is
+/// right for an order placed here — the engine restates them from the
+/// placement — and wrong for one the venue named: there the engine restates
+/// from the caller's statement, so a group the caller moved on the second
+/// replace moved at the venue while the record kept the first.
+#[test]
+fn a_venue_named_orders_record_follows_the_callers_latest_statement() {
+    let (client, rx, shared) = test_client();
+    let named = Order {
+        order_id: 9307, action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), oca_group: "G1".into(), oca_type: 3, ..Default::default()
+    };
+    shared.orders.push_order_info(9307, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: named.clone(),
+        order_state: crate::types::model::OrderState { status: "Submitted".into(), ..Default::default() },
+        last_exec: Default::default(),
+    });
+    let first = Order { lmt_price: 101.0, transmit: true, ..named.clone() };
+    client.place_order(9307, &spy(), &first).unwrap();
+    let second = Order { lmt_price: 102.0, oca_group: "G2".into(), transmit: true, ..named };
+    client.place_order(9307, &spy(), &second).unwrap();
+    let mut statements = 0;
+    while let Ok(cmd) = rx.try_recv() {
+        statements += matches!(cmd, ControlCommand::Order(OrderRequest::Describe { .. })) as u32;
+    }
+    assert_eq!(statements, 2, "each replace carried the caller's statement to the engine");
+    let record = client.core.tracked_order(9307).expect("tracked");
+    assert_eq!(record.oca_group, "G2", "and the record says what the venue was last told");
 }
 
 /// A change of type on an order with a parent or a group is refused.

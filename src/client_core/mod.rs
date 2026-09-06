@@ -2555,13 +2555,6 @@ impl ClientCore {
         // else. Every attribute below rides a tag the replace does not carry,
         // so a modify would state the order without it.
         //
-        // The bracket links are the costly pair. A replace that omits the
-        // parent link or the OCA group leaves a child resting alone: a fill on
-        // one leg no longer cancels the other, and the position is left with a
-        // naked order against it. Whether the venue reads an omitted 583 or
-        // 6107 as unchanged or as cleared is not established here, and the
-        // difference between "latent" and "detached" is the whole risk — so
-        // the modify is refused rather than sent and hoped for.
         // The venue refuses the order itself on the venue and security type a
         // session asked on — "Partial AON orders not supported for this
         // combination of exchange and security type" — so what a replace would
@@ -2713,6 +2706,23 @@ impl ClientCore {
                 t.order_type,
             )));
         }
+        // A parent or a group other than the one an order placed here was
+        // placed with. The replace carries neither — the engine restates them
+        // from the placement — so the order would go on as it was placed
+        // while the caller believed it linked otherwise. An order the venue
+        // named is restated from the caller's statement, links included, so
+        // there the caller's word is what the venue receives.
+        if let Some(t) = tracked.as_ref()
+            && self.placed_here(order_id)
+            && ((incoming.parent_id != 0 && incoming.parent_id != t.parent_id)
+                || (!incoming.oca_group.is_empty() && incoming.oca_group != t.oca_group))
+        {
+            return Some(Refusal::validation(
+                "the parent or the group of an order placed here cannot be modified: the replace \
+                 does not carry them, and the venue would go on working the order as it was placed"
+                    .to_string(),
+            ));
+        }
         let why = tracked
             .and_then(|tracked| Self::replace_cannot_restate(&tracked, restating_itself))
             .or_else(|| Self::replace_cannot_restate(incoming, restating_itself))?;
@@ -2774,27 +2784,26 @@ impl ClientCore {
                 tracked.remaining = (order.total_quantity - tracked.filled).max(0.0);
                 tracked.contract = contract;
                 // What the wire keeps across a replace, kept here too, in both
-                // directions. The engine restates the parent link, the group
-                // and its type from the record of the placement whatever the
-                // replace states, so a caller's empty value there does not
-                // detach the order and a caller's new one does not attach it.
-                // The client is the record's: a replace states no client, and
-                // where the record names none the venue's answer is read in
-                // its place wherever the client is reported.
+                // directions — for an order placed here. The engine restates
+                // the parent link, the group and its type from the record of
+                // the placement whatever the replace states, so a caller's
+                // empty value there does not detach the order and a caller's
+                // new one does not attach it; a new one is refused before this.
+                // An order the venue named is restated from the caller's
+                // statement of it on every replace, so there the record
+                // follows the caller, as the venue does. The client is the
+                // record's either way: a replace states no client, and where
+                // the record names none the venue's answer is read in its
+                // place wherever the client is reported.
                 let kept = (tracked.order.client_id, tracked.order.parent_id, tracked.order.oca_group.clone(), tracked.order.oca_type);
-                if (order.parent_id != 0 && order.parent_id != kept.1)
-                    || (!order.oca_group.is_empty() && order.oca_group != kept.2)
-                {
-                    log::warn!(
-                        "order {order_id}: the replace states a parent or a group the order was not \
-                         placed with; a replace carries neither, so the order stays as it was placed",
-                    );
-                }
+                let placed_here = tracked.placed_here;
                 tracked.order = order;
                 tracked.order.client_id = kept.0;
-                tracked.order.parent_id = kept.1;
-                tracked.order.oca_group = kept.2;
-                tracked.order.oca_type = kept.3;
+                if placed_here {
+                    tracked.order.parent_id = kept.1;
+                    tracked.order.oca_group = kept.2;
+                    tracked.order.oca_type = kept.3;
+                }
             }
             None => {
                 // A caller replacing an order the venue replayed at connect:
