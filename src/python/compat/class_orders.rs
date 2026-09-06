@@ -501,7 +501,7 @@ impl Default for Order {
             order_type: String::new(),
             lmt_price: 0.0,
             aux_price: 0.0,
-            tif: "DAY".into(),
+            tif: String::new(),
             outside_rth: false,
             display_size: 0,
             min_qty: 0,
@@ -657,7 +657,7 @@ impl Order {
     #[new]
     #[pyo3(signature = (
         order_id=0, action="".to_string(), total_quantity=0.0, order_type="".to_string(),
-        lmt_price=0.0, aux_price=0.0, tif="DAY".to_string(), outside_rth=false,
+        lmt_price=0.0, aux_price=0.0, tif="".to_string(), outside_rth=false,
         display_size=0, min_qty=0, hidden=false, good_after_time="".to_string(),
         good_till_date="".to_string(), oca_group="".to_string(), trailing_percent=0.0,
         algo_strategy="".to_string(), what_if=false, cash_qty=0.0, parent_id=0,

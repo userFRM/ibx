@@ -40,8 +40,8 @@ impl PriceCondition {
     // Empty, which is what the reference client holds for a condition nobody
     // named an exchange on. Named as SMART here, a condition watching a
     // contract that trades elsewhere watched it on a venue nobody chose.
-    #[pyo3(signature = (con_id=0, exchange=String::new(), price=0.0, is_more=true, trigger_method=0, is_conjunction_connection=true, **keywords))]
-    fn new(con_id: i64, exchange: String, price: f64, is_more: bool, trigger_method: i32, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+    #[pyo3(signature = (trigger_method=0, con_id=0, exchange=String::new(), is_more=true, price=0.0, is_conjunction_connection=true, **keywords))]
+    fn new(trigger_method: i32, con_id: i64, exchange: String, is_more: bool, price: f64, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
         let made = Py::new(py, Self { con_id, exchange, price, is_more, trigger_method, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
@@ -108,8 +108,8 @@ impl TimeCondition {
     fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
 
     #[new]
-    #[pyo3(signature = (time="".to_string(), is_more=true, is_conjunction_connection=true, **keywords))]
-    fn new(time: String, is_more: bool, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+    #[pyo3(signature = (is_more=true, time="".to_string(), is_conjunction_connection=true, **keywords))]
+    fn new(is_more: bool, time: String, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
         let made = Py::new(py, Self { time, is_more, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
@@ -150,8 +150,8 @@ impl MarginCondition {
     fn set_is_more_alias(&mut self, v: bool) { self.is_more = v; }
 
     #[new]
-    #[pyo3(signature = (percent=0, is_more=true, is_conjunction_connection=true, **keywords))]
-    fn new(percent: u32, is_more: bool, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+    #[pyo3(signature = (is_more=true, percent=0, is_conjunction_connection=true, **keywords))]
+    fn new(is_more: bool, percent: u32, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
         let made = Py::new(py, Self { percent, is_more, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
@@ -193,8 +193,8 @@ impl ExecutionCondition {
     fn set_exchange_alias(&mut self, v: String) { self.exchange = v; }
 
     #[new]
-    #[pyo3(signature = (symbol="".to_string(), exchange="".to_string(), sec_type="".to_string(), is_conjunction_connection=true, **keywords))]
-    fn new(symbol: String, exchange: String, sec_type: String, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+    #[pyo3(signature = (sec_type="".to_string(), exchange="".to_string(), symbol="".to_string(), is_conjunction_connection=true, **keywords))]
+    fn new(sec_type: String, exchange: String, symbol: String, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
         let made = Py::new(py, Self { symbol, exchange, sec_type, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
@@ -243,8 +243,8 @@ impl VolumeCondition {
     fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
 
     #[new]
-    #[pyo3(signature = (con_id=0, exchange=String::new(), volume=0, is_more=true, is_conjunction_connection=true, **keywords))]
-    fn new(con_id: i64, exchange: String, volume: i64, is_more: bool, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+    #[pyo3(signature = (con_id=0, exchange=String::new(), is_more=true, volume=0, is_conjunction_connection=true, **keywords))]
+    fn new(con_id: i64, exchange: String, is_more: bool, volume: i64, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
         let made = Py::new(py, Self { con_id, exchange, volume, is_more, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)
@@ -295,8 +295,8 @@ impl PercentChangeCondition {
     fn set_con_id_alias(&mut self, v: i64) { self.con_id = v; }
 
     #[new]
-    #[pyo3(signature = (con_id=0, exchange=String::new(), change_percent=0.0, is_more=true, is_conjunction_connection=true, **keywords))]
-    fn new(con_id: i64, exchange: String, change_percent: f64, is_more: bool, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
+    #[pyo3(signature = (con_id=0, exchange=String::new(), is_more=true, change_percent=0.0, is_conjunction_connection=true, **keywords))]
+    fn new(con_id: i64, exchange: String, is_more: bool, change_percent: f64, is_conjunction_connection: bool, keywords: Option<&Bound<'_, pyo3::types::PyDict>>, py: Python<'_>) -> PyResult<Py<Self>> {
         let made = Py::new(py, Self { con_id, exchange, change_percent, is_more, is_conjunction_connection })?;
         set_from_keywords(made.bind(py).as_any(), keywords)?;
         Ok(made)

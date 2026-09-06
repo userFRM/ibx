@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(o.action, "");
         assert_eq!(o.total_quantity, 0.0);
         assert_eq!(o.order_type, "");
-        assert_eq!(o.tif, "DAY");
+        assert_eq!(o.tif, "");
         assert!(o.transmit);
         assert!(!o.what_if);
         assert!(!o.outside_rth);

@@ -4,7 +4,7 @@
 use super::contract::{by_reference_name, enum_code, enum_member, set_by_reference_name};
 use pyo3::prelude::*;
 
-use super::{camel_aliases_copy, camel_aliases_owned};
+use super::camel_aliases_copy;
 
 /// ibapi-compatible BarData class for historical data callbacks.
 #[pyclass(from_py_object)]
@@ -222,7 +222,7 @@ pub struct CommissionAndFeesReport {
     #[pyo3(get, set)]
     pub yield_amount: f64,
     #[pyo3(get, set)]
-    pub yield_redemption_date: String,
+    pub yield_redemption_date: i64,
 }
 
 #[pymethods]
@@ -261,11 +261,6 @@ camel_aliases_copy! {
     CommissionAndFeesReport {
         get_commission_and_fees_alias set_commission_and_fees_alias commissionAndFees commission_and_fees f64;
         get_realized_pnl_alias set_realized_pnl_alias realizedPNL realized_pnl f64;
-    }
-}
-
-camel_aliases_owned! {
-    CommissionAndFeesReport {
-        get_yield_redemption_date_alias set_yield_redemption_date_alias yieldRedemptionDate yield_redemption_date String;
+        get_yield_redemption_date_alias set_yield_redemption_date_alias yieldRedemptionDate yield_redemption_date i64;
     }
 }

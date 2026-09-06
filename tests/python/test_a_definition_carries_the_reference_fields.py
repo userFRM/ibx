@@ -48,6 +48,12 @@ def test_the_fields_start_unstated():
     d = ContractDetails()
     assert d.maturity == ""
     assert d.minAlgoSize == UNSET_DOUBLE
+    # The reference client leaves the size and precision figures unset too.
+    assert d.minSize == UNSET_DOUBLE
+    assert d.sizeIncrement == UNSET_DOUBLE
+    assert d.suggestedSizeIncrement == UNSET_DOUBLE
+    assert d.lastPricePrecision == UNSET_DOUBLE
+    assert d.lastSizePrecision == UNSET_DOUBLE
     assert (d.eventContract1, d.eventContractDescription1, d.eventContractDescription2) == ("", "", "")
 
 

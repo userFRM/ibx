@@ -486,7 +486,7 @@ impl EClient {
                 currency: charge.currency.clone(),
                 realized_pnl: charge.realized_pnl,
                 yield_amount: charge.yield_amount,
-                yield_redemption_date: charge.yield_redemption_date.clone(),
+                yield_redemption_date: charge.yield_redemption_date,
             };
             let report_py = Py::new(py, report)?.into_any();
             call_wrapper!(self.wrapper, py, "commission_and_fees_report", (&report_py,));

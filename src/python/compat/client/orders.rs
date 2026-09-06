@@ -976,7 +976,7 @@ impl EClient {
                     currency: se.commission_and_fees.currency.clone(),
                     realized_pnl: se.commission_and_fees.realized_pnl,
                     yield_amount: se.commission_and_fees.yield_amount,
-                    yield_redemption_date: se.commission_and_fees.yield_redemption_date.clone(),
+                    yield_redemption_date: se.commission_and_fees.yield_redemption_date,
                 };
                 let report_py = Py::new(py, report)?.into_any();
                 self.deliver(py, "commission_and_fees_report", (&report_py,))?;

@@ -684,7 +684,7 @@ impl Default for Order {
             order_type: String::new(),
             lmt_price: 0.0,
             aux_price: 0.0,
-            tif: "DAY".into(),
+            tif: String::new(),
             outside_rth: false,
             display_size: 0,
             min_qty: 0,
@@ -1468,7 +1468,7 @@ pub struct CommissionAndFeesReport {
     /// A bond's yield at this price.
     pub yield_amount: f64,
     /// Which redemption that yield is measured to.
-    pub yield_redemption_date: String,
+    pub yield_redemption_date: i64,
 }
 
 impl CommissionAndFeesReport {
@@ -1488,7 +1488,7 @@ impl CommissionAndFeesReport {
             currency: currency.to_string(),
             realized_pnl: f64::MAX,
             yield_amount: f64::MAX,
-            yield_redemption_date: String::new(),
+            yield_redemption_date: 0,
         }
     }
 }
@@ -1868,7 +1868,7 @@ mod tests {
         assert_eq!(o.action, "");
         assert_eq!(o.total_quantity, 0.0);
         assert_eq!(o.order_type, "");
-        assert_eq!(o.tif, "DAY");
+        assert_eq!(o.tif, "");
         assert!(o.transmit);
         assert!(!o.what_if);
         assert!(!o.outside_rth);

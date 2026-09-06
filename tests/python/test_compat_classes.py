@@ -58,7 +58,7 @@ def test_order_defaults():
     assert o.action == ""
     assert o.total_quantity == 0.0
     assert o.order_type == ""
-    assert o.tif == "DAY"
+    assert o.tif == ""
     assert o.transmit is True
     assert o.what_if is False
 
