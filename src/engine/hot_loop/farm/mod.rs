@@ -1234,7 +1234,26 @@ impl FarmState {
                 // exchange map, the option model — is refused on its own. The
                 // quote it rides beside is not, and its prices go on arriving;
                 // told the quote was refused, a caller withdrew it.
-                if req_id.is_some_and(|rid| self.generic_tick_reqs.iter().any(|(id, _)| *id == rid)) {
+                if let Some(rid) = req_id
+                    && let Some(&(_, kind)) = self.generic_tick_reqs.iter().find(|(id, _)| *id == rid)
+                {
+                    // The news beside the quote is refused on its own. Left in
+                    // place, the entry the rebuild reads re-sends it on the
+                    // next reconnect — the venue refuses it again — and a
+                    // headline that never comes is waited on; so it is
+                    // released, the request and its filing both. The other
+                    // companions — the trading status, the exchange map, the
+                    // option model — carry no such standing state to release.
+                    if kind == NEWS_REQUEST_TYPE
+                        && let Some(pos) = self.news_subscriptions.iter().position(|(_, id, ..)| *id == rid)
+                    {
+                        let (.., con_id, _) = self.news_subscriptions.remove(pos);
+                        self.forget_news(rid, instrument);
+                        // Told so the client clears whoever asked, else its
+                        // dedup holds a re-ask against a claim the venue
+                        // already refused and no fresh subscription is sent.
+                        shared.market.push_news_rejection(con_id);
+                    }
                     log::warn!("The venue refused a request beside the quote on {named}: {reason}");
                     return;
                 }

@@ -83,6 +83,11 @@ pub struct MarketDataState {
     last_option_model: Mutex<std::collections::HashMap<crate::types::InstrumentId, crate::types::OptionComputation>>,
     /// Subscriptions the venue was never able to be asked for, and why.
     subscription_failures: Mutex<Vec<(crate::types::InstrumentId, String)>>,
+    /// Contracts whose per-contract news the venue refused. The engine has
+    /// released its own side; the client clears its record of who asked, so a
+    /// fresh subscription is sent anew rather than deduped against a claim the
+    /// venue already declined. Keyed by con_id, as the client keys its askers.
+    news_rejections: Mutex<Vec<i64>>,
     /// The increment each subscription was acknowledged with, for whoever
     /// watches the contract.
     tick_req_params: Mutex<Vec<(crate::types::InstrumentId, f64)>>,
@@ -128,6 +133,7 @@ impl MarketDataState {
             option_computations: Mutex::new(Vec::with_capacity(16)),
             last_option_model: Mutex::new(std::collections::HashMap::new()),
             subscription_failures: Mutex::new(Vec::new()),
+            news_rejections: Mutex::new(Vec::new()),
             tick_req_params: Mutex::new(Vec::new()),
             last_min_tick: Mutex::new(std::collections::HashMap::new()),
             tick_req_params_direct: Mutex::new(Vec::new()),
@@ -336,6 +342,16 @@ impl MarketDataState {
     /// Take every subscription failures waiting, leaving none.
     pub fn drain_subscription_failures(&self) -> Vec<(crate::types::InstrumentId, String)> {
         self.subscription_failures.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every con_id whose news the venue refused, leaving none. The
+    /// client clears its askers for each, so a re-ask is sent anew.
+    pub fn drain_news_rejections(&self) -> Vec<i64> {
+        self.news_rejections.lock().unwrap().drain(..).collect()
+    }
+
+    #[doc(hidden)] pub fn push_news_rejection(&self, con_id: i64) {
+        self.news_rejections.lock().unwrap().push(con_id);
     }
 
     /// The increment a subscription was acknowledged with, kept for whoever

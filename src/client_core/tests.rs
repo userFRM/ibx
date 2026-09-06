@@ -2274,3 +2274,17 @@ fn a_condition_trigger_of_7_or_8_is_carried() {
         );
     }
 }
+
+/// A news subscription the venue refuses leaves nobody holding it, so a later
+/// ask on the same contract is the first again and sends anew. Without the
+/// release, the dedup that keeps one venue subscription for many askers holds
+/// the re-ask against a claim the venue already declined and no news arrives.
+#[test]
+fn a_refused_news_subscription_frees_a_later_ask() {
+    let core = ClientCore::new();
+    let con_id = 756733;
+    assert!(core.first_to_ask_for_news(con_id, 11), "the first ask sends");
+    assert!(!core.first_to_ask_for_news(con_id, 12), "a second is deduped against the first");
+    core.release_news_askers(con_id);
+    assert!(core.first_to_ask_for_news(con_id, 13), "after the refusal a later ask sends anew");
+}

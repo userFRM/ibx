@@ -1641,6 +1641,13 @@ impl ClientCore {
         first
     }
 
+    /// Forget every caller that asked for news on a contract the venue
+    /// refused. A later ask is then the first again and sends anew, rather
+    /// than being deduped against a claim the venue already declined.
+    pub(crate) fn release_news_askers(&self, con_id: i64) {
+        self.news_askers.lock().unwrap().remove(&con_id);
+    }
+
     /// Register a market data subscription mapping.
     /// If `generic_tick_list` contains "292", also subscribes to per-contract news.
     pub fn register_mkt_data(

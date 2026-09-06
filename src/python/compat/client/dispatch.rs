@@ -585,6 +585,13 @@ impl EClient {
             }
         }
 
+        // A news subscription the venue refused: the engine released its side,
+        // so the client forgets whoever asked, leaving a later ask free to
+        // send anew. The quote it rode beside is untouched and unreported.
+        for con_id in shared.market.drain_news_rejections() {
+            self.core.release_news_askers(con_id);
+        }
+
         // A book this client could not keep whole, on the request that asked
         // for it. Nothing further is kept for it, so a caller not told reads a
         // subscription that is up and a book that has stopped moving. 354 is

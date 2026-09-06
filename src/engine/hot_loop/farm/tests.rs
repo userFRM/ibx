@@ -1545,6 +1545,40 @@ mod depth_position_tests {
         assert_eq!(shared.market.drain_subscription_failures().len(), 1, "the quote's own refusal reaches the caller");
     }
 
+    /// The news that rides beside the quote is its own generic tick, and the
+    /// venue refuses it on its own. Left in place, the entry the rebuild reads
+    /// re-sends on the next reconnect a subscription the venue has already
+    /// said it will not serve, and a headline that never comes is waited on
+    /// forever. So the refusal releases it: the request the venue named, the
+    /// tag it was filed under, and the entry the rebuild walks — while the
+    /// quote it rode beside is not reported refused and its prices go on
+    /// arriving.
+    #[test]
+    fn a_refused_news_companion_releases_its_state() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut None, &mut hb,
+        );
+        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut hb);
+        assert_eq!(farm.news_subscriptions.len(), 1, "the news was filed for the rebuild");
+        let refused = crate::protocol::fix::fix_build(&[
+            (crate::protocol::fix::TAG_MSG_TYPE, "j"),
+            (262, "7"),
+            (58, "Error&BRFG/NEWS/not permissioned"),
+        ], 1);
+        farm.handle_subscription_reject(&refused, &context, &shared);
+        assert!(farm.news_subscriptions.is_empty(), "the refused news is not left for the rebuild to re-send");
+        assert!(farm.generic_tick_reqs.iter().all(|(rid, _)| *rid != 7), "its request is released");
+        assert!(farm.md_req_to_instrument.iter().all(|(rid, _)| *rid != 7), "and its instrument mapping");
+        assert!(shared.market.drain_subscription_failures().is_empty(), "the quote it rode beside is not reported refused");
+        assert_eq!(shared.market.drain_news_rejections(), vec![756733], "the client is told to clear its askers so a re-ask sends");
+    }
+
     /// The increment the venue acknowledges a subscription with is kept for
     /// the caller, who hears it on `tick_req_params` as the reference client
     /// delivers it.
