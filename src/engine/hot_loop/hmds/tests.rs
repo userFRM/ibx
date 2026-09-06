@@ -273,6 +273,30 @@ fn query_error_releases_historical_and_emits_error_and_end_sentinel() {
     assert!(hist[0].1.is_complete);
     assert!(hist[0].1.bars.is_empty());
 }
+/// A head timestamp the connection cannot carry is refused, not recorded as
+/// pending. Pushed unconditionally, a request with no connection sat pending
+/// with no answer ever coming.
+#[test]
+fn a_head_timestamp_with_no_connection_is_refused_not_left_pending() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+    shared.reference.cache_definition(265598, crate::types::model::Contract {
+        con_id: 265598, symbol: "AAPL".into(), sec_type: "STK".into(), exchange: "SMART".into(),
+        ..Default::default()
+    });
+
+    hmds.send_head_timestamp_request(3, 265598, "TRADES", true, false, &mut conn, &mut hb, &shared);
+
+    assert!(hmds.pending_head_ts.is_empty(), "a request that could not be sent is not left pending");
+    let told = shared.reference.drain_historical_errors();
+    assert!(
+        told.iter().any(|(id, code, _)| *id == 3 && *code == 504),
+        "the caller is told the request could not be sent: {told:?}",
+    );
+}
+
 
 #[test]
 fn query_error_releases_head_timestamp_without_sentinel() {

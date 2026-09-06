@@ -2150,17 +2150,38 @@ fn build_tbt_query(
         // The id the query goes out under, so the response can be matched to
         // the caller. A locally generated id never reaches the wire.
         let query_id = crate::control::historical::head_timestamp_query_id(&req);
-        if let Some(conn) = hmds_conn.as_mut() {
-            let ts = chrono_free_timestamp();
-            let _ = conn.send_fix(&[
-                (fix::TAG_MSG_TYPE, "W"),
-                (fix::TAG_SENDING_TIME, &ts),
-                (6118, &xml),
-            ]);
-            log::info!("Sent head timestamp request: req_id={req_id} con_id={con_id}");
-            hb.last_hmds_sent = Instant::now();
+        // Recorded as pending only once it is actually sent. Pushed
+        // unconditionally, a request the socket could not carry — or one with
+        // no connection at all — sat pending with no answer coming, and the
+        // log claimed a send that did not happen.
+        let Some(conn) = hmds_conn.as_mut() else {
+            super::push_hmds_refusal(
+                shared, req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+                format!("the head timestamp for {con_id} could not be sent: the historical connection is not up"),
+                false,
+            );
+            return;
+        };
+        let ts = chrono_free_timestamp();
+        match conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "W"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6118, &xml),
+        ]) {
+            Ok(()) => {
+                log::info!("Sent head timestamp request: req_id={req_id} con_id={con_id}");
+                hb.last_hmds_sent = Instant::now();
+                self.pending_head_ts.push((query_id, req_id));
+            }
+            Err(e) => {
+                log::warn!("head timestamp did not go out: req_id={req_id} con_id={con_id}: {e}");
+                super::push_hmds_refusal(
+                    shared, req_id, crate::error_codes::Refusal::NOT_CONNECTED,
+                    format!("the head timestamp for {con_id} could not be sent: {e}"),
+                    false,
+                );
+            }
         }
-        self.pending_head_ts.push((query_id, req_id));
     }
 
     pub(crate) fn send_scanner_params_request(&mut self, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
