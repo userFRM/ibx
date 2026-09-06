@@ -458,6 +458,9 @@ impl EClient {
         // `tick_req_params` ahead of the first tick. The venue names one
         // exchange table for every contract and states no permission figure,
         // so those two fields are empty and nought.
+        for (req_id, min_tick) in self.shared.market.drain_tick_req_params_direct() {
+            wrapper.tick_req_params(req_id, min_tick, "", 0);
+        }
         for (instrument, min_tick) in self.shared.market.drain_tick_req_params() {
             let held_by = self.core.req_id_for_instrument(instrument);
             let watching = std::iter::once(held_by)

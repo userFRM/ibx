@@ -655,6 +655,9 @@ impl EClient {
 
         // The increment each subscription was acknowledged with, to everyone
         // watching the contract, once, as on the other surface.
+        for (req_id, min_tick) in shared.market.drain_tick_req_params_direct() {
+            call_wrapper!(self.wrapper, py, "tick_req_params", (req_id, min_tick, "", 0i64));
+        }
         for (instrument, min_tick) in shared.market.drain_tick_req_params() {
             let held_by = self.core.req_id_for_instrument(instrument);
             let watching: Vec<i64> = std::iter::once(held_by)

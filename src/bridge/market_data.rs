@@ -86,6 +86,13 @@ pub struct MarketDataState {
     /// The increment each subscription was acknowledged with, for whoever
     /// watches the contract.
     tick_req_params: Mutex<Vec<(crate::types::InstrumentId, f64)>>,
+    /// The last minimum increment announced for an instrument, so a request
+    /// that follows an existing subscription can be told it too: the venue
+    /// sends one tickReqParams per reqMktData, and a follower asked for none.
+    last_min_tick: Mutex<std::collections::HashMap<crate::types::InstrumentId, f64>>,
+    /// tickReqParams owed to a single request that followed a live
+    /// subscription, delivered to that request alone rather than fanned.
+    tick_req_params_direct: Mutex<Vec<(i64, f64)>>,
     /// Lookups that named a contract another slot already holds: the slot the
     /// caller was given, and the one the contract lives in.
     subscription_moves: Mutex<Vec<(crate::types::InstrumentId, crate::types::InstrumentId)>>,
@@ -122,6 +129,8 @@ impl MarketDataState {
             last_option_model: Mutex::new(std::collections::HashMap::new()),
             subscription_failures: Mutex::new(Vec::new()),
             tick_req_params: Mutex::new(Vec::new()),
+            last_min_tick: Mutex::new(std::collections::HashMap::new()),
+            tick_req_params_direct: Mutex::new(Vec::new()),
             subscription_moves: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
             venue_time: Mutex::new(None),
@@ -153,6 +162,7 @@ impl MarketDataState {
     /// Say that a slot has been given back.
     #[doc(hidden)] pub fn note_released_slot(&self, instrument: crate::types::InstrumentId) {
         self.released_slots.lock().unwrap().push(instrument);
+        self.last_min_tick.lock().unwrap().remove(&instrument);
     }
 
     /// The slots given back since this was last asked.
@@ -332,6 +342,24 @@ impl MarketDataState {
     /// watches the contract. Engine side.
     #[doc(hidden)] pub fn push_tick_req_params(&self, instrument: crate::types::InstrumentId, min_tick: f64) {
         self.tick_req_params.lock().unwrap().push((instrument, min_tick));
+        self.last_min_tick.lock().unwrap().insert(instrument, min_tick);
+    }
+
+    /// The increment a follower should be told, if the subscription it follows
+    /// was already acknowledged. `None` before that — the pending tickReqParams
+    /// fans out to the follower when it arrives.
+    pub fn min_tick_for_follower(&self, instrument: crate::types::InstrumentId) -> Option<f64> {
+        self.last_min_tick.lock().unwrap().get(&instrument).copied()
+    }
+
+    /// tickReqParams owed to one request that followed a live subscription.
+    #[doc(hidden)] pub fn push_tick_req_params_for(&self, req_id: i64, min_tick: f64) {
+        self.tick_req_params_direct.lock().unwrap().push((req_id, min_tick));
+    }
+
+    /// Take those, in the order they came. Client side.
+    pub fn drain_tick_req_params_direct(&self) -> Vec<(i64, f64)> {
+        self.tick_req_params_direct.lock().unwrap().drain(..).collect()
     }
 
     /// Take the acknowledged increments, in the order they came. Client side.
@@ -570,6 +598,33 @@ impl MarketDataState {
 
     #[doc(hidden)] pub fn set_instrument_count(&self, count: u32) {
         self.instrument_count.store(count as u64, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod follower_tick_req_params_tests {
+    use super::*;
+
+    /// A request that follows a live subscription is owed the increment that
+    /// subscription was acknowledged with — the venue sends one tickReqParams
+    /// per reqMktData, and a follower asked for none. Cleared when the slot is
+    /// given back, so a reclaimed contract does not carry a stale increment.
+    #[test]
+    fn a_follower_is_owed_the_cached_increment() {
+        let m = MarketDataState::new();
+        let instrument = 5;
+
+        assert_eq!(m.min_tick_for_follower(instrument), None, "none before the acknowledgement");
+        m.push_tick_req_params(instrument, 0.01);
+        assert_eq!(m.min_tick_for_follower(instrument), Some(0.01), "cached from the acknowledgement");
+
+        // The follower is owed it, delivered to that request alone.
+        m.push_tick_req_params_for(2, 0.01);
+        assert_eq!(m.drain_tick_req_params_direct(), vec![(2, 0.01)]);
+        assert!(m.drain_tick_req_params_direct().is_empty(), "taken once");
+
+        m.note_released_slot(instrument);
+        assert_eq!(m.min_tick_for_follower(instrument), None, "cleared when the slot is given back");
     }
 }
 

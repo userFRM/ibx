@@ -1765,6 +1765,13 @@ impl ClientCore {
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
+            // The venue sends a tickReqParams per reqMktData; a follower asked
+            // for none, so it is owed the increment the live subscription was
+            // acknowledged with. Before that acknowledgement there is none yet,
+            // and the pending one fans out to this follower when it arrives.
+            if let Some(min_tick) = shared.market.min_tick_for_follower(instrument) {
+                shared.market.push_tick_req_params_for(req_id, min_tick);
+            }
             // The news subscription was sent above whether or not the quotes
             // were already up, so it is recorded here as well. Recorded only
             // on the path that also opened the quotes, it was never withdrawn:
