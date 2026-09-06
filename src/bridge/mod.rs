@@ -324,6 +324,11 @@ impl SharedState {
         self.notify();
     }
 
+    /// Read the connection-restored flag without clearing it.
+    pub fn peek_connection_restored(&self) -> bool {
+        self.connection_restored.load(Ordering::Acquire)
+    }
+
     /// Read and clear the connection-restored flag.
     #[inline]
     pub fn take_connection_restored(&self) -> bool {

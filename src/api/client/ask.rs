@@ -261,6 +261,13 @@ fn is_connection_notice(code: i64) -> bool {
     matches!(code, 2104 | 2106 | 2107 | 2119 | 2158)
 }
 
+/// Whether the answering-call guard re-raises a loss on drop: the connection
+/// went during the wait, the caller kept no record of its own to have heard
+/// it, and no restore has landed since the last pump to make the loss stale.
+fn reraise_the_loss(went_during: bool, heard_by_the_caller: bool, restored_since: bool) -> bool {
+    went_during && !heard_by_the_caller && !restored_since
+}
+
 /// Holds the caller's right to be told the session closed, across pumping that
 /// this client does on its own behalf.
 ///
@@ -296,7 +303,11 @@ impl Drop for LeaveTheCloseNoticeForTheCaller<'_> {
         let went_during = self.connected_before
             && !self.client.connected.load(std::sync::atomic::Ordering::Acquire);
         let heard_by_the_caller = self.client.kept.lock().map(|k| k.is_some()).unwrap_or(false);
-        if went_during && !heard_by_the_caller {
+        // A restore that landed after the last pump has already set the
+        // flag; re-raising the loss would clear it, and the caller would
+        // read 1100 and never the 1102 the engine recovered with.
+        let restored_since = self.client.shared.peek_connection_restored();
+        if reraise_the_loss(went_during, heard_by_the_caller, restored_since) {
             self.client.shared.set_connection_lost();
         }
     }
@@ -1471,6 +1482,18 @@ mod ask_id_holds_nothing_after_it_is_kept {
             shared.reference.is_ours(crate::bridge::RecordKind::Answer, id),
             "and the id is still this session's own",
         );
+    }
+
+    /// The answering-call guard re-raises a loss only when no restore has
+    /// landed since the last pump. A restore that arrives after the last pump
+    /// sets the flag; re-raising would clear it and the caller would read 1100
+    /// and never the 1102 the engine recovered with.
+    #[test]
+    fn the_guard_reraises_a_loss_only_when_no_restore_has_landed() {
+        assert!(reraise_the_loss(true, false, false), "loss during the wait, no record, no restore");
+        assert!(!reraise_the_loss(true, false, true), "a restore since the last pump makes the loss stale");
+        assert!(!reraise_the_loss(false, false, false), "no loss during the wait, nothing to re-raise");
+        assert!(!reraise_the_loss(true, true, false), "the caller's own record already heard it");
     }
 
     /// One released the ordinary way gives the session up too.
