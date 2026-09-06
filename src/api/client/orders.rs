@@ -429,21 +429,27 @@ impl EClient {
                 "order_id {order_id} is not an order number: they start at one",
             ))
         })?;
-        if !manual_order_cancel_time.is_empty() {
-            // Recorded against the order named, which is known to be one by
-            // now: parked against an id that names no order, the note fired
-            // as an error on nothing.
-            self.shared.orders.push_order_inactive(
-                order_id,
-                Refusal::VALIDATION,
-                format!(
-                    "a withdrawal states a time, and this protocol carries no field for \
-                     it: the cancel names five and none of them is that one, so the order \
-                     is withdrawn without it. State it where the order was placed to have \
-                     it recorded. (stated: {manual_order_cancel_time})",
-                ),
-            );
-        }
+        // Said for a withdrawal that happens — after a held order is
+        // forgotten, or before the cancel goes — and not for one refused
+        // below as spent or unknown, which withdrew nothing.
+        let annotate = || {
+            if manual_order_cancel_time.is_empty() {
+                return;
+            }
+                // Recorded against the order named, which is known to be one by
+                // now: parked against an id that names no order, the note fired
+                // as an error on nothing.
+                self.shared.orders.push_order_inactive(
+                    order_id,
+                    Refusal::VALIDATION,
+                    format!(
+                        "a withdrawal states a time, and this protocol carries no field for \
+                         it: the cancel names five and none of them is that one, so the order \
+                         is withdrawn without it. State it where the order was placed to have \
+                         it recorded. (stated: {manual_order_cancel_time})",
+                    ),
+                );
+        };
         // An order still held never reached the venue, so withdrawing it is
         // forgetting a command rather than sending one. Sent, the venue
         // answers that it knows no such order and the command stays queued to
@@ -457,6 +463,7 @@ impl EClient {
         // working while the caller had been told it was withdrawn: the staged
         // revision goes, and the cancel still travels.
         if self.core.withdraw_held_placement(order_id) {
+            annotate();
             return Ok(());
         }
         // A withdrawal naming an order this client is not working is answered
@@ -489,6 +496,7 @@ impl EClient {
                 format!("no order is working under {order_id}"),
             ));
         }
+        annotate();
         self.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
     }
 
@@ -554,8 +562,21 @@ impl EClient {
         // is the engine's, mirrored: a contract the venue named an order on
         // counts whether or not this session ever subscribed to it.
         let count = self.shared.market.instrument_count();
+        // Every failed send is counted and reported, as on the other surface:
+        // stopped at the first, the rest were never attempted and the caller
+        // was not told how many went.
+        let mut unsent = 0usize;
         for instrument in 0..count {
-            self.send(ControlCommand::Order(OrderRequest::CancelAll { instrument }))?;
+            if self.send(ControlCommand::Order(OrderRequest::CancelAll { instrument })).is_err() {
+                unsent += 1;
+            }
+        }
+        if unsent > 0 {
+            return Err(Refusal::no_answer(format!(
+                "a global cancel reached the engine for {} of {count} instruments; \
+                 the rest were not sent, so orders on them are still working",
+                count as usize - unsent,
+            )));
         }
         // An order the venue named that could not be given a slot in this
         // client's instrument table is in none of those requests: the engine

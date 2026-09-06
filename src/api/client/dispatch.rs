@@ -723,12 +723,17 @@ impl EClient {
             wrapper.head_timestamp(req_id as i64, &stated);
         }
 
-        // Contract details → contract_details + contract_details_end
+        // Contract details → contract_details + contract_details_end. The
+        // ends are taken before the rows: a row and its end landing between
+        // the two drains then deliver the row now and the end next pass,
+        // where the other order delivered the end first and the row to a
+        // caller that had already stopped listening.
+        let ends = self.shared.reference.drain_contract_details_end();
         for (req_id, def) in self.shared.reference.drain_contract_details() {
             let details = ContractDetails::from_definition(&def);
             wrapper.contract_details(req_id as i64, &details);
         }
-        for req_id in self.shared.reference.drain_contract_details_end() {
+        for req_id in ends {
             wrapper.contract_details_end(req_id as i64);
         }
 

@@ -544,11 +544,6 @@ impl EClient {
                 "cancel_order: order_id {order_id} is not an order number",
             )));
         };
-        // Said before the cancel goes, so a caller reading its callbacks in
-        // order learns what will not travel before it is told the order went.
-        if let Some(stated) = uncarried {
-            self.say_the_annotation_did_not_travel(py, order_id, stated)?;
-        }
         // An order still held never reached the venue, so withdrawing it is
         // forgetting a command rather than sending one, as it is on the other
         // surface. Sent, the venue answers that it knows no such order and the
@@ -562,6 +557,11 @@ impl EClient {
         // working while the caller had been told it was withdrawn: the staged
         // revision goes, and the cancel still travels.
         if self.core.withdraw_held_placement(oid) {
+            // Said for a withdrawal that happens, as on the other surface, and
+            // not for one refused below as spent or unknown.
+            if let Some(stated) = uncarried.clone() {
+                self.say_the_annotation_did_not_travel(py, order_id, stated)?;
+            }
             return Ok(());
         }
         // A withdrawal naming an order this client is not working is answered
@@ -593,6 +593,11 @@ impl EClient {
                 crate::error_codes::NO_SUCH_ORDER,
                 format!("no order is working under {oid}"),
             ));
+        }
+        // Said before the cancel goes, so a caller reading its callbacks in
+        // order learns what will not travel before it is told the order went.
+        if let Some(stated) = uncarried {
+            self.say_the_annotation_did_not_travel(py, order_id, stated)?;
         }
         Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: oid }))
     }

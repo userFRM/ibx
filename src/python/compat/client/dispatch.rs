@@ -885,7 +885,11 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "head_timestamp", (req_id as i64, stated.as_str()));
         }
 
-        // Drain contract details -> contractDetails + contractDetailsEnd
+        // Drain contract details -> contractDetails + contractDetailsEnd. The
+        // ends are taken before the rows, as on the other surface: a row and
+        // its end landing between the two drains deliver the row now and the
+        // end next pass, never the end first.
+        let contract_ends = shared.reference.drain_contract_details_end_for_dispatch();
         let contract_defs = shared.reference.drain_contract_details_for_dispatch();
         for (req_id, def) in contract_defs {
             let details = ContractDetails::from_definition(py, &def);
@@ -893,7 +897,6 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "contract_details",
                 (req_id as i64, &details_py));
         }
-        let contract_ends = shared.reference.drain_contract_details_end_for_dispatch();
         for req_id in contract_ends {
             call_wrapper!(self.wrapper, py, "contract_details_end", (req_id as i64,));
         }

@@ -871,8 +871,15 @@ impl CcpState {
                         && let Some(rid) = response_req_id.as_ref().and_then(|r| r.parse::<u32>().ok())
                         && rid < 0xF000_0000
                     {
-                        for def in all.into_iter().filter(|d| d.con_id != 0) {
-                            shared.reference.cache_contract(
+                        // The listing the flat parse below produces is that
+                        // path's to deliver: it is the one paired with the
+                        // trading hours, and claimed here it reached the
+                        // caller without them while the enriched row was
+                        // dropped at the gate.
+                        let flat = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq())
+                            .map(|d| d.con_id);
+                        for def in all.into_iter().filter(|d| d.con_id != 0 && Some(d.con_id) != flat) {
+                            shared.reference.cache_definition(
                             def.con_id as i64,
                             // Mapped where every other reader of a
                             // definition maps it. Written out here, an
@@ -900,14 +907,21 @@ impl CcpState {
                     })
                 });
                 if let (Some(idx), Some(rid)) = (fanout_idx, response_req_id.as_ref()) {
-                    if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq()) {
-                        let api_req_id = self.pending_fanout[idx].api_req_id;
+                    let api_req_id = self.pending_fanout[idx].api_req_id;
+                    let parsed = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq());
+                    if parsed.is_none() {
+                        // Counted below all the same: a leg whose reply cannot
+                        // be read is answered, and left uncounted the request
+                        // waited out its deadline for a reply already in.
+                        log::warn!("lookup {api_req_id}: a leg answered with a definition that cannot be read");
+                    }
+                    if let Some(def) = parsed {
                         // No con_id is "no definition for this
                         // exchange" — cache nothing and emit no row. The leg
                         // still counts toward the fan-out below, so the
                         // request completes.
                         if def.con_id != 0 {
-                            shared.reference.cache_contract(
+                            shared.reference.cache_definition(
                             def.con_id as i64,
                             // Mapped where every other reader of a
                             // definition maps it. Written out here, an
@@ -938,27 +952,27 @@ impl CcpState {
                                 }
                             }
                         }
-                        // A leg the gateway cannot resolve carries no contract:
-                        // it still completes the fan-out, but a zeroed row is
-                        // not a listing.
-                        if !self.pending_fanout[idx].answered.iter().any(|id| id == rid) {
-                            self.pending_fanout[idx].answered.push(rid.clone());
-                        }
-                        self.pending_fanout[idx].deadline = Instant::now() + SECDEF_TIMEOUT;
-                        if self.pending_fanout[idx].answered.len() >= self.pending_fanout[idx].fanout_req_ids.len() {
-                            self.pending_fanout.swap_remove(idx);
-                            // The master row may still be parked awaiting its
-                            // schedule. Ending here would order the end before
-                            // the row, so the pair carries it — the same way the
-                            // single-exchange case above hands the end over.
-                            match self.pending_schedule_pair.iter_mut()
-                                .find(|p| p.api_req_id == api_req_id)
-                            {
-                                Some(pair) => pair.is_last = true,
-                                None => {
-                                    shared.reference.push_contract_details_end(api_req_id);
-                                    emit(event_tx, Event::ContractDetailsEnd(api_req_id));
-                                }
+                    }
+                    // A leg the gateway cannot resolve carries no contract:
+                    // it still completes the fan-out, but a zeroed row is
+                    // not a listing.
+                    if !self.pending_fanout[idx].answered.iter().any(|id| id == rid) {
+                        self.pending_fanout[idx].answered.push(rid.clone());
+                    }
+                    self.pending_fanout[idx].deadline = Instant::now() + SECDEF_TIMEOUT;
+                    if self.pending_fanout[idx].answered.len() >= self.pending_fanout[idx].fanout_req_ids.len() {
+                        self.pending_fanout.swap_remove(idx);
+                        // The master row may still be parked awaiting its
+                        // schedule. Ending here would order the end before
+                        // the row, so the pair carries it — the same way the
+                        // single-exchange case above hands the end over.
+                        match self.pending_schedule_pair.iter_mut()
+                            .find(|p| p.api_req_id == api_req_id)
+                        {
+                            Some(pair) => pair.is_last = true,
+                            None => {
+                                shared.reference.push_contract_details_end(api_req_id);
+                                emit(event_tx, Event::ContractDetailsEnd(api_req_id));
                             }
                         }
                     }
@@ -972,7 +986,7 @@ impl CcpState {
                 if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq()) {
                     let is_last_wire = crate::control::contracts::secdef_response_is_last(msg);
                     if def.con_id != 0 {
-                        shared.reference.cache_contract(
+                        shared.reference.cache_definition(
                             def.con_id as i64,
                             // Mapped where every other reader of a
                             // definition maps it. Written out here, an
@@ -2348,13 +2362,16 @@ impl CcpState {
             let Some(pos) = self.pending_option_params.iter()
                 .position(|(_, pending, con_id, _)| {
                     pending.eq_ignore_ascii_case(&symbol)
-                        && stated.is_none_or(|named| named == *con_id)
+                        && stated.is_none_or(|named| *con_id == 0 || named == *con_id)
                 })
             else {
                 log::warn!("Option chain reply for '{symbol}' matches no request");
                 continue;
             };
-            let (req_id, _, con_id, _) = self.pending_option_params.remove(pos);
+            let (req_id, _, asked_under, _) = self.pending_option_params.remove(pos);
+            // The underlying as the venue names it, where it names one; a
+            // caller who asked without the id is answered with it.
+            let con_id = stated.unwrap_or(asked_under);
             log::info!("Option chain reply: req_id={req_id} symbol={symbol} scopes={}", scopes.len());
             shared.reference.push_option_params(req_id, con_id, scopes);
         }
@@ -2772,7 +2789,10 @@ impl CcpState {
     ) {
         if con_id == 0 { return; }
         if self.auto_fetched_conids.contains_key(&con_id) { return; }
-        if shared.reference.get_contract(con_id).is_some() { return; }
+        // Warm means defined. An entry a fill or an order seeded names the
+        // contract and no more, and read as warm it kept the definition from
+        // ever being asked for.
+        if shared.reference.has_definition(con_id) { return; }
         let req_id = self.next_internal_secdef_id;
         self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
         self.auto_fetched_conids.insert(con_id, req_id);

@@ -6805,3 +6805,122 @@ fn a_refused_preview_is_a_refusal_and_not_a_rejected_order() {
     );
     assert!(context.order(42).is_none(), "and the preview is over");
 }
+
+/// A definition arriving over an entry a fill seeded keeps what it states.
+///
+/// The cache merged seven names and nothing else, so an option's strike, its
+/// right, its expiry and its multiplier — all that tells two options on one
+/// underlying apart — were dropped on the way in.
+#[test]
+fn a_definition_over_a_seeded_entry_keeps_what_it_states() {
+    let shared = SharedState::new();
+    shared.reference.cache_contract(1, crate::types::model::Contract {
+        con_id: 1, symbol: "SPY".into(), sec_type: "OPT".into(), exchange: "SMART".into(), currency: "USD".into(),
+        ..Default::default()
+    });
+    shared.reference.cache_definition(1, crate::types::model::Contract {
+        con_id: 1, symbol: "SPY".into(), sec_type: "OPT".into(), strike: 500.0, right: "C".into(),
+        last_trade_date_or_contract_month: "20261218".into(), multiplier: "100".into(), trading_class: "SPY".into(),
+        ..Default::default()
+    });
+    let held = shared.reference.get_contract(1).expect("cached");
+    assert_eq!((held.strike, held.right.as_str(), held.last_trade_date_or_contract_month.as_str(), held.multiplier.as_str()),
+        (500.0, "C", "20261218", "100"), "{held:?}");
+}
+
+/// An entry a fill seeded is not a definition, and does not keep the
+/// definition from being asked for.
+#[test]
+fn a_seeded_entry_does_not_keep_the_definition_from_being_fetched() {
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    shared.reference.cache_contract(2, crate::types::model::Contract {
+        con_id: 2, symbol: "SPY".into(), sec_type: "OPT".into(), ..Default::default()
+    });
+    ccp.auto_fetch_secdef_if_cold(2, &mut None, &shared, &mut hb);
+    assert!(ccp.auto_fetched_conids.contains_key(&2), "the definition is asked for");
+    shared.reference.cache_definition(3, crate::types::model::Contract { con_id: 3, symbol: "SPY".into(), ..Default::default() });
+    ccp.auto_fetch_secdef_if_cold(3, &mut None, &shared, &mut hb);
+    assert!(!ccp.auto_fetched_conids.contains_key(&3), "and a defined one is not asked for again");
+}
+
+/// A chain asked for without the underlying's id is answered, under the id
+/// the venue names.
+///
+/// Matched on the id alone, a request that stated none could never match a
+/// reply that stated one, and the caller waited out the deadline; and the
+/// callback carried the caller's id where the reference client carries the
+/// venue's.
+#[test]
+fn a_chain_asked_for_without_the_underlyings_id_is_answered_under_the_venues() {
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+    ccp.pending_option_params.push((9, "SPY".into(), 0, Instant::now() + OPTION_CHAIN_TIMEOUT));
+    let msg = fix::fix_build(
+        &[
+            (fix::TAG_MSG_TYPE, "U"), (6040, "139"), (55, "SPY"),
+            (6775, "20260116/20260320"), (6346, "756733"), (100, "SMART"), (6058, "SPY"), (231, "100"),
+            (6997, "500.0;505.0"),
+        ],
+        1,
+    );
+    ccp.handle_option_chain(&msg, &shared);
+    let answered = shared.reference.drain_option_params();
+    assert_eq!(answered.len(), 1, "the request is answered");
+    assert_eq!((answered[0].0, answered[0].1), (9, 756733), "under the underlying the venue names");
+    assert!(ccp.pending_option_params.is_empty());
+}
+
+/// Of two listings in one reply, the one the trading hours are fetched for
+/// is delivered with them, once.
+///
+/// The multi-listing path claimed the delivery slot for every listing, the
+/// last included — the one the flat path pairs with the schedule — so that
+/// row reached the caller without hours and the enriched row was dropped at
+/// the gate when the pair resolved.
+#[test]
+fn the_listing_paired_with_its_hours_is_delivered_by_that_pairing_alone() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    // A caller's lookup by symbol, which is what draws two listings.
+    ccp.pending_secdef.push((9, false, Instant::now() + SECDEF_TIMEOUT));
+    let msg = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "d"),
+        (crate::control::contracts::TAG_SECURITY_REQ_ID, "9"),
+        (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
+        (55, "SPY"), (167, "CS"), (crate::control::contracts::TAG_IB_CON_ID, "756733"), (15, "USD"),
+        (55, "SPY"), (167, "CS"), (crate::control::contracts::TAG_IB_CON_ID, "90016213"), (15, "MXN"),
+        (6256, "SPY-MEXI"),
+    ], 1);
+    ccp.process_ccp_message(&msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
+    let rows: Vec<i64> = shared.reference.drain_contract_details().into_iter().map(|(_, d)| d.con_id as i64).collect();
+    assert_eq!(rows, vec![756733], "the listing with no hours to wait for goes at once, and only that one");
+    assert!(
+        ccp.pending_schedule_pair.iter().any(|p| p.api_req_id == 9 && p.def.con_id == 90016213),
+        "the other waits for its hours: {:?}", ccp.pending_schedule_pair.iter().map(|p| p.def.con_id).collect::<Vec<_>>(),
+    );
+}
+
+/// A leg of a fan-out whose reply cannot be read still counts as answered.
+///
+/// The tally sat inside the parse, so an unreadable leg never completed the
+/// fan-out and the request waited out its deadline for a reply already in.
+#[test]
+fn a_leg_whose_reply_cannot_be_read_still_counts() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    ccp.pending_fanout.push(PendingFanout {
+        api_req_id: 9,
+        fanout_req_ids: vec!["ibxfan-9-0".into(), "ibxfan-9-1".into()],
+        answered: vec!["ibxfan-9-0".into()],
+        deadline: Instant::now() + SECDEF_TIMEOUT,
+    });
+    let unreadable = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "d"),
+        (crate::control::contracts::TAG_SECURITY_REQ_ID, "ibxfan-9-1"),
+        (crate::control::contracts::TAG_SECURITY_RESPONSE_TYPE, "4"),
+        (55, "SPY"), (167, "CS"), (crate::control::contracts::TAG_IB_CON_ID, "not-a-contract"),
+    ], 1);
+    ccp.process_ccp_message(&unreadable, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
+    assert!(ccp.pending_fanout.is_empty(), "the fan-out is complete");
+    assert_eq!(shared.reference.drain_contract_details_end(), vec![9], "and the caller has its end");
+}

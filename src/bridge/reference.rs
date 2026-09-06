@@ -110,6 +110,8 @@ pub struct ReferenceState {
     depth_exchanges_pending: Mutex<bool>,
     /// Contract cache from CCP exec reports (con_id -> api::Contract).
     contract_cache: Mutex<HashMap<i64, api::Contract>>,
+    /// The entries above that are the venue's own definitions, not seeds.
+    defined_contracts: Mutex<std::collections::HashSet<i64>>,
     /// Gateway-local init data (populated during connection, read-only after).
     smart_components: Mutex<Vec<crate::types::SmartComponent>>,
     news_providers: Mutex<Vec<crate::types::NewsProvider>>,
@@ -168,6 +170,7 @@ impl ReferenceState {
             depth_exchanges_cache: Mutex::new(Vec::new()),
             depth_exchanges_pending: Mutex::new(false),
             contract_cache: Mutex::new(HashMap::new()),
+            defined_contracts: Mutex::new(std::collections::HashSet::new()),
             smart_components: Mutex::new(Vec::new()),
             news_providers: Mutex::new(Vec::new()),
             soft_dollar_tiers: Mutex::new(Vec::new()),
@@ -938,17 +941,48 @@ impl ReferenceState {
     #[doc(hidden)] pub fn cache_contract(&self, con_id: i64, contract: api::Contract) {
         let mut cache = self.contract_cache.lock().unwrap();
         if let Some(existing) = cache.get_mut(&con_id) {
-            // Merge: only overwrite fields that are non-empty in the new contract
-            if !contract.symbol.is_empty() { existing.symbol = contract.symbol; }
-            if !contract.sec_type.is_empty() { existing.sec_type = contract.sec_type; }
-            if !contract.exchange.is_empty() { existing.exchange = contract.exchange; }
-            if !contract.currency.is_empty() { existing.currency = contract.currency; }
-            if !contract.local_symbol.is_empty() { existing.local_symbol = contract.local_symbol; }
-            if !contract.primary_exchange.is_empty() { existing.primary_exchange = contract.primary_exchange; }
-            if !contract.trading_class.is_empty() { existing.trading_class = contract.trading_class; }
+            // Merged field by field: what the incoming states stands, what it
+            // leaves empty is kept. Merged on seven names alone, a definition
+            // arriving over an entry a fill had seeded lost its strike, its
+            // right, its expiry and its multiplier — which is all that tells
+            // two options on one underlying apart.
+            let api::Contract {
+                symbol, sec_type, exchange, currency, local_symbol, primary_exchange, trading_class,
+                last_trade_date_or_contract_month, last_trade_date, strike, right, multiplier,
+                sec_id_type, sec_id, description, issuer_id, combo_legs_descrip, ..
+            } = contract;
+            for (field, stated) in [
+                (&mut existing.symbol, symbol), (&mut existing.sec_type, sec_type),
+                (&mut existing.exchange, exchange), (&mut existing.currency, currency),
+                (&mut existing.local_symbol, local_symbol), (&mut existing.primary_exchange, primary_exchange),
+                (&mut existing.trading_class, trading_class),
+                (&mut existing.last_trade_date_or_contract_month, last_trade_date_or_contract_month),
+                (&mut existing.last_trade_date, last_trade_date), (&mut existing.right, right),
+                (&mut existing.multiplier, multiplier), (&mut existing.sec_id_type, sec_id_type),
+                (&mut existing.sec_id, sec_id), (&mut existing.description, description),
+                (&mut existing.issuer_id, issuer_id), (&mut existing.combo_legs_descrip, combo_legs_descrip),
+            ] {
+                if !stated.is_empty() { *field = stated; }
+            }
+            if strike != 0.0 { existing.strike = strike; }
         } else {
             cache.insert(con_id, contract);
         }
+    }
+
+    /// Cache what the venue's own definition of a contract states, and mark
+    /// the entry as defined. An entry seeded from a fill or an order names the
+    /// contract without defining it, and the lookup that would define it was
+    /// skipped for the entry being there at all.
+    #[doc(hidden)] pub fn cache_definition(&self, con_id: i64, contract: api::Contract) {
+        self.cache_contract(con_id, contract);
+        self.defined_contracts.lock().unwrap().insert(con_id);
+    }
+
+    /// Whether the venue's own definition of this contract has been cached,
+    /// as against an entry that merely names it.
+    pub fn has_definition(&self, con_id: i64) -> bool {
+        self.defined_contracts.lock().unwrap().contains(&con_id)
     }
 
     // ── Gateway-local init data ──

@@ -9572,3 +9572,26 @@ fn a_completed_order_names_the_client_that_placed_it() {
     client.req_completed_orders(false, &mut named);
     assert_eq!(named.0, [(86, 5)], "the client that placed it");
 }
+
+/// A global cancel attempts every instrument and says how many it reached,
+/// on this surface as on the other.
+#[test]
+fn a_global_cancel_says_how_many_instruments_it_reached() {
+    let (client, rx, shared) = test_client();
+    shared.orders.set_replay_done();
+    shared.market.set_instrument_count(3);
+    drop(rx);
+    let refused = client.req_global_cancel().expect_err("nothing reached the engine");
+    assert!(refused.message.contains("reached the engine for 0 of 3"), "{refused}");
+}
+
+/// The note that a withdrawal's time does not travel is said for a
+/// withdrawal that happens, not for one refused.
+#[test]
+fn a_refused_withdrawal_carries_no_note_about_its_time() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.set_replay_done();
+    let refused = client.cancel_order(77, "20260906-10:00:00").expect_err("no order is working under 77");
+    assert!(refused.message.contains("no order is working"), "{refused}");
+    assert!(shared.orders.drain_order_inactive().is_empty(), "and nothing is said about a time that did not travel");
+}
