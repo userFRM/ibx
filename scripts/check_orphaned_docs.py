@@ -28,7 +28,7 @@ import re
 import subprocess
 import sys
 
-DECLARES = r"(?:pub(?:\([^)]*\))?\s+)?(?:default\s+|const\s+|async\s+|unsafe\s+|extern\s+\"[^\"]*\"\s+)*fn\s+(\w+)"
+DECLARES = r"(?:pub(?:\([^)]*\))?\s+)?(?:default\s+|async\s+|unsafe\s+|extern\s+\"[^\"]*\"\s+)*(?:const\s+fn|fn|type|struct|enum|trait|static|const|mod)\s+(\w+)"
 ADDED_FN = re.compile(r"^\+\s*" + DECLARES)
 REMOVED_FN = re.compile(r"^-\s*" + DECLARES)
 DOC = re.compile(r"^[ +]\s*(?:///|#\[)")
@@ -103,9 +103,9 @@ def main():
         print(f"{path}: `{fn}` was inserted under a doc comment written for "
               f"something else, and now reads as its own: {doc}")
     if found:
-        print(f"\n{len(found)} function(s) took a doc comment written for "
+        print(f"\n{len(found)} item(s) took a doc comment written for "
               f"something else. Move the block down to the item it describes, "
-              f"or give the new function its own.")
+              f"or give the new item its own.")
         return 1
     return 0
 
@@ -118,6 +118,19 @@ def demo():
     assert orphaned(stolen) == [
         ("src/thing.rs", "inserted", "/// What the old one does."),
     ], orphaned(stolen)
+
+    # The same theft by a type alias put on a struct's declaration line: the
+    # struct's block stays on the alias, ahead of the alias's own. Any
+    # documented item, not only a function.
+    alias = ("+++ b/src/thing.rs\n"
+             " /// The context passed to callbacks.\n"
+             "+/// What a refusal puts back.\n"
+             "+pub(crate) type PreReplace = (Order, String);\n"
+             "+\n"
+             " pub struct Context {\n")
+    assert orphaned(alias) == [
+        ("src/thing.rs", "PreReplace", "/// The context passed to callbacks."),
+    ], orphaned(alias)
 
     # The shape a hand review missed: the new function brings a doc of its own
     # and still lands under an older block, which stays attached to it.

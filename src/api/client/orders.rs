@@ -924,24 +924,15 @@ impl EClient {
         let parent_id = self.reserve_order_ids(3)?;
         let (tp_id, sl_id) = (parent_id + 1, parent_id + 2);
 
-        let scaled = |price: f64| crate::types::price_from_f64(price);
-        self.send(ControlCommand::Order(OrderRequest::SubmitBracket {
-            con_id: contract.con_id,
-            parent_id: parent_id as u64,
-            tp_id: tp_id as u64,
-            sl_id: sl_id as u64,
-            instrument,
-            side,
-            qty: crate::types::qty_from_f64(quantity),
-            entry_price: scaled(entry),
-            take_profit: scaled(take_profit),
-            stop_loss: scaled(stop_loss),
-        }))?;
-        // Each leg is recorded as placed here, under its own number. A leg
-        // replaced ahead of the venue's acknowledgement was otherwise a fresh
-        // placement under its number, which overwrote the engine's record of
-        // the leg with one carrying no parent and no group, and the next
-        // replace restated the leg detached from its bracket.
+        // Each leg is recorded as placed here, under its own number, and
+        // before it is sent, as a placement is: recorded behind the send, a
+        // refusal or a fill arriving in the window found nothing to record
+        // against and the insert put a fresh PendingSubmit over the venue's
+        // own word. A leg replaced ahead of the venue's acknowledgement was
+        // otherwise a fresh placement under its number, which overwrote the
+        // engine's record of the leg with one carrying no parent and no
+        // group, and the next replace restated the leg detached from its
+        // bracket.
         let (action, exit_action) = match side {
             crate::types::Side::Buy => ("BUY", "SELL"),
             _ => ("SELL", "BUY"),
@@ -957,6 +948,19 @@ impl EClient {
         self.core.track_order(parent_id as u64, contract.clone(), leg(parent_id, action, "LMT", entry, 0.0, 0), instrument);
         self.core.track_order(tp_id as u64, contract.clone(), leg(tp_id, exit_action, "LMT", take_profit, 0.0, parent_id), instrument);
         self.core.track_order(sl_id as u64, contract.clone(), leg(sl_id, exit_action, "STP", 0.0, stop_loss, parent_id), instrument);
+        let scaled = |price: f64| crate::types::price_from_f64(price);
+        self.send(ControlCommand::Order(OrderRequest::SubmitBracket {
+            con_id: contract.con_id,
+            parent_id: parent_id as u64,
+            tp_id: tp_id as u64,
+            sl_id: sl_id as u64,
+            instrument,
+            side,
+            qty: crate::types::qty_from_f64(quantity),
+            entry_price: scaled(entry),
+            take_profit: scaled(take_profit),
+            stop_loss: scaled(stop_loss),
+        }))?;
         Ok([parent_id, tp_id, sl_id])
     }
 }

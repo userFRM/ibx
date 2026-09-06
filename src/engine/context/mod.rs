@@ -49,12 +49,12 @@ impl Clock {
     }
 }
 
-/// The context passed to strategy callbacks. Provides market data access and
-/// order management. All hot-path data is pre-allocated.
 /// What a refusal of a revision puts back: the terms and the name the venue is
 /// known to hold, and the record of the placement where the order has one.
 pub(crate) type PreReplace = (Order, String, Option<Box<crate::types::OrderSpec>>);
 
+/// The context passed to strategy callbacks. Provides market data access and
+/// order management. All hot-path data is pre-allocated.
 pub struct Context {
     pub(crate) market: MarketState,
     positions: Box<[f64]>,
