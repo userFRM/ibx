@@ -1302,16 +1302,22 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
         let mut w = RecordingWrapper::default();
         eclient.process_msgs(&mut w);
 
-        let open_event = w.events.iter().find(|e| e.starts_with(&format!("open_order:{order_id}:")));
-        let status_event = w.events.iter().find(|e|
-            e.starts_with(&format!("order_status:{order_id}:PreSubmitted")));
-        match (open_event, status_event) {
-            (Some(oe), Some(_)) => {
+        // A what-if is a preview: the venue answers with an open order that
+        // carries the margin and the state — status among it — and sends no
+        // order status, which it sends for a working order and a preview never
+        // becomes one. The reference client's decoder fires this exactly:
+        // `processOpenOrder` calls `openOrder` and nothing else, and
+        // `orderStatus` comes only from a separate ORDER_STATUS message the
+        // venue does not send here. So the status is read from the state the
+        // open order carries, not from an order status that never comes.
+        let open_event = w.events.iter().find(|e| e.starts_with(&format!("open_order:{order_id}:PreSubmitted")));
+        match open_event {
+            Some(oe) => {
                 println!("  Dispatcher: open_order fired with state: {oe}");
                 true
             }
-            _ => {
-                println!("  Dispatcher: FAIL — open_order or order_status missing. events={:?}", w.events);
+            None => {
+                println!("  Dispatcher: FAIL — open_order carrying the PreSubmitted state missing. events={:?}", w.events);
                 false
             }
         }
@@ -1325,7 +1331,7 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
     let commission = response_snapshot.map(|r| r.commission).unwrap_or(0);
     if commission > 0 {
         println!("  Commission: ${:.2}", commission as f64 / PRICE_SCALE as f64);
-        assert!(dispatcher_validated, "Dispatcher path (open_order + order_status) failed validation");
+        assert!(dispatcher_validated, "Dispatcher path (open_order carrying the what-if state) failed validation");
         println!("  PASS\n");
     } else {
         no_market(&shared, "commission was zero, so nothing was priced");
