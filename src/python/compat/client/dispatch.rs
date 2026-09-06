@@ -153,7 +153,6 @@ impl EClient {
                     self.pending_option_calcs.lock().unwrap().clear();
                 }
             }
-            call_wrapper!(self.wrapper, py, "error", (-1i64, 0i64, 1100i64, "Connectivity between client and server has been lost", ""));
         }
         // A session the caller ended is not a session that was lost, and is
         // not announced here: the dispatch loop ends and answers with
@@ -194,9 +193,33 @@ impl EClient {
             if !down_now {
                 self.connected.store(true, Ordering::Release);
             }
-            call_wrapper!(self.wrapper, py, "error", (-1i64, 0i64, 1102i64, "Connectivity between client and server has been restored - data maintained", ""));
         }
 
+        // The connectivity callbacks in the order the batch holds them: a
+        // recovery then a re-drop in one pass is 1102 then 1100, not 1100 then
+        // 1102 with "restored" as the last word on a session that went again.
+        // The state above is set from the flags, which say only where it ended;
+        // the order is the events', which say how it got there. Contiguous
+        // events of one kind are one transition — a network cut takes the farm
+        // and the trading connection down together — so a run is one call.
+        let mut last_said: Option<bool> = None;
+        for ev in &events {
+            let up = match ev {
+                Event::Disconnected => false,
+                Event::Reconnected => true,
+                _ => continue,
+            };
+            if last_said == Some(up) {
+                continue;
+            }
+            last_said = Some(up);
+            let (code, msg): (i64, &str) = if up {
+                (1102, "Connectivity between client and server has been restored - data maintained")
+            } else {
+                (1100, "Connectivity between client and server has been lost")
+            };
+            call_wrapper!(self.wrapper, py, "error", (-1i64, 0i64, code, msg, ""));
+        }
         // One of the connections the venue keeps data on went away or came
         // back. Said as it happens, under the number the venue reports it
         // under: a caller reading quotes has nothing else to tell it that the
