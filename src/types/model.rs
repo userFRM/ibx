@@ -936,12 +936,13 @@ impl Order {
             good_after,
             good_till,
             good_till_date_ymd,
-            oca_group: self.oca_group.parse().unwrap_or(0),
-            oca_group_str: if self.oca_group.parse::<u64>().is_err() && !self.oca_group.is_empty() {
-                self.oca_group.clone()
-            } else {
-                String::new()
-            },
+            // The group as the caller names it, whatever it reads as. A name
+            // that reads as a number was rewritten to the engine's own form
+            // and read back under it; the venue holds such a name as named,
+            // measured with two orders under "1234" on the paper account, and
+            // the reference client sends it as named.
+            oca_group: 0,
+            oca_group_str: self.oca_group.clone(),
             parent_id: self.parent_id.max(0) as u64,
             discretionary_amt: crate::types::price_from_f64(self.discretionary_amt),
             sweep_to_fill: self.sweep_to_fill,

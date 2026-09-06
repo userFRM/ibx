@@ -1924,6 +1924,97 @@ fn what_the_account_is_working_live() {
     println!("\n  (nothing sent; this is a reading)");
 }
 
+/// A one-cancels-all group named by a number is sent as the caller names it.
+///
+/// A caller's group name is a string on both surfaces, as on the reference
+/// client, and nothing in it says it may not read as a number. What the venue
+/// holds under such a name is measured here rather than assumed: two resting
+/// orders under the group "1234", the name each is acknowledged under, and
+/// the second's cancellation when the first is withdrawn, which is what the
+/// group exists for.
+///
+/// Run: cargo test --test ib_paper_compat a_numeric_group_name_is_held_as_named_live -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of, so it cannot run beside the suite; run it with --ignored"]
+fn a_numeric_group_name_is_held_as_named_live() {
+    start_logging();
+    let config = match get_config() {
+        Some(c) => c,
+        None => { println!("Skipping: IB credentials not set"); return; }
+    };
+    println!("=== A group named by a number ===\n");
+    let ibx::gateway::Session { gateway: gw, market_data: farm, trading: ccp, historical: hmds, .. } =
+        Gateway::connect(&config).expect("Gateway::connect failed");
+    let account_id = gw.account_id.clone();
+    drop(gw);
+
+    let first = common::next_order_id();
+    let second = common::next_order_id();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())), account_id,
+        farm, ccp, hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    hot_loop.context_mut().set_routing(inst_id, "STK", "SMART");
+    // Two resting buys far below the market, in one group named "1234".
+    for order_id in [first, second] {
+        control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+            con_id: 0, order_id, instrument: inst_id, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+            kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1',
+            attrs: OrderAttrs { oca_group_str: "1234".to_string(), oca_type: 1, outside_rth: true, ..Default::default() },
+        })).expect("send failed");
+    }
+    let join = run_hot_loop(hot_loop);
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut acked = std::collections::HashSet::new();
+    let mut refused = Vec::new();
+    while Instant::now() < deadline && acked.len() < 2 && refused.is_empty() {
+        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            println!("  [update] oid={} status={:?}", u.order_id, u.status);
+            match u.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted => { acked.insert(u.order_id); }
+                OrderStatus::Rejected => refused.push(u.order_id),
+                _ => {}
+            }
+        }
+    }
+    std::thread::sleep(Duration::from_secs(2));
+    let mut held: Vec<(u64, String, String)> = shared.orders.drain_open_orders().into_iter()
+        .filter(|(id, _)| *id == first || *id == second)
+        .map(|(id, info)| (id, info.order.oca_group.clone(), info.order_state.status.clone()))
+        .collect();
+    held.sort();
+    for (id, group, status) in &held { println!("  order {id}: group {group:?} status {status}"); }
+
+    // Withdraw the first; a held group cancels the second without being asked.
+    let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: first }));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut cancelled = std::collections::HashSet::new();
+    while Instant::now() < deadline && cancelled.len() < 2 {
+        if let Ok(Event::OrderUpdate(u)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            println!("  [update] oid={} status={:?}", u.order_id, u.status);
+            if u.status == OrderStatus::Cancelled { cancelled.insert(u.order_id); }
+        }
+    }
+    if !cancelled.contains(&second) {
+        let _ = control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id: second }));
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    let _ = control_tx.send(ControlCommand::Shutdown);
+    let _ = join.join();
+
+    assert!(refused.is_empty(), "the venue refused {refused:?} under the group \"1234\"");
+    assert_eq!(acked.len(), 2, "both orders acknowledged");
+    let groups: Vec<&str> = held.iter().map(|(_, g, _)| g.as_str()).collect();
+    assert_eq!(groups, ["1234", "1234"], "the venue holds the group under the name the caller gave");
+    assert!(cancelled.contains(&second), "the second order was cancelled by the group when the first was withdrawn");
+    println!("\n  PASS — a numeric group name is held as named\n");
+}
+
 /// A real fill books the quantity the venue reported, and moves the holding.
 ///
 /// Run against a European listing, which trades while New York is closed, so

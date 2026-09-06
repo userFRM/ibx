@@ -313,8 +313,8 @@ impl EClient {
         // on a modify. An order placed here has its record already. Built
         // before the record below is restated, so a statement that cannot be
         // built refuses the replace with nothing moved; and sent whether or
-        // not the replace transmits now, since a held replace records the
-        // order here and the transmit that follows would find it placed here.
+        // not the replace transmits now, since a held replace leaves the hold
+        // later as the command it was held as, with nothing built then.
         let statement = if replacing && !placed_here {
             match ClientCore::build_order_request(order, oid, instrument, Some(contract))? {
                 ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. }) => {

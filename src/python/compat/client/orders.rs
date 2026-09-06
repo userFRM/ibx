@@ -106,11 +106,10 @@ impl EClient {
             Ok(params) => params,
             Err(why) => return self.report_refusal(py, order_id, Refusal::validation(why)),
         };
-        // What the order path reads off a contract: where it is listed, its
-        // legs, and the contract it hedges against. The legs and the hedge are
-        // Python objects, so reading them needs the interpreter.
+        // The legs and the hedge the caller states: Python objects, which
+        // need the interpreter to read. The contract itself is built whole
+        // below, once the venue has named it.
         let api_contract = crate::types::model::Contract {
-            primary_exchange: contract.primary_exchange.clone(),
             // A leg this client cannot read is a refusal, like the other
             // fields read off the caller's objects above, and is reported
             // the same way.
@@ -215,6 +214,19 @@ impl EClient {
             }
         } else {
             contract
+        };
+        // The contract as the venue was told it: the venue's naming, with the
+        // legs and the hedge read off the caller's objects above. One object
+        // for the submit, the record and the cache, built before the order is:
+        // the engine reads the contract's number off the submit to see that
+        // the slot it names still holds that contract, and a submit built from
+        // a description carrying no number passed that check unread, as no
+        // order from the other surface does; and the record read back a
+        // contract id of zero for an order placed by symbol.
+        let api_contract = crate::types::model::Contract {
+            combo_legs: api_contract.combo_legs,
+            delta_neutral_contract: api_contract.delta_neutral_contract,
+            ..contract.to_api()
         };
 
         // The number the caller stated, or a refusal. An id at or below zero
@@ -348,15 +360,9 @@ impl EClient {
         // call had failed. What reached the engine and what did not is said
         // on the error callback, under the number a lost session is reported
         // under, and the call returns.
-        // Track order in shared core. The record is the contract as the venue
-        // was told it: the description, and the legs and the hedge read off
-        // the caller's objects above. Converted afresh, the record held a BAG
+        // Track order in shared core, under the contract as the venue was told
+        // it, legs and hedge included: converted afresh, the record held a BAG
         // with nothing in it, and that is what every callback handed back.
-        let api_contract = crate::types::model::Contract {
-            combo_legs: api_contract.combo_legs,
-            delta_neutral_contract: api_contract.delta_neutral_contract,
-            ..contract.to_api()
-        };
         let mut tracked_order = api_order.clone();
         tracked_order.order_id = oid as i64;
         // The client this order goes out under. Left at nought, the order
@@ -1438,6 +1444,50 @@ w = W()",
         }
     }
 
+    /// An order placed by description goes out, is recorded and is cached
+    /// under the contract the venue named.
+    ///
+    /// The reference client's own examples place by symbol. The submit was
+    /// built from the caller's description, which carries no contract id, so
+    /// it passed the engine's check that the slot still holds that contract
+    /// unread, as no order from the other surface does. The record and the
+    /// cache are read back beside it: one contract serves all three, and a
+    /// key that parts from its value is the same defect under another name.
+    #[test]
+    fn an_order_placed_by_description_carries_the_contract_the_venue_named() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _shared, _wrapper) = placed_client(py);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<ControlCommand>(0);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            client.core.set_registration_timeout(std::time::Duration::from_secs(2));
+            let described = Contract { con_id: 0, ..bracket_contract() };
+            // Named already, so the lookup is answered from the record rather
+            // than the venue: the question is what the naming is used for.
+            let key = crate::client_core::ClientCore::description_key(&described.to_api());
+            client.core.remember_named(key, bracket_contract().to_api());
+            let engine = std::thread::spawn(move || {
+                match rx.recv() {
+                    Ok(ControlCommand::RegisterInstrument { reply_tx, .. }) => {
+                        let _ = reply_tx.expect("a registration asks for an answer").send(Ok(7));
+                    }
+                    other => panic!("a registration goes first, got {other:?}"),
+                }
+                rx.recv()
+            });
+            client.place_order(py, 9, &described, &bracket_order(true, 0)).unwrap();
+            let sent = engine.join().unwrap();
+            assert!(
+                matches!(sent, Ok(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 756733, order_id: 9, .. }))),
+                "the submit names the contract the venue named: {sent:?}",
+            );
+            let recorded = client.core.open_orders.lock().unwrap().get(&9).map(|o| o.contract.con_id);
+            assert_eq!(recorded, Some(756733), "and so does the record");
+            let cached = client.core.contract_cache.lock().unwrap().get(&756733).map(|c| c.con_id);
+            assert_eq!(cached, Some(756733), "and the cache holds that contract under its own number");
+        });
+    }
+
     /// The error callbacks the wrapper was handed, as id, code and message.
     fn error_calls(py: Python<'_>, wrapper: &Py<PyAny>) -> Vec<(i64, i64, String)> {
         let all: Vec<(String, i64, i64, i64, String, String)> = wrapper
@@ -1485,9 +1535,9 @@ w = W()",
                 matches!(
                     received.as_slice(),
                     [
-                        ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: 3, .. }),
-                        ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: 4, .. }),
-                        ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: 5, .. }),
+                        ControlCommand::Order(OrderRequest::SubmitEx { con_id: 756733, order_id: 3, .. }),
+                        ControlCommand::Order(OrderRequest::SubmitEx { con_id: 756733, order_id: 4, .. }),
+                        ControlCommand::Order(OrderRequest::SubmitEx { con_id: 756733, order_id: 5, .. }),
                     ],
                 ),
                 "the family goes in the order it was placed: {received:?}",
@@ -1537,7 +1587,7 @@ w = W()",
             assert!(
                 matches!(
                     received.as_slice(),
-                    [ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: 3, .. })],
+                    [ControlCommand::Order(OrderRequest::SubmitEx { con_id: 756733, order_id: 3, .. })],
                 ),
                 "only the parent reached the engine: {received:?}",
             );

@@ -453,6 +453,11 @@ pub(crate) fn drain_and_send_orders(
                         ORDER_NOT_FOUND_ERROR_CODE,
                         format!("no order {order_id} is tracked here, so it cannot be replaced"),
                     );
+                    // A statement kept for this replace was the record for it
+                    // and for nothing else; it goes with the refusal.
+                    if context.described.remove(&order_id) {
+                        context.submitted.remove(&order_id);
+                    }
                     the_change_did_not_go(order_id, 0, None, context, shared, event_tx);
                     continue;
                 };

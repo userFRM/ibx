@@ -4201,3 +4201,40 @@ fn a_replaced_bracket_leg_keeps_its_group_and_its_parent() {
         "and the parent it was placed under: {replaced}",
     );
 }
+
+/// A statement kept for a replace the book cannot take goes with the refusal.
+///
+/// The statement is the record for the replace behind it and for nothing
+/// else. A replace of an order the book does not hold is refused, and a
+/// statement left standing for it grew the record by one order for every
+/// such id, the growth the retirement of orders exists to stop.
+#[test]
+fn a_statement_for_a_refused_replace_goes_with_the_refusal() {
+    use crate::types::{OrderKind as K, PRICE_SCALE as P};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    context.register_instrument(756733);
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    context.pending_orders.push(crate::types::OrderRequest::Describe {
+        order_id: 77,
+        spec: Box::new(crate::types::OrderSpec {
+            kind: K::Limit { price: 100 * P },
+            attrs: crate::types::OrderAttrs::default(),
+        }),
+    });
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 77, price: 101 * P, qty: crate::types::QTY_SCALE, outside_rth: false,
+        ord_type: 0, tif: 0, stop_price: 0,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let refused = shared.orders.drain_order_inactive();
+    assert!(refused.iter().any(|(id, ..)| *id == 77), "the replace is refused: {refused:?}");
+    assert!(
+        !context.submitted.contains_key(&77) && !context.described.contains(&77),
+        "and the statement kept for it went with the refusal",
+    );
+}

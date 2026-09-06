@@ -2414,7 +2414,7 @@ fn place_order_stop_with_parent_and_gtc_uses_submit_ex() {
                 if stop_price == (240.0 * PRICE_SCALE_F) as i64));
             assert_eq!(tif, b'1'); // GTC
             assert_eq!(attrs.parent_id, 42);
-            assert_eq!(attrs.oca_group, 77);
+            assert_eq!(attrs.oca_group_str, "77", "the group as the caller named it");
         }
         _ => panic!("expected a Ex order, got {cmd:?}"),
     }
@@ -9376,3 +9376,26 @@ fn a_schedule_asked_for_as_historical_data_is_served() {
     );
 }
 
+
+/// A one-cancels-all group name travels as the caller names it.
+///
+/// A name that reads as a number was rewritten to the engine's own form on
+/// the way out and read back under it. The venue holds such a name as named,
+/// so the name travels as named, whatever it reads as.
+#[test]
+fn a_numeric_group_name_travels_as_named() {
+    let (client, rx, _shared) = test_client();
+    let order = Order {
+        order_id: 9401, action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), oca_group: "1234".into(), oca_type: 1, transmit: true,
+        ..Default::default()
+    };
+    client.place_order(9401, &spy(), &order).unwrap();
+    let mut stated = None;
+    while let Ok(cmd) = rx.try_recv() {
+        if let ControlCommand::Order(OrderRequest::SubmitEx { attrs, .. }) = cmd {
+            stated = Some((attrs.oca_group_str.clone(), attrs.oca_group));
+        }
+    }
+    assert_eq!(stated, Some(("1234".to_string(), 0)), "the group goes out under the name the caller gave");
+}

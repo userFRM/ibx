@@ -274,6 +274,8 @@ STATED_CONSTANTS = {
     "exercise_action": "set by the exercise call, not by an order",
     "combo_legs": "carried on the contract, not on the order",
     "delta_neutral_contract": "carried on the contract, not on the order",
+    "oca_group": "the caller's group name travels whole in oca_group_str; "
+                 "the number is the engine's own naming for a bracket's legs",
 }
 
 
