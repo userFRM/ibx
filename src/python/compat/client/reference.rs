@@ -128,6 +128,7 @@ impl EClient {
             req_id: wire_req_id(req_id)?,
             what_to_show: what_to_show.to_string(),
             use_rth: use_rth != 0,
+            include_expired: contract.include_expired,
             filters: contract.lookup_filters(),
         })?;
         Ok(())

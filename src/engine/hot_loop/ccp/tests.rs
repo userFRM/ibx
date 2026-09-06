@@ -6424,6 +6424,7 @@ fn spy_by_symbol(instrument: crate::types::InstrumentId) -> PendingSubscribe {
 fn head_timestamp_by_symbol(req_id: u32) -> crate::types::ControlCommand {
     crate::types::ControlCommand::FetchHeadTimestamp {
         req_id,
+        include_expired: false,
         contract: crate::types::ContractRef {
             symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), currency: "USD".into(),
             ..Default::default()

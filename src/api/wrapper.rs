@@ -838,6 +838,12 @@ pub mod tests {
         fn tick_size(&mut self, req_id: i64, tick_type: i32, size: f64) {
             self.events.push(format!("tick_size:{req_id}:{tick_type}:{size}"));
         }
+        fn tick_req_params(&mut self, ticker_id: i64, min_tick: f64, bbo_exchange: &str, snapshot_permissions: i64) {
+            self.events.push(format!("tick_req_params:{ticker_id}:{min_tick}:{bbo_exchange}:{snapshot_permissions}"));
+        }
+        fn historical_data_update(&mut self, req_id: i64, bar: &BarData) {
+            self.events.push(format!("historical_data_update:{req_id}:{}", bar.date));
+        }
         fn order_status(
             &mut self, order_id: i64, status: &str, filled: f64, remaining: f64,
             avg_fill_price: f64, _: i64, parent_id: i64, _: f64, _: i64, _: &str, _: f64,

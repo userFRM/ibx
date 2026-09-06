@@ -352,7 +352,7 @@ pub(super) fn phase_head_timestamp(mut conns: Conns) -> Conns {
         shared.clone(), None, account_id.clone(), conns.farm, conns.ccp, Some(hmds), None,
     );
 
-    control_tx.send(ControlCommand::FetchHeadTimestamp { contract: ibx::types::ContractRef { con_id: 756733, symbol: "".to_string(), sec_type: "".to_string(), exchange: "".to_string(), currency: "".to_string(), ..Default::default() }, req_id: 7900, what_to_show: "TRADES".into(), use_rth: true, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHeadTimestamp { include_expired: false, contract: ibx::types::ContractRef { con_id: 756733, symbol: "".to_string(), sec_type: "".to_string(), exchange: "".to_string(), currency: "".to_string(), ..Default::default() }, req_id: 7900, what_to_show: "TRADES".into(), use_rth: true, filters: Default::default() }).unwrap();
     let join = run_hot_loop(hot_loop);
 
     let mut response: Option<historical::HeadTimestampResponse> = None;
@@ -1343,7 +1343,7 @@ pub(super) fn phase_cancel_data_requests(mut conns: Conns) -> Conns {
     control_tx.send(ControlCommand::CancelHistorical { req_id: 20001 }).unwrap();
 
     // 2. FetchHeadTimestamp + CancelHeadTimestamp
-    control_tx.send(ControlCommand::FetchHeadTimestamp { contract: ibx::types::ContractRef { con_id: 756733, symbol: "".to_string(), sec_type: "".to_string(), exchange: "".to_string(), currency: "".to_string(), ..Default::default() }, req_id: 20002, what_to_show: "TRADES".to_string(), use_rth: true, filters: Default::default() }).unwrap();
+    control_tx.send(ControlCommand::FetchHeadTimestamp { include_expired: false, contract: ibx::types::ContractRef { con_id: 756733, symbol: "".to_string(), sec_type: "".to_string(), exchange: "".to_string(), currency: "".to_string(), ..Default::default() }, req_id: 20002, what_to_show: "TRADES".to_string(), use_rth: true, filters: Default::default() }).unwrap();
     control_tx.send(ControlCommand::CancelHeadTimestamp { req_id: 20002 }).unwrap();
 
     // 3. FetchFundamentalData + CancelFundamentalData

@@ -78,6 +78,7 @@ impl EClient {
         // of the callbacks below is told why it cannot be answered rather than
         // left waiting on this thread's own turn.
         let _reading = super::Reading::begin(self.which_session());
+        self.dispatch_venue_data(wrapper);
         self.dispatch_positions(wrapper);
         self.dispatch_orders(wrapper);
         self.dispatch_quotes(wrapper);
@@ -110,6 +111,24 @@ impl EClient {
             && !self.close_notified.swap(true, Ordering::AcqRel)
         {
             wrapper.connection_closed();
+        }
+    }
+
+    /// One of the connections the venue keeps data on went away or came back,
+    /// said under the number the venue reports it under, and said first: a
+    /// caller reading quotes has nothing else to tell it that the last price
+    /// it holds stopped being a price. A market-data loss also forgets what
+    /// each caller was last told of every quote — the engine zeroes the
+    /// quotes at the drop, and diffed against what the caller had heard those
+    /// noughts went out as prices; diffed against nothing, only what the venue
+    /// restates goes out.
+    fn dispatch_venue_data(&self, wrapper: &mut impl Wrapper) {
+        for (which, up) in self.shared.drain_venue_data_notices() {
+            if matches!(which, crate::bridge::VenueDataConnection::MarketData) && !up {
+                self.core.forget_last_quotes();
+            }
+            let (broken, ok) = which.codes();
+            wrapper.error(-1, if up { ok } else { broken }, which.says(up), "");
         }
     }
 
@@ -395,6 +414,20 @@ impl EClient {
     // ── Quote Dispatch ──
 
     fn dispatch_quotes(&self, wrapper: &mut impl Wrapper) {
+        // The increment each subscription was acknowledged with, to everyone
+        // watching the contract, once: the reference client delivers it on
+        // `tick_req_params` ahead of the first tick. The venue names one
+        // exchange table for every contract and states no permission figure,
+        // so those two fields are empty and nought.
+        for (instrument, min_tick) in self.shared.market.drain_tick_req_params() {
+            let held_by = self.core.req_id_for_instrument(instrument);
+            let watching = std::iter::once(held_by)
+                .filter(|id| *id >= 0)
+                .chain(self.core.followers_of(instrument));
+            for req_id in watching {
+                wrapper.tick_req_params(req_id, min_tick, "", 0);
+            }
+        }
         // Quote polling → tick_price / tick_size (via ClientCore)
         let instruments = self.core.snapshot_instruments();
         // Every quote gets the same one, because a quote states no attributes
@@ -448,7 +481,7 @@ impl EClient {
                 // Tick type 45 goes to every subscriber of the contract, as the
                 // prices and strings above do.
                 for id in std::iter::once(ts.req_id).chain(watchers.iter().copied()) {
-                    wrapper.tick_string(id, 45, &ts_secs.to_string());
+                    wrapper.tick_string(id, if result.delayed { 88 } else { 45 }, &ts_secs.to_string());
                 }
             }
             // The holder and everyone watching it. A caller that asked for a
@@ -653,6 +686,7 @@ impl EClient {
         // callback heard nothing from this surface.
         for (req_id, response) in self.shared.reference.drain_historical_data() {
             let is_update = self.core.hist_initial_complete.lock().unwrap().contains(&req_id);
+            self.core.note_historical_zone(req_id as i64, &response.timezone);
             for bar in &response.bars {
                 let bd = BarData {
                     date: self.core.bar_time_for(req_id as i64, &bar.time, &response.timezone),
@@ -817,10 +851,10 @@ impl EClient {
         ) {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
                 // A forming bar is stamped at its open, in seconds since the
-                // epoch, and carries no timezone. Historical bars carry the
-                // wire's stamp and its zone.
+                // epoch; dated as the history before it was, in the caller's
+                // format on the zone the series was stated on.
                 let bd = BarData {
-                    date: bar.timestamp.to_string(),
+                    date: self.core.bar_time_for_epoch(req_id as i64, i64::from(bar.timestamp)),
                     open: bar.open,
                     high: bar.high,
                     low: bar.low,

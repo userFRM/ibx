@@ -141,6 +141,19 @@ pub struct StringTickEvent {
     pub value: String,
 }
 
+/// The number a delayed feed carries a tick under, as the reference client
+/// numbers one: the bid, the ask and the last from 66, the sizes and the rest
+/// after them, and the halt and the timestamp under their own.
+fn as_delayed(tick_type: i32) -> i32 {
+    match tick_type {
+        TICK_BID => 66, TICK_ASK => 67, TICK_LAST => 68,
+        TICK_BID_SIZE => 69, TICK_ASK_SIZE => 70, TICK_LAST_SIZE => 71,
+        TICK_HIGH => 72, TICK_LOW => 73, TICK_VOLUME => 74, TICK_CLOSE => 75, TICK_OPEN => 76,
+        TICK_LAST_TIMESTAMP => 88, TICK_HALTED => 90,
+        other => other,
+    }
+}
+
 /// Result of polling quotes for one instrument.
 pub struct QuotePollResult {
     /// Numeric ticks that arrived.
@@ -152,6 +165,9 @@ pub struct QuotePollResult {
     pub string_ticks: Vec<StringTickEvent>,
     /// The moment the venue stamped the quote with, if it stated one.
     pub timestamp: Option<TimestampTick>,
+    /// Whether this request's feed is delayed, so what follows goes out under
+    /// the numbers the reference client gives a delayed feed.
+    pub delayed: bool,
     /// true if any tick was delivered (for snapshot detection).
     pub delivered: bool,
 }
@@ -686,6 +702,9 @@ pub struct HistoricalAsk {
     pub end_date_time: String,
     /// How far back from that end, in the venue's own units.
     pub duration: String,
+    /// The zone the venue stated the series on, once it has, for the bars
+    /// that continue it.
+    pub zone: String,
 }
 
 pub struct ClientCore {
@@ -3176,6 +3195,14 @@ impl ClientCore {
         // Single lock acquisition for both read and write of last_quotes.
         let mut map = self.last_quotes.lock().unwrap();
         let last = map.get(&iid).copied().unwrap_or([0i64; 16]);
+        // Numbered as the feed this request was made under: a delayed feed
+        // goes out under the delayed numbers, which is what the caller was
+        // told to expect on `market_data_type`.
+        let delayed = matches!(
+            self.mdt_by_req.lock().unwrap().get(&req_id),
+            Some(&MDT_DELAYED) | Some(&MDT_DELAYED_FROZEN)
+        );
+        let numbered = |tick_type: i32| if delayed { as_delayed(tick_type) } else { tick_type };
 
         let mut ticks = Vec::new();
         let mut delivered = false;
@@ -3188,7 +3215,7 @@ impl ClientCore {
         for &(idx, tt) in PRICE_TICKS {
             if fields[idx] != last[idx] {
                 ticks.push(TickEvent {
-                    req_id, tick_type: tt,
+                    req_id, tick_type: numbered(tt),
                     value: fields[idx] as f64 / PRICE_SCALE_F,
                     is_price: true,
                 });
@@ -3203,7 +3230,7 @@ impl ClientCore {
         for &(idx, tt) in SIZE_TICKS {
             if fields[idx] != last[idx] {
                 ticks.push(TickEvent {
-                    req_id, tick_type: tt,
+                    req_id, tick_type: numbered(tt),
                     value: fields[idx] as f64 / QTY_SCALE as f64,
                     is_price: false,
                 });
@@ -3259,7 +3286,7 @@ impl ClientCore {
         let mut generic_ticks = Vec::new();
         if fields[15] != last[15] {
             generic_ticks.push(TickEvent {
-                req_id, tick_type: TICK_HALTED,
+                req_id, tick_type: numbered(TICK_HALTED),
                 value: fields[15] as f64,
                 is_price: false,
             });
@@ -3268,7 +3295,7 @@ impl ClientCore {
 
         map.insert(iid, cached);
 
-        QuotePollResult { ticks, generic_ticks, string_ticks, timestamp, delivered }
+        QuotePollResult { delayed, ticks, generic_ticks, string_ticks, timestamp, delivered }
     }
 
     /// Whether a snapshot has just finished arriving.
@@ -4279,6 +4306,35 @@ impl ClientCore {
             .get(&req_id)
             .map_or(1, |ask| ask.format_date);
         crate::protocol::datetime::bar_date_as_asked(stated, format_date, zone)
+    }
+
+    /// Forget what each caller was last told of every quote.
+    ///
+    /// At a market-data drop the engine zeroes every quote, so nothing reads a
+    /// pre-drop price as current. Compared against what the caller had been
+    /// told, those noughts read as moves and went out as prices; compared
+    /// against nothing, only what the venue restates goes out, and what the
+    /// caller last heard stands until then.
+    pub fn forget_last_quotes(&self) {
+        self.last_quotes.lock().unwrap().clear();
+    }
+
+    /// The zone a series was stated on, kept for the bars that continue it.
+    pub fn note_historical_zone(&self, req_id: i64, zone: &str) {
+        if zone.is_empty() {
+            return;
+        }
+        self.historical_asks.lock().unwrap().entry(req_id).or_default().zone = zone.to_string();
+    }
+
+    /// A continuing bar's time as the caller asked bars to be dated, on the
+    /// zone its history was stated on.
+    pub fn bar_time_for_epoch(&self, req_id: i64, secs: i64) -> String {
+        let asks = self.historical_asks.lock().unwrap();
+        let (format_date, zone) = asks
+            .get(&req_id)
+            .map_or((1, ""), |ask| (ask.format_date, ask.zone.as_str()));
+        crate::protocol::datetime::bar_epoch_as_asked(secs, format_date, zone)
     }
 
     /// Validate historical-request arguments before anything reaches the

@@ -207,9 +207,9 @@ impl SecDefState {
         // Announced as the other two data connections' losses are, under the
         // venue's own numbers for this one; its recovery is announced where
         // the socket is installed again.
-        crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::VenueData {
-            which: crate::bridge::VenueDataConnection::SecurityDefinition, up: false,
-        });
+        crate::engine::hot_loop::announce_venue_data(
+            shared, event_tx, crate::bridge::VenueDataConnection::SecurityDefinition, false,
+        );
         for (_, req_id, ..) in self.pending.drain(..) {
             shared.reference.push_historical_error(
                 req_id,

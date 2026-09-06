@@ -9399,3 +9399,88 @@ fn a_numeric_group_name_travels_as_named() {
     }
     assert_eq!(stated, Some(("1234".to_string(), 0)), "the group goes out under the name the caller gave");
 }
+
+/// A data connection's loss and return reach the caller under the venue's
+/// numbers on this surface too.
+///
+/// The plain connect builds no event stream, and the notice rode the event
+/// stream alone, so a program on this surface read quotes off a connection
+/// the venue had said was broken and heard nothing.
+#[test]
+fn a_data_connections_loss_and_return_are_reported_under_the_venues_numbers() {
+    let (client, _rx, shared) = test_client();
+    shared.push_venue_data_notice(crate::bridge::VenueDataConnection::MarketData, false);
+    shared.push_venue_data_notice(crate::bridge::VenueDataConnection::MarketData, true);
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    let said: Vec<&str> = w.events.iter().filter(|e| e.starts_with("error:-1:")).map(String::as_str).collect();
+    assert_eq!(said.len(), 2, "{:?}", w.events);
+    assert!(said[0].starts_with("error:-1:2103:") && said[1].starts_with("error:-1:2104:"), "{said:?}");
+}
+
+/// The increment a subscription was acknowledged with reaches every caller
+/// watching the contract on `tick_req_params`, once.
+#[test]
+fn the_acknowledged_increment_reaches_the_caller_on_tick_req_params() {
+    let (client, _rx, shared) = test_client();
+    client.core.req_to_instrument.lock().unwrap().insert(1, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+    shared.market.push_tick_req_params(0, 0.01);
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    assert!(w.events.iter().any(|e| e == "tick_req_params:1:0.01::0"), "{:?}", w.events);
+    client.process_msgs(&mut w);
+    assert_eq!(w.events.iter().filter(|e| e.starts_with("tick_req_params:")).count(), 1, "once");
+}
+
+/// A bar that continues a kept-up-to-date request is dated as the history
+/// before it was: in the caller's format, on the series' own zone.
+///
+/// The history came back as `20260904 09:30:00 US/Eastern` and every update
+/// under the same request as seconds since the epoch with no zone.
+#[test]
+fn an_update_bar_is_dated_as_the_history_before_it() {
+    let (client, _rx, shared) = test_client();
+    client.req_historical_data(5, &spy(), "", "1 D", "1 min", "TRADES", false, 1, true).expect("asked");
+    shared.reference.push_historical_data(5, crate::control::historical::HistoricalResponse {
+        query_id: "q5".into(), timezone: "US/Eastern".into(), is_complete: true, bars: Vec::new(),
+    });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    shared.market.push_real_time_bar(5, crate::types::RealTimeBar {
+        timestamp: 1_757_000_000, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 0.0, wap: 1.0, count: 1,
+    });
+    client.process_msgs(&mut w);
+    assert!(
+        w.events.iter().any(|e| e == "historical_data_update:5:20250904 11:33:20 US/Eastern"),
+        "{:?}", w.events.iter().filter(|e| e.starts_with("historical_data_update")).collect::<Vec<_>>(),
+    );
+}
+
+/// A market-data connection that went away leaves nothing fabricated behind
+/// it: what the caller last heard stands until the venue restates it.
+///
+/// The engine zeroes every quote at the drop, so nothing reads a pre-drop
+/// price as current; the caller's own record of what it was last told did
+/// not move with it, so the first quote after the rebuild — a bid alone —
+/// was diffed against the old ask, last and close and each went out as a
+/// real nought.
+#[test]
+fn a_dropped_data_connection_fabricates_no_ticks() {
+    let (client, _rx, shared) = test_client();
+    client.core.req_to_instrument.lock().unwrap().insert(1, 0);
+    client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+    shared.market.push_quote(0, &Quote { bid: 150 * PRICE_SCALE, ask: 151 * PRICE_SCALE, halted: 1, ..Default::default() });
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+    w.events.clear();
+    // The drop: the venue's notice, and the engine's zeroing behind it.
+    shared.push_venue_data_notice(crate::bridge::VenueDataConnection::MarketData, false);
+    shared.market.push_quote(0, &Quote::default());
+    client.process_msgs(&mut w);
+    // The rebuild restates the bid alone.
+    shared.market.push_quote(0, &Quote { bid: 150 * PRICE_SCALE, ..Default::default() });
+    client.process_msgs(&mut w);
+    let ticks: Vec<&String> = w.events.iter().filter(|e| e.starts_with("tick_price") || e.starts_with("tick_size") || e.starts_with("tick_generic")).collect();
+    assert_eq!(ticks, [&"tick_price:1:1:150".to_string()], "only what the venue restated: {:?}", w.events);
+}

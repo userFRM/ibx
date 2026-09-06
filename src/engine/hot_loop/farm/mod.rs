@@ -740,7 +740,7 @@ impl FarmState {
                 Ok(0) => {}
                 Err(e) => {
                     log::error!("Farm connection lost: {e}");
-                    self.handle_disconnect(farm_conn, context, event_tx);
+                    self.handle_disconnect(farm_conn, context, event_tx, shared);
                     return;
                 }
                 Ok(n) => {
@@ -1201,6 +1201,7 @@ impl FarmState {
 
         context.market.register_server_tag(server_tag, instrument);
         context.market.set_min_tick(instrument, min_tick);
+        shared.market.push_tick_req_params(instrument, min_tick);
         if let Some(size_tick) = trailing_size_increment(&parts) {
             context.market.set_size_tick(instrument, size_tick);
         }
@@ -1229,6 +1230,14 @@ impl FarmState {
         match instrument {
             Some(instrument) => {
                 let named = context.market.symbol(instrument);
+                // A request riding beside the quote — the trading status, the
+                // exchange map, the option model — is refused on its own. The
+                // quote it rides beside is not, and its prices go on arriving;
+                // told the quote was refused, a caller withdrew it.
+                if req_id.is_some_and(|rid| self.generic_tick_reqs.iter().any(|(id, _)| *id == rid)) {
+                    log::warn!("The venue refused a request beside the quote on {named}: {reason}");
+                    return;
+                }
                 log::warn!("The venue refused a subscription on {named}: {reason}");
                 shared.market.push_subscription_failure(
                     instrument, format!("the venue refused this subscription: {reason}"),
@@ -2181,6 +2190,7 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         context: &mut Context,
         event_tx: &Option<EventSink>,
+        shared: &SharedState,
     ) {
         self.disconnected = true;
         *farm_conn = None;
@@ -2230,10 +2240,9 @@ impl FarmState {
         // quotes it can read do not go anywhere when the connection carrying
         // them does, so without this it goes on reading the last price before
         // the drop as though it were still a price.
-        emit(event_tx, Event::VenueData {
-            which: crate::bridge::VenueDataConnection::MarketData,
-            up: false,
-        });
+        crate::engine::hot_loop::announce_venue_data(
+            shared, event_tx, crate::bridge::VenueDataConnection::MarketData, false,
+        );
     }
 
     /// Test-only: set disconnected without clearing state or emitting events.

@@ -202,12 +202,13 @@ impl EClient {
         // under: a caller reading quotes has nothing else to tell it that the
         // last price it holds stopped being a price, and the quotes it can
         // read do not go anywhere when the connection carrying them does.
-        for event in &events {
-            if let Event::VenueData { which, up } = event {
-                let (broken, ok) = which.codes();
-                call_wrapper!(self.wrapper, py, "error",
-                    (-1i64, 0i64, if *up { ok } else { broken }, which.says(*up), ""));
+        for (which, up) in shared.drain_venue_data_notices() {
+            if matches!(which, crate::bridge::VenueDataConnection::MarketData) && !up {
+                self.core.forget_last_quotes();
             }
+            let (broken, ok) = which.codes();
+            call_wrapper!(self.wrapper, py, "error",
+                (-1i64, 0i64, if up { ok } else { broken }, which.says(up), ""));
         }
 
         // The status that came with the same report, so one execution report
@@ -629,6 +630,18 @@ impl EClient {
             call_wrapper!(self.wrapper, py, "error", (order_id as i64, 0i64, code as i64, msg.as_str(), ""));
         }
 
+        // The increment each subscription was acknowledged with, to everyone
+        // watching the contract, once, as on the other surface.
+        for (instrument, min_tick) in shared.market.drain_tick_req_params() {
+            let held_by = self.core.req_id_for_instrument(instrument);
+            let watching: Vec<i64> = std::iter::once(held_by)
+                .filter(|id| *id >= 0)
+                .chain(self.core.followers_of(instrument))
+                .collect();
+            for req_id in watching {
+                call_wrapper!(self.wrapper, py, "tick_req_params", (req_id, min_tick, "", 0i64));
+            }
+        }
         // Poll quotes for changes -> tickPrice/tickSize
         // Poll quotes via shared ClientCore (same logic as Rust dispatch)
         let instruments = self.core.snapshot_instruments();
@@ -684,7 +697,7 @@ impl EClient {
                 // every tick but the one that says when the last trade
                 // happened, and could not tell a live print from a stale one.
                 for id in std::iter::once(ts.req_id).chain(watchers.iter().copied()) {
-                    call_wrapper!(self.wrapper, py, "tick_string", (id, TICK_LAST_TIMESTAMP, ts_secs.to_string().as_str()));
+                    call_wrapper!(self.wrapper, py, "tick_string", (id, if result.delayed { 88 } else { TICK_LAST_TIMESTAMP }, ts_secs.to_string().as_str()));
                 }
             }
             // The holder and everyone watching it, for the reason the ticks
@@ -831,6 +844,7 @@ impl EClient {
         let hist_data = shared.reference.drain_historical_data_for_dispatch();
         for (req_id, response) in hist_data {
             let is_update = self.core.hist_initial_complete.lock().unwrap().contains(&req_id);
+            self.core.note_historical_zone(req_id as i64, &response.timezone);
             for bar in &response.bars {
                 let bar_obj = BarData::new(
                     self.core.bar_time_for(req_id as i64, &bar.time, &response.timezone),
@@ -1092,11 +1106,12 @@ impl EClient {
         for (req_id, bar) in rtbars {
             if self.core.hist_initial_complete.lock().unwrap().contains(&req_id) {
                 // keepUpToDate bar → dispatch as historical_data_update
-                // Bar open time, in seconds since the epoch. Bars of the
-                // initial answer carry the venue's stamp and zone; a bar still
-                // forming is stamped locally and states no zone.
+                // Bar open time, in seconds since the epoch, dated as the
+                // history before it was: in the caller's format, on the zone
+                // the series was stated on.
                 let bar_obj = BarData::new(
-                    format!("{}", bar.timestamp), bar.open, bar.high, bar.low, bar.close,
+                    self.core.bar_time_for_epoch(req_id as i64, i64::from(bar.timestamp)),
+                    bar.open, bar.high, bar.low, bar.close,
                     bar.volume as i64, bar.wap, bar.count,
                     String::new(), // streaming bars carry no timezone
                 );

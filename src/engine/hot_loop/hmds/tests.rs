@@ -1538,6 +1538,7 @@ mod hmds_correlation_tests {
                     exchange: "SMART".into(),
                     data_type: "Last",
                     use_rth: true,
+                    include_expired: false,
                 },
             )
         };
@@ -2067,4 +2068,36 @@ fn a_number_already_running_a_scan_is_not_given_another() {
     let errors = shared.reference.drain_historical_errors();
     assert_eq!(errors.len(), 1, "the caller is told: {errors:?}");
     assert_eq!(errors[0].1, 385, "under the number that names it");
+}
+
+/// A page that cannot be read ends a request kept up to date whose history
+/// has not arrived whole, as it ends any other.
+///
+/// The unreadable page was warned and the stream left to go on, which is
+/// right once the history is in; before that there is no history to go on
+/// from — no end fired, later pages went on extending a series nobody could
+/// be handed, and the number could never be used again.
+#[test]
+fn an_unreadable_page_ends_a_kept_up_to_date_request_still_assembling() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+    hmds.pending_historical.push(("q9".to_string(), 9));
+    hmds.keep_up_to_date_reqs.insert(9);
+    hmds.held.push(HeldSeries {
+        req_id: 9, fold: Fold::None, con_id: 0, sec_type: String::new(), exchange: String::new(),
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None, actions: None, complete: false,
+    });
+    let xml = "<ResultSetBar><id>q9</id><eoq>true</eoq><tz>UTC</tz><Events><Bar><time>20260714-13:30:00</time><open>100.0</open></Bar></Events></ResultSetBar>";
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"35=W\x016118=");
+    msg.extend_from_slice(xml.as_bytes());
+    msg.push(0x01);
+    hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+    assert!(hmds.pending_historical.iter().all(|(_, rid)| *rid != 9), "the number is released");
+    assert!(hmds.held.iter().all(|a| a.req_id != 9), "and the series with it");
+    assert!(!hmds.keep_up_to_date_reqs.contains(&9), "and the stream half");
+    assert!(shared.reference.drain_historical_errors().iter().any(|e| e.0 == 9), "the caller is told");
+    assert!(shared.reference.drain_historical_data().iter().any(|(rid, r)| *rid == 9 && r.is_complete), "and given its end");
 }

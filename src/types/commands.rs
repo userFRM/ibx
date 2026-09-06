@@ -280,6 +280,8 @@ pub enum ControlCommand {
         what_to_show: String,
         /// Whether to count only regular trading hours.
         use_rth: bool,
+        /// Whether an expired contract is meant, as the bar query states it.
+        include_expired: bool,
         /// What tells two contracts on one underlying apart, for the
         /// lookup that names this one when the caller passed no id.
         filters: SecDefFilters,

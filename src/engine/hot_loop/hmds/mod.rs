@@ -380,10 +380,9 @@ impl HmdsState {
         self.fail_pending("the historical connection went away before the venue answered", shared);
         // The venue says when this connection breaks, and a caller waiting on
         // history has nothing else to read it from.
-        crate::engine::hot_loop::emit(event_tx, crate::bridge::Event::VenueData {
-            which: crate::bridge::VenueDataConnection::Historical,
-            up: false,
-        });
+        crate::engine::hot_loop::announce_venue_data(
+            shared, event_tx, crate::bridge::VenueDataConnection::Historical, false,
+        );
     }
 
     /// Report every unanswered one-shot request as failed, and forget it.
@@ -1017,9 +1016,20 @@ impl HmdsState {
                                 .position(|(q, _)| states(stated, q.as_str()))
                             {
                                 let (_, req_id) = self.pending_historical[pos];
-                                if !self.keep_up_to_date_reqs.contains(&req_id) {
+                                // A request kept up to date goes on past an
+                                // unreadable page once its history is in;
+                                // before that there is no history to go on
+                                // from, so it ends as any other, stream half
+                                // and all.
+                                let still_assembling = self.held.iter().any(|a| a.req_id == req_id);
+                                if !self.keep_up_to_date_reqs.contains(&req_id) || still_assembling {
                                     self.pending_historical.remove(pos);
                                     self.held.retain(|a| a.req_id != req_id);
+                                    if self.keep_up_to_date_reqs.remove(&req_id) {
+                                        self.rtbar_subs.retain(|(_, rid, ..)| *rid != req_id);
+                                        self.rtbar_resub.retain(|r| r.req_id != req_id);
+                                        self.forming_bars.retain(|f| f.req_id != req_id);
+                                    }
                                     released_req_id = Some(req_id);
                                     from_historical = true;
                                 }
@@ -2090,7 +2100,7 @@ fn build_tbt_query(
         self.send_historical_cancel(&cancel_id, hmds_conn, hb);
     }
 
-    pub(crate) fn send_head_timestamp_request(&mut self, req_id: u32, con_id: i64, what_to_show: &str, use_rth: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
+    pub(crate) fn send_head_timestamp_request(&mut self, req_id: u32, con_id: i64, what_to_show: &str, use_rth: bool, include_expired: bool, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState, shared: &SharedState) {
         // The head-timestamp table, which is the bar one and the rate: this
         // was a third divergent copy with a silent TRADES fallback.
         let data_type = match crate::control::historical::head_timestamp_data_type(what_to_show) {
@@ -2124,6 +2134,7 @@ fn build_tbt_query(
             exchange: described.exchange.clone(),
             data_type,
             use_rth,
+            include_expired,
         };
         let xml = crate::control::historical::build_head_timestamp_xml(&req);
         // The id the query goes out under, so the response can be matched to

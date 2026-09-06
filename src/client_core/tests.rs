@@ -819,6 +819,29 @@ fn poll_pnl_single_change_detection_suppresses_duplicate() {
     assert!(core.poll_pnl_single(&shared).is_empty());
 }
 
+/// A delayed subscription numbers its ticks as delayed.
+///
+/// The caller was told on `market_data_type` that the feed was delayed and
+/// then handed it under the realtime numbers; the reference client numbers a
+/// delayed feed under its own, from 66.
+#[test]
+fn a_delayed_subscription_numbers_its_ticks_as_delayed() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    core.mdt_by_req.lock().unwrap().insert(11, MDT_DELAYED);
+    shared.market.push_quote(0, &Quote {
+        bid: 100 * crate::types::PRICE_SCALE, ask: 101 * crate::types::PRICE_SCALE,
+        last: 100 * crate::types::PRICE_SCALE + crate::types::PRICE_SCALE / 2,
+        bid_size: 3 * crate::types::QTY_SCALE, timestamp_ns: 1_757_000_000_000_000_000,
+        ..Default::default()
+    });
+    let polled = core.poll_instrument_ticks(&shared, 0, 11);
+    let mut numbered: Vec<i32> = polled.ticks.iter().map(|t| t.tick_type).collect();
+    numbered.sort_unstable();
+    assert_eq!(numbered, vec![66, 67, 68, 69], "delayed bid, ask, last and bid size: {numbered:?}");
+    assert!(polled.delayed, "and the timestamp goes out under the delayed number");
+}
+
 /// A holding that moves by less than a whole unit is a change.
 ///
 /// The change key held the quantity as a whole number, so a fractional

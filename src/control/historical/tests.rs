@@ -374,6 +374,7 @@ fn head_timestamp_xml_structure() {
         exchange: "SMART".to_string(),
         data_type: "Last",
         use_rth: true,
+        include_expired: false,
     };
     let xml = build_head_timestamp_xml(&req);
     assert!(xml.contains("<type>TickHeadTimeStamp</type>"));
@@ -1109,4 +1110,16 @@ fn a_bar_is_kept_up_to_date_when_it_folds_from_the_five_second_stream() {
             "{asked} would open where the venue's never does",
         );
     }
+}
+
+/// The head-timestamp query states whether an expired contract is meant, as
+/// the bar query does. A settled future asked about with the flag set was
+/// asked about as a contract that no longer exists.
+#[test]
+fn the_head_timestamp_query_states_expired_as_the_bar_query_does() {
+    let ask = |include_expired: bool| super::build_head_timestamp_xml(&super::HeadTimestampRequest {
+        con_id: 1, sec_type: "FUT".into(), exchange: "CME".into(), data_type: "TRADES", use_rth: false, include_expired,
+    });
+    assert!(ask(true).contains("<expired>yes</expired>"), "{}", ask(true));
+    assert!(ask(false).contains("<expired>no</expired>"), "{}", ask(false));
 }

@@ -501,7 +501,7 @@ mod resub_tests {
             756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
             false, &mut None, &mut hb,
         );
-        farm.handle_disconnect(&mut None, &mut context, &None);
+        farm.handle_disconnect(&mut None, &mut context, &None, &crate::bridge::SharedState::new());
         assert!(farm.instrument_md_reqs.is_empty(), "the disconnect clears the request list");
 
         let targets = farm.take_resub_targets(&context.market);
@@ -555,7 +555,7 @@ mod resub_tests {
         assert!(!farm.greeks_subs.is_empty(), "so is the modelling ask");
         assert!(!farm.quotes_for_no_one.is_empty(), "so is the unclaimed number");
 
-        farm.handle_disconnect(&mut None, &mut context, &None);
+        farm.handle_disconnect(&mut None, &mut context, &None, &crate::bridge::SharedState::new());
 
         assert!(
             farm.depth_fanout_exchange.is_empty(),
@@ -581,7 +581,7 @@ mod resub_tests {
             756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
             false, &mut None, &mut hb,
         );
-        farm.handle_disconnect(&mut None, &mut context, &None);
+        farm.handle_disconnect(&mut None, &mut context, &None, &crate::bridge::SharedState::new());
         farm.send_mktdata_unsubscribe(instrument, &mut None, &mut hb);
 
         assert!(
@@ -610,7 +610,7 @@ mod resub_tests {
             assert!(farm.holds_market_data(instrument), "subscribed: held");
 
             if down {
-                farm.handle_disconnect(&mut None, &mut context, &None);
+                farm.handle_disconnect(&mut None, &mut context, &None, &crate::bridge::SharedState::new());
                 // The record deliberately survives a disconnect, so the slot
                 // stays held — that is what makes the resubscribe possible.
                 assert!(farm.holds_market_data(instrument), "disconnected: still held");
@@ -732,7 +732,7 @@ mod resub_tests {
         assert_eq!(farm.replay_queue.len(), 3);
 
         // And the farm goes before the rest of them do.
-        farm.handle_disconnect(&mut None, &mut context, &None);
+        farm.handle_disconnect(&mut None, &mut context, &None, &crate::bridge::SharedState::new());
 
         assert!(farm.replay_queue.is_empty(), "nothing is left holding them");
         assert_eq!(
@@ -1485,6 +1485,66 @@ mod depth_position_tests {
         );
     }
 
+
+
+    /// A refusal of a request riding beside the quote — the trading status,
+    /// the exchange map, the option model — is the venue refusing that
+    /// request, not the quote. Reported as the quote's, the caller was told
+    /// no such contract exists (200) while its prices went on arriving, and a
+    /// program that takes that number as final withdrew a working
+    /// subscription.
+    #[test]
+    fn a_refused_companion_request_is_not_the_quote_refused() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut None, &mut hb,
+        );
+        let refused = |id: u32| crate::protocol::fix::fix_build(&[
+            (crate::protocol::fix::TAG_MSG_TYPE, "j"),
+            (262, &id.to_string()),
+            (58, "Error&SMART/STATUS/not available"),
+        ], 1);
+        let companion = farm.generic_tick_reqs.iter()
+            .find(|(_, kind)| *kind == TRADING_STATUS_REQUEST_TYPE)
+            .map(|(id, _)| *id)
+            .expect("the trading status is asked for beside the quote");
+        farm.handle_subscription_reject(&refused(companion), &context, &shared);
+        assert!(shared.market.drain_subscription_failures().is_empty(), "a companion's refusal is the companion's");
+        let quote = farm.md_req_to_instrument.iter()
+            .map(|(id, _)| *id)
+            .find(|id| !farm.generic_tick_reqs.iter().any(|(g, _)| g == id))
+            .expect("the quote's own request");
+        farm.handle_subscription_reject(&refused(quote), &context, &shared);
+        assert_eq!(shared.market.drain_subscription_failures().len(), 1, "the quote's own refusal reaches the caller");
+    }
+
+    /// The increment the venue acknowledges a subscription with is kept for
+    /// the caller, who hears it on `tick_req_params` as the reference client
+    /// delivers it.
+    #[test]
+    fn an_acknowledged_increment_is_kept_for_the_caller() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut None, &mut hb,
+        );
+        let quote = farm.md_req_to_instrument.iter()
+            .map(|(id, _)| *id)
+            .find(|id| !farm.generic_tick_reqs.iter().any(|(g, _)| g == id))
+            .expect("the quote's own request");
+        let ack = format!("35=Q\x01777,{quote},0.01");
+        farm.handle_subscription_ack(ack.as_bytes(), &mut context, &shared);
+        assert_eq!(shared.market.drain_tick_req_params(), vec![(instrument, 0.01)]);
+    }
 
 }
 

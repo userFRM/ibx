@@ -408,6 +408,20 @@ pub fn bar_date_as_asked(stated: &str, format_date: i32, zone: &str) -> String {
     format!("{} {zone}", at.to_zoned(clock).strftime("%Y%m%d %H:%M:%S"))
 }
 
+/// A bar stamped in seconds since the epoch, dated as the caller asked bars
+/// to be: the seconds themselves for format 2, otherwise the venue's spelling
+/// on the zone the series was stated on. With no zone to place it on, the
+/// seconds stand.
+pub fn bar_epoch_as_asked(secs: i64, format_date: i32, zone: &str) -> String {
+    if format_date == 2 || zone.is_empty() {
+        return secs.to_string();
+    }
+    let (Some(clock), Ok(at)) = (clock_named(zone), jiff::Timestamp::from_second(secs)) else {
+        return secs.to_string();
+    };
+    format!("{} {zone}", at.to_zoned(clock).strftime("%Y%m%d %H:%M:%S"))
+}
+
 /// The range a bar request named, as stated once its bars have all arrived.
 ///
 /// Not read off the reply. The reply carries a range of its own and the

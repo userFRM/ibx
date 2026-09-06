@@ -220,6 +220,9 @@ pub struct SharedState {
     /// like `connection_lost`, so a client with no event channel still learns
     /// it is back.
     connection_restored: AtomicBool,
+    /// The venue's data connections going away and coming back, in order,
+    /// for a client with no event channel to read.
+    venue_data_notices: std::sync::Mutex<Vec<(crate::bridge::VenueDataConnection, bool)>>,
     /// Notifier for waking consumers (e.g. Python event loop) when data arrives.
     notify_mutex: Mutex<bool>,
     notify_condvar: Condvar,
@@ -265,6 +268,7 @@ impl SharedState {
             connection_lost: AtomicBool::new(false),
             connection_lost_by_design: AtomicBool::new(false),
             connection_restored: AtomicBool::new(false),
+            venue_data_notices: std::sync::Mutex::new(Vec::new()),
             notify_mutex: Mutex::new(false),
             notify_condvar: Condvar::new(),
         }
@@ -324,6 +328,19 @@ impl SharedState {
     #[inline]
     pub fn take_connection_restored(&self) -> bool {
         self.connection_restored.swap(false, Ordering::AcqRel)
+    }
+
+    /// One of the connections the venue keeps data on went away or came back.
+    /// Hot-loop side; kept here so a client with no event channel hears it.
+    #[doc(hidden)]
+    pub fn push_venue_data_notice(&self, which: crate::bridge::VenueDataConnection, up: bool) {
+        self.venue_data_notices.lock().unwrap().push((which, up));
+        self.notify();
+    }
+
+    /// Take the data-connection notices, in the order they came.
+    pub fn drain_venue_data_notices(&self) -> Vec<(crate::bridge::VenueDataConnection, bool)> {
+        self.venue_data_notices.lock().unwrap().drain(..).collect()
     }
 
     /// Record an auth-connection RTT sample. Hot-loop side.

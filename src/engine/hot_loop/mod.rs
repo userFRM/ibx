@@ -1421,12 +1421,12 @@ impl HotLoop {
                     self.hmds.held.retain(|a| a.req_id != req_id);
                     self.hmds.send_adjustments_cancel(req_id, &mut self.hmds_conn, &mut self.hb);
                 }
-                ControlCommand::FetchHeadTimestamp { contract, req_id, what_to_show, use_rth, .. } => {
+                ControlCommand::FetchHeadTimestamp { contract, req_id, what_to_show, use_rth, include_expired, .. } => {
                     let ContractRef { con_id, .. } = contract;
                     if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
-                        self.hmds.send_head_timestamp_request(req_id, con_id, &what_to_show, use_rth, &mut self.hmds_conn, &mut self.hb, &self.shared);
+                        self.hmds.send_head_timestamp_request(req_id, con_id, &what_to_show, use_rth, include_expired, &mut self.hmds_conn, &mut self.hb, &self.shared);
                     }
                 }
                 ControlCommand::FetchContractDetails { contract, req_id, filters } => {
@@ -2014,7 +2014,7 @@ impl HotLoop {
                 if since_recv > HeartbeatState::farm_dead_after(stated) {
                     log::error!("Farm liveness timeout ({since_recv}s silent) — connection lost");
                     self.farm.handle_disconnect(
-                        &mut self.farm_conn, &mut self.context, &self.event_tx,
+                        &mut self.farm_conn, &mut self.context, &self.event_tx, &self.shared,
                     );
                 } else if self.hb.pending_farm_test.is_none() {
                     let test_id = self.hb.next_test_id();
@@ -2235,7 +2235,7 @@ impl HotLoop {
         {
             log::error!("Farm transport can no longer carry traffic — giving it up");
             self.farm.handle_disconnect(
-                &mut self.farm_conn, &mut self.context, &self.event_tx,
+                &mut self.farm_conn, &mut self.context, &self.event_tx, &self.shared,
             );
         }
         if !self.hmds.disconnected
@@ -2619,10 +2619,9 @@ impl HotLoop {
                 self.budget.record_connected(Instant::now());
                 // Said whether or not a loss was ever announced, because the
                 // break was said the same way.
-                emit(&self.event_tx, Event::VenueData {
-                    which: crate::bridge::VenueDataConnection::MarketData,
-                    up: true,
-                });
+                announce_venue_data(
+                    &self.shared, &self.event_tx, crate::bridge::VenueDataConnection::MarketData, true,
+                );
                 self.announce_reconnected();
                 self.farm_next_attempt_at = None;
                 self.pending_farm_reconnect = None;
@@ -3064,9 +3063,9 @@ impl HotLoop {
                     return;
                 }
                 self.secdef_conn = Some(conn);
-                emit(&self.event_tx, Event::VenueData {
-                    which: crate::bridge::VenueDataConnection::SecurityDefinition, up: true,
-                });
+                announce_venue_data(
+                    &self.shared, &self.event_tx, crate::bridge::VenueDataConnection::SecurityDefinition, true,
+                );
                 self.hb.last_secdef_recv = Instant::now();
                 self.hb.pending_secdef_test = None;
                 self.hb.last_secdef_sent = Instant::now();
@@ -3146,10 +3145,9 @@ impl HotLoop {
                 self.hmds_budget.record_connected(Instant::now());
                 self.hmds_next_attempt_at = None;
                 self.pending_hmds_reconnect = None;
-                emit(&self.event_tx, Event::VenueData {
-                    which: crate::bridge::VenueDataConnection::Historical,
-                    up: true,
-                });
+                announce_venue_data(
+                    &self.shared, &self.event_tx, crate::bridge::VenueDataConnection::Historical, true,
+                );
             }
             Ok(Err(e)) => {
                 let reason = retry::DisconnectReason::from_error(&e);
@@ -3364,6 +3362,15 @@ pub(crate) fn emit(event_tx: &Option<EventSink>, event: Event) {
     {
         sink.lost.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Say that one of the venue's data connections went away or came back: on
+/// the event stream, and in the shared state for a client with none.
+pub(crate) fn announce_venue_data(
+    shared: &SharedState, event_tx: &Option<EventSink>, which: crate::bridge::VenueDataConnection, up: bool,
+) {
+    shared.push_venue_data_notice(which, up);
+    emit(event_tx, Event::VenueData { which, up });
 }
 
 /// Clone a payload for the event channel, but only when one is attached.
@@ -4824,7 +4831,7 @@ mod tests {
         hl.ccp.handle_disconnect(
             &mut hl.ccp_conn, &mut hl.context, &hl.shared, &hl.event_tx,
         );
-        hl.farm.handle_disconnect(&mut hl.farm_conn, &mut hl.context, &hl.event_tx);
+        hl.farm.handle_disconnect(&mut hl.farm_conn, &mut hl.context, &hl.event_tx, &hl.shared);
 
         assert!(
             hl.ccp_conn.is_none(),
@@ -6391,7 +6398,7 @@ mod tests {
         let mut hl = HotLoop::new(shared.clone(), None, None);
         hl.ccp.pending_named.push((7, ControlCommand::FetchHeadTimestamp {
             req_id: 7, contract: stock(0, "SPY"), what_to_show: "TRADES".into(),
-            use_rth: true, filters: Default::default(),
+            use_rth: true, include_expired: false, filters: Default::default(),
         }, std::time::Instant::now()));
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         hl.set_control_rx(rx);

@@ -668,6 +668,8 @@ pub struct HeadTimestampRequest {
     pub data_type: &'static str,
     /// Whether to count only regular trading hours.
     pub use_rth: bool,
+    /// Whether an expired contract is meant, stated as the bar query states it.
+    pub include_expired: bool,
 }
 
 /// Parsed head timestamp response.
@@ -709,6 +711,7 @@ pub fn build_head_timestamp_xml(req: &HeadTimestampRequest) -> String {
          <Query>\
          <id>{id}</id>\
          <useRTH>{rth}</useRTH>\
+         <expired>{expired}</expired>\
          <contractID>{con_id}</contractID>\
          <exchange>{exchange}</exchange>\
          <secType>{sec_type}</secType>\
@@ -721,6 +724,7 @@ pub fn build_head_timestamp_xml(req: &HeadTimestampRequest) -> String {
          <delay>auto</delay>\
          </Query>\
          </ListOfQueries>",
+        expired = if req.include_expired { "yes" } else { "no" },
         con_id = req.con_id,
         sec_type = req.sec_type,
         data = req.data_type,

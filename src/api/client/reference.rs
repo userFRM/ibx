@@ -125,6 +125,7 @@ impl EClient {
             filters: contract.lookup_filters(),
             what_to_show: what_to_show.into(),
             use_rth,
+            include_expired: contract.include_expired,
         })
     }
 
