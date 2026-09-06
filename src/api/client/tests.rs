@@ -9282,11 +9282,13 @@ fn a_venue_named_orders_record_follows_the_callers_latest_statement() {
     client.place_order(9307, &spy(), &first).unwrap();
     let second = Order { lmt_price: 102.0, oca_group: "G2".into(), transmit: true, ..named };
     client.place_order(9307, &spy(), &second).unwrap();
-    let mut statements = 0;
+    let mut stated_groups = Vec::new();
     while let Ok(cmd) = rx.try_recv() {
-        statements += matches!(cmd, ControlCommand::Order(OrderRequest::Describe { .. })) as u32;
+        if let ControlCommand::Order(OrderRequest::Describe { spec, .. }) = cmd {
+            stated_groups.push(spec.attrs.oca_group_str.clone());
+        }
     }
-    assert_eq!(statements, 2, "each replace carried the caller's statement to the engine");
+    assert_eq!(stated_groups, ["G1", "G2"], "each replace carried the caller's statement to the engine");
     let record = client.core.tracked_order(9307).expect("tracked");
     assert_eq!(record.oca_group, "G2", "and the record says what the venue was last told");
 }

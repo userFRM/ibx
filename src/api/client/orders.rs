@@ -306,25 +306,30 @@ impl EClient {
         // Whether this client placed the order, as against learning of it
         // from the venue through a status or an earlier restatement.
         let placed_here = self.core.placed_here(oid);
-        if replacing {
-            self.core.restate_order(Some(&self.shared), oid, contract.clone(), placed.clone(), instrument);
-        }
         // A replace of an order this client did not place — one the venue
         // named at connect — goes behind the caller's own statement of the
         // order, which the engine keeps as the record it has none of and
         // restates the shape from. That is what the reference client sends
-        // on a modify. An order placed here has its record already. Sent
-        // whether or not the replace transmits now: a held replace records
-        // the order here, so the transmit that follows it would find the
-        // order placed here and send no statement at all.
-        if replacing
-            && !placed_here
-            && let Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) =
-                ClientCore::build_order_request(order, oid, instrument, Some(contract))
-        {
-            let _ = self.control_tx.send(ControlCommand::Order(OrderRequest::Describe {
-                order_id: oid, spec: Box::new(crate::types::OrderSpec { kind, attrs }),
-            }));
+        // on a modify. An order placed here has its record already. Built
+        // before the record below is restated, so a statement that cannot be
+        // built refuses the replace with nothing moved; and sent whether or
+        // not the replace transmits now, since a held replace records the
+        // order here and the transmit that follows would find it placed here.
+        let statement = if replacing && !placed_here {
+            match ClientCore::build_order_request(order, oid, instrument, Some(contract))? {
+                ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. }) => {
+                    Some(Box::new(crate::types::OrderSpec { kind, attrs }))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if replacing {
+            self.core.restate_order(Some(&self.shared), oid, contract.clone(), placed.clone(), instrument);
+        }
+        if let Some(spec) = statement {
+            let _ = self.control_tx.send(ControlCommand::Order(OrderRequest::Describe { order_id: oid, spec }));
         }
         if order.transmit {
             if !replacing {

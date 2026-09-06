@@ -382,8 +382,22 @@ impl EClient {
         // this call returns, and a restatement written behind that answer put
         // the attempted terms over a refusal that had already put back the
         // real ones.
-        // Whether this client placed the order, as on the other surface.
+        // Whether this client placed the order, as on the other surface; and
+        // the caller's statement of one it did not, built before the record
+        // is restated so a statement that cannot be built refuses the replace
+        // with nothing moved.
         let placed_here = self.core.placed_here(oid);
+        let statement = if replacing && !placed_here {
+            match ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract)) {
+                Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) => {
+                    Some(Box::new(crate::types::OrderSpec { kind, attrs }))
+                }
+                Ok(_) => None,
+                Err(why) => return self.report_refusal(py, order_id, why),
+            }
+        } else {
+            None
+        };
         if replacing {
             // Whether or not the session state is still here. Skipped where it
             // was not, the record went unchanged for a change that did go out
@@ -393,17 +407,8 @@ impl EClient {
                 venue_now, oid, api_contract.clone(), tracked_order.clone(), instrument,
             );
         }
-        // The caller's statement of an order this client did not place,
-        // ahead of the replace and whether or not it transmits now, as on
-        // the other surface.
-        if replacing
-            && !placed_here
-            && let Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) =
-                ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract))
-        {
-            let _ = Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Describe {
-                order_id: oid, spec: Box::new(crate::types::OrderSpec { kind, attrs }),
-            }));
+        if let Some(spec) = statement {
+            let _ = Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Describe { order_id: oid, spec }));
         }
         if api_order.transmit {
             if !replacing {
