@@ -739,4 +739,20 @@ impl EClient {
         let tx = tx.as_ref().ok_or_else(|| PyRuntimeError::new_err("No event channel"))?;
         tx.send(Event::Stopped).map_err(|e| PyRuntimeError::new_err(format!("{e}")))
     }
+
+    /// Raise the lossless connection-lost flag *without* sending the event, to
+    /// stand in for a bounded event channel that dropped the transition under a
+    /// consumer too far behind to drain it (test-only).
+    #[doc(hidden)]
+    fn _test_set_connection_lost(&self) -> PyResult<()> {
+        self.shared_state()?.set_connection_lost();
+        Ok(())
+    }
+
+    /// Raise the lossless connection-restored flag without the event (test-only).
+    #[doc(hidden)]
+    fn _test_set_connection_restored(&self) -> PyResult<()> {
+        self.shared_state()?.set_connection_restored();
+        Ok(())
+    }
 }

@@ -220,6 +220,28 @@ impl EClient {
             };
             call_wrapper!(self.wrapper, py, "error", (-1i64, 0i64, code, msg, ""));
         }
+        // The events carry the order; the flags carry the fact. The event
+        // channel is bounded and drops what it cannot hold, so a consumer far
+        // enough behind loses the transition it would have announced — while
+        // `went`/`came_back` recorded it the whole time. Where a flag says the
+        // connectivity changed this pass and no event was left to say it, the
+        // callback is sent from the flag, in the final state the flags hold
+        // (`down_now`). The reference client never drops this notice: its
+        // dispatch queue is unbounded. A loss the caller asked for stays a
+        // `connection_closed`, not a 1100, as above; a restore is always said.
+        let final_up = !down_now;
+        if (went || came_back) && last_said != Some(final_up) {
+            let suppress_loss = !final_up
+                && (shared.connection_lost_by_design() || self.session_ended.load(Ordering::Relaxed));
+            if !suppress_loss {
+                let (code, msg): (i64, &str) = if final_up {
+                    (1102, "Connectivity between client and server has been restored - data maintained")
+                } else {
+                    (1100, "Connectivity between client and server has been lost")
+                };
+                call_wrapper!(self.wrapper, py, "error", (-1i64, 0i64, code, msg, ""));
+            }
+        }
         // One of the connections the venue keeps data on went away or came
         // back. Said as it happens, under the number the venue reports it
         // under: a caller reading quotes has nothing else to tell it that the
