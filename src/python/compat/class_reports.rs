@@ -1,7 +1,7 @@
 //! What the venue reports back: fills, their cost, bars, and news.
 
 // The other families, and the two helpers every class here uses.
-use super::contract::by_reference_name;
+use super::contract::{by_reference_name, set_by_reference_name};
 use pyo3::prelude::*;
 
 use super::{camel_aliases_copy, camel_aliases_owned};
@@ -47,6 +47,12 @@ impl BarData {
     /// the names this class defines.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
         by_reference_name(slf.as_any(), name, &[])
+    }
+
+    /// The same names, written to: a field set under the reference client's
+    /// spelling lands on this client's field.
+    fn __setattr__(slf: Bound<'_, Self>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
+        set_by_reference_name(slf.as_any(), name, &value, &[])
     }
 
     #[new]
@@ -161,6 +167,12 @@ impl Execution {
     /// the names this class defines.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
         by_reference_name(slf.as_any(), name, &[])
+    }
+
+    /// The same names, written to: a field set under the reference client's
+    /// spelling lands on this client's field.
+    fn __setattr__(slf: Bound<'_, Self>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
+        set_by_reference_name(slf.as_any(), name, &value, &[])
     }
 
     #[new]

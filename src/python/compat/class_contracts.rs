@@ -1,7 +1,7 @@
 //! The contract classes a caller works in, as the Python API names them.
 
 // The other families, and the two helpers every class here uses.
-use super::contract::{by_reference_name, set_from_keywords};
+use super::contract::{by_reference_name, set_by_reference_name, set_from_keywords};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use std::sync::OnceLock;
@@ -803,6 +803,23 @@ impl ContractDetails {
         )
     }
 
+    /// The same names, written to: a field set under the reference client's
+    /// spelling lands on this client's field.
+    fn __setattr__(slf: Bound<'_, Self>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
+        set_by_reference_name(
+            slf.as_any(),
+            name, &value,
+            &[
+                // Same field, different word: the reference client writes one
+                // `t`, calls the bond remark a plain note, and orders the words
+                // of the fund's follow-on minimum the other way round.
+                ("putable", "puttable"),
+                ("notes", "bond_notes"),
+                ("fundSubsequentMinimumPurchase", "fund_minimum_subsequent_purchase"),
+            ],
+        )
+    }
+
     #[new]
     #[pyo3(signature = ())]
     fn py_new(py: Python<'_>) -> Self {
@@ -1139,6 +1156,12 @@ impl SmartComponentPy {
         by_reference_name(slf.as_any(), name, &[])
     }
 
+    /// The same names, written to: a field set under the reference client's
+    /// spelling lands on this client's field.
+    fn __setattr__(slf: Bound<'_, Self>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
+        set_by_reference_name(slf.as_any(), name, &value, &[])
+    }
+
     #[new]
     #[pyo3(signature = ())]
     fn new() -> Self { Self::default() }
@@ -1175,6 +1198,12 @@ impl ContractDescription {
     /// the names this class defines.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
         by_reference_name(slf.as_any(), name, &[])
+    }
+
+    /// The same names, written to: a field set under the reference client's
+    /// spelling lands on this client's field.
+    fn __setattr__(slf: Bound<'_, Self>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
+        set_by_reference_name(slf.as_any(), name, &value, &[])
     }
 
     #[new]
@@ -1258,6 +1287,12 @@ impl DepthMktDataDescriptionPy {
     /// the names this class defines.
     fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
         by_reference_name(slf.as_any(), name, &[])
+    }
+
+    /// The same names, written to: a field set under the reference client's
+    /// spelling lands on this client's field.
+    fn __setattr__(slf: Bound<'_, Self>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
+        set_by_reference_name(slf.as_any(), name, &value, &[])
     }
 
     #[new]

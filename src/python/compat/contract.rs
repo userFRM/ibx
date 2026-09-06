@@ -118,15 +118,23 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// A capital starts a word, which is enough for every name either side spells
 /// out and not enough for the ones that run their letters together. So the
 /// split is a first guess, and what the object carries decides.
-pub(super) fn by_reference_name(
-    obj: &Bound<'_, PyAny>,
-    name: &str,
-    aliases: &[(&str, &str)],
-) -> PyResult<Py<PyAny>> {
+/// The name this object carries a field under, asked for by the reference
+/// client's spelling: the alias table first, then the words split at the
+/// capitals, then the letters alone. `None` where no field answers.
+///
+/// Split at every capital, `reqPnL` is `req_pn_l` and names nothing, so a
+/// caller asking for a running profit was told this object carries none.
+/// Matched on the letters alone it is `req_pnl`, which is the call. That
+/// last pass runs only for a name the split changed, which is what a name
+/// from the other client looks like: asked about `__dict__` it would reach
+/// the object's own listing, and that listing asks the object for `__dict__`.
+/// Names opening on an underscore are left out: this crate's own workings
+/// are not reachable under a second spelling.
+fn reference_name(obj: &Bound<'_, PyAny>, name: &str, aliases: &[(&str, &str)]) -> PyResult<Option<String>> {
     if let Some((_, ours)) = aliases.iter().find(|(theirs, _)| *theirs == name)
-        && let Ok(v) = obj.getattr(*ours)
+        && obj.hasattr(*ours)?
     {
-        return Ok(v.unbind());
+        return Ok(Some((*ours).to_string()));
     }
     let mut snake = String::with_capacity(name.len() + 4);
     for (i, c) in name.chars().enumerate() {
@@ -139,27 +147,12 @@ pub(super) fn by_reference_name(
             snake.push(c);
         }
     }
-    if snake != name
-        && let Ok(v) = obj.getattr(snake.as_str())
-    {
-        return Ok(v.unbind());
-    }
-    // Split at every capital, `reqPnL` is `req_pn_l` and names nothing, so a
-    // caller asking for a running profit was told this object carries none.
-    // Matched on the letters alone it is `req_pnl`, which is the call.
-    //
-    // Only for a name the split changed, which is what a name from the other
-    // client looks like. Asked about `__dict__` this reaches the object's own
-    // listing, and that listing asks the object for `__dict__`; a name the
-    // split left alone was never the other client's spelling anyway.
     if snake == name {
-        let class = obj.get_type().name()?;
-        return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-            "'{class}' object has no attribute '{name}'"
-        )));
+        return Ok(None);
     }
-    // Names opening on an underscore are left out: this crate's own workings
-    // are not reachable under a second spelling.
+    if obj.hasattr(snake.as_str())? {
+        return Ok(Some(snake));
+    }
     let flattened = name.to_lowercase();
     for carried in obj.dir()?.iter() {
         let Ok(carried) = carried.extract::<String>() else {
@@ -168,14 +161,51 @@ pub(super) fn by_reference_name(
         if carried.starts_with('_') || carried.replace('_', "") != flattened {
             continue;
         }
-        if let Ok(v) = obj.getattr(carried.as_str()) {
-            return Ok(v.unbind());
+        if obj.hasattr(carried.as_str())? {
+            return Ok(Some(carried));
         }
     }
-    let class = obj.get_type().name()?;
-    Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-        "'{class}' object has no attribute '{name}'"
-    )))
+    Ok(None)
+}
+
+fn no_attribute(obj: &Bound<'_, PyAny>, name: &str) -> PyErr {
+    let class = obj.get_type().name().map(|n| n.to_string()).unwrap_or_default();
+    pyo3::exceptions::PyAttributeError::new_err(format!("'{class}' object has no attribute '{name}'"))
+}
+
+/// A read under the reference client's spelling, for a `__getattr__`: reached
+/// only when the name as written was not found.
+pub(super) fn by_reference_name(
+    obj: &Bound<'_, PyAny>,
+    name: &str,
+    aliases: &[(&str, &str)],
+) -> PyResult<Py<PyAny>> {
+    match reference_name(obj, name, aliases)? {
+        Some(ours) => Ok(obj.getattr(ours.as_str())?.unbind()),
+        None => Err(no_attribute(obj, name)),
+    }
+}
+
+/// A write under either spelling, for a `__setattr__`: the name as written
+/// first, and where the object refuses it, the field the reference client's
+/// spelling names. A name neither spelling names raises as the write did.
+pub(super) fn set_by_reference_name(
+    obj: &Bound<'_, PyAny>,
+    name: &str,
+    value: &Bound<'_, PyAny>,
+    aliases: &[(&str, &str)],
+) -> PyResult<()> {
+    let py = obj.py();
+    let object = py.import("builtins")?.getattr("object")?;
+    let refused = match object.call_method1("__setattr__", (obj, name, value)) {
+        Ok(_) => return Ok(()),
+        Err(e) if e.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) => e,
+        Err(e) => return Err(e),
+    };
+    match reference_name(obj, name, aliases)? {
+        Some(ours) if ours != name => object.call_method1("__setattr__", (obj, ours.as_str(), value)).map(|_| ()),
+        _ => Err(refused),
+    }
 }
 
 #[cfg(test)]
