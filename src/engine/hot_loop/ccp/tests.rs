@@ -3968,6 +3968,44 @@ fn figures_for_other_holdings_stay_out_of_the_account() {
         "and none of it is what the account itself is worth",
     );
 }
+/// Figures for holdings held elsewhere are read in the layout the venue
+/// states a figure in: the name opens a group, and the currency and the value
+/// follow inside it, the currency first on every group the account's own
+/// figures were measured to carry. Read as value-then-currency, the currency
+/// closed the group before its value arrived, and every figure was dropped.
+#[test]
+fn figures_for_other_holdings_are_read_as_the_venue_lays_them_out() {
+    let (_ccp, _context, shared) = u186_test_state();
+    let msg = b"8=O\x0135=AL\x016529=AR.1\x018001=AccruedCash\x0115=CHF\x016066=1788679387\x016288=0\x018004=-748.20\x018001=NetLiquidation\x0115=USD\x016066=1788679387\x016288=0\x018004=12345.67\x01";
+    super::handle_account_update_elsewhere(msg, &shared, crate::types::HeldElsewhere::Away);
+    let mut stated = shared.portfolio.values_elsewhere(crate::types::HeldElsewhere::Away);
+    stated.sort();
+    assert_eq!(stated, [
+        ("AccruedCash".to_string(), "-748.20".to_string(), "CHF".to_string()),
+        ("NetLiquidation".to_string(), "12345.67".to_string(), "USD".to_string()),
+    ]);
+}
+
+/// The maintenance margin is the plain spelling, as its three siblings are.
+///
+/// The full spelling is a different figure — the two diverge whenever
+/// intraday margin relief applies — and it stays reachable by name among the
+/// stated values. Written into the maintenance field, the account read the
+/// full figure beside a plain initial one.
+#[test]
+fn the_maintenance_margin_is_the_plain_spelling() {
+    let (_ccp, mut context, shared) = u186_test_state();
+    let msg = b"8=O\x0135=UM\x018001=MaintMarginReq\x0115=USD\x018004=10.00\x018001=FullMaintMarginReq\x0115=USD\x018004=20.00\x018001=InitMarginReq\x0115=USD\x018004=5.00\x018001=FullInitMarginReq\x0115=USD\x018004=7.00\x01";
+    super::positions::handle_account_update(msg, &mut context, &shared);
+    let account = context.account();
+    assert_eq!(account.maint_margin_req, crate::types::price_from_f64(10.0), "the plain figure");
+    assert_eq!(account.init_margin_req, crate::types::price_from_f64(5.0), "as its sibling");
+    assert!(
+        shared.portfolio.stated_account_values().iter().any(|(k, v, c)| k == "FullMaintMarginReq" && v == "20.00" && c == "USD"),
+        "and the full figure stays reachable by name",
+    );
+}
+
 mod unnamed_execution_tests {
 
     /// A report carries far more than any one client reads. What is not read

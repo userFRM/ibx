@@ -2696,30 +2696,34 @@ fn handle_account_update_elsewhere(
     held: crate::types::HeldElsewhere,
 ) {
     let Ok(text) = std::str::from_utf8(msg) else { return };
-    // Name, value, currency: the currency follows the value, as it does on
-    // the account's own figures, and a figure stated in two currencies is
-    // two figures. Keyed on the name alone, the second statement overwrote
-    // the first.
+    // The name opens a group; its currency and its value follow inside it,
+    // and the group is filed when the next name opens or the frame ends. On
+    // the account's own figures the currency comes before the value on every
+    // group; read as value-then-currency, the currency closed the group before
+    // its value arrived and every figure was dropped. A figure stated in two
+    // currencies is two figures.
     let mut name: Option<&str> = None;
     let mut value: Option<&str> = None;
+    let mut currency: &str = "";
     let mut stated = 0usize;
-    let mut file = |name: &mut Option<&str>, value: &mut Option<&str>, currency: &str| {
+    let mut file = |name: &mut Option<&str>, value: &mut Option<&str>, currency: &mut &str| {
         if let (Some(n), Some(v)) = (name.take(), value.take()) {
             shared.portfolio.set_value_elsewhere(held, n.to_string(), v.to_string(), currency.to_string());
             stated += 1;
         }
+        *currency = "";
     };
     for part in text.split('\x01') {
         if let Some(v) = part.strip_prefix("8001=") {
-            file(&mut name, &mut value, "");
+            file(&mut name, &mut value, &mut currency);
             name = Some(v);
         } else if let Some(v) = part.strip_prefix("8004=") {
             value = Some(v);
         } else if let Some(c) = part.strip_prefix("15=") {
-            file(&mut name, &mut value, c);
+            currency = c;
         }
     }
-    file(&mut name, &mut value, "");
+    file(&mut name, &mut value, &mut currency);
     if stated > 0 {
         log::info!("{stated} account figures for holdings {held:?}");
     }
@@ -2752,14 +2756,6 @@ fn handle_pnl_prices(msg: &[u8], shared: &SharedState) {
     shared.portfolio.set_venue_prices(table);
 }
 
-/// Handle 6040=75 position + market price feed.
-/// Fires at init and after each fill. Contains repeating group: 146=count ×
-/// (6008=conId, 6064=qty, 6101=avgCost).
-/// The wire only carries conId/qty/avgCost — no symbol/secType. For any held conId not
-/// yet in the
-/// reference cache, an internal secdef request goes out so the wrapper-facing Contract
-/// is
-/// populated by the time `req_positions` is called.
 impl CcpState {
 
     /// Issue an internal secdef request for `con_id` where the reference cache is cold

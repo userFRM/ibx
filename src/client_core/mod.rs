@@ -3618,8 +3618,10 @@ impl ClientCore {
             let realized = seed.map(|s| s.realized_pnl).unwrap_or(0.0);
             let value = mv_now;
 
+            // The quantity whole, fractions included: held as a whole number,
+            // a holding that moved inside one unit read as unchanged.
             let snapshot: [i64; 5] = [
-                qty_now as i64,
+                crate::types::qty_from_f64(qty_now),
                 crate::types::price_from_f64(daily),
                 crate::types::price_from_f64(unrealized),
                 crate::types::price_from_f64(realized),

@@ -819,6 +819,34 @@ fn poll_pnl_single_change_detection_suppresses_duplicate() {
     assert!(core.poll_pnl_single(&shared).is_empty());
 }
 
+/// A holding that moves by less than a whole unit is a change.
+///
+/// The change key held the quantity as a whole number, so a fractional
+/// holding — a crypto position — that moved inside one unit while the venue's
+/// marks stood was reported nothing.
+#[test]
+fn poll_pnl_single_reports_a_fractional_move_in_the_holding() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.portfolio.account_download_is_settled();
+    let marks = |shared: &SharedState| shared.portfolio.set_position_marks(
+        479624278, Some(crate::types::price_from_f64(101.0)), Some(crate::types::price_from_f64(151.5)),
+        Some(crate::types::price_from_f64(1.5)), None,
+    );
+    seed_pnl_position(&core, &shared, 479624278, 0, 1.5, 100.0, 101.0, 0.0);
+    marks(&shared);
+    shared.portfolio.set_midnight_seeds(String::new(), vec![MidnightSeed {
+        con_id: 479624278, qty_midnight: Some(1.5), cost_midnight: Some(150.0),
+        qty_traded: None, money_traded: 0.0, realized_pnl: 0.0,
+    }]);
+    core.subscribe_pnl_single(7, 479624278);
+    assert_eq!(core.poll_pnl_single(&shared).len(), 1);
+    // The holding grows inside the same whole unit; the venue's marks stand.
+    seed_pnl_position(&core, &shared, 479624278, 0, 1.9, 100.0, 101.0, 0.0);
+    marks(&shared);
+    assert_eq!(core.poll_pnl_single(&shared).len(), 1, "a move in the holding is reported");
+}
+
 #[test]
 fn poll_pnl_single_unsubscribe_clears_cache() {
     let core = ClientCore::new();

@@ -46,7 +46,12 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
                 match k {
                     "NetLiquidation" => { if let Ok(v) = val.parse::<f64>() { context.account.net_liquidation = crate::types::price_from_f64(v); } }
                     "BuyingPower" => { if let Ok(v) = val.parse::<f64>() { context.account.buying_power = crate::types::price_from_f64(v); } }
-                    "MaintMarginReq" => { if let Ok(v) = val.parse::<f64>() { context.account.margin_used = crate::types::price_from_f64(v); } }
+                    "MaintMarginReq" => {
+                        if let Ok(v) = val.parse::<f64>() {
+                            context.account.margin_used = crate::types::price_from_f64(v);
+                            context.account.maint_margin_req = crate::types::price_from_f64(v);
+                        }
+                    }
                     "UnrealizedPnL" => { if let Ok(v) = val.parse::<f64>() { context.account.unrealized_pnl = crate::types::price_from_f64(v); } }
                     "RealizedPnL" => { if let Ok(v) = val.parse::<f64>() { context.account.realized_pnl = crate::types::price_from_f64(v); } }
                     "TotalCashValue" => { if let Ok(v) = val.parse::<f64>() { context.account.total_cash_value = crate::types::price_from_f64(v); } }
@@ -60,7 +65,6 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
                     // account read whichever the venue stated last. Each stays
                     // reachable by name among the stated values.
                     "InitMarginReq" => { if let Ok(v) = val.parse::<f64>() { context.account.init_margin_req = crate::types::price_from_f64(v); } }
-                    "FullMaintMarginReq" => { if let Ok(v) = val.parse::<f64>() { context.account.maint_margin_req = crate::types::price_from_f64(v); } }
                     "AvailableFunds" => { if let Ok(v) = val.parse::<f64>() { context.account.available_funds = crate::types::price_from_f64(v); } }
                     "ExcessLiquidity" => { if let Ok(v) = val.parse::<f64>() { context.account.excess_liquidity = crate::types::price_from_f64(v); } }
                     "Cushion" => { if let Ok(v) = val.parse::<f64>() { context.account.cushion = crate::types::price_from_f64(v); } }
