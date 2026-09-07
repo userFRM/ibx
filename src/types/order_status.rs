@@ -63,6 +63,21 @@ pub fn is_terminal_status(status: &str, completed_status: &str) -> bool {
         || (status == "Inactive" && !completed_status.is_empty())
 }
 
+/// The same verdict, where the status has not been flattened onto the
+/// vocabulary a caller reads yet.
+///
+/// A refusal and an order the venue merely holds share one API string, and the
+/// completed status beside it is what tells them apart. Somebody holding the
+/// enum has the answer already — put through the string and asked with no
+/// completed status to hand, a refusal came back as not finished, and the
+/// cancel refusal that stated one on tag 39 read past it and forced the order
+/// to working: the venue had said the order was rejected and the caller was
+/// told it was live.
+#[inline]
+pub fn is_terminal(status: OrderStatus) -> bool {
+    matches!(status, OrderStatus::Filled | OrderStatus::Cancelled | OrderStatus::Rejected)
+}
+
 /// Convert OrderStatus enum to ibapi-compatible string.
 #[inline]
 pub fn order_status_str(status: OrderStatus) -> &'static str {

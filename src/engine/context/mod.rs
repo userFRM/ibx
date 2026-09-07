@@ -646,10 +646,16 @@ impl Context {
     /// withdrawal. Nothing later corrected it, because the recorded name only
     /// ever moves forward.
     pub fn restore_pre_replace(&mut self, order_id: OrderId, revision: u32) {
+        // The named one first, because there may not be one. Pruned ahead of
+        // that check, a refusal this client had already acted on — the venue
+        // repeats one, and a reconnect replays it — found nothing left to
+        // restore and returned, having just deleted the fallback a revision
+        // still outstanding was holding. That revision was then refused with
+        // its own terms installed and nothing to put back.
+        let Some((mut prior, name, record)) = self.pre_replace.remove(&(order_id, revision)) else { return };
         // Every later revision was built on terms the venue never held, so its
         // fallback records a state that never existed. They go with this one.
         self.pre_replace.retain(|(id, ver), _| *id != order_id || *ver <= revision);
-        let Some((mut prior, name, record)) = self.pre_replace.remove(&(order_id, revision)) else { return };
         if let (Some(record), Some(spec)) = (record, self.submitted.get_mut(&order_id)) {
             *spec = record;
         }

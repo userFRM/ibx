@@ -2968,8 +2968,9 @@ impl ClientCore {
             Some(tracked) => {
                 // Kept against a refusal. Only the first of a run of
                 // replacements records it: the second states terms the venue
-                // has not answered for either, and falling back to those would
-                // put back an attempt rather than what the venue holds.
+                // has not answered for either — a change held back never
+                // reaches it at all — and falling back to those would put back
+                // an attempt rather than what the venue holds.
                 if tracked.before_the_replace.is_none() {
                     tracked.before_the_replace = Some(Box::new(tracked.order.clone()));
                 }

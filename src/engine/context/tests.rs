@@ -796,3 +796,34 @@ fn an_inactive_order_is_one_the_reconnect_has_to_account_for() {
     );
     assert_eq!(ctx.uncertain_orders().len(), 1, "and it is reported as one of them");
 }
+
+/// A refusal already acted on does not take a live revision's fallback with it.
+///
+/// The venue repeats a refusal, and a reconnect replays one. Arriving a second
+/// time, it found its own snapshot already spent — but the pruning of later
+/// revisions ran ahead of that check, so it deleted the fallback a revision
+/// still outstanding was holding and then returned having restored nothing.
+/// That revision was refused in its turn with its own terms installed and
+/// nothing left to put back.
+#[test]
+fn a_refusal_arriving_twice_leaves_a_live_revision_its_fallback() {
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    let terms = |px: i64| crate::types::Order::new(
+        7, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, px * PRICE_SCALE, b'2', b'0', 0,
+    );
+    context.insert_order(terms(102));
+    context.pre_replace.insert((7, 1), (terms(100), "7.0".to_string(), None));
+
+    // The refusal of the first revision, acted on.
+    context.restore_pre_replace(7, 1);
+    // A second revision goes out behind it, with a fallback of its own.
+    context.pre_replace.insert((7, 2), (terms(101), "7.1".to_string(), None));
+    // And the first refusal arrives again.
+    context.restore_pre_replace(7, 1);
+
+    assert!(
+        context.pre_replace.contains_key(&(7, 2)),
+        "the revision still outstanding lost the terms it falls back to",
+    );
+}

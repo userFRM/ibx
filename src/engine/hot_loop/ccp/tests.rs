@@ -7351,3 +7351,223 @@ fn a_leg_whose_reply_cannot_be_read_still_counts() {
     assert!(ccp.pending_fanout.is_empty(), "the fan-out is complete");
     assert_eq!(shared.reference.drain_contract_details_end(), vec![9], "and the caller has its end");
 }
+
+/// A refusal answers the order that was cancelled, not the number its name
+/// happens to carry.
+///
+/// Tag 41 echoes the name this client put on the cancel, and that name is not
+/// always built from the order's own number: an order recovered from a prior
+/// session is keyed here by the id the venue stated beside it, while the name
+/// it answers to comes from the permanent one. Read back as digits, the
+/// refusal reached whatever order that number matched — so the order the
+/// caller had cancelled stayed pending for good, and another was retired in
+/// its place.
+#[test]
+fn a_refusal_reaches_the_order_whose_name_it_states() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    // The order the caller cancelled, recovered from a prior session and so
+    // answering to a name built from the venue's permanent number.
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false);
+    context.last_clord.insert(42, "9000.0".to_string());
+    // And an unrelated order that happens to be numbered as that name reads.
+    context.insert_order(crate::types::Order::new(
+        9000, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+
+    let mut frame = std::collections::HashMap::new();
+    frame.insert(41u32, "9000.0".to_string());
+    frame.insert(434u32, "1".to_string());
+    frame.insert(102u32, "1".to_string());
+    ccp.handle_cancel_reject(&frame, &mut context, &shared, &None);
+
+    assert!(
+        context.order(42).is_none(),
+        "the refusal did not reach the order whose cancel it answers",
+    );
+    assert!(
+        context.order(9000).is_some(),
+        "and it retired the order whose number the name happened to read as",
+    );
+}
+
+/// A cancel refused because the order finished ends the order.
+///
+/// The venue very often refuses a cancel precisely because there is nothing
+/// left to cancel, and says which on tag 39. Taken as a status and nothing
+/// more, the order kept its place in the book with a terminal status written
+/// on it, no completion was filed, and the row a caller reads stayed the
+/// working one — so `req_open_orders` went on listing an order the venue had
+/// said was done. The refusal is the last message the order draws, so nothing
+/// later corrected any of it.
+///
+/// A refusal is one of the two, and it is the one the shared vocabulary cannot
+/// state: it reads as the same word as an order the venue merely holds, and
+/// only the completed status beside it tells them apart. Asked with none to
+/// hand it came back as not finished, and the order was forced to working
+/// against a message that said it had been rejected.
+#[test]
+fn a_cancel_refused_because_the_order_is_over_ends_it() {
+    for (stated, expected) in [
+        ("2", crate::types::OrderStatus::Filled),
+        ("8", crate::types::OrderStatus::Rejected),
+    ] {
+        let mut ccp = CcpState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        tracked_for_cancel(&mut context);
+        shared.orders.push_order_info(42, RichOrderInfo {
+            contract: api::Contract::default(),
+            order: api::Order::default(),
+            order_state: api::OrderState::default(),
+            last_exec: api::Execution::default(),
+        });
+
+        let mut frame = std::collections::HashMap::new();
+        frame.insert(41u32, "C42".to_string());
+        frame.insert(434u32, "1".to_string());
+        frame.insert(102u32, "0".to_string());
+        frame.insert(39u32, stated.to_string());
+        ccp.handle_cancel_reject(&frame, &mut context, &shared, &None);
+
+        assert!(
+            context.order(42).is_none(),
+            "39={stated}: the order the venue says is over is still in the book, \
+             where a cancel-all walks to it and a replace names it",
+        );
+        assert!(
+            shared.orders.get_order_info(42).is_none(),
+            "39={stated}: and the row a caller reads still lists it as working",
+        );
+        let completed = shared.orders.drain_completed_orders();
+        assert!(
+            completed.iter().any(|c| c.order_id == 42 && c.status == expected),
+            "39={stated}: nothing was filed to say how it finished: {completed:?}",
+        );
+    }
+}
+
+/// A correction that reopens a finished order puts it back where a withdrawal
+/// can reach it.
+///
+/// A trade cancel or correction restates an execution already reported, so it
+/// is the one report that may legitimately return a completed order to a
+/// working quantity — and the record a caller reads already accepted it. The
+/// engine's own book did not, so the two disagreed: the caller was shown an
+/// open order, a cancel-all walked the book and never reached it, and the
+/// quantity the correction gave back had no cumulative baseline to be booked
+/// against.
+#[test]
+fn a_correction_that_reopens_an_order_puts_it_back_in_the_book() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let shared = SharedState::new();
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * QTY_SCALE, 400 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+
+    // Filled whole, so the order finishes and is retired.
+    let fill = exec_report_frame(&[
+        (39, "2"), (150, "F"), (17, "exec-1"),
+        (32, "100"), (31, "412.25"), (14, "100"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&fill, b"", &mut context, &shared, &None, "");
+    assert!(context.order(42).is_none(), "a filled order is retired");
+    let _ = shared.orders.drain_fills();
+
+    // The venue then undoes half of that trade, leaving the order working.
+    // Stating its side, which is what putting an order back needs: a guessed
+    // one books every later fill the wrong way, by twice the fill.
+    let corrected = exec_report_frame(&[
+        (39, "1"), (150, "H"), (17, "exec-2"), (54, "1"), (6008, "756733"),
+        (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
+
+    assert!(
+        context.order(42).is_some(),
+        "the order the correction reopened is not in the book a withdrawal walks",
+    );
+}
+
+/// A report arriving behind a finished order leaves no name behind it.
+///
+/// Retiring an order drops the two name maps precisely because they only serve
+/// orders that can still be cancelled or replaced. A late working echo — and
+/// the venue sends one behind a fill — wrote the entry straight back, with
+/// nothing left that would ever remove it: a process left running held one per
+/// order it had ever placed.
+#[test]
+fn a_report_behind_a_finished_order_leaves_no_name_behind_it() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let shared = SharedState::new();
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * QTY_SCALE, 400 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+
+    let fill = exec_report_frame(&[
+        (11, "42.0"), (39, "2"), (150, "F"), (17, "exec-1"),
+        (32, "100"), (31, "412.25"), (14, "100"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&fill, b"", &mut context, &shared, &None, "");
+    assert!(context.order(42).is_none(), "a filled order is retired");
+    assert!(!context.last_clord.contains_key(&42), "and its name goes with it");
+
+    // The working status the venue echoes behind a fill.
+    let echo = exec_report_frame(&[
+        (11, "42.0"), (39, "0"), (150, "0"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&echo, b"", &mut context, &shared, &None, "");
+
+    assert!(
+        !context.last_clord.contains_key(&42),
+        "the echo wrote the name back with nothing left that would remove it",
+    );
+}
+
+/// An acceptance does not spend a fallback a later revision still needs.
+///
+/// The venue takes a second revision before it has answered the first. This
+/// side keeps one set of terms per revision; the record a caller reads keeps
+/// one for the order. Told the fallback was spent the moment the first was
+/// accepted, the revision still in flight had nothing left to fall back to —
+/// so when the venue refused it in turn, the record went on stating the terms
+/// it had just turned down, and every later cancel and replace restated from
+/// those.
+#[test]
+fn an_acceptance_does_not_spend_a_fallback_a_later_revision_needs() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let shared = SharedState::new();
+    let terms = |px: i64| crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * QTY_SCALE, px * PRICE_SCALE, b'2', b'0', 0,
+    );
+    context.insert_order(terms(102));
+    // Two revisions out, neither answered.
+    context.pre_replace.insert((42, 1), (terms(100), "42.0".to_string(), None));
+    context.pre_replace.insert((42, 2), (terms(101), "42.1".to_string(), None));
+
+    // The venue takes the first.
+    let ack = exec_report_frame(&[
+        (11, "42.1"), (39, "5"), (150, "5"), (54, "1"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&ack, b"", &mut context, &shared, &None, "");
+
+    assert!(
+        shared.orders.drain_replacements_taken().is_empty(),
+        "the record was told to spend its only fallback while a revision it \
+         would need it for is still outstanding",
+    );
+}

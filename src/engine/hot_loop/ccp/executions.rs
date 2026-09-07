@@ -887,8 +887,16 @@ impl CcpState {
         // below could put the terms back, so the record kept the refused
         // terms and the name moved to the refused revision.
         let revision_refused = matches!(parsed.get(&378).map(String::as_str), Some("102" | "103"));
+        // A trade cancel or correction restates an execution already reported,
+        // so it is the one report that may legitimately return a completed
+        // order to a working quantity. The record a caller reads already
+        // accepts it; the engine's own book did not, and the two then
+        // disagreed: the caller was shown an open order, a cancel-all walked
+        // the book and did not reach it, and the quantity the correction gave
+        // back had no cumulative baseline to be booked against.
+        let restates_a_trade = matches!(exec_type, "G" | "H");
         let recovering = !status.is_terminal() && !marked_resend && !revision_refused
-            && clord_id != 0 && !already_finished
+            && clord_id != 0 && (!already_finished || restates_a_trade)
             && (context.order(clord_id).is_none() || unknown);
         if recovering {
             self.recover_order(parsed, clord_id, prior, context, shared);
@@ -972,10 +980,19 @@ impl CcpState {
             && raw_clord != "*"
         {
             let reported = revision_of(raw_clord);
-            if recovering
-                || context.last_clord.get(&clord_id).is_none_or(|held| {
-                    reported >= revision_of(held)
-                })
+            // Not for an order that has finished. Retiring one drops the two
+            // name maps precisely because they only serve orders that can
+            // still be cancelled or replaced — and then a late working echo,
+            // or a replayed partial fill for an order this session never
+            // tracked, wrote the entry straight back with nothing left to
+            // remove it. A process left running held one per order it had ever
+            // seen. A correction is the exception, because it puts the order
+            // back and the name is how a withdrawal reaches it.
+            if (!already_finished || restates_a_trade)
+                && (recovering
+                    || context.last_clord.get(&clord_id).is_none_or(|held| {
+                        reported >= revision_of(held)
+                    }))
             {
                 context.last_clord.insert(clord_id, raw_clord.clone());
             }
@@ -1115,7 +1132,16 @@ impl CcpState {
             // status, the acknowledgement behind it was dropped as stale, and
             // the copy outlived the replacement the venue had taken — so the
             // next refusal put back terms from before it.
-            if ours {
+            //
+            // And only where nothing later is still in flight. What is left in
+            // the map after the retain above is exactly that. The surfaces
+            // keep one fallback for an order where this side keeps one per
+            // revision, so an acceptance spending it left the revision still
+            // outstanding with nothing to fall back to: refused in its turn,
+            // the record went on stating the terms the venue had just
+            // turned down, and every later cancel and replace restated from
+            // those.
+            if ours && !context.pre_replace.keys().any(|(id, _)| *id == clord_id) {
                 shared.orders.note_replacement_taken(clord_id);
             }
         }
@@ -1849,16 +1875,33 @@ impl CcpState {
         shared: &SharedState,
         event_tx: &Option<EventSink>,
     ) {
-        // Match handle_exec_report's tag-11 parsing: strip the "C" prefix and
-        // any ".0/.1/.2" modify-chain suffix.
-        let orig_clord = parsed.get(&41).and_then(|s| {
-            let stripped = s.strip_prefix('C').unwrap_or(s);
-            let base = stripped.split('.').next().unwrap_or(stripped);
-            // Through the same range check every other id on the wire takes.
-            // Read bare, a number past the highest this client can carry
-            // reached the record it names and was reported back as a negative
-            // one, which is no order at all.
-            stated_order_id(base)
+        // Tag 41 is the name this client put on the cancel, echoed back. It is
+        // resolved through the record it was taken from rather than read as
+        // digits: the name an order carries is not always its number. An order
+        // recovered from a prior session is keyed here by the id the venue
+        // stated beside it, while the name it answers to is built from the
+        // permanent one — so the cancel went out naming that, and reading the
+        // digits back pointed the refusal at an order whose number happened to
+        // match the permanent id. The order the caller cancelled stayed
+        // pending, and some other order was retired in its place.
+        let orig_clord = parsed.get(&41).and_then(|stated| {
+            context
+                .last_clord
+                .iter()
+                .find(|(_, name)| *name == stated)
+                .map(|(id, _)| *id)
+                .or_else(|| {
+                    // No record of having sent that name. A cancel issued
+                    // before anything was observed states the versioned form,
+                    // which reads as the number it is built from.
+                    let stripped = stated.strip_prefix('C').unwrap_or(stated);
+                    let base = stripped.split('.').next().unwrap_or(stripped);
+                    // Through the same range check every other id on the wire
+                    // takes. Read bare, a number past the highest this client
+                    // can carry reached the record it names and was reported
+                    // back as a negative one, which is no order at all.
+                    stated_order_id(base)
+                })
         });
         let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("Cancel rejected");
         let reject_type: u8 = parsed.get(&434).and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -1913,6 +1956,8 @@ impl CcpState {
 
         // Update local context only for an order tracked in this session.
         let mut restored: Option<crate::types::OrderStatus> = None;
+        // Where the refusal says the order finished rather than that it stands.
+        let mut finished_by_the_refusal: Option<crate::types::OrderStatus> = None;
         let instrument = if let Some(order) = context.order(oid).copied() {
             if unknown_order {
                 // Terminal and removed, which is what the reject states.
@@ -1940,11 +1985,7 @@ impl CcpState {
                 // order was live that the venue had already filled.
                 let stated = parsed.get(&39)
                     .map(|s| status_of(s, oid, parsed))
-                    .filter(|s| {
-                        crate::types::order_status::is_terminal_status(
-                            crate::types::order_status::order_status_str(*s), "",
-                        )
-                    });
+                    .filter(|s| crate::types::order_status::is_terminal(*s));
                 let restore_status = match stated {
                     Some(finished) => finished,
                     None if order.filled > 0 => crate::types::OrderStatus::PartiallyFilled,
@@ -1968,6 +2009,9 @@ impl CcpState {
                     // the guard would rightly block it on the ordinary path.
                     context.set_order_status_forced(oid, restore_status);
                     restored = Some(restore_status);
+                    if crate::types::order_status::is_terminal(restore_status) {
+                        finished_by_the_refusal = Some(restore_status);
+                    }
                 }
                 // And said, not only recorded. The engine's book went back to
                 // working while the record the surfaces read stayed on the
@@ -1991,6 +2035,26 @@ impl CcpState {
         // fill that raced it, stating the order was gone when it had just been
         // told the order filled.
         if unknown_order {
+            shared.orders.remove_order_info(oid);
+        }
+
+        // A cancel is very often refused because the order finished, and the
+        // refusal states which on tag 39. Taken as a status and nothing more,
+        // the order kept its place in the book with a terminal status written
+        // on it — a cancel-all still walked to it, and a replace still named
+        // it — no completion was filed, and the row a caller reads stayed the
+        // working one it had, so `req_open_orders` went on listing an order
+        // the venue had said was filled. Nothing later corrected any of it:
+        // the refusal is the last message this order draws.
+        if let Some(status) = finished_by_the_refusal {
+            shared.orders.push_completed_order(CompletedOrder {
+                order_id: oid,
+                instrument,
+                status,
+                filled_qty: context.order(oid).map_or(0, |o| o.filled),
+                timestamp_ns: context.now_ns(),
+            });
+            context.retire_order(oid);
             shared.orders.remove_order_info(oid);
         }
 
