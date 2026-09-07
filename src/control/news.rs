@@ -212,6 +212,10 @@ fn extract_zip_entry(data: &[u8]) -> Option<Vec<u8>> {
     }
     let compression = u16::from_le_bytes([zip_data[8], zip_data[9]]);
     let compressed_size = u32::from_le_bytes([zip_data[18], zip_data[19], zip_data[20], zip_data[21]]) as usize;
+    // What the entry says it inflates to. Nought where the sizes travel in a
+    // descriptor after the data instead, which is the case the compressed size
+    // above is already read that way for.
+    let inflates_to = u32::from_le_bytes([zip_data[22], zip_data[23], zip_data[24], zip_data[25]]) as usize;
     let filename_len = u16::from_le_bytes([zip_data[26], zip_data[27]]) as usize;
     let extra_len = u16::from_le_bytes([zip_data[28], zip_data[29]]) as usize;
 
@@ -250,10 +254,26 @@ fn extract_zip_entry(data: &[u8]) -> Option<Vec<u8>> {
                             return None;
                         }
                     }
-                    Err(_) => break, // trailing data after deflate stream
+                    Err(_) => break,
                 }
             }
-            if out.is_empty() { None } else { Some(out) }
+            // Against what the entry said it would inflate to. A stream that
+            // stops part way ends the read without erroring — the decoder has
+            // simply run out of input — so what came back was part of the
+            // properties document handed over as the whole of it: headlines
+            // missing, one of them possibly cut mid-row, and the answer saying
+            // there was no more to come. A reply cut short is refused rather
+            // than delivered shortened, which is how the scanner rows and the
+            // histogram rows beside this are read.
+            //
+            // Only where the entry states a size. Nought means the sizes
+            // travel after the data, and then there is nothing here to check
+            // against.
+            if out.is_empty() || (inflates_to > 0 && out.len() != inflates_to) {
+                None
+            } else {
+                Some(out)
+            }
         }
         _ => None,
     }
@@ -741,6 +761,55 @@ mod tests {
 
         let small = build_test_zip(b"ENTRY", b"hello");
         assert_eq!(extract_zip_entry(&small).as_deref(), Some(&b"hello"[..]));
+    }
+
+    /// A stream that stops mid-way is refused, not delivered as what it
+    /// managed.
+    ///
+    /// Trailing bytes after a complete stream end it cleanly, and that is the
+    /// case the note here used to describe. Stopping because the data cannot
+    /// be read is the other one, and it handed back part of the properties
+    /// document as the whole of it: headlines went missing, one of them
+    /// possibly cut mid-row, and the answer said there was no more to come.
+    /// The scanner rows and the histogram rows beside this refuse a reply cut
+    /// short and say so.
+    #[test]
+    fn a_stream_that_stops_mid_way_is_not_the_answer_it_managed() {
+        use flate2::write::DeflateEncoder;
+        use flate2::Compression;
+        use std::io::Write as _;
+
+        // Long enough that a cut leaves plenty already inflated to hand back.
+        let body = "h:0=".to_string() + &"headline|t|a|200|1|DJ|1\n".repeat(400);
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(body.as_bytes()).unwrap();
+        let deflated = encoder.finish().unwrap();
+
+        // A deflate entry, as the venue's own answers are.
+        let entry = |payload: &[u8], inflates_to: u32| {
+            let mut zip = vec![0u8; 30];
+            zip[0..4].copy_from_slice(b"PK\x03\x04");
+            zip[8..10].copy_from_slice(&8u16.to_le_bytes()); // deflate
+            zip[18..22].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+            zip[22..26].copy_from_slice(&inflates_to.to_le_bytes());
+            zip.extend_from_slice(payload);
+            zip
+        };
+        let whole_len = body.len() as u32;
+
+        assert_eq!(
+            extract_zip_entry(&entry(&deflated, whole_len)).as_deref(),
+            Some(body.as_bytes()),
+            "the entry as the venue sends it reads whole",
+        );
+
+        // The same entry with its stream cut short: the header states what is
+        // there, so the bytes are reachable — they just stop part way.
+        let cut = &deflated[..deflated.len() / 2];
+        assert!(
+            extract_zip_entry(&entry(cut, whole_len)).is_none(),
+            "a stream that stops part way is refused, not handed back as what it managed",
+        );
     }
 
     /// An article body is a gzip stream inside the zip the answer arrived in,

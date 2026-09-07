@@ -2104,4 +2104,36 @@ mod depth_bit_tests {
         let got: Vec<_> = shared.market.drain_depth_updates().into_iter().map(|u| u.position).collect();
         assert_eq!(got, [1], "{got:?}");
     }
+
+/// A number this session gave up is refused whatever shape the answer arrives
+/// in.
+///
+/// The price acknowledgement refuses one and says why: a caller's numbers are
+/// its own and it may ask again under one it used before, so the first
+/// request's answer arriving second would point the second at a number nothing
+/// comes on. That reasoning does not depend on which message the venue chose
+/// to answer in — and two of the three paths did not keep it, so the same
+/// number was refused or taken according to the shape, and the mapping the
+/// retirement exists to prevent was written by one path while another was
+/// refusing it.
+#[test]
+fn a_given_up_number_is_refused_on_the_ticker_setup_too() {
+    let mut farm = FarmState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.market.register(756733);
+
+    // The subscription ends, which gives its number up.
+    context.market.register_server_tag(4242, instrument);
+    context.market.clear_server_tags_for(instrument);
+    assert!(context.market.retired_server_tags().contains(&4242));
+
+    // The venue answers under that number in the other shape.
+    farm.handle_ticker_setup(b"35=L\x01756733,0.01,4242", &mut context, &shared);
+
+    assert!(
+        context.market.instrument_by_server_tag(4242).is_none(),
+        "a number given up is not mapped again by an answer in another shape",
+    );
+}
 }

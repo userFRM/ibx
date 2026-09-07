@@ -1146,6 +1146,21 @@ impl FarmState {
             // acks can name the same one. Two records then match every update
             // and the book applies each level twice. The generic-tick branch
             // below already keeps one record per tag.
+            // A number this session has given up names a subscription that is
+            // over, whatever shape the answer arrives in. The price ack beside
+            // this one refuses such a number and says why: the caller's ids are
+            // its own and it may ask again under one it used before, so the first
+            // request's answer arriving second would point the second at a number
+            // nothing comes on. That reasoning does not depend on which message
+            // the venue chose to answer in, and this path did not keep it — so the
+            // same number was refused or taken depending on the shape.
+            if context.market.retired_server_tags().contains(&server_tag) {
+                log::warn!(
+                    "an answer names venue number {server_tag}, which this session has \
+                     given up; it belongs to a subscription that is over",
+                );
+                return;
+            }
             self.depth_tag_to_req.retain(|(tag, id, ..)| {
                 !(*tag == server_tag && *id == user_req)
             });
@@ -1343,6 +1358,21 @@ impl FarmState {
         };
         let server_tag: u32 = match parts[2].parse() { Ok(v) => v, Err(_) => return };
 
+        // A number this session has given up names a subscription that is
+        // over, whatever shape the answer arrives in. The price ack beside
+        // this one refuses such a number and says why: the caller's ids are
+        // its own and it may ask again under one it used before, so the first
+        // request's answer arriving second would point the second at a number
+        // nothing comes on. That reasoning does not depend on which message
+        // the venue chose to answer in, and this path did not keep it — so the
+        // same number was refused or taken depending on the shape.
+        if context.market.retired_server_tags().contains(&server_tag) {
+            log::warn!(
+                "an answer names venue number {server_tag}, which this session has given \
+                 up; it belongs to a subscription that is over",
+            );
+            return;
+        }
         if let Some(instrument) = context.market.instrument_by_con_id(con_id) {
             context.market.register_server_tag(server_tag, instrument);
             context.market.set_min_tick(instrument, min_tick);
