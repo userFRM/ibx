@@ -199,5 +199,11 @@ pub(super) fn phase_heartbeat_timeout_detection(conns: Conns) -> Conns {
     println!("  Loop survived timeout (graceful shutdown succeeded)");
     println!("  PASS\n");
 
-    Conns { farm: reclaimed.farm, ccp: real_ccp, hmds: reclaimed.hmds, account_id }
+    // The parked original went unheartbeated the whole time the engine ran on
+    // the dead socket — long enough for the venue to reap it — so it is a dead
+    // connection now. The live session is the one the engine rebuilt when it
+    // noticed the dead socket, which the reclaim kept warm; hand that forward
+    // and let the reaped original close.
+    drop(real_ccp);
+    reclaimed
 }
