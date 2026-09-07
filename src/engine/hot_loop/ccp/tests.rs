@@ -2818,6 +2818,58 @@ fn a_rejection_that_answers_the_replace_is_not_filed_as_how_the_order_finished()
     );
 }
 
+/// And so does the state cached under the order, which is what a caller asking
+/// what it has working reads.
+///
+/// The cache was written before the guard decided whether the rejection was
+/// this order's outcome, so the order stayed in the book — the guard says so —
+/// while what was filed under it carried a rejection's status and its reason.
+/// A caller polling in between was handed a rejected order the venue was still
+/// working.
+#[test]
+fn a_rejection_that_answers_the_replace_is_not_cached_as_the_orders_state() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    let before = *context.order(42).expect("the order is tracked");
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string(), None));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
+
+    let report = |exec_type: &str, ord_status: &str, text: &str| {
+        crate::protocol::fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+            (11, "42"), (150, exec_type), (39, ord_status), (58, text),
+        ], 1)
+    };
+    ccp.process_ccp_message(
+        &report("8", "8", "Order has been cancelled already, too late to replace"),
+        &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+    let cached = shared.orders.get_order_info(42);
+    assert!(
+        cached.as_ref().is_none_or(|info| {
+            info.order_state.reject_reason.is_empty() && info.order_state.status != "Inactive"
+        }),
+        "an answer to the replace is not the working order's state: {:?}",
+        cached.map(|i| (i.order_state.status.clone(), i.order_state.reject_reason.clone())),
+    );
+
+    // And the cancel's own verdict is cached, as it is filed.
+    ccp.process_ccp_message(
+        &report("4", "4", "Revision rejected due to unapproved mod followed by cancel"),
+        &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+    assert_eq!(
+        shared.orders.get_order_info(42).map(|i| i.order_state.status.clone()).as_deref(),
+        Some("Cancelled"),
+    );
+}
+
 // /: in the UP portfolio snapshot the average cost is
 // tag 6101 and 6065 is the market price. The handler previously read 6065 as
 // the average cost. Verify the mapping and that all marks are stored.
@@ -3315,6 +3367,59 @@ fn matching_symbols_empty_result_pops_and_delivers() {
     let delivered = shared.reference.drain_matching_symbols();
     assert_eq!(delivered[0].0, 2);
     assert!(ccp.pending_matching_symbols.is_empty());
+}
+
+/// A symbol search the venue refuses is answered with the refusal.
+///
+/// It states its own number on tag 320, the same tag the definition lookup and
+/// the option chain state theirs on, and only those two were matched against
+/// it. So a refused search matched nothing, stayed queued, and the caller
+/// waited out the sweep's timeout to be told the venue had never replied —
+/// when it had replied at once, and said why.
+#[test]
+fn a_refused_symbol_search_is_told_the_reason_rather_than_left_to_time_out() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    ccp.pending_matching_symbols.push((1, Instant::now() + MATCHING_SYMBOLS_TIMEOUT));
+    ccp.pending_matching_symbols.push((2, Instant::now() + MATCHING_SYMBOLS_TIMEOUT));
+
+    let msg = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "3"),
+        (320, "2"),
+        (58, "Unknown contract"),
+    ], 1);
+    ccp.process_ccp_message(&msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
+
+    let refused = shared.reference.drain_historical_errors();
+    assert_eq!(refused.len(), 1, "the caller is told: {refused:?}");
+    assert_eq!(refused[0].0, 2, "the one the venue named, not the queue head");
+    assert!(refused[0].2.contains("Unknown contract"), "and why: {}", refused[0].2);
+    assert_eq!(
+        ccp.pending_matching_symbols.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
+        vec![1],
+        "the refused request is off the queue and the other still waits",
+    );
+}
+
+/// And a refusal that names nothing is not handed to a definition lookup while
+/// a symbol search is outstanding — the search may be the one refused, and that
+/// caller would then be handed somebody else's refusal.
+#[test]
+fn a_nameless_refusal_is_not_attributed_while_a_symbol_search_is_outstanding() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    ccp.pending_secdef.push((4242, false, Instant::now() + MATCHING_SYMBOLS_TIMEOUT));
+    ccp.pending_matching_symbols.push((1, Instant::now() + MATCHING_SYMBOLS_TIMEOUT));
+
+    let msg = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "3"),
+        (58, "Unknown contract"),
+    ], 1);
+    ccp.process_ccp_message(&msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1");
+
+    assert!(
+        shared.reference.drain_historical_errors().is_empty(),
+        "neither is told, because which one was refused is not stated",
+    );
+    assert_eq!(ccp.pending_secdef.len(), 1, "and the lookup still waits");
 }
 
 #[test]

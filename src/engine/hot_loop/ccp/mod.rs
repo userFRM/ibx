@@ -613,7 +613,8 @@ impl CcpState {
                     .or_else(|| {
                         (stated.is_none()
                             && self.pending_option_params.len() == 1
-                            && self.pending_secdef.is_empty())
+                            && self.pending_secdef.is_empty()
+                            && self.pending_matching_symbols.is_empty())
                         .then_some(0)
                     });
                 if let Some(at) = refused_chain {
@@ -622,6 +623,25 @@ impl CcpState {
                     shared.reference.push_historical_error(
                         req_id, crate::error_codes::Refusal::NO_DEFINITION,
                         format!("option chain request rejected: {reason}"),
+                    );
+                    return;
+                }
+                // A refusal of a symbol search, which states its own number on
+                // this tag as the two beside it do. Matched against nothing,
+                // the caller waited out the sweep's timeout and was told the
+                // venue had never replied — when it had replied at once, and
+                // said why.
+                if let Some(at) = stated.and_then(|rid| {
+                    self.pending_matching_symbols.iter().position(|(pid, _)| *pid == rid)
+                }) {
+                    let (req_id, _) = self.pending_matching_symbols.remove(at);
+                    log::warn!("Matching symbols request req_id={req_id} rejected: {reason}");
+                    // Refused rather than answered empty: an empty answer is a
+                    // search the venue ran and nothing matched, which is not
+                    // what this is.
+                    shared.reference.push_historical_error(
+                        req_id, crate::error_codes::Refusal::NO_DEFINITION,
+                        format!("matching symbols request rejected: {reason}"),
                     );
                     return;
                 }
@@ -650,7 +670,8 @@ impl CcpState {
                         // and its own definitions later had nothing waiting.
                         (stated.is_none()
                             && self.pending_secdef.len() == 1
-                            && self.pending_fanout.is_empty())
+                            && self.pending_fanout.is_empty()
+                            && self.pending_matching_symbols.is_empty())
                         .then_some(0)
                     });
                 if let Some(at) = named {
