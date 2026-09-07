@@ -2275,6 +2275,39 @@ fn a_condition_trigger_of_7_or_8_is_carried() {
     }
 }
 
+/// A request joining a live subscription is owed the quote as it stands.
+///
+/// The ticks are worked out once per contract, against what was last sent for
+/// that contract, and fanned to everyone watching it. A request that joined a
+/// contract whose baseline already matched the quote was therefore sent nothing
+/// — and on a contract that is not moving it stayed that way, indefinitely.
+/// Forgetting the baseline is what makes the next pass state everything the
+/// venue has said, which is what a subscription is answered with.
+#[test]
+fn a_forgotten_baseline_states_the_quote_as_it_stands() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.market.set_instrument_count(1);
+    shared.market.push_quote(0, &crate::types::Quote {
+        bid: 100 * PRICE_SCALE,
+        ask: 101 * PRICE_SCALE,
+        ..Default::default()
+    });
+
+    assert!(core.poll_instrument_ticks(&shared, 0, 1).delivered, "the quote is stated once");
+    assert!(
+        !core.poll_instrument_ticks(&shared, 0, 1).delivered,
+        "and not again while it stands still",
+    );
+
+    // What a joining request does.
+    core.last_quotes.lock().unwrap().remove(&0);
+    assert!(
+        core.poll_instrument_ticks(&shared, 0, 2).delivered,
+        "a request that joins is owed the quote as it stands, not the next move",
+    );
+}
+
 /// A request joining a contract the venue already refused is refused too.
 ///
 /// The refusal is drained once and told to whoever held the contract then. A

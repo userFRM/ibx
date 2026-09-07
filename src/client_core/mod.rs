@@ -1787,6 +1787,17 @@ impl ClientCore {
             if let Some(reason) = shared.market.failure_for_follower(instrument) {
                 shared.market.push_subscription_failure_for(req_id, reason);
             }
+            // And it is owed the quote as it stands. The ticks are worked out
+            // once per contract, against what was last sent for that contract,
+            // and fanned to everyone watching it — so a request joining a
+            // contract whose baseline already matches the quote was sent
+            // nothing at all, and on a contract that is not moving it stayed
+            // that way. Forgetting the baseline is what makes the next pass
+            // state everything the venue has said, which is what a subscription
+            // is answered with; it is the same mechanism a market-data drop
+            // uses. Everyone already watching hears those values restated,
+            // which is what they are holding.
+            self.last_quotes.lock().unwrap().remove(&instrument);
             // The news subscription was sent above whether or not the quotes
             // were already up, so it is recorded here as well. Recorded only
             // on the path that also opened the quotes, it was never withdrawn:
