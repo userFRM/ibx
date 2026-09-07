@@ -220,8 +220,15 @@ pub(super) fn set_by_reference_name(
     aliases: &[(&str, &str)],
 ) -> PyResult<()> {
     let target = reference_name(obj, name, aliases)?;
-    let object = obj.py().import("builtins")?.getattr("object")?;
-    object.call_method1("__setattr__", (obj, target.as_deref().unwrap_or(name), value))?;
+    let field = target.as_deref().unwrap_or(name);
+    // Reach the data descriptor the pyclass field defines and drive its `__set__`
+    // directly. This is called from the class's own `__setattr__`, so it must not
+    // route back through it: `object.__setattr__` bypasses that on CPython 3.14
+    // but 3.12 refuses it ("can't apply this __setattr__ to X object"), while the
+    // descriptor path works on both. A name the class does not carry raises on the
+    // type lookup, as the plain write would where there is no such field.
+    let descriptor = obj.get_type().getattr(field)?;
+    descriptor.call_method1("__set__", (obj, value))?;
     Ok(())
 }
 
