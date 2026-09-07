@@ -2768,6 +2768,56 @@ fn a_cancel_is_still_answered_when_rejections_cross_it() {
     );
 }
 
+/// And the completed record says the same thing the status did.
+///
+/// The completion was filed before the guard above decided whether the
+/// rejection was this order's outcome, so a rejection answering the replace was
+/// recorded as how the order finished. That record is kept and refuses a later
+/// one, so the caller was told Cancelled on the status and read Rejected in the
+/// completed orders — and while the memory stood, every status behind it was
+/// dropped as well.
+#[test]
+fn a_rejection_that_answers_the_replace_is_not_filed_as_how_the_order_finished() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    let before = *context.order(42).expect("the order is tracked");
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string(), None));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
+
+    let report = |exec_type: &str, ord_status: &str, text: &str| {
+        crate::protocol::fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+            (11, "42"), (150, exec_type), (39, ord_status), (58, text),
+        ], 1)
+    };
+    ccp.process_ccp_message(
+        &report("8", "8", "Order has been cancelled already, too late to replace"),
+        &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+    assert!(
+        shared.orders.drain_completed_orders().is_empty(),
+        "an answer to the replace is not the order finishing",
+    );
+
+    ccp.process_ccp_message(
+        &report("4", "4", "Revision rejected due to unapproved mod followed by cancel"),
+        &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+    let done = shared.orders.drain_completed_orders();
+    assert_eq!(done.len(), 1, "the cancel's own verdict is filed: {done:?}");
+    assert_eq!(done[0].order_id, 42);
+    assert_eq!(
+        done[0].status, crate::types::OrderStatus::Cancelled,
+        "and it says what the status said, not what the rejection said",
+    );
+}
+
 // /: in the UP portfolio snapshot the average cost is
 // tag 6101 and 6065 is the market price. The handler previously read 6065 as
 // the average cost. Verify the mapping and that all marks are stored.

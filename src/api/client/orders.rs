@@ -1002,7 +1002,13 @@ impl EClient {
         self.core.track_order(tp_id as u64, contract.clone(), leg(tp_id, exit_action, "LMT", take_profit, 0.0, parent_id), instrument);
         self.core.track_order(sl_id as u64, contract.clone(), leg(sl_id, exit_action, "STP", 0.0, stop_loss, parent_id), instrument);
         let scaled = |price: f64| crate::types::price_from_f64(price);
-        self.send(ControlCommand::Order(OrderRequest::SubmitBracket {
+        // The three records go back where the command did not reach the engine,
+        // as `transmit_family` puts back the ones a placement could not send.
+        // Kept, the caller held three orders the venue was never given: they
+        // were reported as working, a replace of one was built as a change to
+        // something the venue does not hold, and nothing ever released the
+        // numbers, because the number is only spent by an order that went.
+        if let Err(refused) = self.send(ControlCommand::Order(OrderRequest::SubmitBracket {
             con_id: contract.con_id,
             parent_id: parent_id as u64,
             tp_id: tp_id as u64,
@@ -1013,7 +1019,12 @@ impl EClient {
             entry_price: scaled(entry),
             take_profit: scaled(take_profit),
             stop_loss: scaled(stop_loss),
-        }))?;
+        })) {
+            for id in [parent_id, tp_id, sl_id] {
+                self.core.untrack_order(id as u64);
+            }
+            return Err(refused);
+        }
         Ok([parent_id, tp_id, sl_id])
     }
 }

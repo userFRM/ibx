@@ -1729,20 +1729,7 @@ impl CcpState {
             crate::types::OrderStatus::Cancelled |
             crate::types::OrderStatus::Rejected
         ) {
-            // Recorded whether or not the order was being tracked. A market
-            // order can finish before its acknowledgement has been handled, so
-            // requiring a tracked record meant the fastest orders — the ones
-            // that fill immediately — left no memory of having finished, and
-            // the working status echoed behind the fill had nothing to be
-            // refused by.
             let tracked = context.order(clord_id).copied();
-            shared.orders.push_completed_order(CompletedOrder {
-                order_id: clord_id,
-                instrument: tracked.map_or(0, |o| o.instrument),
-                status,
-                filled_qty: tracked.map_or(0, |o| o.filled),
-                timestamp_ns: context.now_ns(),
-            });
             // A rejection the guard left standing is the venue's answer to the
             // request that raced the cancel, not an answer to the cancel: the
             // venue still owes the cancel its own verdict, and retiring here
@@ -1755,7 +1742,30 @@ impl CcpState {
             let cancel_still_owed = status == crate::types::OrderStatus::Rejected
                 && tracked.is_some_and(|o| o.status == crate::types::OrderStatus::PendingCancel)
                 && context.replace_is_outstanding(clord_id);
+            // Filed under the guard that retires it, and for the same reason:
+            // an answer that is not this order's outcome is not how it
+            // finished either. Filed ahead of the guard, the rejection that
+            // raced the cancel was recorded as the order's completion — and
+            // that record stands, so when the cancel's own verdict arrived it
+            // was refused as a completion already filed, leaving the caller
+            // told Cancelled on the status and Rejected in the completed
+            // orders. For as long as the memory lasts it also drops every
+            // status behind it, so an order that goes back to working after a
+            // refused cancel stops reporting at all.
             if !cancel_still_owed {
+                // Recorded whether or not the order was being tracked. A market
+                // order can finish before its acknowledgement has been handled,
+                // so requiring a tracked record meant the fastest orders — the
+                // ones that fill immediately — left no memory of having
+                // finished, and the working status echoed behind the fill had
+                // nothing to be refused by.
+                shared.orders.push_completed_order(CompletedOrder {
+                    order_id: clord_id,
+                    instrument: tracked.map_or(0, |o| o.instrument),
+                    status,
+                    filled_qty: tracked.map_or(0, |o| o.filled),
+                    timestamp_ns: context.now_ns(),
+                });
                 context.retire_order(clord_id);
             }
         }

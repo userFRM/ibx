@@ -4408,6 +4408,32 @@ fn a_request_with_no_engine_behind_it_says_so_under_its_own_code() {
     );
 }
 
+/// A bracket whose command never reached the engine leaves nothing tracked.
+///
+/// The three legs are recorded before the command goes, as they have to be —
+/// the engine answers about them by number. Where the send does not reach the
+/// engine a placement puts its record back, and this did not: the caller was
+/// left holding three orders the venue was never given, reported as working,
+/// each answering `is_working_at_the_venue`, so a retry built a change to
+/// something the venue does not hold — and nothing released the numbers, since
+/// only an order that went spends one.
+#[test]
+fn a_bracket_that_never_reached_the_engine_leaves_nothing_tracked() {
+    let (client, rx, _shared) = test_client();
+    drop(rx);
+
+    let refused = client
+        .submit_bracket(&spy(), crate::types::Side::Buy, 100.0, 100.0, 110.0, 90.0)
+        .expect_err("nothing can be sent with no engine to send it");
+    assert_eq!(refused.code, crate::error_codes::Refusal::NOT_CONNECTED);
+
+    let tracked: Vec<u64> = client.core.open_orders.lock().unwrap().keys().copied().collect();
+    assert!(
+        tracked.is_empty(),
+        "every leg goes back where the command did not reach the engine: {tracked:?}",
+    );
+}
+
 /// A req_id reaches these requests' wire form as u32. `next_order_id()` hands
 /// out ids near 1.7e12, so a caller running one counter for orders and
 /// requests — the ibapi idiom — wraps every one of these: the venue receives an
