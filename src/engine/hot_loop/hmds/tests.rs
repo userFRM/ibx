@@ -1746,6 +1746,85 @@ fn a_series_that_cannot_be_folded_withdraws_the_stream_it_was_asked_for_alongsid
     let cancel = String::from_utf8_lossy(&super::read_frame(&mut peer)).into_owned();
     assert!(cancel.contains("ticker:4002"), "and withdrawn at the venue: {cancel:?}");
 }
+
+/// A request kept up to date is two queries, and the withdrawal takes both.
+///
+/// The batch and the five-second stream beside it are acknowledged separately,
+/// so two records can stand under one request number. The withdrawal that runs
+/// when the request fails took the one it found and left the other — and that
+/// one belonged to no pending list and carried no flag, so nothing swept it.
+/// The number read as busy for the rest of the session, and a caller asking
+/// under it again was refused for a stream that was not running. The
+/// withdrawal a caller asks for itself already takes them all.
+#[test]
+fn withdrawing_a_kept_up_to_date_request_leaves_no_record_under_its_number() {
+    let mut hmds = HmdsState::new();
+    let mut hb = HeartbeatState::new();
+    let (conn, mut peer) = Connection::for_test();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(500))).unwrap();
+    let mut conn = Some(conn);
+    hmds.keep_up_to_date_reqs.insert(9);
+    // Both halves, as a live request holds them: the stream, and the batch the
+    // venue also acknowledged.
+    hmds.rtbar_subs.push(("rt_9".to_string(), 9, Some(4002), 0.01, 1.0));
+    hmds.rtbar_subs.push(("hist_9".to_string(), 9, Some(4003), 0.01, 1.0));
+
+    hmds.withdraw_the_stream_half(9, &mut conn, &mut hb);
+
+    assert!(
+        hmds.rtbar_subs.iter().all(|(_, rid, ..)| *rid != 9),
+        "no record stands under the number: {:?}",
+        hmds.rtbar_subs.iter().map(|(q, r, ..)| (q.clone(), *r)).collect::<Vec<_>>(),
+    );
+    let cancel = String::from_utf8_lossy(&super::read_frame(&mut peer)).into_owned();
+    assert!(cancel.contains("ticker:4002"), "and the stream is withdrawn: {cancel:?}");
+}
+
+/// A withdrawal waiting for its number does not stop a stream another caller
+/// is still reading.
+///
+/// Two callers on one contract and kind are served under one number. The
+/// withdrawal that runs while the number is known guards against that and says
+/// why. The one that had to wait for the number — because the caller left
+/// before the venue answered — sent the cancel whoever else held it, and that
+/// caller was left subscribed in every table, silent for the rest of the
+/// session, and told nothing.
+#[test]
+fn a_withdrawal_waiting_for_its_number_leaves_a_shared_stream_running() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let (conn, mut peer) = Connection::for_test();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+    let mut conn = Some(conn);
+
+    // A second caller already reading the number the venue is about to state.
+    hmds.tbt_subscriptions.push(TbtSubscription {
+        ignore_size: false, instrument: 0, query_id: "tbt_keep".to_string(),
+        kind: TbtType::Last, caller_req_id: 7, venue_id: 55,
+        min_tick: 0, size_tick: 0.0, running: Default::default(),
+    });
+    // And one that left before its own acknowledgement arrived.
+    hmds.tbt_withdrawn_unnumbered.insert("tbt_gone".to_string());
+
+    let ack = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ResultSetTickerId>\
+        <id>tbt_gone</id><rtTickerId>55</rtTickerId><minTick>0.01</minTick>\
+        <sizeMinTick>1</sizeMinTick><eoq>false</eoq></ResultSetTickerId>";
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"35=W\x016118=");
+    msg.extend_from_slice(ack.as_bytes());
+    msg.push(0x01);
+    hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+    assert!(
+        !hmds.tbt_withdrawn.contains(&55),
+        "the number is not marked withdrawn while another caller reads it",
+    );
+    assert!(
+        super::read_frame(&mut peer).is_empty(),
+        "and no cancel goes out for it",
+    );
+}
 }
 
 mod hmds_transport_tests {

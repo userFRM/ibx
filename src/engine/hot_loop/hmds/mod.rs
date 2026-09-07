@@ -667,6 +667,22 @@ impl HmdsState {
                         // stated now, and its ticks are known for what they
                         // are.
                         if self.tbt_withdrawn_unnumbered.remove(&ack.query_id) {
+                            // The rule the withdrawal below keeps, which this
+                            // branch did not: two callers on one contract and
+                            // kind are served under one number, so a cancel
+                            // sent by the first stops the stream the other is
+                            // still reading. There it is guarded; here the
+                            // cancel went out whoever else held the number,
+                            // and that caller was left subscribed in every
+                            // table, silent for the rest of the session, and
+                            // told nothing.
+                            if self.tbt_subscriptions.iter().any(|sub| sub.venue_id == ack.venue_id) {
+                                log::info!(
+                                    "TBT stream {} is still read by another caller; the                                      withdrawal that was waiting for its number leaves it running",
+                                    ack.venue_id,
+                                );
+                                return;
+                            }
                             self.tbt_withdrawn.insert(ack.venue_id);
                             Self::send_tbt_cancel(&ack.venue_id.to_string(), hmds_conn, hb);
                             return;
@@ -2118,6 +2134,16 @@ fn build_tbt_query(
             return;
         };
         let (query_id, _, ticker_id, ..) = self.rtbar_subs.remove(pos);
+        // And anything else standing under this number. A request kept up to
+        // date is two queries — the batch and the stream beside it — and the
+        // venue acknowledges both, so two records can stand under one request.
+        // Taking the one this found left the other, and it belonged to no
+        // pending list and carried no flag, so nothing swept it: the number
+        // read as busy for the rest of the session, and a caller asking under
+        // it again was refused for a stream that was not running. The
+        // withdrawal the caller asks for itself takes them all; this one did
+        // not.
+        self.rtbar_subs.retain(|(_, rid, ..)| *rid != req_id);
         self.rtbar_resub.retain(|r| r.req_id != req_id);
         let cancel_id = ticker_id.map(|t| t.to_string()).unwrap_or(query_id);
         self.send_historical_cancel(&cancel_id, hmds_conn, hb);

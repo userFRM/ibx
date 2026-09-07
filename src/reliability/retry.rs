@@ -83,6 +83,15 @@ impl DisconnectReason {
         {
             return Self::NotReady;
         }
+        // A soft-token challenge the venue refuses is answered by dropping the
+        // socket and asking again with a token derived afresh — that is the
+        // behaviour captured for this exchange, and it is written down beside
+        // the farm's own copy of it. Read as a refusal of the credentials it
+        // ended recovery for the session, which is the one thing that cannot
+        // reach a fresh token: the credentials were never the thing refused.
+        if text.contains("soft_token auth failed") {
+            return Self::Transport;
+        }
         // The client took the attempt back — a stop, or a recovery budget
         // that is spent. Nothing about the venue changed, and nothing a
         // retry carries is different.
@@ -175,6 +184,28 @@ mod tests {
         let reason = DisconnectReason::from_error(&e);
         assert_eq!(reason, DisconnectReason::AuthorizationFailed);
         assert!(reason.is_terminal(), "the same credentials fail the same way next time");
+    }
+
+    /// And a soft-token challenge the venue refuses is not a refusal of the
+    /// credentials.
+    ///
+    /// The recovery captured for this exchange is to drop the socket and ask
+    /// again with a token derived afresh. Read on the error's kind alone it
+    /// arrived as a permission failure — which is terminal, and ends recovery
+    /// for the session, and is the one answer that can never reach a fresh
+    /// token. The classifier reads the venue's own words first for exactly
+    /// this reason; this exchange's words were not among the ones it read.
+    #[test]
+    fn a_refused_soft_token_is_retried_with_a_fresh_one() {
+        let e = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "CCP SOFT_TOKEN auth failed: FAILED",
+        );
+        let reason = DisconnectReason::from_error(&e);
+        assert!(
+            !reason.is_terminal(),
+            "the socket is dropped and asked again, not given up on: {reason:?}",
+        );
     }
 
     /// Two clients on one session, each reconnecting when it is dropped, take
