@@ -37,6 +37,28 @@ def script_python():
     return str(VENV) if VENV.exists() else sys.executable
 
 
+def python_ci_pins():
+    """The interpreter version the workflow runs the Python suite on.
+
+    Read out of the workflow for the same reason the suite list is: a pin that
+    moves there and not here leaves this gate answering for a run it did not do.
+    """
+    found = re.search(r'python-version:\s*"?(\d+\.\d+)"?', WORKFLOW.read_text())
+    return found.group(1) if found else None
+
+
+def python_version_here():
+    """`major.minor` of the interpreter this gate runs the Python suite with."""
+    if not VENV.exists():
+        return None
+    done = subprocess.run(
+        [str(VENV), "-c",
+         "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        capture_output=True, text=True, check=False,
+    )
+    return done.stdout.strip() or None
+
+
 def suites_ci_runs():
     """Every `--test <name>` the workflow names, in the order it names them."""
     text = WORKFLOW.read_text()
@@ -170,6 +192,18 @@ def main():
 
     if code := generated_docs_are_current():
         return code
+
+    # Everything above passed, which is only the same answer the workflow gives
+    # if the Python suite ran on the interpreter the workflow names. It did not
+    # once: the suite passed here on one version and failed there on another for
+    # a day of pushes, because a write through the attribute protocol is not the
+    # same operation on both. So the verdict says which interpreter answered.
+    pinned, here = python_ci_pins(), python_version_here()
+    if pinned and here and pinned != here:
+        print(f"\nevery suite passed, but the Python suite ran on {here} and the "
+              f"workflow runs it on {pinned}. That is not the same evidence — run "
+              f"it on {pinned} before reading this as what the workflow will say.")
+        return 0
 
     print(f"\nall of it passed, across {len(suites)} suites: {' '.join(suites)}")
     return 0
