@@ -2693,6 +2693,20 @@ impl HotLoop {
                          the caller has to act.",
                         reason.as_str(),
                     );
+                    // The market-data farm alone, with the trading connection
+                    // up: the transport the venue will not take back is what
+                    // has ended, not the session — the rule the spent-budget
+                    // path beside this one already keeps. Ended as the
+                    // session, an answer that belongs to the quote feed's own
+                    // logon refused every reader as not connected and exited
+                    // both event loops, while the trading connection stayed up
+                    // and went on taking orders on a session the caller could
+                    // no longer read.
+                    if !self.ccp.disconnected {
+                        self.farm_halted = Some(reason);
+                        self.pending_farm_reconnect = None;
+                        return;
+                    }
                     self.halt_recovery(reason);
                     self.pending_farm_reconnect = None;
                     return;
@@ -4930,6 +4944,39 @@ mod tests {
         hl.ccp.disconnected = true;
         hl.maybe_spawn_ccp_reconnect();
         assert!(shared.reference.session_over().is_some(), "the trading connection running out ends it");
+    }
+
+    /// An answer the quote feed's own logon cannot come back from — credentials
+    /// the venue refuses — ends that feed, not the session, while the trading
+    /// connection is up. The spent-budget path beside it already keeps that
+    /// rule; this one reached `halt_recovery` directly, so a farm the venue
+    /// would not take back refused every reader as not connected and ended both
+    /// event loops on a session whose trading connection was still carrying
+    /// orders.
+    #[test]
+    fn a_farm_the_venue_will_not_take_back_does_not_end_the_session() {
+        let refused = || std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied, "Farm logon rejected",
+        );
+
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.farm.disconnected = true;
+        hl.ccp.disconnected = false;
+        hl.answer_farm_reconnect_for_test(1, Err(refused()));
+        hl.poll_farm_reconnect_for_test();
+        assert!(shared.reference.session_over().is_none(), "the session stands");
+        assert!(shared.reference.trading_over().is_none(), "and trading is not ended");
+        assert!(hl.farm_halted.is_some(), "the feed alone is given up on");
+
+        // And with nothing else carrying the session, the same answer ends it.
+        let alone = Arc::new(SharedState::new());
+        let mut only_farm = HotLoop::new(alone.clone(), None, None);
+        only_farm.farm.disconnected = true;
+        only_farm.ccp.disconnected = true;
+        only_farm.answer_farm_reconnect_for_test(1, Err(refused()));
+        only_farm.poll_farm_reconnect_for_test();
+        assert!(alone.reference.session_over().is_some(), "with the trading connection down too, it ends");
     }
 
     /// A recovery budget that runs out is recorded as that, not as a stop the
