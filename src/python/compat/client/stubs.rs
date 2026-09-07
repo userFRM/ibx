@@ -361,16 +361,21 @@ impl EClient {
         let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         let shared = self.shared_state()?;
         let sc = shared.reference.smart_components();
-        let map = pyo3::types::PyDict::new(py);
+        // A list, which is what the reference client's decoder builds: the name
+        // it gives the argument says "map" and the thing it passes is a list, so
+        // a program written against it iterates the components and reads each
+        // one's fields. Handed a dict keyed by bit number, that loop walked the
+        // keys and asked an integer for `bitNumber`.
+        let mut components = Vec::with_capacity(sc.len());
         for c in sc.iter() {
-            let obj = SmartComponentPy {
+            components.push(Py::new(py, SmartComponentPy {
                 bit_number: c.bit_number,
                 exchange: c.exchange.clone(),
                 exchange_letter: c.exchange_letter.clone(),
-            };
-            map.set_item(c.bit_number, Py::new(py, obj)?)?;
+            })?);
         }
-        self.deliver(py, "smart_components", (req_id, map.as_any()))?;
+        let list = pyo3::types::PyList::new(py, components)?;
+        self.deliver(py, "smart_components", (req_id, list.as_any()))?;
         Ok(())
     }
 
@@ -422,12 +427,16 @@ impl EClient {
         let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         let shared = self.shared_state()?;
         let codes = shared.reference.family_codes();
-        let py_list = pyo3::types::PyList::new(py, codes.iter().map(|fc| {
-            pyo3::types::PyTuple::new(py, &[
-                fc.account_id.as_str().into_pyobject(py).unwrap().into_any(),
-                fc.family_code_str.as_str().into_pyobject(py).unwrap().into_any(),
-            ]).unwrap()
-        }))?;
+        // Objects, as the reference client passes them: a program reads
+        // `code.accountID`, which a pair does not answer to.
+        let mut family = Vec::with_capacity(codes.len());
+        for fc in codes.iter() {
+            family.push(Py::new(py, crate::python::compat::class_reports::FamilyCodePy {
+                account_id: fc.account_id.clone(),
+                family_code_str: fc.family_code_str.clone(),
+            })?);
+        }
+        let py_list = pyo3::types::PyList::new(py, family)?;
         self.deliver(py, "family_codes", (py_list.as_any(),))?;
         Ok(())
     }

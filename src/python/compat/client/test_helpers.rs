@@ -82,6 +82,52 @@ impl EClient {
         Ok(())
     }
 
+    /// Seed one histogram bucket, so a test can read the shape the callback
+    /// hands over and not only that it fired (test-only).
+    #[doc(hidden)]
+    fn _test_push_histogram(&self, req_id: u32, price: f64, count: i64) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.reference.push_histogram_data(
+            req_id,
+            vec![crate::control::histogram::HistogramEntry { price, count }],
+        );
+        Ok(())
+    }
+
+    /// Seed a trading schedule carrying one session (test-only).
+    #[doc(hidden)]
+    fn _test_push_historical_schedule(
+        &self, req_id: u32, ref_date: &str, open_time: &str, close_time: &str,
+    ) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.reference.push_historical_schedule(
+            req_id,
+            crate::types::HistoricalScheduleResponse {
+                query_id: String::new(),
+                timezone: "US/Eastern".to_string(),
+                start_date_time: open_time.to_string(),
+                end_date_time: close_time.to_string(),
+                sessions: vec![crate::types::ScheduleSession {
+                    ref_date: ref_date.to_string(),
+                    open_time: open_time.to_string(),
+                    close_time: close_time.to_string(),
+                }],
+            },
+        );
+        Ok(())
+    }
+
+    /// Seed the family codes the logon burst carries (test-only).
+    #[doc(hidden)]
+    fn _test_set_family_codes(&self, account_id: &str, family_code_str: &str) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.reference.set_family_codes(vec![crate::types::FamilyCode {
+            account_id: account_id.to_string(),
+            family_code_str: family_code_str.to_string(),
+        }]);
+        Ok(())
+    }
+
     /// Name the client this session connected under, as `connect` does.
     #[doc(hidden)]
     fn _test_set_client_id(&self, client_id: i32) {

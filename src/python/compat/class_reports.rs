@@ -207,6 +207,95 @@ impl NewsProviderPy {
     fn new() -> Self { Self::default() }
 }
 
+/// ibapi-compatible HistogramData class.
+///
+/// The reference client hands a histogram over as objects carrying `price` and
+/// `size` rather than as pairs. Code written against it reads `item.price`, and
+/// a pair answers nothing — the attribute error is caught by the callback
+/// dispatcher, so the caller was handed a histogram it could not read and heard
+/// no complaint about it either.
+#[pyclass(from_py_object, name = "HistogramData")]
+#[derive(Clone, Debug, Default)]
+pub struct HistogramDataPy {
+    #[pyo3(get, set)]
+    pub price: f64,
+    #[pyo3(get, set)]
+    pub size: f64,
+}
+
+#[pymethods]
+impl HistogramDataPy {
+    #[new]
+    #[pyo3(signature = ())]
+    fn new() -> Self { Self::default() }
+}
+
+/// ibapi-compatible FamilyCode class.
+///
+/// Stated as the reference client states one, for the reason `HistogramData` is:
+/// a program reads `code.accountID`, which a pair does not carry.
+#[pyclass(from_py_object, name = "FamilyCode")]
+#[derive(Clone, Debug, Default)]
+pub struct FamilyCodePy {
+    #[pyo3(get, set)]
+    pub account_id: String,
+    #[pyo3(get, set)]
+    pub family_code_str: String,
+}
+
+#[pymethods]
+impl FamilyCodePy {
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        by_reference_name(slf.as_any(), name, &[])
+    }
+
+    /// The same names, written to.
+    fn __setattr__(slf: Bound<'_, Self>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
+        set_by_reference_name(slf.as_any(), name, &value, &[])
+    }
+
+    #[new]
+    #[pyo3(signature = ())]
+    fn new() -> Self { Self::default() }
+}
+
+/// ibapi-compatible HistoricalSession class.
+///
+/// The reference client states a session as `startDateTime`, `endDateTime` and
+/// `refDate`. Handed over as a triple this client ordered its own way, a program
+/// written against that client did not merely fail to read it — it read the
+/// reference date as the opening time.
+#[pyclass(from_py_object, name = "HistoricalSession")]
+#[derive(Clone, Debug, Default)]
+pub struct HistoricalSessionPy {
+    #[pyo3(get, set)]
+    pub start_date_time: String,
+    #[pyo3(get, set)]
+    pub end_date_time: String,
+    #[pyo3(get, set)]
+    pub ref_date: String,
+}
+
+#[pymethods]
+impl HistoricalSessionPy {
+    /// Answer to the name the reference client gives a field as well as the
+    /// name this one gives it.
+    fn __getattr__(slf: Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        by_reference_name(slf.as_any(), name, &[])
+    }
+
+    /// The same names, written to.
+    fn __setattr__(slf: Bound<'_, Self>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
+        set_by_reference_name(slf.as_any(), name, &value, &[])
+    }
+
+    #[new]
+    #[pyo3(signature = ())]
+    fn new() -> Self { Self::default() }
+}
+
 /// ibapi-compatible CommissionAndFeesReport class.
 #[pyclass(from_py_object)]
 #[derive(Clone, Debug, Default)]

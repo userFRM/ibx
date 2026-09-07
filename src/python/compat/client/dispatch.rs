@@ -1080,11 +1080,21 @@ impl EClient {
 
         // Drain histogram data -> histogram_data
         let histograms = shared.reference.drain_histogram_data_for_dispatch();
+        // Each bucket as the reference client hands it over: a record naming
+        // `price` and `size`, not a pair. Read off a pair, the name answered
+        // nothing and the attribute error was caught by the dispatcher — so the
+        // caller was handed a histogram it could not read and heard nothing
+        // said about it. The same treatment the historical ticks below already
+        // had.
         for (req_id, entries) in histograms {
-            let tuples: Vec<Bound<'_, pyo3::types::PyTuple>> = entries.iter().map(|e| {
-                pyo3::types::PyTuple::new(py, &[e.price.into_pyobject(py).unwrap().into_any(), e.count.into_pyobject(py).unwrap().into_any()]).unwrap()
-            }).collect();
-            let py_list = pyo3::types::PyList::new(py, tuples)?;
+            let mut buckets = Vec::with_capacity(entries.len());
+            for e in entries.iter() {
+                buckets.push(Py::new(py, crate::python::compat::class_reports::HistogramDataPy {
+                    price: e.price,
+                    size: e.count as f64,
+                })?);
+            }
+            let py_list = pyo3::types::PyList::new(py, buckets)?;
             call_wrapper!(self.wrapper, py, "histogram_data", (req_id as i64, py_list));
         }
 
@@ -1188,13 +1198,18 @@ impl EClient {
         // Drain historical schedules -> historical_schedule
         let schedules = shared.reference.drain_historical_schedules_for_dispatch();
         for (req_id, resp) in schedules {
-            let sessions: Vec<Bound<'_, pyo3::types::PyTuple>> = resp.sessions.iter().map(|s| {
-                pyo3::types::PyTuple::new(py, &[
-                    s.ref_date.as_str().into_pyobject(py).unwrap().into_any(),
-                    s.open_time.as_str().into_pyobject(py).unwrap().into_any(),
-                    s.close_time.as_str().into_pyobject(py).unwrap().into_any(),
-                ]).unwrap()
-            }).collect();
+            // Each session as the reference client states one: `startDateTime`,
+            // `endDateTime`, `refDate`. Handed over as a triple in this client's
+            // own order, a program written against that one did not merely fail
+            // to read it — it took the reference date for the opening time.
+            let mut sessions = Vec::with_capacity(resp.sessions.len());
+            for s in resp.sessions.iter() {
+                sessions.push(Py::new(py, crate::python::compat::class_reports::HistoricalSessionPy {
+                    start_date_time: s.open_time.clone(),
+                    end_date_time: s.close_time.clone(),
+                    ref_date: s.ref_date.clone(),
+                })?);
+            }
             let py_sessions = pyo3::types::PyList::new(py, sessions)?;
             call_wrapper!(self.wrapper, py, "historical_schedule", (
                 req_id as i64,

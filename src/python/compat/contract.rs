@@ -107,6 +107,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SoftDollarTierPy>()?;
     m.add_class::<DepthMktDataDescriptionPy>()?;
     m.add_class::<PriceIncrementPy>()?;
+    m.add_class::<HistogramDataPy>()?;
+    m.add_class::<FamilyCodePy>()?;
+    m.add_class::<HistoricalSessionPy>()?;
     Ok(())
 }
 
