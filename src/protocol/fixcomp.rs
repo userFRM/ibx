@@ -52,18 +52,18 @@ pub fn fixcomp_decompress(data: &[u8]) -> io::Result<Vec<Vec<u8>>> {
             .ok()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| parse_err("fixcomp: tag 95 value is not a usize"))?;
-        // Unbounded over the rest of the frame, which is a real weakness: a
-        // "96=" byte run inside a payload stands in for a tag that is not
-        // there, and the payload is then read from the wrong place. Anchoring
-        // one byte later does not help — the byte at the separator is the
-        // separator, so the search could never have matched there — and
-        // nothing here knows where the tags end, so bounding it needs
-        // something this does not have.
-        let payload_start = if let Some(idx96) = find_tag(&data[soh..], b"96=") {
-            soh + idx96 + 3
-        } else {
-            soh + 1
-        };
+        // Tag 96 begins immediately after the separator ending tag 95, and
+        // nowhere else. The client this one replaces requires exactly that
+        // position and refuses the frame otherwise; it does not search.
+        //
+        // Searched instead, a "96=" byte run inside a payload stood in for a
+        // tag that was not there, and the payload was then read from the wrong
+        // place — inflated from the middle of itself, or from bytes an
+        // attacker chose.
+        if data.len() < soh + 4 || &data[soh + 1..soh + 4] != b"96=" {
+            return Err(parse_err("fixcomp: tag 96 does not follow tag 95"));
+        }
+        let payload_start = soh + 4;
         let payload_end = payload_start
             .checked_add(raw_len)
             .ok_or_else(|| parse_err("fixcomp: tag 95 length overflows usize"))?;
@@ -594,6 +594,37 @@ mod tests {
         let comp = fixcomp_build(&inner);
         let truncated = &comp[..comp.len() - 5];
         assert!(fixcomp_decompress(truncated).is_err());
+    }
+
+    /// The payload begins immediately after tag 95, and a "96=" further along
+    /// the frame is not that tag.
+    ///
+    /// Searched for instead of read at its position, a "96=" byte run inside
+    /// the payload stood in for the tag and the frame was inflated from the
+    /// middle of itself — from bytes whoever sent the frame chose. The client
+    /// this one replaces reads that one position and refuses the frame when
+    /// the tag is not there.
+    #[test]
+    fn a_payload_marker_further_along_the_frame_is_not_tag_96() {
+        let inner = fix_build(&[(35, "A"), (108, "30")], 1);
+        let genuine = fixcomp_build(&inner);
+        assert_eq!(
+            fixcomp_decompress(&genuine).expect("a well-formed frame decompresses"),
+            vec![inner],
+            "the frame as the venue sends it still reads",
+        );
+
+        // The same frame with the tag moved off its position: whatever follows
+        // tag 95 now, a "96=" later on does not name the payload.
+        let at95 = genuine.windows(4).position(|w| w == b"\x0195=").expect("tag 95") + 1;
+        let soh = genuine[at95..].iter().position(|&b| b == SOH).expect("its value ends") + at95;
+        let mut displaced = genuine[..=soh].to_vec();
+        displaced.extend_from_slice(b"9999=x\x0196=");
+        displaced.extend_from_slice(&genuine[soh + 4..]);
+        assert!(
+            fixcomp_decompress(&displaced).is_err(),
+            "a payload named from somewhere else in the frame is not read",
+        );
     }
 
     #[test]

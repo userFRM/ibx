@@ -174,10 +174,23 @@ impl SecureChannel {
     ///
     /// Reading them is worth doing on the farm connections, where nothing
     /// else authenticates the peer. It is worth little on the primary, where
-    /// TLS has already done it. What the signature covers is not established:
-    /// the two randoms and the two public values, alone and combined, in
-    /// their raw and encoded forms, do not verify against the leaf under
-    /// PKCS#1 v1.5 with SHA-1, SHA-256 or SHA-384.
+    /// TLS has already done it.
+    ///
+    /// The signature covers nothing, which is why nothing verified against it.
+    /// The two randoms and the two public values, alone and combined, in their
+    /// raw and encoded forms, do not verify against the leaf under PKCS#1 v1.5
+    /// with SHA-1, SHA-256 or SHA-384 — and the client this one replaces does
+    /// not put a message under the signature before checking it, nor read the
+    /// answer it gets back. Its handshake stops only if the check raises; a
+    /// signature that is simply wrong passes. So there is no scheme here to
+    /// reproduce, and reproducing one would refuse peers that client accepts.
+    ///
+    /// What that client does enforce is the chain, and each of these ends its
+    /// handshake: at least three certificates; the leaf within its validity
+    /// dates; the leaf's issuer and the next certificate's subject both naming
+    /// the venue's own authority, with its two environments held apart; and
+    /// the leaf signed by the certificate behind it. That is what is worth
+    /// reproducing on a farm connection, and it is not reproduced here yet.
     pub fn process_server_hello(&mut self, fields: &[&str]) -> std::io::Result<()> {
         let invalid = |what: &str| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("DH server hello: {what}"))

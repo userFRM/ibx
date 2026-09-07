@@ -498,6 +498,22 @@ impl Connection {
             if self.buf.starts_with(b"8=FIX.") {
                 if let Some(total) = fix_msg_length(&self.buf)
                     && self.buf.len() >= total {
+                        // Only where the trailer is where the length said it
+                        // would be. A length that names some other position is
+                        // resynchronised past, as an unreadable one is: it is
+                        // the same failure reaching the reader through the
+                        // same field, and waiting it out holds a header at the
+                        // front of the buffer that no further byte can
+                        // complete.
+                        if !trailer_is_where_the_length_says(&self.buf, total) {
+                            log::warn!(
+                                "extract_frames: a FIX header states a body length whose \
+                                 trailer is not where it says; resynchronising past it",
+                            );
+                            self.buf.drain(..1);
+                            discarded += 1;
+                            continue;
+                        }
                         let msg: Vec<u8> = self.buf.drain(..total).collect();
                         frames.push(Frame::Fix(msg));
                         continue;
@@ -566,10 +582,12 @@ impl Connection {
         if self.read_key.is_empty() {
             return Some(msg.to_vec()); // no signing configured
         }
-        // A frame carrying no 8349 tag is still accepted, as the reference
-        // client does. Whether unsigned frames arrive on a keyed connection is
-        // not established; refusing them on that assumption would drop real
-        // traffic. The warning makes the case visible in logs.
+        // A frame carrying no signature is accepted unchanged, which is what
+        // the client this one replaces does: it classifies a frame as signed
+        // by looking for the trailer at the position the length implies, and
+        // where that is absent it says so and hands the frame on — no verify
+        // and no refusal. Refusing here instead would drop traffic that client
+        // delivers. The warning makes the case visible in logs.
         if !msg.windows(6).any(|w| w == b"\x018349=") {
             log::warn!("inbound frame carries no 8349 signature on a signed connection");
             return Some(msg.to_vec());
@@ -814,6 +832,32 @@ fn fix_msg_length(data: &[u8]) -> Option<usize> {
     soh_pos.checked_add(8)?.checked_add(body_len)
 }
 
+/// Whether the trailer sits where the stated body length says it does.
+///
+/// The client this one replaces requires exactly that before it will call a
+/// buffer a frame: `<SOH>10=` at the position the length implies, and a final
+/// `<SOH>`. A buffer whose trailer is elsewhere is not a frame to it, whatever
+/// tag 9 claims.
+///
+/// Trusted without the check, a stated length longer than the message swallows
+/// the frames behind it, and one shorter cuts the message and leaves its tail
+/// to be read as the start of the next — and neither is distinguishable from a
+/// frame still arriving, so both wait on bytes that were already read.
+///
+/// The three digits are not recomputed. That client does not check them
+/// either: it generates a checksum outbound and verifies none inbound, and
+/// refusing a frame it accepts is not the same client.
+///
+/// Answers only where the whole of the stated length is held; before that
+/// there is nothing at the position to look at.
+fn trailer_is_where_the_length_says(data: &[u8], total: usize) -> bool {
+    if data.len() < total || total < 8 {
+        return false;
+    }
+    let at = total - 8;
+    data[at] == SOH && &data[at + 1..at + 4] == b"10=" && data[total - 1] == SOH
+}
+
 /// The offset of the earliest header this reader recognises, if there is one.
 ///
 /// The same set the frame scan uses, so resynchronising after an unreadable
@@ -879,6 +923,56 @@ mod tests {
     fn fix_msg_length_incomplete() {
         let msg = fix_build(&[(35, "0")], 1);
         assert_eq!(fix_msg_length(&msg[..10]), None);
+    }
+
+    /// A stated length whose trailer is somewhere else is not a length.
+    ///
+    /// The client this one replaces asks for the trailer at the position the
+    /// length implies before it will call a buffer a frame. Trusted without
+    /// that, a length longer than the message swallows the frames behind it,
+    /// and a length shorter cuts the message and leaves its tail to be read as
+    /// the start of the next.
+    #[test]
+    fn a_length_whose_trailer_is_elsewhere_is_not_a_frame() {
+        let good = fix_build(&[(35, "0")], 1);
+        assert!(
+            trailer_is_where_the_length_says(&good, good.len()),
+            "a message the venue built states its own length",
+        );
+        // A length two bytes short: the trailer is no longer at the position
+        // it names, and the two bytes it leaves behind start no frame.
+        assert!(!trailer_is_where_the_length_says(&good, good.len() - 2));
+        // And one longer than what is held answers nothing yet, because there
+        // is nothing at that position to look at.
+        assert!(!trailer_is_where_the_length_says(&good, good.len() + 2));
+    }
+
+    /// And the reader resynchronises past it rather than waiting.
+    ///
+    /// The length is readable, so no further byte can make it parse and no
+    /// further byte can put the trailer where it claims — the header would sit
+    /// at the front of the buffer for the life of the connection, with every
+    /// frame behind it unread while the socket kept delivering.
+    #[test]
+    fn a_frame_whose_stated_length_lies_does_not_hold_the_ones_behind_it() {
+        let honest = fix_build(&[(35, "0")], 1);
+        // A header stating a body two bytes longer than it carries, with a
+        // whole frame behind it.
+        let mut lying = honest.clone();
+        let at9 = find_subsequence(&lying, b"9=").expect("tag 9");
+        let soh = lying[at9..].iter().position(|&b| b == SOH).expect("its value ends") + at9;
+        let stated: usize = std::str::from_utf8(&lying[at9 + 2..soh]).unwrap().parse().unwrap();
+        let wider = format!("{}", stated + 2);
+        lying.splice(at9 + 2..soh, wider.bytes());
+
+        let mut buf = lying;
+        buf.extend_from_slice(&honest);
+        let mut conn = test_connection_with_buf(buf);
+        let frames = conn.extract_frames();
+        assert!(
+            frames.iter().any(|f| matches!(f, Frame::Fix(m) if *m == honest)),
+            "the frame behind the lying header is read: {} frame(s)", frames.len(),
+        );
     }
 
     /// A length that is there and unreadable is not a length still arriving.
