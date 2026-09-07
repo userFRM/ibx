@@ -6293,6 +6293,86 @@ fn a_refused_revision_the_venue_has_answered_does_not_revive_the_order() {
     );
 }
 
+/// And a refusal of a revision the venue IS holding does not revive it either.
+///
+/// That is the interleaving the case above stops short of: a replace goes out,
+/// the caller cancels over it — which is allowed, and the guard raises pending
+/// cancel — and only then does the venue refuse the live revision. Restoring
+/// the terms wrote the snapshot's status back into the book as well, which is
+/// not a status the guard was asked about: it went straight past it, and the
+/// caller was told its withdrawn order was working while the cancel was still
+/// in flight.
+#[test]
+fn a_refused_revision_does_not_revive_an_order_cancelled_over_it() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy,
+        100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    // The replace goes out, and the terms before it are kept to fall back on.
+    let before = *context.order(42).expect("the order is tracked");
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string(), None));
+    // The caller withdraws over it.
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
+
+    // Now the venue refuses the revision it was holding.
+    let mut refused = std::collections::HashMap::new();
+    refused.insert(41u32, "42.1".to_string());
+    refused.insert(11u32, "42.1".to_string());
+    refused.insert(434u32, "2".to_string());
+    refused.insert(102u32, "0".to_string());
+    ccp.handle_cancel_reject(&refused, &mut context, &shared, &None);
+
+    assert_eq!(
+        context.order(42).map(|o| o.status),
+        Some(crate::types::OrderStatus::PendingCancel),
+        "the terms go back; what has happened to the order does not",
+    );
+}
+
+/// An accepted replace on an order that filled before the answer landed is
+/// still announced.
+///
+/// The venue reports a partly filled working order as submitted — the two
+/// quantities carry the distinction — so an acknowledgement stating submitted,
+/// on a book holding partly filled, is the same status stated twice. Compared
+/// as enums it read as two, and the acknowledgement announced nothing: no
+/// status reached either surface, and the terms cached under the order stayed
+/// the ones from before the replace.
+#[test]
+fn a_replace_accepted_on_a_partly_filled_order_is_announced() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy,
+        100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    // A fill lands before the venue answers the replace.
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PartiallyFilled, false));
+    let _ = shared.orders.drain_order_updates();
+
+    // 150=5 / 39=5 is the venue accepting the replace.
+    let ack = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+        (11, "42"), (150, "5"), (39, "5"), (6008, "756733"),
+    ], 1);
+    ccp.process_ccp_message(
+        &ack, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+
+    assert!(
+        shared.orders.drain_order_updates().iter().any(|u| u.order_id == 42),
+        "the caller hears that the replace was taken",
+    );
+}
+
 /// A caller waiting on the download is let through to a squared account.
 ///
 /// The flag that says the download is over used to be the first thing the

@@ -671,7 +671,14 @@ impl CcpState {
                         (stated.is_none()
                             && self.pending_secdef.len() == 1
                             && self.pending_fanout.is_empty()
-                            && self.pending_matching_symbols.is_empty())
+                            && self.pending_matching_symbols.is_empty()
+                            // And the chains, which the branch above defers to
+                            // this one for. Left out, the two were not
+                            // symmetric: a chain waiting with a lone lookup
+                            // deferred there and was taken here, so the lookup
+                            // was told the chain's refusal and the chain waited
+                            // out its own deadline to be told nothing came.
+                            && self.pending_option_params.is_empty())
                         .then_some(0)
                     });
                 if let Some(at) = named {

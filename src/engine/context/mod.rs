@@ -655,6 +655,16 @@ impl Context {
         }
         if let Some(current) = self.open_orders.get(&order_id) {
             prior.filled = current.filled;
+            // And a state the order has reached since the snapshot was taken,
+            // where that outranks the snapshot's. The terms go back; what has
+            // happened to the order since does not. Restored whole, an order
+            // withdrawn after the replace went out came back to working —
+            // past the guard, since this writes the book rather than asking
+            // it — and the caller's withdrawal was undone while its verdict
+            // was still owed.
+            if current.status.rank() > prior.status.rank() {
+                prior.status = current.status;
+            }
         }
         if prior.filled > 0 && prior.status.rank() < OrderStatus::PartiallyFilled.rank() {
             prior.status = OrderStatus::PartiallyFilled;

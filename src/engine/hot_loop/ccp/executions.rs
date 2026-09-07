@@ -1197,8 +1197,19 @@ impl CcpState {
         // order already working when the change lands stays working. Only where
         // the order is in the state being announced, so a status the guard
         // rejected is not reported over it.
-        let acknowledged_in_place = is_replace_ack
-            && context.order(clord_id).is_some_and(|o| o.status == status);
+        // Compared as the caller is told them, not as this engine holds them.
+        // A partly filled working order is reported as submitted — the two
+        // quantities carry the distinction, which is why the vocabulary
+        // collapses them — so an acknowledgement stating submitted, on a book
+        // holding partly filled, is the same status stated twice. Compared as
+        // enums it was two, and an accepted replace on an order that had filled
+        // before the answer landed announced nothing at all.
+        let says_the_same = |held: crate::types::OrderStatus| {
+            crate::types::order_status::order_status_str(held)
+                == crate::types::order_status::order_status_str(status)
+        };
+        let acknowledged_in_place =
+            is_replace_ack && context.order(clord_id).is_some_and(|o| says_the_same(o.status));
         let status_changed = !revision_refused && (applied || acknowledged_in_place);
 
         // A report can also undo or restate an execution rather than announce a
@@ -1335,7 +1346,8 @@ impl CcpState {
         // the order is, and that is the same question the guard just settled.
         // An order this session does not hold is not one the guard has an
         // opinion on, and is left to the two rules below it.
-        let states_the_order = context.order(clord_id).is_none_or(|o| o.status == status);
+        let states_the_order =
+            context.order(clord_id).is_none_or(|o| says_the_same(o.status));
 
         // Enrich order/contract caches block
         {
@@ -1861,11 +1873,21 @@ impl CcpState {
         // true by default, the two sites that set it disagreed about what a
         // refused cancellation carries.
         let mut answers_a_live_revision = false;
+        // Whether the caller had withdrawn this order before the venue
+        // answered the change, read before anything is written back.
+        let mut withdrawn_before_the_restore = false;
         if reject_type == 2 && !unknown_order {
             let refused_revision = parsed.get(&11)
                 .map(|c| revision_of(c))
                 .unwrap_or_else(|| *context.modify_versions.get(&oid).unwrap_or(&0));
             answers_a_live_revision = context.pre_replace.contains_key(&(oid, refused_revision));
+            // Read before the restore writes the snapshot's status back over
+            // it. The copy taken below is of the book as it stands after that,
+            // so asking it whether a cancel was outstanding asks the wrong
+            // moment — the answer is always the snapshot's.
+            withdrawn_before_the_restore = context
+                .order(oid)
+                .is_some_and(|o| o.status == crate::types::OrderStatus::PendingCancel);
             context.restore_pre_replace(oid, refused_revision);
         }
 
@@ -1895,16 +1917,31 @@ impl CcpState {
                 } else {
                     crate::types::OrderStatus::Submitted
                 };
-                // Deliberate regression (PendingCancel back to working) — the
-                // guard would rightly block it on the ordinary path.
-                context.set_order_status_forced(oid, restore_status);
+                // A refusal of the CHANGE says nothing about a cancel sent
+                // over it. The venue takes a cancel while a revision is still
+                // outstanding — the branch above is here because it does — and
+                // refusing the revision leaves that cancel exactly where it
+                // was: still owed a verdict of its own. Forced back to working
+                // anyway, the withdrawal the caller had been told about was
+                // undone, and both books reported a live order with its cancel
+                // in flight until the venue answered it.
+                //
+                // A refused CANCELLATION is the other case and keeps the
+                // regression: there the venue has said the withdrawal will not
+                // happen, so pending cancel has stopped being true.
+                let answers_the_cancel = reject_type != 2;
+                if answers_the_cancel || !withdrawn_before_the_restore {
+                    // Deliberate regression (PendingCancel back to working) —
+                    // the guard would rightly block it on the ordinary path.
+                    context.set_order_status_forced(oid, restore_status);
+                    restored = Some(restore_status);
+                }
                 // And said, not only recorded. The engine's book went back to
                 // working while the record the surfaces read stayed on the
                 // cancel that was refused: `req_open_orders` reported an order
                 // as leaving that the venue had said would not leave, and
                 // nothing later corrected it, because the refusal is the last
                 // message this order draws.
-                restored = Some(restore_status);
             }
             order.instrument
         } else {
