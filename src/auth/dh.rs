@@ -185,12 +185,23 @@ impl SecureChannel {
     /// signature that is simply wrong passes. So there is no scheme here to
     /// reproduce, and reproducing one would refuse peers that client accepts.
     ///
-    /// What that client does enforce is the chain, and each of these ends its
-    /// handshake: at least three certificates; the leaf within its validity
-    /// dates; the leaf's issuer and the next certificate's subject both naming
-    /// the venue's own authority, with its two environments held apart; and
-    /// the leaf signed by the certificate behind it. That is what is worth
-    /// reproducing on a farm connection, and it is not reproduced here yet.
+    /// That client does check the chain, and each of these ends its handshake:
+    /// at least three certificates; the leaf within its validity dates; the
+    /// leaf's issuer and the next certificate's subject both naming the venue's
+    /// own authority, with its two environments held apart; the leaf signed by
+    /// the certificate behind it; and a path validation over the rest.
+    ///
+    /// None of that authenticates the peer, which is why it is not reproduced
+    /// here. The anchor the path is validated against is taken from the chain
+    /// the peer just sent — there is no trust store on that side — and the peer
+    /// supplies both the leaf and the certificate that signs it, so it chooses
+    /// the two names the checks pin as freely as it chooses the rest. The whole
+    /// of it is a consistency check over material one party picked.
+    ///
+    /// What authenticates this peer is the logon described above, which is
+    /// cryptographic and which a substituted peer cannot pass. That check is
+    /// worth having and this client has it; the chain is worth reading only if
+    /// the other side ever gains an anchor it did not receive.
     pub fn process_server_hello(&mut self, fields: &[&str]) -> std::io::Result<()> {
         let invalid = |what: &str| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("DH server hello: {what}"))
