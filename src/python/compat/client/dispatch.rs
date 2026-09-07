@@ -719,7 +719,7 @@ impl EClient {
         // Poll quotes for changes -> tickPrice/tickSize
         // Poll quotes via shared ClientCore (same logic as Rust dispatch)
         let instruments = self.core.snapshot_instruments();
-        let mut snapshot_done: Vec<i64> = Vec::new();
+        let mut snapshot_done: Vec<(i64, Option<u64>)> = Vec::new();
         for (iid, req_id) in instruments {
             let result = self.core.poll_instrument_ticks(shared, iid, req_id);
             // The same quote, once per caller watching this contract. One
@@ -781,8 +781,17 @@ impl EClient {
             // completed and never withdrawn.
             for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
                 if self.core.check_snapshot_done(id) {
+                    // What it was watching when the snapshot finished, so the
+                    // withdrawal below can tell this subscription from
+                    // whatever the callback leaves under the same number. A
+                    // callback is free to withdraw what it has just been told
+                    // about and ask for something else — "the snapshot is in,
+                    // now stream it" is the obvious thing to write — and the
+                    // withdrawal that followed took the number alone, so it
+                    // cancelled the subscription the callback had just made.
+                    let was_watching = self.core.registration_of(id);
                     call_wrapper!(self.wrapper, py, "tick_snapshot_end", (id,));
-                    snapshot_done.push(id);
+                    snapshot_done.push((id, was_watching));
                 }
             }
         }
@@ -790,7 +799,13 @@ impl EClient {
         // a handler that disconnected on `tick_snapshot_end` is not told 504
         // about a snapshot that completed, and an engine that has gone is not
         // an exception out of `run` — the session was recorded as over above.
-        for req_id in snapshot_done {
+        for (req_id, was_watching) in snapshot_done {
+            // Only where the number still holds the subscription the
+            // snapshot was for — not merely the same contract, which a
+            // callback that re-asked would also show.
+            if self.core.registration_of(req_id) != was_watching {
+                continue;
+            }
             let Ok(tx) = self.tx() else { break };
             if let Err(why) = self.withdraw_mkt_data(py, &tx, req_id) {
                 log::debug!("withdrawing finished snapshot {req_id}: {why}");

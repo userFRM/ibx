@@ -486,7 +486,7 @@ impl EClient {
         // there is nothing else to put in it, not because nothing was looked
         // for.
         let attrib = crate::types::model::TickAttrib::default();
-        let mut snapshot_done: Vec<i64> = Vec::new();
+        let mut snapshot_done: Vec<(i64, Option<u64>)> = Vec::new();
         for (iid, req_id) in instruments {
             let result = self.core.poll_instrument_ticks(&self.shared, iid, req_id);
             // The same quote, once per caller watching this contract.
@@ -539,13 +539,27 @@ impl EClient {
             // waiting for the end of it waited for ever.
             for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
                 if self.core.check_snapshot_done(id) {
+                    // What it was watching when the snapshot finished, so
+                    // the withdrawal below can tell this subscription from
+                    // whatever the callback leaves under the same number. A
+                    // callback is free to withdraw what it has just been told
+                    // about and ask for something else — "the snapshot is in,
+                    // now stream it" is the obvious thing to write — and the
+                    // withdrawal that followed took the number alone, so it
+                    // cancelled the subscription the callback had just made.
+                    let was_watching = self.core.registration_of(id);
                     wrapper.tick_snapshot_end(id);
-                    snapshot_done.push(id);
+                    snapshot_done.push((id, was_watching));
                 }
             }
         }
-        for req_id in snapshot_done {
-            let _ = self.cancel_mkt_data(req_id);
+        for (req_id, was_watching) in snapshot_done {
+            // Only where the number still holds the subscription the
+            // snapshot was for — not merely the same contract, which a
+            // callback that re-asked would also show.
+            if self.core.registration_of(req_id) == was_watching {
+                let _ = self.cancel_mkt_data(req_id);
+            }
         }
 
         // TBT trades → tick_by_tick_all_last

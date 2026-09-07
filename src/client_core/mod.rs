@@ -760,6 +760,14 @@ pub struct ClientCore {
     /// the two are refused against their own records, so a claim that did not
     /// say which would refuse a pair the client allows.
     registering: Mutex<std::collections::HashSet<(u8, i64)>>,
+    /// Which registration a number is currently holding, counted.
+    ///
+    /// A number outlives the subscriptions made under it: a callback may
+    /// withdraw what it was told about and ask for something else on the spot,
+    /// and the new one can watch the very same contract — so neither the
+    /// number nor what it watches tells the two apart. This does.
+    registration_epoch: Mutex<HashMap<i64, u64>>,
+    epochs: std::sync::atomic::AtomicU64,
     /// Which request owns each contract's quotes. One per contract:
     /// later callers follow it rather than opening a second.
     pub instrument_to_req: Mutex<HashMap<InstrumentId, i64>>,
@@ -1015,6 +1023,8 @@ impl ClientCore {
             readonly: std::sync::atomic::AtomicBool::new(false),
             req_to_instrument: Mutex::new(HashMap::new()),
             registering: Mutex::new(std::collections::HashSet::new()),
+            registration_epoch: Mutex::new(HashMap::new()),
+            epochs: std::sync::atomic::AtomicU64::new(0),
             instrument_to_req: Mutex::new(HashMap::new()),
             tbt_to_instrument: Mutex::new(HashMap::new()),
             instrument_followers: Mutex::new(HashMap::new()),
@@ -1508,6 +1518,7 @@ impl ClientCore {
                 // Outside both, because a request pointing at the instrument it
                 // follows is not what a withdrawal races against.
                 self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
+                self.stamp_registration(req_id);
                 true
             }
             _ => false,
@@ -1552,6 +1563,7 @@ impl ClientCore {
                 // Outside both, because a request pointing at the instrument it
                 // follows is not what a withdrawal races against.
                 self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
+                self.stamp_registration(req_id);
                 true
             }
             _ => {
@@ -1573,6 +1585,7 @@ impl ClientCore {
         for req_id in held.into_iter().chain(following) {
             if !self.take_or_follow(into, req_id) {
                 self.req_to_instrument.lock().unwrap().insert(req_id, into);
+                self.stamp_registration(req_id);
             }
         }
         self.last_quotes.lock().unwrap().remove(&from);
@@ -1938,6 +1951,7 @@ impl ClientCore {
         // registered, in which case this one watches theirs.
         let _ = self.take_or_follow(instrument_id, req_id);
         self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
+        self.stamp_registration(req_id);
         // What this request asked for, so its own callback says so rather than
         // reporting the type set for everything else.
         self.mdt_by_req.lock().unwrap().insert(
@@ -2019,6 +2033,29 @@ impl ClientCore {
         self.req_to_instrument.lock().unwrap().contains_key(&req_id)
     }
 
+    /// Which contract's slot a number is watching, if it is watching one.
+    pub fn watching(&self, req_id: i64) -> Option<InstrumentId> {
+        self.req_to_instrument.lock().unwrap().get(&req_id).copied()
+    }
+
+    /// Say this number now holds a subscription of its own, distinct from any
+    /// it held before.
+    fn stamp_registration(&self, req_id: i64) {
+        let n = self.epochs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.registration_epoch.lock().unwrap().insert(req_id, n);
+    }
+
+    /// Which subscription a number is holding, as a figure that changes every
+    /// time it takes a new one.
+    ///
+    /// Read to tell one subscription under a number from the next. Neither the
+    /// number nor the contract can do that: a callback is free to withdraw
+    /// what it was just told about and ask for the same contract again, and
+    /// what runs after the callback must not then act on the number alone.
+    pub fn registration_of(&self, req_id: i64) -> Option<u64> {
+        self.registration_epoch.lock().unwrap().get(&req_id).copied()
+    }
+
     /// Unregister a market data subscription.
     ///
     /// Answers with the subscription to withdraw, and separately with the
@@ -2034,6 +2071,7 @@ impl ClientCore {
         // stream reads as a snapshot and is withdrawn as soon as it has both
         // sides of a quote.
         self.snapshot_reqs.lock().unwrap().remove(&req_id);
+        self.registration_epoch.lock().unwrap().remove(&req_id);
         if let Some(instrument) = self.req_to_instrument.lock().unwrap().remove(&req_id) {
             // A caller that was watching someone else's subscription stops
             // watching it, and the subscription stays up for the rest. A

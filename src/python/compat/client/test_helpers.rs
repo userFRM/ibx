@@ -212,6 +212,12 @@ impl EClient {
         Ok(())
     }
 
+    /// Which slot a number is watching, or nothing.
+    #[doc(hidden)]
+    fn _test_watching(&self, req_id: i64) -> Option<u32> {
+        self.core.watching(req_id)
+    }
+
     /// What this session has queued for the engine, taken and cleared.
     ///
     /// Written out rather than handed over as objects: a test asks whether a
