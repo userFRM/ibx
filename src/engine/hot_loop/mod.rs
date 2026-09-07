@@ -510,7 +510,14 @@ impl HotLoop {
                         _ => p.instrument,
                     }
                 };
-                if self.farm.holds_market_data(instrument) {
+                // What is already up, and only where this request can be
+                // answered by it. A snapshot is neither followed nor followable
+                // — it is a request of its own, and it is billed — so a
+                // snapshot skipped for a live stream was never sent and the
+                // caller heard the end of it off ticks it did not ask for,
+                // while a stream skipped for a snapshot in flight was dropped
+                // when the snapshot completed and withdrew.
+                if !p.regulatory_snapshot && self.farm.holds_a_stream(instrument) {
                     continue;
                 }
                 // A feed given up on since the request was taken. The refusal
@@ -1161,7 +1168,12 @@ impl HotLoop {
                         // and never refused for want of the entitlement, and
                         // the caller heard the snapshot end off ticks it did
                         // not ask for — a paid answer that reached nobody.
-                        Some(id) if self.farm.holds_market_data(id) && !regulatory_snapshot => {
+                        //
+                        // And what is followed is a stream. A snapshot holds
+                        // the slot but is withdrawn as soon as it completes,
+                        // so a subscribe pointed at one was never sent and the
+                        // withdrawal took the record out from under it.
+                        Some(id) if self.farm.holds_a_stream(id) && !regulatory_snapshot => {
                             if let Some(tx) = &reply_tx {
                                 let _ = tx.try_send(Ok(id));
                             }
@@ -4473,6 +4485,133 @@ mod tests {
         assert!(
             told.iter().any(|(at, _)| *at == instrument),
             "and the caller is told the feed is done: {told:?}",
+        );
+    }
+
+    /// A request answered by what is already up, and only where it can be.
+    ///
+    /// The chargeable snapshot is not a subscription anybody shares. It is a
+    /// request of its own, it is billed, and it is withdrawn as soon as it
+    /// completes. Read as one, both directions were dropped: a stream skipped
+    /// because a snapshot held the slot went out never, and the snapshot's own
+    /// withdrawal then took the record it had been pointed at; a snapshot
+    /// skipped because a stream held the slot was never sent, never billed and
+    /// never refused for want of the entitlement, and the caller heard the end
+    /// of it off ticks it did not ask for.
+    #[test]
+    fn a_snapshot_and_a_stream_are_each_sent_over_the_other() {
+        fn a_pending(
+            instrument: InstrumentId, regulatory_snapshot: bool,
+        ) -> crate::engine::hot_loop::ccp::PendingSubscribe {
+            crate::engine::hot_loop::ccp::PendingSubscribe {
+                con_id: 756733,
+                instrument,
+                symbol: "SPY".into(),
+                exchange: "SMART".into(),
+                sec_type: "STK".into(),
+                currency: "USD".into(),
+                last_trade_date: String::new(),
+                strike: 0.0,
+                right: String::new(),
+                multiplier: String::new(),
+                mode_9887: 0,
+                regulatory_snapshot,
+            }
+        }
+
+        // The stream, where a snapshot already holds the slot.
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let instrument = hl.context.market.register(756733);
+        hl.farm.instrument_md_reqs.push((instrument, crate::engine::hot_loop::farm::MdReqRecord {
+            con_id: 756733,
+            sec_type: "CS".into(),
+            mode_9887: 0,
+            entries: vec![crate::engine::hot_loop::farm::MdReqEntry {
+                req_id: 7, request_type: 624, venue: "BEST".into(),
+            }],
+        }));
+        hl.ccp.resolved_md_subscribe.push((756733, a_pending(instrument, false)));
+
+        hl.send_resolved_subscriptions();
+
+        assert!(
+            hl.farm.holds_a_stream(instrument),
+            "the subscribe was skipped for a snapshot that is about to withdraw",
+        );
+
+        // And the snapshot, where a stream already holds it.
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let instrument = hl.context.market.register(756733);
+        hl.farm.instrument_md_reqs.push((instrument, crate::engine::hot_loop::farm::MdReqRecord {
+            con_id: 756733,
+            sec_type: "CS".into(),
+            mode_9887: 0,
+            entries: vec![crate::engine::hot_loop::farm::MdReqEntry {
+                req_id: 7, request_type: 442, venue: "BEST".into(),
+            }],
+        }));
+        hl.ccp.resolved_md_subscribe.push((756733, a_pending(instrument, true)));
+
+        hl.send_resolved_subscriptions();
+
+        let entries = hl.farm.instrument_md_reqs.iter()
+            .find(|(id, _)| *id == instrument)
+            .map(|(_, r)| r.entries.len())
+            .unwrap_or(0);
+        assert!(
+            entries > 1,
+            "the snapshot was answered with somebody else's stream, so nothing \
+             was sent and nothing was billed",
+        );
+    }
+
+    /// And where the caller asks by contract id, which is the shorter road to
+    /// the same wrong.
+    ///
+    /// A snapshot on the contract is enough to answer a subscribe with "you
+    /// already have one". The caller was told a number and nothing went out on
+    /// it; the snapshot completed, withdrew, and took the record with it.
+    #[test]
+    fn a_subscribe_is_not_answered_with_a_snapshot_somebody_else_has_out() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+
+        let instrument = hl.context.market.register(756733);
+        hl.farm.instrument_md_reqs.push((instrument, crate::engine::hot_loop::farm::MdReqRecord {
+            con_id: 756733,
+            sec_type: "CS".into(),
+            mode_9887: 0,
+            entries: vec![crate::engine::hot_loop::farm::MdReqEntry {
+                req_id: 7, request_type: 624, venue: "BEST".into(),
+            }],
+        }));
+
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(ControlCommand::Subscribe {
+            contract: ContractRef {
+                con_id: 756733,
+                sec_type: "STK".into(),
+                exchange: "SMART".into(),
+                ..Default::default()
+            },
+            mode_9887: 0,
+            regulatory_snapshot: false,
+            reply_tx: Some(reply_tx),
+        })
+        .expect("the engine holds the other end");
+        hl.poll_once();
+
+        assert_eq!(
+            reply_rx.try_recv().ok(), Some(Ok(instrument)),
+            "the caller is given the contract's slot",
+        );
+        assert!(
+            hl.farm.holds_a_stream(instrument),
+            "and a subscription on it, rather than a snapshot about to withdraw",
         );
     }
 

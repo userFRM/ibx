@@ -687,6 +687,27 @@ impl FarmState {
             || self.replay_queue.iter().any(|r| r.0 == instrument)
     }
 
+    /// Whether this instrument has a subscription a second caller can be given
+    /// instead of one of its own.
+    ///
+    /// The question above is a different one. It asks whether anything would
+    /// be repointed by a slot reuse, and the chargeable snapshot answers yes:
+    /// the slot must not go back to the table while one is out on it. It
+    /// cannot answer yes here. A snapshot is a request of its own, withdrawn
+    /// the moment it completes, and it is never recorded for replay — so a
+    /// subscribe handed it instead of the wire was never sent, and the
+    /// snapshot's own withdrawal then took the record it was pointed at. The
+    /// caller held a number that reads as subscribed with nothing arriving on
+    /// it for the rest of the session.
+    pub(crate) fn holds_a_stream(&self, instrument: InstrumentId) -> bool {
+        self.instrument_md_reqs.iter().any(|(id, record)| {
+            *id == instrument
+                && record.entries.iter()
+                    .any(|e| e.request_type != REGULATORY_SNAPSHOT_REQUEST_TYPE)
+        }) || self.md_resub_info.iter().any(|r| r.0 == instrument)
+            || self.replay_queue.iter().any(|r| r.0 == instrument)
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             replay_queue: Default::default(),

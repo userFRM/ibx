@@ -861,6 +861,47 @@ mod resub_tests {
         // An instrument with none of the three is free to go.
         assert!(!FarmState::new().holds_market_data(instrument));
     }
+
+    /// And the chargeable snapshot is where the two questions come apart.
+    ///
+    /// It holds the slot, because the slot must not go back to the table while
+    /// one is out on it. It is not a subscription anybody can be given instead
+    /// of their own: it is withdrawn the moment it completes and it is never
+    /// recorded for replay, so a subscribe pointed at it was never sent and
+    /// the withdrawal then took the record it was pointed at. The caller was
+    /// left holding a number that reads as subscribed with nothing on it.
+    #[test]
+    fn a_snapshot_holds_the_slot_and_is_not_a_stream_to_follow() {
+        let mut farm = FarmState::new();
+        let mut market = MarketState::new();
+        let instrument = market.register(756733);
+        farm.instrument_md_reqs.push((instrument, MdReqRecord {
+            con_id: 756733,
+            sec_type: "CS".into(),
+            mode_9887: 0,
+            entries: vec![MdReqEntry {
+                req_id: 7,
+                request_type: REGULATORY_SNAPSHOT_REQUEST_TYPE,
+                venue: "BEST".into(),
+            }],
+        }));
+
+        assert!(
+            farm.holds_market_data(instrument),
+            "the slot is in use and cannot be reclaimed under the snapshot",
+        );
+        assert!(
+            !farm.holds_a_stream(instrument),
+            "a subscribe told to follow a snapshot is never sent, and the \
+             snapshot's own withdrawal takes the record with it",
+        );
+
+        // And a real subscription beside it is one, snapshot or no snapshot.
+        farm.instrument_md_reqs[0].1.entries.push(MdReqEntry {
+            req_id: 8, request_type: 442, venue: "BEST".into(),
+        });
+        assert!(farm.holds_a_stream(instrument), "a live subscription");
+    }
 }
 use std::collections::HashMap;
 
