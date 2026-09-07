@@ -1230,6 +1230,32 @@ mod routing_response_tests {
         .expect("a complete frame is the response");
         assert_eq!(got, frame);
     }
+
+    /// The deadline stands for an answer that is not coming, and a peer that
+    /// keeps sending is still not answering.
+    ///
+    /// Read only where the socket goes quiet, it never came due at all: every
+    /// read succeeded, none of them completed a frame, and the loop went round
+    /// again — holding the connect for as long as the bytes kept arriving, and
+    /// growing what it held for just as long.
+    #[test]
+    fn a_peer_that_never_stops_sending_does_not_outlast_the_deadline() {
+        /// Bytes that never complete a frame, without end.
+        struct NeverAFrame;
+        impl Read for NeverAFrame {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let n = buf.len().min(64);
+                buf[..n].fill(b'x');
+                Ok(n)
+            }
+        }
+        let held = super::super::read_routing_response(&mut NeverAFrame, Instant::now())
+            .expect("a deadline reached with no frame is an absent optional response");
+        assert!(
+            held.len() < 1_000_000,
+            "the read ended at the deadline rather than for as long as bytes arrived",
+        );
+    }
 }
 
 /// A redirect or a refusal can arrive after the reconnect's authentication

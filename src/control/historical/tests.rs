@@ -715,6 +715,48 @@ fn a_bars_volume_counts_the_increment_and_its_weighted_price_does_not() {
 }
 
 
+/// A trade count past the width every surface reports it in is read as a bar
+/// that states none, which is the rule the field itself carries and the rule
+/// the other decoder of this field already kept.
+///
+/// The wide form takes the full thirty-two bits off the wire. Cast straight
+/// through to the signed width the field is held in, a count above two billion
+/// reached the caller as a bar made by minus two billion trades — and the
+/// aggregation that folds such bars together works on it afterwards.
+#[test]
+fn a_bar_count_past_what_the_field_carries_is_read_as_none() {
+    let mut bits: Vec<u8> = Vec::new();
+    let put = |v: u32, w: usize, bits: &mut Vec<u8>| {
+        for i in 0..w { bits.push(((v >> i) & 1) as u8); }
+    };
+    put(0, 4, &mut bits);            // padding
+    put(0, 1, &mut bits);            // count width flag: the wide form
+    put(u32::MAX, 32, &mut bits);    // a count above what the field carries
+    put(1000, 31, &mut bits);        // low = 1000 ticks
+    put(1, 1, &mut bits);            // delta width flag: 5 bits
+    put(2, 5, &mut bits);            // open delta
+    put(6, 5, &mut bits);            // high delta
+    put(3, 5, &mut bits);            // close delta
+    put(1, 1, &mut bits);            // wap width flag: 18 bits
+    put(2000, 18, &mut bits);        // weighted sum
+    put(1, 1, &mut bits);            // volume width flag: 16 bits
+    put(500, 16, &mut bits);         // volume count
+
+    let mut packed = vec![0u8; bits.len().div_ceil(8)];
+    for (i, &b) in bits.iter().enumerate() {
+        if b == 1 { packed[i / 8] |= 1 << (i % 8); }
+    }
+    let mut payload = Vec::new();
+    for chunk in packed.chunks(4) {
+        let mut c = chunk.to_vec();
+        c.reverse();
+        payload.extend_from_slice(&c);
+    }
+
+    let bar = decode_bar_payload(&payload, 0.01, 1.0).expect("decodes");
+    assert_eq!(bar.count, 0, "a count that will not fit states none, not a negative one");
+}
+
 #[test]
 fn decode_bar_payload_single_tick() {
     // Count of one, so the bar collapses to a single price: 15000 ticks of a

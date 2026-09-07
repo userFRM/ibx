@@ -681,6 +681,15 @@ fn recv_8eq1(stream: &mut TcpStream, carry: &mut Vec<u8>) -> io::Result<Vec<u8>>
     let deadline = std::time::Instant::now()
         + std::time::Duration::from_secs_f64(TIMEOUT_FARM_LOGON);
     loop {
+        // Read here as well as on the quiet socket below: a peer sending bytes
+        // that never complete a message keeps every read successful, and the
+        // deadline down there is never reached.
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "farm auth timed out waiting for server response",
+            ));
+        }
         // A prior call may already have buffered a full message.
         if let Some(total) = try_frame_8eq1(carry)? {
             let msg = carry[..total].to_vec();

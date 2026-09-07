@@ -234,7 +234,7 @@ impl FormingBar {
         self.bar.low = if self.bar.low == 0.0 { five.low } else { self.bar.low.min(five.low) };
         self.bar.close = five.close;
         self.bar.volume += five.volume;
-        self.bar.count += five.count;
+        self.bar.count = self.bar.count.saturating_add(five.count);
         self.weighted += five.wap * five.volume;
         self.bar.wap = if self.bar.volume > 0.0 {
             self.weighted / self.bar.volume

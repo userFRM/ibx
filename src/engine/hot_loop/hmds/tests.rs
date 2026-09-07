@@ -1251,6 +1251,29 @@ mod forming_bar_tests {
         assert_eq!(next.timestamp, 1_786_456_800);
         assert_eq!(next.volume, 10.0, "nothing carried over");
     }
+
+    /// The trade count comes off the wire at the full width the field carries,
+    /// so two bars in one interval need not add up to one.
+    ///
+    /// Added plain, two counts near the top of the range overflow — on the
+    /// engine thread, where a panic ends the session and every subscription on
+    /// it. The field states what it can hold, so a total past that is held at
+    /// the top rather than wrapped to a bar made by minus two billion trades.
+    #[test]
+    fn a_forming_bar_holds_a_trade_count_the_wire_states_at_the_edge() {
+        let mut forming = FormingBar {
+            req_id: 1, seconds: 300, opened_at: 0,
+            bar: Default::default(), weighted: 0.0,
+        };
+        let mut near_the_top = five(1_786_456_500, 10.0, 10.5, 9.5, 10.2, 100.0);
+        near_the_top.count = i32::MAX - 1;
+        forming.fold(&near_the_top);
+
+        let mut second = five(1_786_456_505, 10.2, 11.0, 10.1, 10.8, 50.0);
+        second.count = i32::MAX - 1;
+        let so_far = forming.fold(&second);
+        assert!(so_far.count > 0, "a bar is never made by a negative number of trades");
+    }
 }
 
 /// A scan response is delivered to the scan that answered.

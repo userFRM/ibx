@@ -1420,6 +1420,16 @@ fn read_routing_response<R: Read>(
     let mut resp_buf = Vec::new();
     let mut tmp = [0u8; 8192];
     loop {
+        // The deadline stands for an answer that is not coming, and a peer
+        // sending bytes that never complete a frame keeps every read
+        // successful — so read only on the quiet socket below, it never came
+        // due at all.
+        if std::time::Instant::now() >= deadline {
+            // Whatever is held, as the quiet-socket arm below returns it:
+            // the venue owes no routing response, so a deadline reached with
+            // nothing is an absent answer and not a failure.
+            return Ok(resp_buf);
+        }
         match reader.read(&mut tmp) {
             Ok(0) => {
                 return Err(io::Error::new(

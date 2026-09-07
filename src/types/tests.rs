@@ -436,6 +436,38 @@ fn what_if_response_is_copy() {
     assert_eq!(r.init_margin_change(), r.init_margin_after - r.init_margin_before);
 }
 
+/// Both margin figures come off the wire, so their difference need not be one.
+///
+/// Each arrives as a decimal and is held at the edge of the range where it will
+/// not fit, so a preview stating one figure at each end asks for a difference
+/// no figure can carry. Subtracted plain, the change came back wrapped — a
+/// preview of an order that frees margin read as one that demands it, by the
+/// width of the whole range.
+#[test]
+fn a_margin_change_holds_at_the_edge_rather_than_wrapping_past_it() {
+    let extreme = WhatIfResponse {
+        init_margin_before: Price::MIN,
+        init_margin_after: Price::MAX,
+        maint_margin_before: Price::MAX,
+        maint_margin_after: Price::MIN,
+        equity_with_loan_before: Price::MIN,
+        equity_with_loan_after: Price::MAX,
+        ..Default::default()
+    };
+    assert_eq!(extreme.init_margin_change(), Price::MAX);
+    assert_eq!(extreme.maint_margin_change(), Price::MIN);
+    assert_eq!(extreme.equity_with_loan_change(), Price::MAX);
+
+    // And the record built from it, which the dispatcher builds unasked for
+    // every preview, is built from the same three.
+    let stated = crate::types::model::OrderState::from(&extreme);
+    assert!(
+        !stated.init_margin_change.starts_with('-'),
+        "a rise in margin does not read as a fall: {}",
+        stated.init_margin_change,
+    );
+}
+
 /// A preview carries what the order would cost, and where the venue can only
 /// bound that cost it says so as a range in a stated currency, with any warning
 /// it has about the order beside it. Dropped on the way to the callback, a

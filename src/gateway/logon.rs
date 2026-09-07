@@ -752,6 +752,15 @@ pub fn farm_logon_exchange(
     for _msg_num in 0..20 {
         // Read until a frame is complete
         let msg = loop {
+            // Before the frame and before the read: a peer that keeps sending
+            // bytes which never complete one is answered by this, and by
+            // nothing else in the loop.
+            if std::time::Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "farm logon timed out waiting for the server",
+                ));
+            }
             if let Some((msg, consumed)) = try_frame_farm_msg(&buf) {
                 buf.drain(..consumed);
                 // An empty frame is the skip the framer states for bytes that

@@ -338,15 +338,15 @@ impl WhatIfResponse {
     /// What the order does to the margin, which the venue states as before and
     /// after and leaves to be taken as the difference.
     pub fn init_margin_change(&self) -> Price {
-        self.init_margin_after - self.init_margin_before
+        self.init_margin_after.saturating_sub(self.init_margin_before)
     }
     /// What the order would change maintenance margin by.
     pub fn maint_margin_change(&self) -> Price {
-        self.maint_margin_after - self.maint_margin_before
+        self.maint_margin_after.saturating_sub(self.maint_margin_before)
     }
     /// What it would change equity with loan value by.
     pub fn equity_with_loan_change(&self) -> Price {
-        self.equity_with_loan_after - self.equity_with_loan_before
+        self.equity_with_loan_after.saturating_sub(self.equity_with_loan_before)
     }
 }
 

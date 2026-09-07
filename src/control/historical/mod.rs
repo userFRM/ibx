@@ -1020,7 +1020,12 @@ pub fn decode_bar_payload(
     let count = if read_bits(&mut pos, 1) == 1 {
         read_bits(&mut pos, 8) as i32
     } else {
-        read_bits(&mut pos, 32) as i32
+        // As the other decoder of this field reads it: a stated count past
+        // what the width every surface reports it in carries is not one this
+        // client can hold, and is read as a bar that states none. Cast
+        // straight through, a count above two billion reached the caller as a
+        // bar made by minus two billion trades.
+        i32::try_from(read_bits(&mut pos, 32)).unwrap_or(0)
     };
 
     // Low price in ticks (31-bit signed)
