@@ -2862,3 +2862,58 @@ fn a_registration_that_fails_withdraws_the_headlines_it_asked_for() {
         "the headlines it had already asked for were never withdrawn: {sent:?}",
     );
 }
+
+/// A withdrawal arriving while the number is still taking its subscription is
+/// told so, not told there is nothing there.
+///
+/// The record a withdrawal reads is written when the engine's answer comes
+/// back, and a registration waits on that. In between there is nothing to
+/// find, so the withdrawal read as a number watching nothing — and that is the
+/// one answer a caller acts on by stopping. It stopped, the registration
+/// finished behind it, and it held a live stream it believed was gone. Told
+/// what is actually true it can ask again, which works.
+#[test]
+fn a_withdrawal_during_registration_is_not_told_there_is_nothing_there() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    shared.market.set_instrument_count(4);
+
+    // The engine holds the answer back until the withdrawal has been tried,
+    // which is the window under test.
+    let (seen_tx, seen_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let (go_tx, go_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let engine = std::thread::spawn(move || {
+        while let Ok(cmd) = rx.recv() {
+            if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
+                let _ = seen_tx.send(());
+                let _ = go_rx.recv();
+                let _ = reply.try_send(Ok(0));
+                return;
+            }
+        }
+    });
+
+    let core_ref = &core;
+    let shared_ref = &shared;
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let _ = core_ref.register_mkt_data(
+                shared_ref, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+                false, false, "", 0,
+            );
+        });
+        seen_rx.recv().expect("the registration reached the engine");
+        assert!(
+            !core_ref.holds_mkt_data(2),
+            "nothing is recorded for it yet, which is the window",
+        );
+        assert!(
+            core_ref.is_registering(2),
+            "a withdrawal here would be told the number is watching nothing, and \
+             a caller that believes it holds a live stream",
+        );
+        let _ = go_tx.send(());
+    });
+    let _ = engine.join();
+}

@@ -599,7 +599,7 @@ impl EClient {
         // the second slot read the first — otherwise their quotes arrive on a
         // slot nothing is watching.
         for (from, into) in shared.market.drain_subscription_moves() {
-            self.core.move_watchers(&shared, from, into);
+            self.core.move_watchers(shared, from, into);
         }
         // Everyone watching the contract, not only whoever asked first. A
         // refusal is a fact about the contract, and a caller sharing somebody
@@ -727,9 +727,25 @@ impl EClient {
             // asked for it hears it under their own request.
             let watchers = self.core.followers_of(iid);
 
-            // Fire market_data_type once per subscription on first tick delivery
-            if let Some(mdt) = self.core.check_mdt_needed(req_id, result.delivered) {
-                call_wrapper!(self.wrapper, py, "market_data_type", (req_id, mdt));
+            // Ahead of everything this pass delivers, and to everyone it
+            // delivers to. The type a caller is served under is stated before
+            // the data it applies to, which is the order the reference client
+            // keeps.
+            //
+            // It was stated for the holder alone, and only where the pass
+            // carried a price or a size. A caller following the contract got
+            // it from inside the price loop, so one whose first event was a
+            // halt, an exchange letter or the last-trade time was handed data
+            // first — and a pass carrying only those counts as nothing
+            // delivered, so neither of them was told at all.
+            let delivering = result.delivered
+                || !result.generic_ticks.is_empty()
+                || !result.string_ticks.is_empty()
+                || result.timestamp.is_some();
+            for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
+                if let Some(mdt) = self.core.check_mdt_needed(id, delivering) {
+                    call_wrapper!(self.wrapper, py, "market_data_type", (id, mdt));
+                }
             }
 
             let attrib = TickAttrib::default();
@@ -743,9 +759,6 @@ impl EClient {
             }
             for tick in &result.ticks {
                 for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
-                    if let Some(mdt) = self.core.check_mdt_needed(id, result.delivered) {
-                        call_wrapper!(self.wrapper, py, "market_data_type", (id, mdt));
-                    }
                     if tick.is_price {
                         call_wrapper!(self.wrapper, py, "tick_price", (id, tick.tick_type, tick.value, &attrib_obj));
                     } else {

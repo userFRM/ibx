@@ -2079,6 +2079,21 @@ impl ClientCore {
         self.req_to_instrument.lock().unwrap().contains_key(&req_id)
     }
 
+    /// Whether a number is in the middle of taking a subscription on another
+    /// thread.
+    ///
+    /// A registration waits on the engine, and the record a withdrawal reads
+    /// is written when that answer comes back. Between the two there is
+    /// nothing to find, so a withdrawal arriving in the gap read as a number
+    /// watching nothing — and the subscription then completed and lived. A
+    /// caller taking that answer at face value, which is the reasonable
+    /// reading, holds a stream it asked to stop. The gap is as long as the
+    /// wait, and the surface that releases the interpreter lock across it
+    /// makes a cancel from a timer thread an ordinary thing to write.
+    pub fn is_registering(&self, req_id: i64) -> bool {
+        self.registering.lock().unwrap().contains(&(TAKING_QUOTES, req_id))
+    }
+
     /// Which contract's slot a number is watching, if it is watching one.
     pub fn watching(&self, req_id: i64) -> Option<InstrumentId> {
         self.req_to_instrument.lock().unwrap().get(&req_id).copied()

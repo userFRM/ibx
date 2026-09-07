@@ -9701,3 +9701,46 @@ fn a_refused_withdrawal_carries_no_note_about_its_time() {
     assert!(refused.message.contains("no order is working"), "{refused}");
     assert!(shared.orders.drain_order_inactive().is_empty(), "and nothing is said about a time that did not travel");
 }
+
+/// The type a caller is served under is stated before the data it applies to.
+///
+/// It was stated from inside the price loop, and counted a pass as delivering
+/// only where it carried a price or a size. A pass whose whole content is the
+/// last-trade time — ordinary on a contract that is not quoting — delivered
+/// that and stated the type afterwards, or never. The reference client states
+/// it first.
+#[test]
+fn the_market_data_type_is_stated_before_the_first_thing_delivered() {
+    #[derive(Default)]
+    struct Order0f { calls: Vec<&'static str> }
+    impl crate::api::wrapper::Wrapper for Order0f {
+        fn market_data_type(&mut self, _req_id: i64, _market_data_type: i32) {
+            self.calls.push("market_data_type");
+        }
+        fn tick_string(&mut self, _req_id: i64, _tick_type: i32, _value: &str) {
+            self.calls.push("tick_string");
+        }
+    }
+
+    let (client, _rx, shared) = test_client();
+    let iid: InstrumentId = 0;
+    client.core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    client.core.req_to_instrument.lock().unwrap().insert(1, iid);
+    shared.market.set_instrument_count(1);
+
+    // A pass carrying nothing but the last-trade time: every price and size
+    // still reads as the baseline it started at.
+    let quote = crate::types::Quote { timestamp_ns: 5, ..Default::default() };
+    shared.market.push_quote(iid, &quote);
+
+    let mut w = Order0f::default();
+    client.process_msgs(&mut w);
+
+    assert_eq!(
+        w.calls.first().copied(),
+        Some("market_data_type"),
+        "the type was stated after what it applies to, or not at all: {:?}",
+        w.calls,
+    );
+    assert!(w.calls.contains(&"tick_string"), "and the time was delivered: {:?}", w.calls);
+}

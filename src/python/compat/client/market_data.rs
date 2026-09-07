@@ -149,6 +149,22 @@ impl EClient {
         // for -- a snapshot that has ended, the watch behind an option
         // calculation -- and those must stay silent.
         if !self.core.holds_mkt_data(req_id) {
+            // Said as what it is. A number still taking its subscription on
+            // another thread has no record here yet, and answering that as
+            // "nothing is being watched" is the one answer a caller acts on by
+            // stopping — so it stopped, the registration finished behind it,
+            // and it held a live stream it believed was gone. This surface
+            // registers with the interpreter lock released, which makes a
+            // cancel from a timer thread an ordinary thing to write.
+            if self.core.is_registering(req_id) {
+                return self.report_refusal(py, req_id, Refusal::stated(
+                    NO_SUCH_SUBSCRIPTION,
+                    format!(
+                        "request {req_id} is still taking its subscription and cannot be \
+                         withdrawn yet: withdraw it once the request it is answering returns",
+                    ),
+                ));
+            }
             return self.report_refusal(py, req_id, Refusal::stated(
                 NO_SUCH_SUBSCRIPTION,
                 format!("no contract is being watched under request {req_id}"),
