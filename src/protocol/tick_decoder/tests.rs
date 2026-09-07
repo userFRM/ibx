@@ -828,3 +828,30 @@ mod overflow_tests {
         assert_eq!(ticks2[0].magnitude.checked_mul(mts), Some(15_000_000_000));
     }
 }
+
+/// A tick stating no width takes no bit from the tick behind it.
+///
+/// The width is the whole value, sign bit included, so an entry stating none
+/// has no sign bit either. Read as though it had one, it consumed a bit
+/// belonging to whatever followed and published a zero of its own: the tick
+/// behind it decoded a bit out of step, and its value and every value after
+/// it in the message were wrong or gone.
+#[test]
+fn a_value_of_no_width_does_not_take_the_next_ticks_sign_bit() {
+    let mut b = PayloadBuilder::new();
+    b.server_tag(0, 7);
+    // An extended entry whose stated width is zero, with more to follow.
+    b.push(31, 5);
+    b.push(1, 1); // has_more
+    b.push(0, 2); // raw_width, which an extended entry does not use
+    b.push(4, 8); // extended tick type
+    b.push(0, 8); // and no bytes of value
+    // The tick behind it: one byte, positive, 42.
+    b.tick(1, 0, 1, 42, false);
+
+    let ticks = decode_ticks_35p(&b.build());
+    assert!(
+        ticks.iter().any(|t| t.magnitude == 42),
+        "the entry stating no width took the following tick's sign bit: {ticks:?}",
+    );
+}

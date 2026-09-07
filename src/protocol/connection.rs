@@ -384,7 +384,18 @@ impl Connection {
                         // dropped a quote or a token frame that had arrived
                         // intact.
                         let next = next_header(&self.buf[1..]).map(|p| p + 1);
-                        let dropped = next.unwrap_or(self.buf.len());
+                        // Where no whole header is here, the tail may still be
+                        // the front of one: a read ends where it ends, and it
+                        // can end in the middle of `8=FIX`. Dropped to the end
+                        // of the buffer, those bytes went with it and the
+                        // frame they began could never be recognised when the
+                        // rest of it arrived. What is kept back is a marker's
+                        // length short of one, which is the most that can be a
+                        // prefix without being a match.
+                        let keep = FIXCOMP_MARKER.len() - 1;
+                        let dropped = next
+                            .unwrap_or_else(|| self.buf.len().saturating_sub(keep))
+                            .max(1);
                         log::warn!(
                             "extract_frames: a compressed frame states a length that does not \
                              read; dropping {dropped}B to the next header. \
@@ -803,7 +814,7 @@ impl Connection {
 /// Compute total length of a length-prefixed, trailer-free message whose
 /// tag-8 header is 4 bytes: `8=O\x01`, `8=1\x01`, or `8=X\x01`, each followed
 /// by `9=<body_len>\x01 ...`.
-fn binary_msg_length(data: &[u8]) -> Option<usize> {
+pub(super) fn binary_msg_length(data: &[u8]) -> Option<usize> {
     let (soh_pos, body_len) = stated_body_length(data)?;
     // The length is whatever the peer wrote, so a total that does not fit is
     // a length no frame can have rather than something to add anyway: added
@@ -1947,6 +1958,30 @@ mod wedge_tests {
         assert!(
             tag9_is_unreadable(over.as_bytes(), fix_msg_length),
             "waiting on a header no byte can complete holds the buffer for ever",
+        );
+    }
+
+    /// A read that ends inside the next header does not take it away.
+    ///
+    /// Stepping past a compressed frame whose length does not read goes to the
+    /// next header, and where none is here yet the rest was dropped as well.
+    /// A read ends where it ends, so the tail is as likely to be the front of
+    /// a header as anything: dropped with the rest, the frame it began could
+    /// never be recognised once the remainder arrived, and it was lost whole.
+    #[test]
+    fn a_header_arriving_in_two_reads_survives_the_step_past_a_bad_frame() {
+        let (mut conn, _peer) = Connection::for_test();
+        // A compressed header stating a length that does not read, and behind
+        // it the first bytes of a real one.
+        conn.inject_buf(b"8=FIXCOMP\x019=00X\x01padpadpad8=FIX");
+        let _ = conn.extract_frames();
+
+        conn.inject_buf(b".4.1\x019=0005\x0135=0\x0110=000\x01");
+        let frames = conn.extract_frames();
+        assert!(
+            frames.iter().any(|f| matches!(f, Frame::Fix(_))),
+            "the header that arrived across two reads was dropped with the \
+             frame in front of it: {frames:?}",
         );
     }
 }

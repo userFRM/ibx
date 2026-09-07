@@ -249,6 +249,50 @@ fn hex_head(bytes: &[u8]) -> String {
     bytes.iter().take(HEX_HEAD).map(|b| format!("{b:02x}")).collect()
 }
 
+/// Where a message that states no body length ends: at its checksum, stepping
+/// over any length-prefixed block on the way.
+///
+/// The bound is a message's own tag 9 wherever it states one, because a scan
+/// cannot tell this message's checksum from the next one's — one arriving
+/// without its own ran on to the following message's and the two were handed
+/// up as a single message, with nothing left over to say so. Not everything
+/// here states a length, and what does not is still read the way it always
+/// was rather than dropped for it.
+fn checksum_end(chunk: &[u8]) -> Option<usize> {
+    let mut scan = 0;
+    let cksum;
+    loop {
+        let raw_tag = find_tag(&chunk[scan..], b"\x0195=").map(|p| scan + p);
+        let ck = find_tag(&chunk[scan..], b"\x0110=").map(|p| scan + p);
+
+        if let (Some(rt), _) = (raw_tag, ck)
+            && (ck.is_none() || rt < ck.unwrap()) {
+                let after95 = chunk[rt + 4..]
+                    .iter()
+                    .position(|&b| b == SOH)
+                    .map(|p| rt + 4 + p)?;
+                let rdl: usize = std::str::from_utf8(&chunk[rt + 4..after95]).ok()?.parse().ok()?;
+                let tag96 = find_tag(&chunk[after95..], b"96=").map(|p| after95 + p)?;
+                // The length is the sender's, and it is read before the bytes
+                // it counts have been seen. One that runs past the end is what
+                // a message cut inside a block looks like, so it is given up
+                // on the way every other unreadable one here is — rather than
+                // indexing past the buffer, which takes the whole session down
+                // through the panic handler instead of one bad frame.
+                scan = match tag96.checked_add(3).and_then(|n| n.checked_add(rdl)) {
+                    Some(n) if n <= chunk.len() => n,
+                    _ => return None,
+                };
+                continue;
+            }
+        cksum = ck;
+        break;
+    }
+    let ck = cksum?;
+    let end = chunk[ck + 4..].iter().position(|&b| b == SOH).map(|p| ck + 4 + p)?;
+    Some(end + 1)
+}
+
 /// Split decompressed content into individual messages.
 ///
 /// Returns the messages read and how many bytes were left unread behind them.
@@ -278,96 +322,55 @@ fn split_messages(buf: &[u8]) -> (Vec<Vec<u8>>, usize) {
                 if o_first {
                     let o = o_s.unwrap();
                     let chunk = &remaining[o..];
-                    // 8=O protocol: length-delimited via tag 9
-                    let tag9 = match find_tag(&chunk[4..], b"9=") {
-                        Some(p) => 4 + p,
-                        None => break,
-                    };
-                    let soh9 = match chunk[tag9..].iter().position(|&b| b == SOH) {
-                        Some(p) => tag9 + p,
-                        None => break,
-                    };
-                    let body_len: usize = match std::str::from_utf8(&chunk[tag9 + 2..soh9]) {
-                        Ok(s) => match s.parse() {
-                            Ok(n) => n,
-                            Err(_) => break,
-                        },
-                        Err(_) => break,
-                    };
-                    // Unchecked, a stated length near the width of the type
-                    // wraps to zero, an empty message is pushed, and the scan
-                    // advances by nothing — the loop over this buffer never
-                    // ends.
-                    let Some(total) = soh9.checked_add(1).and_then(|n| n.checked_add(body_len))
-                    else {
-                        break;
-                    };
-                    if total > chunk.len() {
-                        break;
+                    // The reader the transport frames this header with, asked
+                    // again rather than written again. Written again here, it
+                    // looked for the first `9=` past the header instead of at
+                    // it and took a length out of whatever tag carried those
+                    // two characters.
+                    match super::connection::binary_msg_length(chunk) {
+                        // Still arriving, so what is here is the caller's to
+                        // keep until the rest of it lands.
+                        Some(total) if total > chunk.len() => break,
+                        Some(total) => {
+                            messages.push(chunk[..total].to_vec());
+                            pos += o + total;
+                        }
+                        // Not a header this can frame, and no later byte makes
+                        // it one. Stepped over rather than given up on.
+                        None => pos += o + 1,
                     }
-                    messages.push(chunk[..total].to_vec());
-                    pos += o + total;
                 } else {
                     let f = fix_start.unwrap();
                     let chunk = &remaining[f..];
-                    // Standard FIX: find 10=XXX SOH, skip past raw data blocks
-                    let mut scan = 0;
-                    let mut cksum = None;
-                    loop {
-                        let raw_tag = find_tag(&chunk[scan..], b"\x0195=").map(|p| scan + p);
-                        let ck = find_tag(&chunk[scan..], b"\x0110=").map(|p| scan + p);
-
-                        if let (Some(rt), _) = (raw_tag, ck)
-                            && (ck.is_none() || rt < ck.unwrap()) {
-                                // Skip past raw data block
-                                let after95 = match chunk[rt + 4..]
-                                    .iter()
-                                    .position(|&b| b == SOH)
-                                    .map(|p| rt + 4 + p)
-                                {
-                                    Some(p) => p,
-                                    None => break,
-                                };
-                                let rdl: usize =
-                                    match std::str::from_utf8(&chunk[rt + 4..after95]) {
-                                        Ok(s) => match s.parse() {
-                                            Ok(n) => n,
-                                            Err(_) => break,
-                                        },
-                                        Err(_) => break,
-                                    };
-                                let tag96 = match find_tag(&chunk[after95..], b"96=") {
-                                    Some(p) => after95 + p,
-                                    None => break,
-                                };
-                                // The length is the sender's, and it is read
-                                // before the bytes it counts have been seen. One
-                                // that runs past the end is what a frame cut
-                                // mid-block looks like, so the frame is dropped
-                                // the way every other unreadable one here is —
-                                // rather than indexing past the buffer, which
-                                // takes the whole session down through the panic
-                                // handler instead of one bad frame.
-                                scan = match tag96.checked_add(3).and_then(|n| n.checked_add(rdl)) {
-                                    Some(n) if n <= chunk.len() => n,
-                                    _ => break,
-                                };
-                                continue;
-                            }
-                        cksum = ck;
-                        break;
+                    let total = match super::connection::fix_msg_length(chunk) {
+                        Some(total) if total > chunk.len() => break,
+                        Some(total)
+                            if super::connection::trailer_is_where_the_length_says(
+                                chunk, total,
+                            ) =>
+                        {
+                            Some(total)
+                        }
+                        // States a length and does not end where it says. No
+                        // later byte reconciles those two, so it is stepped
+                        // over the way an unreadable one is.
+                        Some(_) => None,
+                        // States no length at all, which some of these do.
+                        None => match checksum_end(chunk) {
+                            Some(end) => Some(end),
+                            None => break,
+                        },
+                    };
+                    match total {
+                        Some(total) => {
+                            messages.push(chunk[..total].to_vec());
+                            pos += f + total;
+                        }
+                        // Given up on instead of stepped over, a fragment at
+                        // the front hid every message behind it — and the
+                        // opening burst of a session begins with one.
+                        None => pos += f + 1,
                     }
-
-                    let ck = match cksum {
-                        Some(c) => c,
-                        None => break,
-                    };
-                    let end = match chunk[ck + 4..].iter().position(|&b| b == SOH) {
-                        Some(p) => ck + 4 + p,
-                        None => break,
-                    };
-                    messages.push(chunk[..end + 1].to_vec());
-                    pos += f + end + 1;
                 }
             }
         }
@@ -424,10 +427,38 @@ mod tests {
         assert_eq!(leftover, msg.len(), "and every byte of it is still unconsumed");
 
         // The same shape with a length the bytes do satisfy is still read.
+        // Its tag 9 states the body it actually carries: a message ends where
+        // its length says, so one whose header overstates it is a message
+        // still arriving and is held rather than framed.
         let mut whole = Vec::new();
-        whole.extend_from_slice(b"8=FIX.4.2\x019=40\x0135=A\x0195=2\x0196=AB\x0110=000\x01");
+        whole.extend_from_slice(b"8=FIX.4.2\x019=16\x0135=A\x0195=2\x0196=AB\x0110=000\x01");
         let (messages, _) = split_messages(&whole);
         assert_eq!(messages.len(), 1, "a length the frame satisfies is followed");
+    }
+
+    /// A message that loses its checksum does not take the next one with it.
+    ///
+    /// Ended by a scan for the first `<SOH>10=` in what remained, a message
+    /// arriving without its own ran on to the following message's and the two
+    /// were handed up as one — and nothing was left over to say a message had
+    /// gone missing, because the scan had consumed both. Its own stated length
+    /// is what ends it.
+    #[test]
+    fn a_message_without_its_checksum_does_not_swallow_the_next() {
+        // 9=14 counts `35=A\x0158=FIRST\x01`, and no checksum follows it.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"8=FIX.4.2\x019=14\x0135=A\x0158=FIRST\x01");
+        buf.extend_from_slice(b"8=FIX.4.2\x019=15\x0135=A\x0158=SECOND\x0110=000\x01");
+
+        let (messages, _) = split_messages(&buf);
+
+        assert!(
+            !messages.iter().any(|m| m.windows(8).any(|w| w == b"58=FIRST")),
+            "the message with no checksum of its own ran on to the next one's: \
+             {messages:?}",
+        );
+        assert_eq!(messages.len(), 1, "and the whole one behind it is still read");
+        assert!(messages[0].windows(9).any(|w| w == b"58=SECOND"), "{messages:?}");
     }
 
     #[test]

@@ -265,6 +265,15 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
                 return;
             }
 
+            // A value of no width has no sign bit either. Read as though it
+            // had one, the entry took a bit belonging to whatever followed it
+            // and published a zero of its own: the tick behind it was decoded
+            // a bit out of step, so a bid arrived as some other number and
+            // every tick after it in the message was lost.
+            if total_value_bits == 0 {
+                continue;
+            }
+
             // An extended entry states its width in a full byte, so it can name
             // a value wider than this decoder reads. That entry is lost either
             // way; abandoning the message threw away every tick after it as
