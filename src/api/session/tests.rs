@@ -832,3 +832,55 @@ fn the_streams_this_session_opens_reach_the_wire() {
         "the bar stream reaches the engine, not just the caller",
     );
 }
+
+/// A reader running beside an answering call does not wedge them both.
+///
+/// The reader reads into the record the session keeps; an answering call holds
+/// the turn for the length of its question and locks that same record on every
+/// pump inside it. Taken in opposite orders the two form a cycle, and both
+/// threads stop on the mutexes themselves — where no deadline reaches them,
+/// because neither is in a wait loop. `disconnect` then never returns from its
+/// join.
+///
+/// Every test above this one leaves `kept` unset, so their pumps never touch
+/// the record and the pair is never taken in both orders. Which is why the
+/// shape the session's own opening does — wire `kept`, start the reader, ask —
+/// went untested.
+#[test]
+fn a_reader_and_an_answering_call_do_not_wedge_each_other() {
+    let shared = Arc::new(crate::bridge::SharedState::new());
+    let (session, _rx) = a_session(&shared);
+    // What `Client::connect` wires before it starts reading.
+    *session.client.kept.lock().unwrap() = Some(session.state.clone());
+    session.start_reading();
+
+    // An answering call, on its own thread, against a session with no venue:
+    // it will time out, and timing out is fine. Wedging is not.
+    let asking = {
+        let client = Arc::clone(&session.client);
+        std::thread::spawn(move || {
+            let c = crate::types::model::Contract {
+                symbol: "SPY".into(),
+                sec_type: "STK".into(),
+                exchange: "SMART".into(),
+                ..Default::default()
+            };
+            let _ = client.contract_details(&c);
+        })
+    };
+
+    // The question is bounded by its own answer timeout; a wedge is not
+    // bounded by anything. Well clear of the former, well short of forever.
+    let gave_up_at = std::time::Instant::now() + std::time::Duration::from_secs(40);
+    while !asking.is_finished() && std::time::Instant::now() < gave_up_at {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let wedged = !asking.is_finished();
+    session.stop.store(true, Ordering::Relaxed);
+    assert!(
+        !wedged,
+        "the reader and the question hold the turn and the record in opposite \
+         orders, so both stopped on the locks themselves",
+    );
+    let _ = asking.join();
+}

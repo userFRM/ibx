@@ -176,10 +176,26 @@ impl Client {
             .spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     {
+                        // The turn BEFORE the record, which is the order every
+                        // answering call takes them in: it holds the turn for
+                        // the length of its question and locks the record on
+                        // each pump inside that. Taken the other way round —
+                        // record first, turn inside `process_msgs` — the two
+                        // orders form a cycle, and a session with a reader
+                        // running beside any answering call wedged both
+                        // threads on the mutexes themselves, where no deadline
+                        // reaches them and `disconnect` never returns from its
+                        // join. The comment beside the pump claimed this order
+                        // already held; it did not.
+                        //
+                        // `read_the_session` rather than `process_msgs`,
+                        // because the turn is not re-entrant and is already
+                        // held here. It raises the reading marker itself, so a
+                        // question asked from inside a callback is still told
+                        // why it cannot be answered.
+                        let _turn = client.turn_for_reading();
                         let mut kept = state.lock().unwrap_or_else(|e| e.into_inner());
-                        // The turn is taken inside `process_msgs`, and it is
-                        // not re-entrant.
-                        client.process_msgs(&mut *kept);
+                        client.read_the_session(&mut *kept, true);
                     }
                     // The engine rebuilds a connection that goes away, and
                     // reading is what notices it back: `process_msgs` is where
