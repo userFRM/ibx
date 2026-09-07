@@ -799,7 +799,6 @@ impl EClient {
         &self.shared
     }
 
-    /// What tells this session apart from another in the same process.
     /// The turn, for the thread that reads the session on its own.
     ///
     /// `process_msgs` takes this and then reads. A reader that must order the
@@ -809,6 +808,7 @@ impl EClient {
         self.asking.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// What tells this session apart from another in the same process.
     pub(crate) fn which_session(&self) -> usize {
         Arc::as_ptr(&self.shared) as usize
     }

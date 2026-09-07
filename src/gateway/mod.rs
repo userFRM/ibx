@@ -2023,6 +2023,18 @@ impl Gateway {
         }
         let account_id = if account_id.is_empty() { config.username.clone() } else { account_id };
         note_account(&mut accounts, &account_id);
+        // The acknowledgement names the username on the tag an account arrives
+        // on, and the reader that takes it there has no username to tell it
+        // apart from one — the burst scanner does, and guards it; this is the
+        // other place that knows. Left in, the list a caller reads as the
+        // accounts this login holds carried a name the venue refuses every
+        // request made under it.
+        //
+        // Unless it is the account: a login the venue named no account for
+        // stands on the username, which the fallback above just used.
+        if account_id != config.username {
+            accounts.retain(|a| a != &config.username);
+        }
         // The account a caller gets by default leads the list.
         if accounts.first().map(String::as_str) != Some(account_id.as_str()) {
             accounts.retain(|a| a != &account_id);

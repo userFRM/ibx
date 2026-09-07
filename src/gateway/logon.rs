@@ -1421,6 +1421,27 @@ mod tests {
         assert_eq!(ack.account_id, "U333333");
     }
 
+    /// And the username does not stay in the list beside it.
+    ///
+    /// The acknowledgement names the username on the tag an account arrives
+    /// on, and the reader that takes it there has no username to tell the two
+    /// apart — the burst scanner does, and guards it. Left in, what a caller
+    /// reads as the accounts this login holds carried a name the venue refuses
+    /// every request made under it.
+    #[test]
+    fn the_username_is_not_one_of_the_accounts_a_login_holds() {
+        let mut ack = LogonAck::default();
+        // What the acknowledgement carries when it names only the username.
+        note_account(&mut ack.accounts, "someone");
+        assert_eq!(ack.accounts, vec!["someone".to_string()]);
+        // Then the burst names the real one.
+        ack.scan_init(b"\x011=U333333\x01", "someone");
+        assert!(
+            ack.accounts.iter().any(|a| a == "U333333"),
+            "the account the venue named is held: {:?}", ack.accounts,
+        );
+    }
+
     /// A rebuilt connection opens exactly as a first logon does.
     ///
     /// The mass status request is stated once, in the position the logon gives

@@ -134,24 +134,6 @@ pub fn paper_token_convert(token_k: &BigUint, hw_info: &str) -> BigUint {
     BigUint::from_bytes_be(&h.finalize())
 }
 
-/// Short token hash: SHA1(strip(token)).low32.hex
-pub fn token_short_hash(session_token: &BigUint) -> String {
-    let digest = Sha1::digest(strip_leading_zeros(&session_token.to_bytes_be()));
-    let hash_int = BigUint::from_bytes_be(&digest);
-    let mask = BigUint::from(0xFFFF_FFFFu64);
-    format!("{:x}", &hash_int & &mask)
-}
-
-/// Build slotted token hash for farm connection request.
-pub fn token_hash_slots(session_token: &BigUint, paper: bool) -> String {
-    let h = token_short_hash(session_token);
-    if paper {
-        format!(";;{h};")
-    } else {
-        format!("{h};;;")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,29 +214,6 @@ mod tests {
         assert_eq!(k1, k2);
     }
 
-    #[test]
-    fn token_short_hash_format() {
-        let token = BigUint::from(123456789u64);
-        let h = token_short_hash(&token);
-        assert!(!h.is_empty());
-        // Should be valid hex
-        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn token_hash_slots_paper() {
-        let token = BigUint::from(12345u64);
-        let slots = token_hash_slots(&token, true);
-        assert!(slots.starts_with(";;"));
-        assert!(slots.ends_with(';'));
-    }
-
-    #[test]
-    fn token_hash_slots_live() {
-        let token = BigUint::from(12345u64);
-        let slots = token_hash_slots(&token, false);
-        assert!(slots.ends_with(";;;"));
-    }
 
     #[test]
     fn paper_token_differs() {
@@ -333,26 +292,6 @@ mod tests {
         assert_eq!(first, second);
     }
 
-    #[test]
-    fn token_hash_slots_different_usernames_produce_different_hashes() {
-        // Different token values should produce different hash slot strings
-        let token_a = BigUint::from(111111u64);
-        let token_b = BigUint::from(222222u64);
-
-        let slots_a = token_hash_slots(&token_a, false);
-        let slots_b = token_hash_slots(&token_b, false);
-        assert_ne!(
-            slots_a, slots_b,
-            "Different tokens should produce different hash slots"
-        );
-
-        let slots_a_paper = token_hash_slots(&token_a, true);
-        let slots_b_paper = token_hash_slots(&token_b, true);
-        assert_ne!(
-            slots_a_paper, slots_b_paper,
-            "Different tokens should produce different hash slots (paper mode)"
-        );
-    }
 
     // ── Authentication failure paths ──────────────────────────────────
 
@@ -445,15 +384,6 @@ mod tests {
             "Different hardware info must produce different paper tokens");
     }
 
-    #[test]
-    fn token_hash_wrong_token_different_slots() {
-        let real_token = BigUint::from(999_999_999u64);
-        let wrong_token = BigUint::from(111_111_111u64);
-        let real_slots = token_hash_slots(&real_token, true);
-        let wrong_slots = token_hash_slots(&wrong_token, true);
-        assert_ne!(real_slots, wrong_slots,
-            "Wrong token should produce different hash slots");
-    }
 
     #[test]
     fn srp_large_salt_no_panic() {
