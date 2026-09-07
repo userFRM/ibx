@@ -2264,6 +2264,11 @@ impl FarmState {
         self.quotes_for_no_one.clear();
         context.market.clear_server_tags();
         context.market.zero_all_quotes();
+        // And the copy the caller reads, which is a different one: zeroing the
+        // engine's alone left the pre-drop prices standing where
+        // `poll_instrument_ticks` looks, so the notice below was followed by
+        // the whole stale quote going out again as fresh ticks.
+        shared.market.zero_all_quotes();
         // Not Event::Disconnected — that is the session going, and a rebuild
         // usually takes this back without one. But the venue says when this
         // connection breaks and a caller stands down on being told: the

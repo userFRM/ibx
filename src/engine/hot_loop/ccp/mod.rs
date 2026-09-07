@@ -635,15 +635,23 @@ impl CcpState {
                 //
                 // Falling back on the count where the venue names nothing,
                 // which is the case this stood on.
-                let named = parsed
-                    .get(&320)
-                    .and_then(|stated| stated.parse::<u32>().ok())
-                    .and_then(|stated| {
-                        self.pending_secdef.iter().position(|(pid, _, _)| *pid == stated)
+                let named = stated
+                    .and_then(|rid| {
+                        self.pending_secdef.iter().position(|(pid, _, _)| *pid == rid)
                     })
                     .or_else(|| {
-                        (self.pending_secdef.len() == 1 && self.pending_fanout.is_empty())
-                            .then_some(0)
+                        // Only where it named nothing, as the chain above reads
+                        // it. This tag is not this request's alone — a symbol
+                        // search states its own number on it — so a refusal
+                        // that named a request of another kind matched no
+                        // definition lookup here and fell through to the count,
+                        // which answered a lookup that had not been refused at
+                        // all: that caller was handed somebody else's refusal
+                        // and its own definitions later had nothing waiting.
+                        (stated.is_none()
+                            && self.pending_secdef.len() == 1
+                            && self.pending_fanout.is_empty())
+                        .then_some(0)
                     });
                 if let Some(at) = named {
                     let (req_id, _, _) = self.pending_secdef.remove(at);

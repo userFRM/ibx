@@ -1545,6 +1545,34 @@ mod depth_position_tests {
         assert_eq!(shared.market.drain_subscription_failures().len(), 1, "the quote's own refusal reaches the caller");
     }
 
+    /// The quote a caller reads is zeroed at a drop, not only the engine's own.
+    ///
+    /// Zeroing the engine's copy is what stops a price from before the drop
+    /// being read as current — but the copy the caller's tick poll reads is the
+    /// shared one, and it was left standing. Against a baseline the drop had
+    /// just cleared, every field of that stale quote read as a move and went out
+    /// again as a fresh tick, under the notice saying the feed had gone.
+    #[test]
+    fn a_drop_zeroes_the_quote_the_caller_reads() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        shared.market.set_instrument_count(1);
+        shared.market.push_quote(instrument, &crate::types::Quote {
+            bid: 100 * crate::engine::hot_loop::PRICE_SCALE,
+            ask: 101 * crate::engine::hot_loop::PRICE_SCALE,
+            ..Default::default()
+        });
+        assert_ne!(shared.market.quote(instrument).bid, 0, "a price stands before the drop");
+
+        farm.handle_disconnect(&mut None, &mut context, &None, &shared);
+
+        let after = shared.market.quote(instrument);
+        assert_eq!(after.bid, 0, "and none stands after it");
+        assert_eq!(after.ask, 0);
+    }
+
     /// The news that rides beside the quote is its own generic tick, and the
     /// venue refuses it on its own. Left in place, the entry the rebuild reads
     /// re-sends on the next reconnect a subscription the venue has already

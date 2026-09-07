@@ -2883,6 +2883,42 @@ fn tif_round_trips_through_encoder_and_decoder() {
     assert_eq!(decode_tif(b'7'), "");
 }
 
+/// A refusal naming a request of another kind does not answer a definition
+/// lookup that was never refused.
+///
+/// Tag 320 is not this request's alone — a symbol search states its own number
+/// on it. Falling back on the count even where the venue HAD named something
+/// meant such a refusal took the one pending lookup: that caller was handed
+/// somebody else's refusal and its own definitions later had nothing waiting,
+/// while the caller actually refused was never told. The option-chain branch
+/// beside it already guards on the venue having named nothing.
+#[test]
+fn a_refusal_naming_another_request_does_not_answer_a_definition_lookup() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    ccp.pending_secdef.push((7, true, Instant::now()));
+
+    // The venue names request 5 — not this lookup, and not one of ours to find.
+    let reject = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "3"),
+        (58, "Unknown contract"),
+        (320, "5"),
+    ], 1);
+    ccp.process_ccp_message(
+        &reject, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+
+    assert_eq!(
+        ccp.pending_secdef.len(), 1,
+        "the lookup the venue did not name is still waiting for its answer",
+    );
+    assert!(
+        shared.reference.drain_historical_errors().is_empty(),
+        "and nothing was refused on its behalf",
+    );
+}
+
 // ── contract-details deadline sweep ──
 
 #[test]

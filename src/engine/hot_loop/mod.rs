@@ -2411,6 +2411,14 @@ impl HotLoop {
             }
             self.farm_halted = Some(retry::DisconnectReason::RecoveryExhausted);
             self.pending_farm_reconnect = None;
+            // A feed given up on is no longer one the return waits for, which
+            // is what the guard in `announce_reconnected` says. Nothing called
+            // it at the moment the waiting ended, though: a trading connection
+            // that came back during a joint outage was held back by a farm
+            // still dialling, and when that farm ran out there was no second
+            // recovery to announce on. The caller read the session as lost for
+            // the rest of a healthy one.
+            self.announce_reconnected();
             return;
         }
         // Said on the first transport to reach it, and not again: what the
@@ -2705,6 +2713,10 @@ impl HotLoop {
                     if !self.ccp.disconnected {
                         self.farm_halted = Some(reason);
                         self.pending_farm_reconnect = None;
+                        // And the return the farm was holding back is said, as
+                        // where its budget runs out: this is the same moment,
+                        // reached by a different answer.
+                        self.announce_reconnected();
                         return;
                     }
                     self.halt_recovery(reason);
@@ -4923,6 +4935,30 @@ mod tests {
         hl.ccp.disconnected = false;
         hl.announce_reconnected();
         assert!(shared.take_connection_restored(), "the return is announced");
+        assert!(!hl.loss_announced);
+    }
+
+    /// And the loop says it, rather than only a test calling by hand.
+    ///
+    /// The guard above was already right; nothing called it at the moment the
+    /// waiting ended. A trading connection that came back during a joint outage
+    /// was held by a farm still dialling, and when that farm ran out there was
+    /// no further recovery to announce on — so the caller went on reading a
+    /// healthy session as lost, for the rest of it.
+    #[test]
+    fn giving_up_on_the_farm_announces_the_return_it_was_holding_back() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.loss_announced = true;
+        hl.ccp.disconnected = false;
+        hl.farm.disconnected = true;
+        hl.report_recovery_exhausted("farm");
+        assert!(shared.reference.session_over().is_none(), "the session stands");
+        assert!(hl.farm_halted.is_some(), "the farm is given up on");
+        assert!(
+            shared.take_connection_restored(),
+            "and the return the farm was holding back is announced",
+        );
         assert!(!hl.loss_announced);
     }
 

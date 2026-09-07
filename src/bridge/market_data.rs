@@ -407,6 +407,23 @@ impl MarketDataState {
         self.quotes[id as usize].write(quote);
     }
 
+    /// Zero every quote a caller can read, as the engine zeroes its own copy at
+    /// the same moment.
+    ///
+    /// The engine zeroing its own is what stops a price from before a drop
+    /// being read as current — but the copy a caller reads is this one, and it
+    /// was left standing. Against a baseline the drop had just cleared, every
+    /// field of that stale quote read as a move and went out again as a fresh
+    /// tick; then whatever the venue had not restated by the next connection
+    /// went out a second time as nought.
+    #[doc(hidden)] pub fn zero_all_quotes(&self) {
+        let blank = Quote::default();
+        let held = self.instrument_count.load(Ordering::Relaxed) as usize;
+        for slot in self.quotes.iter().take(held.min(self.quotes.len())) {
+            slot.write(&blank);
+        }
+    }
+
     #[doc(hidden)] pub fn push_tbt_trade(&self, trade: TbtTrade) {
         push_bounded(&self.tbt_trades, trade, STREAM_BACKLOG_LIMIT, "tbt_trades");
     }
