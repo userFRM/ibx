@@ -90,6 +90,20 @@ def suites_ci_runs():
     return re.findall(r"--test\s+(\S+)", text)
 
 
+def base_ref():
+    """What a local run measures a change against.
+
+    `origin/main` where there is one, so a gate run over several commits reads
+    all of them. Falling back to the commit before this one, which is right for
+    a single commit and wrong for a batch — and being wrong that way is silent.
+    """
+    done = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "origin/main"],
+        capture_output=True, text=True, check=False,
+    )
+    return "origin/main" if done.returncode == 0 else "HEAD~1"
+
+
 def scripts_ci_runs():
     """Every script under `scripts/` the workflow runs, in its order.
 
@@ -102,9 +116,14 @@ def scripts_ci_runs():
     text = re.sub(r"\\\n\s*", " ", WORKFLOW.read_text())
     seen = []
     for line in re.findall(r"python (scripts/\S+\.py[^\n]*)", text):
-        # The workflow passes it the commit a pull request is measured against.
-        # Locally that is the commit before this one, which is what a push adds.
-        line = re.sub(r'"\$\{\{[^}]*\}\}"', "HEAD~1", line).strip()
+        # The workflow passes it the commit the change is measured against.
+        # Locally that is what has already been pushed, not the commit before
+        # this one: a batch of three is three commits past `HEAD~1`, so a check
+        # run that way reads only the last of them. One of these gates is
+        # exactly the kind that a batch defeats — an item takes its neighbour's
+        # documentation in the first commit and the check never looks there —
+        # and the push hook, which reads the whole range, is what caught it.
+        line = re.sub(r'"\$\{\{[^}]*\}\}"', base_ref(), line).strip()
         if line not in seen:
             seen.append(line)
     return seen
