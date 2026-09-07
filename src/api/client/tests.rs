@@ -1908,7 +1908,7 @@ fn the_headlines_stop_with_the_last_caller_that_asked_for_them() {
     let (_, stop_news) = client.core.unregister_mkt_data(&shared, 3);
     assert_eq!(stop_news, None, "one of two left, so the headlines carry on");
     let (_, stop_news) = client.core.unregister_mkt_data(&shared, 4);
-    assert_eq!(stop_news, Some(0), "and stop when the last of them goes");
+    assert_eq!(stop_news, Some(NewsSubject::Slot(0)), "and stop when the last of them goes");
 }
 
 // A second live subscription on the same contract would clobber

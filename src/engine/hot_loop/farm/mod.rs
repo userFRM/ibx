@@ -1310,6 +1310,35 @@ impl FarmState {
                     log::warn!("The venue refused a request beside the quote on {named}: {reason}");
                     return;
                 }
+                // The chargeable snapshot is refused on its own as well, and
+                // the acknowledgement path already says why: it is a request
+                // of its own, nothing joins it, and what the venue says about
+                // it says nothing about the stream on the same contract. The
+                // refusal side had no such reading, so a snapshot declined for
+                // want of the entitlement — the documented outcome — was
+                // recorded against the contract: every caller watching a
+                // healthy, ticking stream was told their quote had been
+                // refused, and every later joiner was handed that reason
+                // beside the quote it contradicts. Nothing cleared it either,
+                // because only a fresh acknowledgement does and a subscribe
+                // that joins an existing subscription never draws one.
+                //
+                // Where there is no stream to protect, the refusal is the
+                // contract's: the snapshot's caller is the only one watching,
+                // and it is who the reason is for.
+                let refuses_a_snapshot = req_id.is_some_and(|rid| {
+                    self.instrument_md_reqs.iter().any(|(id, record)| {
+                        *id == instrument
+                            && record.entries.iter().any(|e| {
+                                e.req_id == rid
+                                    && e.request_type == REGULATORY_SNAPSHOT_REQUEST_TYPE
+                            })
+                    })
+                });
+                if refuses_a_snapshot && self.holds_a_stream(instrument) {
+                    log::warn!("The venue refused the snapshot on {named}: {reason}");
+                    return;
+                }
                 log::warn!("The venue refused a subscription on {named}: {reason}");
                 shared.market.push_subscription_failure(
                     instrument, format!("the venue refused this subscription: {reason}"),

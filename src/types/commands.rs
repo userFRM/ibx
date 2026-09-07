@@ -93,6 +93,25 @@ pub struct CalendarQuery {
     pub fill_competitors: bool,
 }
 
+/// Which contract a news withdrawal is about.
+///
+/// The slot is what the engine routes on, and a caller that has one names it.
+/// A caller that does not is the reason this is two shapes rather than one:
+/// the headlines are asked for before the contract is registered — a request
+/// that joins an existing subscription returns before that happens — so a
+/// registration that then fails leaves this side holding no slot for a
+/// subscription that did go out. Named by contract instead, the engine
+/// resolves it against the mapping it already keeps: the withdrawal was
+/// otherwise never sent at all, and the headlines ran for the rest of the
+/// session with nothing able to stop them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewsSubject {
+    /// The engine's own slot for the contract.
+    Slot(InstrumentId),
+    /// The venue's number for it, for a caller that holds no slot.
+    Contract(i64),
+}
+
 /// Commands sent from the control plane to the hot loop via SPSC channel.
 ///
 /// The submitting command is much larger than the rest, because it carries an
@@ -174,8 +193,8 @@ pub enum ControlCommand {
     },
     /// Unsubscribe from per-contract news ticks.
     UnsubscribeNews {
-        /// The engine's own slot for the contract.
-        instrument: InstrumentId,
+        /// Which contract's headlines to stop.
+        subject: NewsSubject,
     },
     /// Ask the venue to state the account's figures now.
     ///

@@ -2177,4 +2177,47 @@ fn a_given_up_number_is_refused_on_the_ticker_setup_too() {
         "a number given up is not mapped again by an answer in another shape",
     );
 }
+
+    /// A refused snapshot is not a refusal of the contract.
+    ///
+    /// The acknowledgement path already says why: the chargeable snapshot is a
+    /// request of its own, nothing joins it, and what the venue says about it
+    /// says nothing about the stream on the same contract. The refusal side
+    /// had no such reading, so a snapshot declined for want of the entitlement
+    /// — the documented outcome — was recorded against the contract. Every
+    /// caller watching a healthy, ticking stream was told their quote had been
+    /// refused, and nothing cleared it: only a fresh acknowledgement does, and
+    /// a subscribe that joins an existing subscription never draws one.
+    #[test]
+    fn a_refused_snapshot_does_not_refuse_the_stream_beside_it() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        let shared = SharedState::new();
+        // A live stream, and a snapshot out on the same contract.
+        farm.instrument_md_reqs.push((instrument, MdReqRecord {
+            con_id: 756733,
+            sec_type: "CS".into(),
+            mode_9887: 0,
+            entries: vec![
+                MdReqEntry { req_id: 7, request_type: 442, venue: "BEST".into() },
+                MdReqEntry {
+                    req_id: 8,
+                    request_type: REGULATORY_SNAPSHOT_REQUEST_TYPE,
+                    venue: "BEST".into(),
+                },
+            ],
+        }));
+        farm.md_req_to_instrument.push((8, instrument));
+
+        let refused = fix::fix_build(
+            &[(35, "3"), (262, "8"), (58, "Error&BEST/NO_ENTITLEMENT/snapshot")], 1,
+        );
+        farm.handle_subscription_reject(&refused, &context, &shared);
+
+        assert!(
+            shared.market.failure_for_follower(instrument).is_none(),
+            "the stream on the contract was reported to its watchers as refused",
+        );
+    }
 }

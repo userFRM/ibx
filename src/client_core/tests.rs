@@ -2713,3 +2713,152 @@ fn one_number_cannot_be_registered_twice_at_once() {
     let _ = first.join();
 }
 
+/// The other way into following pays the joiner what the first one does.
+///
+/// A contract named by symbol alone has no identity this side can resolve, so
+/// the engine is the first to know which slot it holds — and the branch that
+/// joins an existing subscription is reached only after that answer comes
+/// back. It paid none of the three things a joiner is owed. For those
+/// contracts it is not a narrow race but the ordinary path: every
+/// second-and-later subscriber took it, heard nothing on a contract that was
+/// not moving, was never told the increment, and where the subscription had
+/// been refused was told it had one.
+#[test]
+fn a_request_the_engine_names_the_slot_for_is_paid_like_any_joiner() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    shared.market.set_instrument_count(4);
+
+    let iid: InstrumentId = 0;
+    // Somebody already holds the contract: acknowledged, then refused, with
+    // the quote as it stands already matching this side's baseline.
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, iid);
+    shared.market.push_tick_req_params(iid, 0.01);
+    let _ = shared.market.drain_tick_req_params();
+    shared.market.push_subscription_failure(iid, "no entitlement".to_string());
+    let _ = shared.market.drain_subscription_failures();
+    core.last_quotes.lock().unwrap().insert(iid, [7i64; 16]);
+
+    // The engine, answering the registration with the slot it resolved.
+    let engine = std::thread::spawn(move || {
+        while let Ok(cmd) = rx.recv() {
+            if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
+                let _ = reply.try_send(Ok(0));
+                return;
+            }
+        }
+    });
+
+    // Named by symbol, so this side holds no identity for it.
+    core.register_mkt_data(
+        &shared, &tx, 2, 0, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        false, false, "", 0,
+    ).expect("the second request joins the one that is up");
+    let _ = engine.join();
+
+    assert!(
+        shared.market.drain_tick_req_params_direct().iter().any(|(at, _)| *at == 2),
+        "the joiner was never told the increment the subscription was acknowledged with",
+    );
+    let told = shared.market.drain_subscription_failures_direct();
+    assert!(
+        told.iter().any(|(at, _)| *at == 2),
+        "and was told it had a subscription the venue had already refused: {told:?}",
+    );
+    assert!(
+        !core.last_quotes.lock().unwrap().contains_key(&iid),
+        "and the baseline still matched the quote, so nothing was ever stated to it",
+    );
+}
+
+/// A caller moved onto another slot is joining a subscription, and is owed
+/// what a joiner is owed.
+///
+/// The engine says so when a lookup names a contract another slot already
+/// holds. Only the slot they left was cleared, so they arrived on one whose
+/// baseline already matched its quote and heard nothing until it next moved,
+/// were never told the increment it was acknowledged with, and where it had
+/// been refused were not told that either.
+#[test]
+fn a_caller_moved_onto_another_slot_is_paid_like_a_joiner() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.market.set_instrument_count(4);
+    let from: InstrumentId = 1;
+    let into: InstrumentId = 0;
+
+    // The slot they are on, and the one that already holds the contract.
+    core.instrument_to_req.lock().unwrap().insert(from, 7);
+    core.req_to_instrument.lock().unwrap().insert(7, from);
+    core.instrument_to_req.lock().unwrap().insert(into, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, into);
+    shared.market.push_tick_req_params(into, 0.01);
+    let _ = shared.market.drain_tick_req_params();
+    shared.market.push_subscription_failure(into, "no entitlement".to_string());
+    let _ = shared.market.drain_subscription_failures();
+    core.last_quotes.lock().unwrap().insert(into, [7i64; 16]);
+
+    core.move_watchers(&shared, from, into);
+
+    assert!(
+        shared.market.drain_tick_req_params_direct().iter().any(|(at, _)| *at == 7),
+        "the moved caller was never told the increment of the subscription it landed on",
+    );
+    let told = shared.market.drain_subscription_failures_direct();
+    assert!(
+        told.iter().any(|(at, _)| *at == 7),
+        "nor that the subscription it landed on had been refused: {told:?}",
+    );
+    assert!(
+        !core.last_quotes.lock().unwrap().contains_key(&into),
+        "and the baseline it arrived on already matched, so nothing was stated to it",
+    );
+}
+
+/// A registration that fails still withdraws the headlines it already asked
+/// for.
+///
+/// The headlines go out before the contract is registered, because a request
+/// that joins an existing subscription returns before that happens. So a
+/// registration that then fails leaves this side holding no slot — the mapping
+/// one comes from is written on the success path — and a withdrawal named by
+/// slot resolved to nothing and was never sent. The record of who asked was
+/// dropped all the same, so no later withdrawal reached them either: the
+/// headlines ran for the rest of the session, and the next request for the
+/// contract opened a second subscription beside the first.
+#[test]
+fn a_registration_that_fails_withdraws_the_headlines_it_asked_for() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    shared.market.set_instrument_count(4);
+
+    // The engine takes the news and then refuses the registration.
+    let engine = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        while let Ok(cmd) = rx.recv() {
+            if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = &cmd {
+                let _ = reply.try_send(Err("the table is full".to_string()));
+            }
+            seen.push(cmd);
+        }
+        seen
+    });
+
+    let refused = core.register_mkt_data(
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        false, false, "292", 0,
+    );
+    assert!(refused.is_err(), "the registration was refused");
+    drop(tx);
+    let sent = engine.join().expect("the engine thread");
+
+    assert!(
+        sent.iter().any(|c| matches!(
+            c, ControlCommand::UnsubscribeNews { subject: NewsSubject::Contract(756733) },
+        )),
+        "the headlines it had already asked for were never withdrawn: {sent:?}",
+    );
+}

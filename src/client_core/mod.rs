@@ -9,6 +9,7 @@
 // because that is the path a program written against this client already
 // names, and used here for the same reason it was written.
 pub use crate::types::order_status::{is_open_or_reactivatable, is_open_status, order_status_str};
+use crate::types::NewsSubject;
 use std::collections::{HashMap, HashSet};
 use crate::error_codes::{
     CHANGE_CANNOT_CHANGE_TYPE, COMBINATION_LEG_INVALID, COMBINATION_NEEDS_LEGS,
@@ -1579,7 +1580,9 @@ impl ClientCore {
     /// holds: only one subscription per contract exists on the wire, so the
     /// callers given the second slot have to read the first, or their quotes
     /// arrive on a slot nothing is watching.
-    pub(crate) fn move_watchers(&self, from: InstrumentId, into: InstrumentId) {
+    pub(crate) fn move_watchers(
+        &self, shared: &SharedState, from: InstrumentId, into: InstrumentId,
+    ) {
         let held = self.instrument_to_req.lock().unwrap().remove(&from);
         let following = self.instrument_followers.lock().unwrap().remove(&from).unwrap_or_default();
         for req_id in held.into_iter().chain(following) {
@@ -1587,8 +1590,56 @@ impl ClientCore {
                 self.req_to_instrument.lock().unwrap().insert(req_id, into);
                 self.stamp_registration(req_id);
             }
+            // Moved onto somebody else's subscription is joining one, and what
+            // a joiner is owed is owed here too. Only the slot they left was
+            // cleared, so they arrived on a contract whose baseline already
+            // matched its quote and heard nothing until it next moved, were
+            // never told the increment it was acknowledged with, and where it
+            // had been refused were not told that either.
+            self.pay_a_joiner(shared, into, req_id);
         }
         self.last_quotes.lock().unwrap().remove(&from);
+    }
+
+    /// What a request that joins a subscription somebody else opened is owed.
+    ///
+    /// It asked the venue for nothing, so the venue answers it with nothing:
+    /// the acknowledgement went to whoever opened the subscription, a refusal
+    /// was drained when it arrived, and the quote is only stated where it
+    /// differs from a baseline this request had no part in setting. Each of
+    /// those has to be handed over here or the caller holds a number that
+    /// reads as subscribed and hears nothing on it.
+    ///
+    /// There is more than one way into following — the contract may be known
+    /// here, or the engine may be the first to know which slot it holds, which
+    /// is every contract named by symbol alone. Paid on one of them and not
+    /// the other, the second was the ordinary path for those contracts.
+    fn pay_a_joiner(&self, shared: &SharedState, instrument: InstrumentId, req_id: i64) {
+        // The venue sends a tickReqParams per reqMktData; a follower asked for
+        // none, so it is owed the increment the live subscription was
+        // acknowledged with. Before that acknowledgement there is none yet,
+        // and the pending one fans out to this follower when it arrives.
+        if let Some(min_tick) = shared.market.min_tick_for_follower(instrument) {
+            shared.market.push_tick_req_params_for(req_id, min_tick);
+        }
+        // And where the subscription this one joins was refused, it is refused
+        // too. The refusal is drained once and told to whoever held the
+        // contract then; a request joining afterwards heard nothing and
+        // received nothing — it had joined a subscription the venue had
+        // already declined, and nothing was ever going to arrive on it.
+        if let Some(reason) = shared.market.failure_for_follower(instrument) {
+            shared.market.push_subscription_failure_for(req_id, reason);
+        }
+        // And it is owed the quote as it stands. The ticks are worked out once
+        // per contract, against what was last sent for that contract, and
+        // fanned to everyone watching it — so a request joining a contract
+        // whose baseline already matches the quote was sent nothing at all,
+        // and on a contract that is not moving it stayed that way. Forgetting
+        // the baseline is what makes the next pass state everything the venue
+        // has said, which is what a subscription is answered with; it is the
+        // same mechanism a market-data drop uses. Everyone already watching
+        // hears those values restated, which is what they are holding.
+        self.last_quotes.lock().unwrap().remove(&instrument);
     }
 
     /// Every other request watching a contract, so one quote reaches them all.
@@ -1855,32 +1906,7 @@ impl ClientCore {
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
-            // The venue sends a tickReqParams per reqMktData; a follower asked
-            // for none, so it is owed the increment the live subscription was
-            // acknowledged with. Before that acknowledgement there is none yet,
-            // and the pending one fans out to this follower when it arrives.
-            if let Some(min_tick) = shared.market.min_tick_for_follower(instrument) {
-                shared.market.push_tick_req_params_for(req_id, min_tick);
-            }
-            // And where the subscription this one joins was refused, it is
-            // refused too. The refusal is drained once and told to whoever held
-            // the contract then; a request joining afterwards heard nothing and
-            // received nothing — it had joined a subscription the venue had
-            // already declined, and nothing was ever going to arrive on it.
-            if let Some(reason) = shared.market.failure_for_follower(instrument) {
-                shared.market.push_subscription_failure_for(req_id, reason);
-            }
-            // And it is owed the quote as it stands. The ticks are worked out
-            // once per contract, against what was last sent for that contract,
-            // and fanned to everyone watching it — so a request joining a
-            // contract whose baseline already matches the quote was sent
-            // nothing at all, and on a contract that is not moving it stayed
-            // that way. Forgetting the baseline is what makes the next pass
-            // state everything the venue has said, which is what a subscription
-            // is answered with; it is the same mechanism a market-data drop
-            // uses. Everyone already watching hears those values restated,
-            // which is what they are holding.
-            self.last_quotes.lock().unwrap().remove(&instrument);
+            self.pay_a_joiner(shared, instrument, req_id);
             // The news subscription was sent above whether or not the quotes
             // were already up, so it is recorded here as well. Recorded only
             // on the path that also opened the quotes, it was never withdrawn:
@@ -1918,10 +1944,19 @@ impl ClientCore {
                 // and the subscription that did go out cannot be withdrawn,
                 // because the path that withdraws it needs a request this one
                 // no longer has.
+                // Named by contract, because this side has no slot for it: the
+                // headlines went out before the contract was registered and
+                // the registration is what just failed, so the mapping a slot
+                // would come from was never written. Named by slot it resolved
+                // to nothing, the withdrawal was never sent, and the headlines
+                // ran for the rest of the session with the record of who asked
+                // already dropped — so no later withdrawal reached them
+                // either, and the next request for the contract opened a
+                // second subscription on the wire beside the first.
                 if wants_news
-                    && let Some(instrument) = self.release_news(shared, req_id)
+                    && let Some(subject) = self.release_news(shared, req_id)
                 {
-                    let _ = control_tx.send(ControlCommand::UnsubscribeNews { instrument });
+                    let _ = control_tx.send(ControlCommand::UnsubscribeNews { subject });
                 }
                 return Err(refused);
             }
@@ -1945,6 +1980,7 @@ impl ClientCore {
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
+            self.pay_a_joiner(shared, instrument_id, req_id);
             return Ok(instrument_id);
         }
         // Somebody may have taken this contract while this request was being
@@ -1972,7 +2008,7 @@ impl ClientCore {
     /// Drop this request's claim on the headlines, and say whether that was
     /// the last one. Called on every path out of a withdrawal: the quotes may
     /// stay up for another caller while the headlines this one asked for stop.
-    pub(crate) fn release_news(&self, shared: &SharedState, req_id: i64) -> Option<InstrumentId> {
+    pub(crate) fn release_news(&self, shared: &SharedState, req_id: i64) -> Option<NewsSubject> {
         let emptied = {
             let mut news = self.news_askers.lock().unwrap();
             let mut done: Option<i64> = None;
@@ -1988,9 +2024,19 @@ impl ClientCore {
             news.remove(&con_id);
             con_id
         };
-        // Named by the instrument, which is what a withdrawal states. Known by
-        // now: nothing is withdrawn that was never registered.
-        self.cached_instrument(shared, emptied)
+        // Named by the slot where this side has one, and by the contract
+        // where it does not. It does not always: the headlines are asked for
+        // before the contract is registered, and the mapping a slot comes from
+        // is written when that succeeds — so a registration that fails leaves
+        // this holding nothing to name. Resolved to a slot or nothing, the
+        // withdrawal was simply never sent, while the record of who asked had
+        // already been dropped above: the headlines ran for the rest of the
+        // session with nothing able to stop them, and the next request for the
+        // contract opened a second subscription beside the first.
+        Some(
+            self.cached_instrument(shared, emptied)
+                .map_or(NewsSubject::Contract(emptied), NewsSubject::Slot),
+        )
     }
 
     /// Take a request number for a book, or say it already holds one.
@@ -2065,7 +2111,7 @@ impl ClientCore {
     /// and left the headlines running.
     pub fn unregister_mkt_data(
         &self, shared: &SharedState, req_id: i64,
-    ) -> (Option<InstrumentId>, Option<InstrumentId>) {
+    ) -> (Option<InstrumentId>, Option<NewsSubject>) {
         // Whatever this id was waiting to finish, it is not waiting any
         // more. Left behind, the same id handed out again for an ordinary
         // stream reads as a snapshot and is withdrawn as soon as it has both

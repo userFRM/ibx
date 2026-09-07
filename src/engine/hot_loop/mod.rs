@@ -22,6 +22,7 @@ impl Default for ReplayPacing {
     }
 }
 
+use crate::types::NewsSubject;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -1179,8 +1180,25 @@ impl HotLoop {
                             }
                         }
                         Some(id) => {
-                            if let Some(tx) = &reply_tx {
-                                let _ = tx.try_send(Ok(id));
+                            // A caller that has stopped waiting gets no
+                            // subscription. Its wait is bounded and this loop
+                            // is not — a redial or a lookup ahead of this
+                            // command outlasts it — and it reports a refusal
+                            // and keeps no record of the slot. Sent anyway,
+                            // the venue streamed a contract for the rest of
+                            // the session that nothing could name: the
+                            // withdrawal is refused for want of a
+                            // subscription, the slot is never given back, and
+                            // only the caller happening to ask for the same
+                            // contract again recovers either.
+                            if let Some(tx) = &reply_tx
+                                && matches!(
+                                    tx.try_send(Ok(id)),
+                                    Err(std::sync::mpsc::TrySendError::Disconnected(_)),
+                                )
+                            {
+                                self.try_reclaim_instrument(id);
+                                continue;
                             }
                             // What the contract is, as the caller stated it
                             // or as the venue's own definition has it.
@@ -1331,9 +1349,22 @@ impl HotLoop {
                         );
                     }
                 }
-                ControlCommand::UnsubscribeNews { instrument } => {
-                    self.farm.send_news_unsubscribe(instrument, &mut self.farm_conn, &mut self.hb);
-                    self.try_reclaim_instrument(instrument);
+                ControlCommand::UnsubscribeNews { subject } => {
+                    // Named by contract where the caller holds no slot, which
+                    // this side is the only one that can resolve: it is what
+                    // registered the contract in the first place.
+                    let instrument = match subject {
+                        NewsSubject::Slot(id) => Some(id),
+                        NewsSubject::Contract(con_id) => {
+                            self.context.market.instrument_by_con_id(con_id)
+                        }
+                    };
+                    if let Some(instrument) = instrument {
+                        self.farm.send_news_unsubscribe(
+                            instrument, &mut self.farm_conn, &mut self.hb,
+                        );
+                        self.try_reclaim_instrument(instrument);
+                    }
                 }
                 ControlCommand::UpdateParam { key, value } => {
                     let _ = (key, value);
@@ -4567,6 +4598,45 @@ mod tests {
         );
     }
 
+    /// A caller that stopped waiting is sent no subscription.
+    ///
+    /// The wait on this side's answer is bounded and this loop is not: a redial
+    /// or a lookup ahead of the command outlasts it, the caller reports a
+    /// refusal and keeps no record of the slot. Subscribed anyway, the venue
+    /// streamed a contract nothing could name for the rest of the session —
+    /// the withdrawal is refused for want of a subscription, the slot is never
+    /// given back, and only the caller happening to ask for the same contract
+    /// again recovers either.
+    #[test]
+    fn a_caller_that_stopped_waiting_is_sent_no_subscription() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        // The caller gave up before the answer reached it.
+        drop(reply_rx);
+        tx.send(ControlCommand::Subscribe {
+            contract: ContractRef {
+                con_id: 756733,
+                sec_type: "STK".into(),
+                exchange: "SMART".into(),
+                ..Default::default()
+            },
+            mode_9887: 0,
+            regulatory_snapshot: false,
+            reply_tx: Some(reply_tx),
+        })
+        .expect("the engine holds the other end");
+        hl.poll_once();
+
+        assert!(
+            hl.context.market.instrument_by_con_id(756733).is_none(),
+            "a slot is held for a subscription nothing on the caller's side can name",
+        );
+    }
+
     /// And where the caller asks by contract id, which is the shorter road to
     /// the same wrong.
     ///
@@ -6775,7 +6845,7 @@ mod tests {
         assert_eq!(delivered[0].instrument, id, "on the contract it was asked for");
 
         // Withdrawn, the tag goes with it: a headline after is nobody's.
-        tx.send(ControlCommand::UnsubscribeNews { instrument: id }).unwrap();
+        tx.send(ControlCommand::UnsubscribeNews { subject: NewsSubject::Slot(id) }).unwrap();
         hl.poll_control_commands();
         hl.farm.process_farm_message(&news_frame(33082), &mut None, &mut hl.context, &shared, &None, &mut hl.hb);
         assert!(shared.market.drain_tick_news().is_empty(), "nothing after the withdrawal");
@@ -7042,7 +7112,7 @@ mod tests {
             "and its tag is filed for the acknowledgement",
         );
 
-        tx.send(ControlCommand::UnsubscribeNews { instrument: id }).unwrap();
+        tx.send(ControlCommand::UnsubscribeNews { subject: NewsSubject::Slot(id) }).unwrap();
         hl.poll_control_commands();
         std::thread::sleep(std::time::Duration::from_millis(50));
         let sent = farm::tests::drain_inner(&mut peer);

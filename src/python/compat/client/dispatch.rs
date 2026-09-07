@@ -599,7 +599,7 @@ impl EClient {
         // the second slot read the first — otherwise their quotes arrive on a
         // slot nothing is watching.
         for (from, into) in shared.market.drain_subscription_moves() {
-            self.core.move_watchers(from, into);
+            self.core.move_watchers(&shared, from, into);
         }
         // Everyone watching the contract, not only whoever asked first. A
         // refusal is a fact about the contract, and a caller sharing somebody

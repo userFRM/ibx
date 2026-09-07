@@ -371,7 +371,7 @@ pub(super) fn phase_news_ticks(conns: Conns) -> Conns {
     }
 
     control_tx
-        .send(ControlCommand::UnsubscribeNews { instrument: 0 })
+        .send(ControlCommand::UnsubscribeNews { subject: ibx::types::NewsSubject::Slot(0) })
         .unwrap();
     let drained_news = shared.market.drain_tick_news();
 

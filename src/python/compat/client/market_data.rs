@@ -529,8 +529,8 @@ impl EClient {
         // Asked separately, because the quotes stay up for another caller
         // while the headlines this one asked for stop. Withdrawn only
         // alongside the quotes, they carried on with nobody listening.
-        if let Some(instrument) = stop_news {
-            let _ = Self::send_control(py, tx, ControlCommand::UnsubscribeNews { instrument });
+        if let Some(subject) = stop_news {
+            let _ = Self::send_control(py, tx, ControlCommand::UnsubscribeNews { subject });
         }
         if let Some(instrument) = instrument
             && let Err(why) = Self::send_control(py, tx, ControlCommand::Unsubscribe { instrument })
