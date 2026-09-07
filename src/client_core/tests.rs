@@ -1572,6 +1572,30 @@ fn a_snapshot_ends_on_the_venue_or_on_the_wait_from_asking() {
     assert!(core.snapshot_reqs.lock().unwrap().is_empty(), "and nothing is left waiting");
 }
 
+/// And a snapshot on a delayed or frozen feed ends the same way.
+///
+/// Those feeds state their bid, ask, last, close and open under numbers of
+/// their own — which is what the caller was told to expect. Only the realtime
+/// numbers were read, so a snapshot on either feed could not be completed by
+/// anything the venue said: it ran to the eleven-second sweep every time,
+/// however promptly the venue answered.
+#[test]
+fn a_delayed_snapshot_ends_on_the_venue_too() {
+    let core = ClientCore::new();
+    core.snapshot_reqs.lock().unwrap().insert(2, (std::time::Instant::now(), 0));
+    // The delayed numbering: bid, ask, last, open, close.
+    for kind in [66, 67, 68, 76] {
+        core.note_snapshot_tick(2, kind);
+        assert!(!core.check_snapshot_done(2), "delayed kind {kind} leaves one to come");
+    }
+    core.note_snapshot_tick(2, 75);
+    assert!(
+        core.check_snapshot_done(2),
+        "the delayed close was the last of them, and the venue had said everything",
+    );
+}
+
+
 /// The venue restates the day's executions at every logon, so the same one
 /// reaches the record more than once. It is stored once, known by its id.
 #[test]
@@ -2460,6 +2484,34 @@ fn a_subscription_the_venue_has_taken_is_no_longer_refused_for_a_joiner() {
         "and the request that was refused is still owed the reason it was",
     );
 }
+
+/// A slot given back takes what is queued under it, not only what is cached.
+///
+/// Both of these name a slot rather than a contract, so the next contract to
+/// take the slot is who they reach. An increment acknowledged for the contract
+/// that left arrives as the new one's, and a move recorded for the old one
+/// repoints the new one's watchers at a third contract and takes its own slot
+/// out of the polling. A reader stalled in a callback is all it takes for the
+/// release to land in between.
+#[test]
+fn a_released_slot_leaves_nothing_queued_under_it() {
+    let shared = SharedState::new();
+    let slot: InstrumentId = 3;
+
+    shared.market.push_tick_req_params(slot, 0.01);
+    shared.market.push_subscription_move(slot, 9);
+    shared.market.note_released_slot(slot);
+
+    assert!(
+        shared.market.drain_tick_req_params().iter().all(|(at, _)| *at != slot),
+        "no increment is delivered for the contract that left",
+    );
+    assert!(
+        shared.market.drain_subscription_moves().iter().all(|(a, b)| *a != slot && *b != slot),
+        "and no move naming its slot",
+    );
+}
+
 
 /// A quote feed the engine has given up on takes no more subscriptions.
 ///

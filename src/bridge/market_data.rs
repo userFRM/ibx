@@ -189,6 +189,16 @@ impl MarketDataState {
         self.released_slots.lock().unwrap().push(instrument);
         self.last_min_tick.lock().unwrap().remove(&instrument);
         self.last_subscription_failure.lock().unwrap().remove(&instrument);
+        // And what is still queued under it, not only what is cached. Both of
+        // these name a slot rather than a contract, so the next contract to
+        // take the slot is who they reach: an increment acknowledged for the
+        // contract that left arrives as the new one's, and a move recorded for
+        // the old one repoints the new one's watchers at a third contract and
+        // takes its own slot out of the polling. A reader stalled in a
+        // callback is all it takes for the release to land in between.
+        self.tick_req_params.lock().unwrap().retain(|(at, _)| *at != instrument);
+        self.subscription_moves.lock().unwrap()
+            .retain(|(from, to)| *from != instrument && *to != instrument);
     }
 
     /// The slots given back since this was last asked.

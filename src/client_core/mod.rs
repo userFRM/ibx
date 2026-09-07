@@ -3373,12 +3373,18 @@ impl ClientCore {
     /// answering. Waiting for a figure above zero instead waits out the clock
     /// on every one of them.
     pub fn note_snapshot_tick(&self, req_id: i64, tick_type: i32) {
+        // Numbered as the feed the request was made under, which is what the
+        // caller was told to expect: a delayed or frozen subscription states
+        // its bid, ask, last, close and open under numbers of their own. Only
+        // the realtime ones were read here, so a snapshot on either of those
+        // feeds could never be completed by anything the venue said — it ran to
+        // the sweep every time, however promptly the venue answered.
         let bit = match tick_type {
-            1 => 1u8,   // bid
-            2 => 2,     // ask
-            4 => 4,     // last
-            14 => 8,    // open
-            9 => 16,    // close
+            1 | 66 => 1u8,   // bid
+            2 | 67 => 2,     // ask
+            4 | 68 => 4,     // last
+            14 | 76 => 8,    // open
+            9 | 75 => 16,    // close
             _ => return,
         };
         if let Some((_, stated)) = self.snapshot_reqs.lock().unwrap().get_mut(&req_id) {
