@@ -482,7 +482,7 @@ impl Connection {
                 // something other than a length behind it. Waited on, it stays
                 // there and every acknowledgement and fill behind it is never
                 // extracted, on a connection that goes on reading as alive.
-                if tag9_is_unreadable(&self.buf) {
+                if tag9_is_unreadable(&self.buf, binary_msg_length) {
                     log::warn!(
                         "extract_frames: a header states an unreadable body \
                          length; resynchronising past it",
@@ -523,7 +523,7 @@ impl Connection {
                 // of the buffer indefinitely, and every frame behind it queues
                 // unread while the socket keeps delivering and the
                 // connection kept reading as alive.
-                if tag9_is_unreadable(&self.buf) {
+                if tag9_is_unreadable(&self.buf, fix_msg_length) {
                     log::warn!(
                         "extract_frames: a FIX header states an unreadable body \
                          length; resynchronising past it",
@@ -804,25 +804,7 @@ impl Connection {
 /// tag-8 header is 4 bytes: `8=O\x01`, `8=1\x01`, or `8=X\x01`, each followed
 /// by `9=<body_len>\x01 ...`.
 fn binary_msg_length(data: &[u8]) -> Option<usize> {
-    // 4-byte tag-8 header ("8=O\x01" / "8=1\x01" / "8=X\x01"), then tag 9 —
-    // at that position and not searched for beyond it. The header is a fixed
-    // width, so there is one place the length can be, and reading the first
-    // "9=" anywhere in the buffer read one the peer wrote into a payload:
-    // a header at the front, junk, then a length naming a total that reached
-    // over the frames queued behind it, and every one of them — an
-    // acknowledgement, a fill — was drained as part of this frame and never
-    // seen. The FIX reader beside this one bounds its own search for the same
-    // reason; this one did not.
-    let after_8 = 4; // "8=O\x01"
-    if data.len() < after_8 + 2 || &data[after_8..after_8 + 2] != b"9=" {
-        return None;
-    }
-    let tag9_pos = after_8;
-    let soh_pos = data[tag9_pos..].iter().position(|&b| b == SOH).map(|p| tag9_pos + p)?;
-    let body_len: usize = std::str::from_utf8(&data[tag9_pos + 2..soh_pos])
-        .ok()?
-        .parse()
-        .ok()?;
+    let (soh_pos, body_len) = stated_body_length(data)?;
     // The length is whatever the peer wrote, so a total that does not fit is
     // a length no frame can have rather than something to add anyway: added
     // unchecked it aborted the process where overflow is checked and framed
@@ -832,15 +814,41 @@ fn binary_msg_length(data: &[u8]) -> Option<usize> {
 
 /// Compute total length of a `8=FIX.4.1\x01 9=<body_len>\x01 ...` message.
 /// Includes the 7-byte checksum trailer `10=XXX\x01`.
-fn fix_msg_length(data: &[u8]) -> Option<usize> {
-    let tag9_pos = find_subsequence(data, b"9=").filter(|&p| p < 20)?;
-    let soh_pos = data[tag9_pos..].iter().position(|&b| b == SOH).map(|p| tag9_pos + p)?;
-    let body_len: usize = std::str::from_utf8(&data[tag9_pos + 2..soh_pos])
-        .ok()?
-        .parse()
-        .ok()?;
+pub(super) fn fix_msg_length(data: &[u8]) -> Option<usize> {
+    let (soh_pos, body_len) = stated_body_length(data)?;
     // header up to and including SOH after tag 9, + body + "10=XXX\x01" (7 bytes)
     soh_pos.checked_add(8)?.checked_add(body_len)
+}
+
+/// Where tag 9 must begin: straight after the tag-8 field, which is the first
+/// field of every frame on this wire.
+///
+/// `None` while the tag-8 field is still arriving.
+fn where_tag_9_begins(data: &[u8]) -> Option<usize> {
+    let rest = data.strip_prefix(b"8=")?;
+    rest.iter().position(|&b| b == SOH).map(|p| p + 3)
+}
+
+/// The body length a header states, with the offset of the separator that ends
+/// the field.
+///
+/// Read at the one position the length can be. Tag 9 follows tag 8 and nothing
+/// sits between them, so searching for the first `9=` in the buffer finds the
+/// length only by luck: it matches inside `49=` as readily, and it matches a
+/// length the peer wrote into a payload. A total taken from either reaches
+/// over the frames queued behind this one, and an acknowledgement and a fill
+/// were drained as part of it and never seen.
+///
+/// `None` where tag 9 is not where the header puts it, has not arrived whole,
+/// or states something that is not a length.
+fn stated_body_length(data: &[u8]) -> Option<(usize, usize)> {
+    let at = where_tag_9_begins(data)?;
+    if !data.get(at..)?.starts_with(b"9=") {
+        return None;
+    }
+    let soh_pos = data[at..].iter().position(|&b| b == SOH).map(|p| at + p)?;
+    let body_len: usize = std::str::from_utf8(&data[at + 2..soh_pos]).ok()?.parse().ok()?;
+    Some((soh_pos, body_len))
 }
 
 /// Whether the trailer sits where the stated body length says it does.
@@ -861,7 +869,7 @@ fn fix_msg_length(data: &[u8]) -> Option<usize> {
 ///
 /// Answers only where the whole of the stated length is held; before that
 /// there is nothing at the position to look at.
-fn trailer_is_where_the_length_says(data: &[u8], total: usize) -> bool {
+pub(super) fn trailer_is_where_the_length_says(data: &[u8], total: usize) -> bool {
     if data.len() < total || total < 8 {
         return false;
     }
@@ -887,25 +895,35 @@ fn next_header(data: &[u8]) -> Option<usize> {
     .min()
 }
 
-/// Whether the tag 9 at the front of this buffer has arrived in full and does
-/// not read as a number.
+/// Whether the tag 9 at the front of this buffer has arrived in full and no
+/// frame length can be got from it.
 ///
 /// That is the case a length-framed reader cannot wait out: the field is
-/// complete, so no further bytes will make it parse.
-fn tag9_is_unreadable(data: &[u8]) -> bool {
-    let Some(tag9_pos) = find_subsequence(data, b"9=").filter(|&p| p < 20) else {
-        // No tag 9 within the header yet. Twenty bytes past the start of a
-        // FIX header is more than the field can take, so once that many have
-        // arrived without one the header is not one.
-        return data.len() >= 20;
+/// complete, so no further byte will make it read.
+///
+/// `total` is the same function the extractor frames this header with, and it
+/// is asked rather than second-guessed. Reimplemented here, the two answered
+/// differently on a length that parses and then overflows the total: the
+/// extractor refused to frame it and this said it was readable, so the header
+/// stayed at the front of the buffer and every frame behind it queued unread
+/// on a connection that went on reading as alive.
+fn tag9_is_unreadable(data: &[u8], total: fn(&[u8]) -> Option<usize>) -> bool {
+    let Some(at) = where_tag_9_begins(data) else {
+        return false; // the tag-8 field is still arriving
     };
-    let Some(soh) = data[tag9_pos..].iter().position(|&b| b == SOH) else {
+    let Some(head) = data.get(at..) else { return false };
+    if head.len() < 2 {
         return false; // still arriving
-    };
-    std::str::from_utf8(&data[tag9_pos + 2..tag9_pos + soh])
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .is_none()
+    }
+    if !head.starts_with(b"9=") {
+        // The header puts the length here and this is not one. No later byte
+        // moves it, so this is not a frame however long it is waited on.
+        return true;
+    }
+    if !head.contains(&SOH) {
+        return false; // the field itself is still arriving
+    }
+    total(data).is_none()
 }
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -993,16 +1011,16 @@ mod tests {
     #[test]
     fn a_body_length_that_cannot_be_read_is_not_one_still_arriving() {
         let whole = fix_build(&[(35, "0")], 1);
-        assert!(!tag9_is_unreadable(&whole), "a good header is readable");
+        assert!(!tag9_is_unreadable(&whole, fix_msg_length), "a good header is readable");
         // A header cut inside its own length field: more bytes would finish it.
-        assert!(!tag9_is_unreadable(&whole[..12]), "still arriving");
+        assert!(!tag9_is_unreadable(&whole[..12], fix_msg_length), "still arriving");
 
         // The field is complete and states something that is not a number.
-        assert!(tag9_is_unreadable(b"8=FIX.4.1\x019=00X4\x0135=0\x01"));
-        assert!(tag9_is_unreadable(b"8=FIX.4.1\x019=\x0135=0\x01"));
+        assert!(tag9_is_unreadable(b"8=FIX.4.1\x019=00X4\x0135=0\x01", fix_msg_length));
+        assert!(tag9_is_unreadable(b"8=FIX.4.1\x019=\x0135=0\x01", fix_msg_length));
 
         // A header long past where its length would sit, carrying none.
-        assert!(tag9_is_unreadable(b"8=FIX.4.1\x0135=0\x0134=000001\x01"));
+        assert!(tag9_is_unreadable(b"8=FIX.4.1\x0135=0\x0134=000001\x01", fix_msg_length));
     }
 
     #[test]
@@ -1901,5 +1919,34 @@ mod wedge_tests {
         conn.inject_buf(&msg);
         assert_eq!(conn.extract_frames().len(), 1);
         assert!(!conn.read_failed(), "a delivering stream is not finished");
+    }
+
+    /// Tag 9 is where the header puts it, and the tail of `49=` is not it.
+    ///
+    /// Searched for, the first `9=` in the buffer matched inside another tag
+    /// and a frame with no body length at all was framed from whatever
+    /// followed — reaching over the frames queued behind it, so an
+    /// acknowledgement and a fill were drained as part of it and never seen.
+    #[test]
+    fn a_length_read_out_of_another_tag_is_not_a_length() {
+        assert_eq!(fix_msg_length(b"8=FIX.4.1\x0149=5\x0135=0\x0110=000\x01"), None);
+    }
+
+    /// What frames a header and what says a header cannot be framed have to
+    /// agree.
+    ///
+    /// A length that reads as a number and then makes no total is refused by
+    /// the one and called readable by the other, so the extractor would not
+    /// frame it and nothing resynchronised past it: the header stayed at the
+    /// front of the buffer and every frame behind it queued unread, on a
+    /// connection that went on reading as alive.
+    #[test]
+    fn a_length_that_can_make_no_total_reads_as_unreadable() {
+        let over = format!("8=FIX.4.1\x019={}\x0135=0\x01", usize::MAX);
+        assert_eq!(fix_msg_length(over.as_bytes()), None, "no total fits");
+        assert!(
+            tag9_is_unreadable(over.as_bytes(), fix_msg_length),
+            "waiting on a header no byte can complete holds the buffer for ever",
+        );
     }
 }

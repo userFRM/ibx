@@ -84,6 +84,12 @@ pub const TAG_TRADE_CHARGE_CURRENCY: u32 = 6381;
 pub const TAG_IB_VERSION: u32 = 6968;
 /// FIX tag 8349: the hmac signature.
 pub const TAG_HMAC_SIGNATURE: u32 = 8349;
+/// What the signature field occupies: `8349=`, eight hex characters, and the
+/// separator. Written by [`fix_sign`] and read back at that width by
+/// [`carries_signature`], so the two cannot state different geometry.
+const SIG_FIELD_LEN: usize = 5 + 8 + 1;
+/// What a FIX.4.1 frame carries after its body: `10=XXX` and the separator.
+const FIX41_TRAILER_LEN: usize = 7;
 
 // Message types
 /// Message type `0`: a heartbeat.
@@ -449,8 +455,7 @@ pub fn fix_sign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>) {
 
 
     // 4. Rebuild message with signature (pre-allocate)
-    let sig_tag_len = 5 + 8 + 1; // "8349=" + 8 hex chars + SOH
-    let signed_body_len = body.len() + sig_tag_len;
+    let signed_body_len = body.len() + SIG_FIELD_LEN;
     let hdr_end = msg.iter().position(|&b| b == SOH).unwrap() + 1;
     let header = &msg[..hdr_end];
 
@@ -512,21 +517,42 @@ pub fn fix_sign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>) {
 
 /// Whether a frame carries a signature field.
 ///
-/// Walked as a field, not matched as text — which is what `fix_unsign` does
-/// below, for the reason it gives there: the same characters sit inside a
-/// field value or a length-prefixed block a message carries. Matched there,
-/// the frame was handed to a verify whose own walk found no signature field,
-/// and that is a failed verify — which gives the transport up for good. The
-/// content that did it comes back on the reconnect, so the session tears down
-/// again on the same frame.
+/// Two readings, because neither answers alone and a frame either can call
+/// signed is one to verify rather than hand on.
 ///
-/// Stricter than the client this one replaces, which classifies by looking for
-/// the fixed trailer at the position the length implies and hands anything
-/// else on unverified. Nothing is refused here that it accepts: a frame with
-/// no signature is passed on either way, and one carrying a real signature
-/// field is checked rather than trusted.
+/// The position is where a signature this wire produces always is: last, at a
+/// fixed width, ahead of the checksum where there is one — [`fix_sign`] puts
+/// it there and nothing follows it. It is also the one reading the distortion
+/// cannot spoil, because the reversal in [`fix_unsign`] stops short of the
+/// trailer, so those bytes arrive as they were written whatever the eight XORs
+/// did to the body.
+///
+/// The walk is what the position cannot do: a signature of some other width is
+/// not at that offset, and handing one on unverified would be trusting a
+/// field this client is able to check. It is the reading that fails on a
+/// distorted body — eight bytes are flipped somewhere in it and one landing on
+/// a separator merges two fields, so the walk runs past an intact signature
+/// without seeing it. On its own that called a signed frame unsigned and
+/// handed it on still distorted with the chain not advanced, and every signed
+/// frame after it verified against the wrong state.
+///
+/// Neither reading matches the tag's characters inside a field value, which is
+/// the third thing a text search would do and the reason this is not one.
 pub fn carries_signature(msg: &[u8]) -> bool {
-    Fields::new(msg).any(|(tag, ..)| tag == TAG_HMAC_SIGNATURE)
+    let trailer = if msg.starts_with(b"8=FIX.4.1") { FIX41_TRAILER_LEN } else { 0 };
+    // The whole shape, not the tag alone. A reject reason quoting the tag can
+    // sit at exactly this offset and end where the separator is expected —
+    // the eight characters between are what tell that apart from a signature.
+    let at_the_trailer = msg
+        .len()
+        .checked_sub(trailer + SIG_FIELD_LEN)
+        .is_some_and(|at| {
+            let field = &msg[at..at + SIG_FIELD_LEN];
+            field.starts_with(b"8349=")
+                && field[SIG_FIELD_LEN - 1] == SOH
+                && field[5..SIG_FIELD_LEN - 1].iter().all(|b| b.is_ascii_hexdigit())
+        });
+    at_the_trailer || Fields::new(msg).any(|(tag, ..)| tag == TAG_HMAC_SIGNATURE)
 }
 
 /// Un-distort and verify a signed FIX message.
@@ -614,9 +640,16 @@ fn frame_end(buf: &[u8]) -> Option<usize> {
     if buf.starts_with(b"8=FIXCOMP\x01") {
         return super::fixcomp::fixcomp_length(buf);
     }
-    let idx = buf.windows(4).position(|w| w == b"\x0110=")?;
-    let end = buf[idx + 4..].iter().position(|&b| b == SOH)?;
-    Some(idx + 4 + end + 1)
+    // Where the length says, and only where the trailer is there to confirm
+    // it. Scanned for instead, the first `<SOH>10=` in the buffer ended the
+    // frame — and a signature, a reject reason or any length-prefixed block
+    // may carry those four bytes inside its value, so a whole frame was cut
+    // at the first one and its tail was read as the head of the next.
+    let total = super::connection::fix_msg_length(buf)?;
+    if buf.len() < total || !super::connection::trailer_is_where_the_length_says(buf, total) {
+        return None;
+    }
+    Some(total)
 }
 
 /// Read one complete FIX message, tolerating transient read timeouts.
@@ -1229,5 +1262,48 @@ mod hostile_frame_tests {
             "the block arrives whole",
         );
         assert!(!parsed.contains_key(&58), "what a block carries is not fields");
+    }
+
+    /// A signature the walk cannot reach is still a signature.
+    ///
+    /// The distortion covers the body and stops short of the trailer, so a
+    /// signature arrives as it was written. What does not survive is the walk
+    /// to it: a length-prefixed block states how far to step, that length sits
+    /// in the distorted span, and one flipped digit steps the walk past the
+    /// trailer and off the end. Classified only that way the frame was called
+    /// unsigned and handed on still distorted with the chain not advanced, and
+    /// every signed frame after it verified against the wrong state.
+    #[test]
+    fn a_signature_the_walk_steps_over_is_still_found() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(b"8=FIX.4.1\x019=0042\x0135=8\x0195=94\x0196=abcd\x01");
+        frame.extend_from_slice(b"8349=DEADBEEF\x01");
+        frame.extend_from_slice(b"10=000\x01");
+
+        assert!(
+            !Fields::new(&frame).any(|(tag, ..)| tag == TAG_HMAC_SIGNATURE),
+            "the walk is meant to step over the trailer here; without that this \
+             test proves nothing",
+        );
+        assert!(
+            carries_signature(&frame),
+            "a frame carrying a signature was handed on unverified",
+        );
+    }
+
+    /// A checksum inside a length-prefixed block does not end the frame.
+    ///
+    /// Tag 95 states how much follows under tag 96 and the block is bytes,
+    /// separators and all. Framed by a scan for the first `<SOH>10=`, a frame
+    /// carrying one was cut at whatever its payload happened to contain and
+    /// its tail was read as the head of the next.
+    #[test]
+    fn a_block_that_carries_a_checksum_does_not_end_the_frame() {
+        let frame = fix_build(&[(35, "8"), (95, "10"), (96, "A\x0110=000\x01B")], 1);
+        assert_eq!(
+            frame_end(&frame),
+            Some(frame.len()),
+            "the frame was cut at a checksum inside the block it carries",
+        );
     }
 }
