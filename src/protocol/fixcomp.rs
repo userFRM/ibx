@@ -169,13 +169,18 @@ pub fn fixcomp_frame_length(data: &[u8]) -> FrameLength {
             FrameLength::Incomplete
         };
     };
-    let Some(tag9) = find_tag(&data[soh1..], b"9=").map(|p| soh1 + p) else {
-        return if data.len() > MAX_HEADER_SCAN {
-            FrameLength::Unreadable
-        } else {
-            FrameLength::Incomplete
-        };
-    };
+    // Immediately after the separator ending tag 8, and nowhere else. This
+    // header is a fixed width too, so a "9=" found further along the buffer is
+    // one the peer wrote into a payload — and the total it names reaches over
+    // whatever is queued behind this frame, taking all of it as part of this
+    // one.
+    let tag9 = soh1 + 1;
+    if data.len() < tag9 + 2 {
+        return FrameLength::Incomplete;
+    }
+    if &data[tag9..tag9 + 2] != b"9=" {
+        return FrameLength::Unreadable;
+    }
     let Some(soh2) = data[tag9..].iter().position(|&b| b == SOH).map(|p| tag9 + p) else {
         return if data.len() > MAX_HEADER_SCAN {
             FrameLength::Unreadable

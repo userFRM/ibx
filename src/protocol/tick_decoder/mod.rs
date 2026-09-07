@@ -207,6 +207,15 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
     if bit_count > payload.len() * 8 {
         return;
     }
+    // A frame stating no bits carries no ticks. Passed on, the reader below
+    // reads nought as "as many as there are" — which is its answer for a
+    // caller that does not know the length, and the wrong answer for a peer
+    // that stated one — and everything after the count decoded into ticks,
+    // the fields following the payload among them. The by-tick stream beside
+    // this one honours a stated nought.
+    if bit_count == 0 {
+        return;
+    }
     let mut reader = BitReader::new(payload, bit_count);
 
     while reader.remaining() > 32 {

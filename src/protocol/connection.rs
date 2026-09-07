@@ -27,7 +27,7 @@ const RECV_BUF_SIZE: usize = 32768;
 /// `fixcomp::MAX_INFLATED` — its wire form cannot exceed its inflated one by
 /// more than the compression's own overhead. The margin beside it covers
 /// that overhead and whatever else one read held when the bound was passed.
-const MAX_BUFFERED: usize = fixcomp::MAX_INFLATED as usize + 1024 * 1024;
+pub(crate) const MAX_BUFFERED: usize = fixcomp::MAX_INFLATED as usize + 1024 * 1024;
 
 /// What a compressed frame starts with, and the longest header this framing
 /// recognises. A read that stops inside it leaves fewer bytes than the marker,
@@ -588,7 +588,7 @@ impl Connection {
         // where that is absent it says so and hands the frame on — no verify
         // and no refusal. Refusing here instead would drop traffic that client
         // delivers. The warning makes the case visible in logs.
-        if !msg.windows(6).any(|w| w == b"\x018349=") {
+        if !fix::carries_signature(msg) {
             log::warn!("inbound frame carries no 8349 signature on a signed connection");
             return Some(msg.to_vec());
         }
@@ -804,9 +804,20 @@ impl Connection {
 /// tag-8 header is 4 bytes: `8=O\x01`, `8=1\x01`, or `8=X\x01`, each followed
 /// by `9=<body_len>\x01 ...`.
 fn binary_msg_length(data: &[u8]) -> Option<usize> {
-    // 4-byte tag-8 header ("8=O\x01" / "8=1\x01" / "8=X\x01"), then find 9=
+    // 4-byte tag-8 header ("8=O\x01" / "8=1\x01" / "8=X\x01"), then tag 9 —
+    // at that position and not searched for beyond it. The header is a fixed
+    // width, so there is one place the length can be, and reading the first
+    // "9=" anywhere in the buffer read one the peer wrote into a payload:
+    // a header at the front, junk, then a length naming a total that reached
+    // over the frames queued behind it, and every one of them — an
+    // acknowledgement, a fill — was drained as part of this frame and never
+    // seen. The FIX reader beside this one bounds its own search for the same
+    // reason; this one did not.
     let after_8 = 4; // "8=O\x01"
-    let tag9_pos = find_subsequence(&data[after_8..], b"9=").map(|p| after_8 + p)?;
+    if data.len() < after_8 + 2 || &data[after_8..after_8 + 2] != b"9=" {
+        return None;
+    }
+    let tag9_pos = after_8;
     let soh_pos = data[tag9_pos..].iter().position(|&b| b == SOH).map(|p| tag9_pos + p)?;
     let body_len: usize = std::str::from_utf8(&data[tag9_pos + 2..soh_pos])
         .ok()?
@@ -1002,6 +1013,33 @@ mod tests {
         let mut full = msg.into_bytes();
         full.extend_from_slice(body);
         assert_eq!(binary_msg_length(&full), Some(full.len()));
+    }
+
+    /// A length read from a `9=` the peer wrote into a payload is not this
+    /// frame's length.
+    ///
+    /// The header is a fixed width, so tag 9 has one position. Searched for
+    /// instead, the first `9=` anywhere in the buffer answered — and a total
+    /// taken from it reached over whatever was queued behind this frame, so an
+    /// acknowledgement or a fill sitting there was drained as part of this one
+    /// and never seen. The FIX reader beside this one bounds its own search;
+    /// this one did not.
+    #[test]
+    fn a_binary_header_reads_its_length_where_the_length_is() {
+        // A well-formed frame still reads.
+        let body = b"35=P\x01data";
+        let mut good = format!("8=O\x019={}\x01", body.len()).into_bytes();
+        good.extend_from_slice(body);
+        assert_eq!(binary_msg_length(&good), Some(good.len()));
+
+        // The same header with no length where one belongs, and a `9=` further
+        // along naming a total that covers the frame behind it.
+        let mut lying = b"8=O\x01zz\x019=999\x01".to_vec();
+        lying.extend_from_slice(&good);
+        assert_eq!(
+            binary_msg_length(&lying), None,
+            "a length found past its position is not this frame's length",
+        );
     }
 
     #[test]
@@ -1482,6 +1520,40 @@ mod tests {
         let forged = fix_build(&[(35, "0"), (8349, "not-a-real-signature")], 1);
         assert_eq!(conn.unsign(&forged), None, "an unverifiable frame is not passed on");
         assert!(conn.read_failed(), "and the transport is finished for reading");
+    }
+
+    /// And the shape a value-quoting test cannot reach: the six bytes
+    /// separator-`8349=` sitting inside a length-prefixed raw block.
+    ///
+    /// The test below quotes the tag in an ordinary value, where no separator
+    /// precedes it — so a needle looking for one passed that case without ever
+    /// being right. A raw block carries whatever bytes the venue put in it,
+    /// separators among them. Matched as text the frame went to a verify whose
+    /// own field walk found no signature field, which is a failed verify, and a
+    /// failed verify gives the transport up for good — then the reconnect
+    /// replays the same content and it happens again.
+    #[test]
+    fn a_raw_block_carrying_the_signature_bytes_is_not_a_signature() {
+        // 95=<len> 96=<len bytes>, with the six bytes inside the block.
+        let raw = b"\x018349=DEADBEEF";
+        let mut frame = Vec::new();
+        frame.extend_from_slice(b"8=FIX.4.1\x019=");
+        let body_len = 5 + format!("{}", raw.len()).len() + 1 + 3 + raw.len() + 1;
+        frame.extend_from_slice(format!("{body_len:04}\x01").as_bytes());
+        frame.extend_from_slice(format!("95={}\x0196=", raw.len()).as_bytes());
+        frame.extend_from_slice(raw);
+        frame.push(SOH);
+
+        let mut conn = signed_conn(b"0123456789abcdef", &[0u8; 16]);
+        assert_eq!(
+            conn.unsign(&frame),
+            Some(frame.clone()),
+            "a raw block's contents are not a signature field",
+        );
+        assert!(
+            !conn.read_failed(),
+            "so the transport is not given up over a frame the venue sent",
+        );
     }
 
     /// The same rule at the pre-check. An *unsigned* frame quoting the tag in a

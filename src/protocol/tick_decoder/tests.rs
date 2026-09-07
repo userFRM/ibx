@@ -414,10 +414,17 @@ fn decode_extended_tick_type_negative() {
 
 #[test]
 fn decode_zero_bit_count() {
-    // bit_count = 0 means no bits to read → no ticks
-    let body = [0u8, 0, 0xFF, 0xFF]; // bit_count=0, garbage payload
+    // A payload long enough that the decoder's own loop would run on it: the
+    // loop needs more than thirty-two bits, so a two-byte payload passed this
+    // whatever the count meant, and the case it was written for went untested.
+    let mut body = vec![0u8, 0]; // bit_count = 0
+    body.extend(std::iter::repeat_n(0xAAu8, 64));
     let ticks = decode_ticks_35p(&body);
-    assert!(ticks.is_empty());
+    assert!(
+        ticks.is_empty(),
+        "a frame stating no bits carries no ticks, whatever follows the count: {} read",
+        ticks.len(),
+    );
 }
 
 #[test]

@@ -510,6 +510,25 @@ pub fn fix_sign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>) {
     (new_msg, new_iv.to_vec())
 }
 
+/// Whether a frame carries a signature field.
+///
+/// Walked as a field, not matched as text — which is what `fix_unsign` does
+/// below, for the reason it gives there: the same characters sit inside a
+/// field value or a length-prefixed block a message carries. Matched there,
+/// the frame was handed to a verify whose own walk found no signature field,
+/// and that is a failed verify — which gives the transport up for good. The
+/// content that did it comes back on the reconnect, so the session tears down
+/// again on the same frame.
+///
+/// Stricter than the client this one replaces, which classifies by looking for
+/// the fixed trailer at the position the length implies and hands anything
+/// else on unverified. Nothing is refused here that it accepts: a frame with
+/// no signature is passed on either way, and one carrying a real signature
+/// field is checked rather than trusted.
+pub fn carries_signature(msg: &[u8]) -> bool {
+    Fields::new(msg).any(|(tag, ..)| tag == TAG_HMAC_SIGNATURE)
+}
+
 /// Un-distort and verify a signed FIX message.
 ///
 /// Returns (undistorted_msg, new_iv, signature_valid).
@@ -630,6 +649,20 @@ pub fn fix_read_deadline<R: Read>(
         // arm that checks is never taken, and this waits for as long as the
         // bytes keep coming while what has arrived grows without bound. It runs
         // on every logon and on every reconnect.
+        // And the same for what has arrived. The deadline bounds how long this
+        // waits and not how much it holds, so a peer sending at line rate for
+        // the length of a logon is bounded in seconds and unbounded in bytes.
+        // The socket reader on the other side of this module refuses past the
+        // same figure, for the same reason.
+        if buf.len() > super::connection::MAX_BUFFERED {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "a logon reply grew past {} bytes without finishing a message",
+                    super::connection::MAX_BUFFERED,
+                ),
+            ));
+        }
         if std::time::Instant::now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
