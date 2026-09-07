@@ -117,6 +117,10 @@ impl EClient {
             .is_some_and(|held| Arc::ptr_eq(held, shared));
         let went = shared.take_connection_lost();
         let came_back = shared.take_connection_restored();
+        // What this surface believed before the flags below are applied. A
+        // restore is only a restore from a loss the caller was told about, and
+        // once these have been stored there is nothing left to ask.
+        let believed_connected = self.connected.load(Ordering::Acquire);
         if went && still_current {
             self.connected.store(false, Ordering::Release);
         }
@@ -233,7 +237,14 @@ impl EClient {
         if (went || came_back) && last_said != Some(final_up) {
             let suppress_loss = !final_up
                 && (shared.connection_lost_by_design() || self.session_ended.load(Ordering::Relaxed));
-            if !suppress_loss {
+            // And a restore is said only where this surface believed it was
+            // down. A pass that spans a whole outage and its recovery collapses
+            // the two flags to the restore alone, and a restore with no loss
+            // before it reads as a recovery from something the caller was never
+            // told about. The other surface says exactly this and guards it;
+            // the guard was not carried across when this path was written.
+            let suppress_restore = final_up && believed_connected;
+            if !suppress_loss && !suppress_restore {
                 let (code, msg): (i64, &str) = if final_up {
                     (1102, "Connectivity between client and server has been restored - data maintained")
                 } else {

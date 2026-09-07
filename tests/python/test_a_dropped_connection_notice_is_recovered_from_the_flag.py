@@ -59,3 +59,29 @@ def test_a_restore_whose_event_was_dropped_is_still_announced():
     c.poll()
     assert 1102 in w.codes, f"a dropped restore event left the caller down: {w.codes}"
     assert c.isConnected()
+
+
+def test_an_outage_a_whole_pass_missed_does_not_announce_a_bare_restore():
+    """A 1102 is a recovery from a loss the caller was told about.
+
+    A pass slow enough to span the whole outage and its recovery — a long
+    callback holding the interpreter, or a brief drop — sees both flags and
+    collapses them to the restore alone. Announced anyway, the caller is told
+    connectivity was restored without ever having been told it went, and a
+    program that re-syncs on that pairs its recovery with nothing.
+
+    The other surface says exactly this and guards it; the guard was not
+    carried across when this path was written.
+    """
+    w, c = _connected()
+    assert c.isConnected()
+
+    # Both flags, in one pass, on a surface that believed it was up throughout.
+    c._test_set_connection_lost()
+    c._test_set_connection_restored()
+    c.poll()
+
+    assert 1102 not in w.codes, (
+        f"a restore was announced to a caller never told of a loss: {w.codes}"
+    )
+    assert c.isConnected(), "and the session reads as up, which it is"
