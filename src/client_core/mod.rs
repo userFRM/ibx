@@ -1754,13 +1754,22 @@ impl ClientCore {
             } else {
                 named
             };
-            let _ = control_tx.send(ControlCommand::SubscribeNews {
+            // Reported, not discarded. A send fails because the engine is
+            // gone, and the branch below returns success for a contract
+            // somebody else already watches without sending anything else — so
+            // a caller that asked for headlines was told it had them while
+            // nothing had reached the engine at all. The record of who asked
+            // goes back with it, or the next ask is deduped against this one.
+            if let Err(gone) = control_tx.send(ControlCommand::SubscribeNews {
                 con_id,
                 symbol: symbol.to_string(),
                 sec_type: sec_type.to_string(),
                 providers,
                 reply_tx: None,
-            });
+            }) {
+                self.release_news_askers(con_id);
+                return Err(Refusal::not_connected(format!("Engine stopped: {gone}")));
+            }
         }
 
         // A contract already being watched needs no second subscription: this
@@ -2274,6 +2283,14 @@ impl ClientCore {
     /// Ask for the pnl single.
     pub fn subscribe_pnl_single(&self, req_id: i64, con_id: i64) {
         self.pnl_single_reqs.lock().unwrap().insert(req_id, con_id);
+        // What was last reported under this number belonged to whatever it
+        // watched before. Kept, a number pointed at another contract inherited
+        // the last one's day — or, where the two happened to agree, reported
+        // nothing at all until something moved, because a figure is only sent
+        // when it differs from what was sent before. The withdrawal beside
+        // this one clears it for the same reason; taking the number without
+        // withdrawing it did not.
+        self.last_pnl_single.lock().unwrap().remove(&req_id);
     }
 
     /// Stop the pnl single.

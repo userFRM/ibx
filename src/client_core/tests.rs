@@ -2598,3 +2598,56 @@ fn a_refused_news_subscription_frees_a_later_ask() {
     core.release_news_askers(con_id);
     assert!(core.first_to_ask_for_news(con_id, 13), "after the refusal a later ask sends anew");
 }
+
+/// A caller told its headlines are coming has had them asked for.
+///
+/// The send fails because the engine is gone, and the branch below it returns
+/// success for a contract somebody else already watches without sending
+/// anything else — so a caller that asked for headlines was told it had them
+/// while nothing reached the engine at all. The record of who asked goes back
+/// with the refusal, or the next ask is deduped against this one.
+#[test]
+fn news_the_engine_never_heard_is_not_reported_as_asked_for() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.market.set_instrument_count(4);
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    drop(rx); // the engine is gone
+
+    // A contract somebody already watches, so the quote half sends nothing.
+    let iid: InstrumentId = 0;
+    core.con_id_to_instrument.lock().unwrap().insert(756733, iid);
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, iid);
+
+    let asked = core.register_mkt_data(
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        false, false, "292", 0,
+    );
+    assert!(asked.is_err(), "the caller is told: {asked:?}");
+    assert!(
+        core.first_to_ask_for_news(756733, 3),
+        "and the next ask is not deduped against one nobody heard",
+    );
+}
+
+/// A P&L number pointed at another contract does not inherit the last one.
+///
+/// A figure is only sent where it differs from the one sent before, so the
+/// cache left under the number either reported the previous contract's day as
+/// this one's, or — where the two happened to agree — reported nothing at all
+/// until something moved. The withdrawal clears it for this reason; taking the
+/// number without withdrawing it did not.
+#[test]
+fn a_pnl_number_taken_for_another_contract_starts_clean() {
+    let core = ClientCore::new();
+    core.subscribe_pnl_single(11, 8001);
+    core.last_pnl_single.lock().unwrap().insert(11, [1, 2, 3, 4, 5]);
+
+    core.subscribe_pnl_single(11, 8002);
+    assert!(
+        !core.last_pnl_single.lock().unwrap().contains_key(&11),
+        "the last contract's figures are not this one's",
+    );
+}
+
