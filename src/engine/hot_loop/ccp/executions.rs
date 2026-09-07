@@ -629,7 +629,7 @@ impl CcpState {
                 // follows adds them again: taken whole, an order that had
                 // filled forty read as eighty.
                 filled: parse_qty_tag(parsed.get(&14))
-                    .map(|cum| (cum - own_shares).max(0))
+                    .map(|cum| cum.saturating_sub(own_shares).max(0))
                     .unwrap_or_else(|| prior.map_or(0, |o| o.filled)),
                 // An order this session never saw is working by the fact of
                 // being in the push. One whose state was not known stays
@@ -1320,22 +1320,22 @@ impl CcpState {
         // reported both under the later print's execution.
         let booked_off: Option<RichOrderInfo>;
 
-        // A rejection that raced a cancel, on an order the venue still owes the
-        // cancel a verdict on: this report is not the order's outcome, so it
-        // neither retires the order below nor stands as the state cached under
-        // it. Read once, because both are the same answer to the same question
-        // — read only at the retirement, the order stayed in the book and the
-        // cached state was overwritten with the rejection anyway, so what a
-        // caller was handed for a working order carried a rejection's status
-        // and its reason while the venue went on working it.
+        // The state filed under an order is the state the engine holds for it.
         //
-        // As the guard beside the status: only where a replace is outstanding
-        // does a rejection behind a cancel answer something other than the
-        // cancel itself.
-        let cancel_still_owed = status == crate::types::OrderStatus::Rejected
-            && context.order(clord_id)
-                .is_some_and(|o| o.status == crate::types::OrderStatus::PendingCancel)
-            && context.replace_is_outstanding(clord_id);
+        // A report the status guard refused states some other one, and there
+        // are several ways to arrive at that: a rejection that answers a
+        // replace rather than the cancel it raced, and history replayed behind
+        // a cancel that the order has since moved past. Filed anyway, the
+        // engine went on working the order — the guard says so — while what a
+        // caller asking for its working orders read carried the refused
+        // report's status and its reason.
+        //
+        // Read against the order as it stands after the guard, rather than
+        // against the one shape this took first: the cache is answering what
+        // the order is, and that is the same question the guard just settled.
+        // An order this session does not hold is not one the guard has an
+        // opinion on, and is left to the two rules below it.
+        let states_the_order = context.order(clord_id).is_none_or(|o| o.status == status);
 
         // Enrich order/contract caches block
         {
@@ -1737,7 +1737,7 @@ impl CcpState {
                     is_resend && !finishes && context.order(clord_id).is_none();
                 if (!already_terminal || finishes)
                     && !history_of_a_finished_order
-                    && !cancel_still_owed
+                    && states_the_order
                 {
                     shared.orders.push_order_info(clord_id, info);
                 }
@@ -1750,13 +1750,22 @@ impl CcpState {
             crate::types::OrderStatus::Rejected
         ) {
             let tracked = context.order(clord_id).copied();
+            // Whether this report is how the order FINISHED, which is not the
+            // question the cache above asks — that one is what the order IS.
+            //
             // A rejection the guard left standing is the venue's answer to the
             // request that raced the cancel, not an answer to the cancel: the
             // venue still owes the cancel its own verdict, and retiring here
             // would leave that verdict nothing to announce against when it
             // lands. The order stays in the book until a verdict the guard
-            // accepts finishes it. Read above, where it also holds back the
-            // state cached under the order.
+            // accepts finishes it.
+            //
+            // As the guard beside the status: only where a replace is
+            // outstanding does a rejection behind a cancel answer something
+            // other than the cancel itself.
+            let cancel_still_owed = status == crate::types::OrderStatus::Rejected
+                && tracked.is_some_and(|o| o.status == crate::types::OrderStatus::PendingCancel)
+                && context.replace_is_outstanding(clord_id);
             // Filed under the guard that retires it, and for the same reason:
             // an answer that is not this order's outcome is not how it
             // finished either. Filed ahead of the guard, the rejection that

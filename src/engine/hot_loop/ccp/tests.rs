@@ -2870,6 +2870,48 @@ fn a_rejection_that_answers_the_replace_is_not_cached_as_the_orders_state() {
     );
 }
 
+/// And history replayed behind a cancel is not the order's state either.
+///
+/// A session opens by replaying recent activity, and a working report from
+/// before a cancel was sent cannot move the order out of PendingCancel — the
+/// status guard says so. The cache did not read that verdict, so it filed the
+/// replayed status anyway, and a caller asking what it had working was told
+/// Submitted about an order the engine was holding as pending cancel.
+#[test]
+fn a_working_report_the_status_guard_refused_is_not_cached_as_the_orders_state() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
+
+    // 97=Y marks a report that restates history. 150=0/39=0 is a working
+    // order, which the venue names PreSubmitted.
+    let replayed = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+        (11, "42"), (150, "0"), (39, "0"), (97, "Y"),
+    ], 1);
+    ccp.process_ccp_message(
+        &replayed, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+
+    assert_eq!(
+        context.order(42).map(|o| o.status),
+        Some(crate::types::OrderStatus::PendingCancel),
+        "the guard kept the order where it was",
+    );
+    let cached = shared.orders.get_order_info(42);
+    assert!(
+        cached.as_ref().is_none_or(|i| i.order_state.status != "PreSubmitted"),
+        "and the cache says the same thing: {:?}",
+        cached.map(|i| i.order_state.status.clone()),
+    );
+}
+
 // /: in the UP portfolio snapshot the average cost is
 // tag 6101 and 6065 is the market price. The handler previously read 6065 as
 // the average cost. Verify the mapping and that all marks are stored.
@@ -3273,6 +3315,41 @@ fn matching_symbols_ack(req_id: &str) -> Vec<u8> {
 
 fn u186_test_state() -> (CcpState, Context, SharedState) {
     (CcpState::new(), Context::new(), SharedState::new())
+}
+
+/// Both figures a recovered order's fill is worked out from come off the wire,
+/// so their difference need not be one.
+///
+/// A report that both recovers an order and books a fill counts its own shares
+/// in the cumulative figure, and this takes them back out. Taken plain, a
+/// cumulative figure the venue states near the bottom of the range and a fill
+/// near the top underflow the subtraction — on the engine thread, where a
+/// panic ends the session and every subscription on it.
+#[test]
+fn a_recovered_order_survives_a_cumulative_quantity_the_wire_states_at_the_edge() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    // Under the largest quantity `parse_qty_tag` will carry, stated at both
+    // ends of the range: the cumulative figure at the bottom, this report's
+    // own fill at the top.
+    let edge = (crate::types::Qty::MAX / crate::types::QTY_SCALE) as f64 * 0.9;
+    let report = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+        (11, "42"), (150, "F"), (39, "1"), (6008, "756733"),
+        // A side and a quantity, which is what makes this the recovery of an
+        // order this session does not hold.
+        (54, "1"), (38, "100"),
+        (14, &format!("{:.0}", -edge)),
+        (32, &format!("{edge:.0}")),
+    ], 1);
+    ccp.process_ccp_message(
+        &report, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+    // What matters is that the engine is still here to be asked. A quantity
+    // that cannot be worked out is nought filled, not a number below it.
+    assert!(
+        context.order(42).is_none_or(|o| o.filled >= 0),
+        "a fill is never a negative quantity",
+    );
 }
 
 /// Every deadline the engine keeps for a caller's request has to expire
