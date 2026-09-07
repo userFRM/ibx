@@ -1119,6 +1119,12 @@ impl CcpState {
                 shared.orders.note_replacement_taken(clord_id);
             }
         }
+        // Whether the caller had withdrawn this order before the refusal put
+        // its terms back. Read here, because the restore below writes the
+        // snapshot's status into the book and every later read sees that one.
+        let withdrawn_before_the_refusal = revision_refused
+            && context.order(clord_id)
+                .is_some_and(|o| o.status == crate::types::OrderStatus::PendingCancel);
         if revision_refused {
             // A revision the venue will not make leaves the order on the terms
             // it had, and the record must follow: it took the attempt ahead of
@@ -1192,7 +1198,21 @@ impl CcpState {
         // surfaces no order_status. A refusal states no new status; the order
         // stands on the terms it has. Any execution on the report is still read
         // below.
-        let applied = context.update_order_status(clord_id, status, is_resend);
+        // A refusal of the CHANGE says nothing about a cancel sent over it, and
+        // the status it carries is the order's terms as they stand — which the
+        // guard reads as the order working again, because that is what it means
+        // everywhere else. So the report resumed a withdrawal the venue still
+        // owes a verdict on, and the flag that suppresses the announcement left
+        // the book saying it too.
+        //
+        // The same rule the cancel-reject path keeps. That one is `35=9`; this
+        // is the execution report carrying the refusal, and it was the other
+        // half of the same defect.
+        let applied = if withdrawn_before_the_refusal && restatement_reason == "102" {
+            false
+        } else {
+            context.update_order_status(clord_id, status, is_resend)
+        };
         // An accepted modify is announced even where it changed no status: an
         // order already working when the change lands stays working. Only where
         // the order is in the state being announced, so a status the guard
@@ -1912,10 +1932,23 @@ impl CcpState {
             // the order stands now, and forcing it back to working undid the
             // withdrawal the caller had been told about.
             } else if reject_type != 2 || answers_a_live_revision {
-                let restore_status = if order.filled > 0 {
-                    crate::types::OrderStatus::PartiallyFilled
-                } else {
-                    crate::types::OrderStatus::Submitted
+                // The reject states where the order stands, and a cancel the
+                // venue refuses is very often refused BECAUSE the order
+                // finished — which is what it says on that tag. Read past it,
+                // the restore put a finished order back to working and did
+                // none of the cleanup a finish does, so the caller was told an
+                // order was live that the venue had already filled.
+                let stated = parsed.get(&39)
+                    .map(|s| status_of(s, oid, parsed))
+                    .filter(|s| {
+                        crate::types::order_status::is_terminal_status(
+                            crate::types::order_status::order_status_str(*s), "",
+                        )
+                    });
+                let restore_status = match stated {
+                    Some(finished) => finished,
+                    None if order.filled > 0 => crate::types::OrderStatus::PartiallyFilled,
+                    None => crate::types::OrderStatus::Submitted,
                 };
                 // A refusal of the CHANGE says nothing about a cancel sent
                 // over it. The venue takes a cancel while a revision is still

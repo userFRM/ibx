@@ -2189,6 +2189,15 @@ impl HotLoop {
     /// Replace the farm connection (after reconnection) and re-subscribe to all
     /// instruments.
     pub fn reconnect_farm(&mut self, conn: Connection) {
+        // A feed given up on is given up on by the engine's own recovery. This
+        // is a caller handing in a transport instead, and that one is live — so
+        // the refusal raised when the recovery stopped is taken back with it,
+        // and the recovery is allowed to run again. Left set, every
+        // subscription on the feed the caller had just rebuilt was refused for
+        // the rest of the session, and nothing would have tried to rebuild it
+        // again either.
+        self.farm_halted = None;
+        self.shared.market.clear_market_data_over();
         let replay = ReplayPacing {
             burst: self.reconnect_cfg.replay_burst,
             pace: self.reconnect_cfg.replay_pace,
@@ -5127,6 +5136,33 @@ mod tests {
             );
         }
     }
+
+    /// A feed the caller rebuilds by hand serves subscriptions again.
+    ///
+    /// Giving up is the engine giving up on its OWN recovery, and it never
+    /// picks that up again — which is what the refusal beside it means. A
+    /// caller handing in a transport of its own is not that: the feed it hands
+    /// in is live. Left standing, every subscription on it was refused for the
+    /// rest of the session, and nothing would have tried to rebuild it either.
+    #[test]
+    fn a_feed_the_caller_rebuilds_serves_subscriptions_again() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.ccp.disconnected = false;
+        hl.farm.disconnected = true;
+        hl.report_recovery_exhausted("farm");
+        assert!(shared.market.market_data_over().is_some(), "given up on");
+
+        let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+        hl.reconnect_farm(conn);
+
+        assert!(
+            shared.market.market_data_over().is_none(),
+            "the feed the caller handed in serves what is asked of it",
+        );
+        assert!(hl.farm_halted.is_none(), "and the engine may recover it again");
+    }
+
 
     /// And with the trading connection down as well, it is the session: there
     /// is nothing left to keep.

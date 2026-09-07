@@ -680,6 +680,17 @@ impl MarketDataState {
         *self.market_data_over.lock().unwrap() = Some(why);
     }
 
+    /// And take it back, for a feed a caller has rebuilt by hand.
+    ///
+    /// The engine gives up on its own recovery and never picks it up again,
+    /// which is what giving up means — but a caller handing in a transport of
+    /// its own is not the engine's recovery, and the feed it hands in is live.
+    /// Left standing, every subscription on that live feed was refused for the
+    /// rest of the session.
+    #[doc(hidden)] pub fn clear_market_data_over(&self) {
+        *self.market_data_over.lock().unwrap() = None;
+    }
+
     /// The venue has taken this contract's subscription, so the reason it
     /// last refused one is no longer what a joining request is owed.
     ///

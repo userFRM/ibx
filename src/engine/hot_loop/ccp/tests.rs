@@ -6334,6 +6334,85 @@ fn a_refused_revision_does_not_revive_an_order_cancelled_over_it() {
     );
 }
 
+/// And the same refusal carried on an execution report, which is the other
+/// half of it.
+///
+/// The venue states a refused change two ways: as a cancel reject, and as an
+/// execution report naming the refusal on its own tag. The first was fixed;
+/// this is the second. The report carries the order's terms as they stand, and
+/// the guard reads a working status as the order working again — because that
+/// is what it means everywhere else — so the withdrawal the caller had been
+/// told about was undone, and the flag that suppresses the announcement left
+/// the book saying it anyway.
+#[test]
+fn a_refused_revision_on_an_execution_report_does_not_revive_a_cancelled_order() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy,
+        100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    let before = *context.order(42).expect("the order is tracked");
+    context.pre_replace.insert((42, 1), (before, "42.0".to_string(), None));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
+
+    // 378=102 is the venue refusing the change; 39=0 states the order's terms
+    // as they stand, which reads as working.
+    let refused = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+        (11, "42.1"), (150, "0"), (39, "0"), (378, "102"),
+    ], 1);
+    ccp.process_ccp_message(
+        &refused, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+
+    assert_eq!(
+        context.order(42).map(|o| o.status),
+        Some(crate::types::OrderStatus::PendingCancel),
+        "the refusal answers the change, not the cancel still in flight",
+    );
+}
+
+/// A cancel the venue refuses because the order already filled does not put
+/// the order back to working.
+///
+/// The reject states where the order stands, and a refused cancellation is
+/// very often refused for exactly that reason. Read past it, the restore put a
+/// finished order back to working and did none of the cleanup finishing does,
+/// so the caller held a live order the venue had already filled — and a
+/// withdrawal of everything would go on trying to cancel it.
+#[test]
+fn a_cancel_refused_because_the_order_filled_leaves_it_filled() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy,
+        100 * crate::types::QTY_SCALE, 100 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::Submitted, false));
+    assert!(context.update_order_status(42, crate::types::OrderStatus::PendingCancel, false));
+
+    // 434=1 refuses the cancellation; 102=0 is "too late"; 39=2 says why.
+    let mut refused = std::collections::HashMap::new();
+    refused.insert(41u32, "42".to_string());
+    refused.insert(434u32, "1".to_string());
+    refused.insert(102u32, "0".to_string());
+    refused.insert(39u32, "2".to_string());
+    ccp.handle_cancel_reject(&refused, &mut context, &shared, &None);
+
+    assert_ne!(
+        context.order(42).map(|o| o.status),
+        Some(crate::types::OrderStatus::Submitted),
+        "an order the venue says is filled is not reported working",
+    );
+}
+
+
 /// An accepted replace on an order that filled before the answer landed is
 /// still announced.
 ///
