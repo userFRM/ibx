@@ -1672,6 +1672,57 @@ fn a_refused_stream_half_frees_the_number_it_was_kept_up_to_date_under() {
     assert!(!hmds.keep_up_to_date_reqs.contains(&9), "and the number is freed");
     assert!(hmds.forming_bars.iter().all(|f| f.req_id != 9), "and the half-built bar with it");
 }
+
+/// A series that cannot be folded fails the whole request, so the stream half
+/// goes with it — as it does where the venue states the refusal and where a
+/// page cannot be read.
+///
+/// Left running, five-second bars kept arriving under a number the caller had
+/// just been told had failed, the next reconnect asked for the stream again,
+/// and the number answered nothing else for the rest of the session.
+#[test]
+fn a_series_that_cannot_be_folded_withdraws_the_stream_it_was_asked_for_alongside() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let (conn, mut peer) = Connection::for_test();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(500))).unwrap();
+    let mut conn = Some(conn);
+    hmds.pending_historical.push(("hist_1".to_string(), 9));
+    hmds.keep_up_to_date_reqs.insert(9);
+    hmds.rtbar_subs.push(("hist_1".to_string(), 9, Some(4002), 0.01, 1.0));
+    hmds.held.push(HeldSeries {
+        req_id: 9, fold: Fold::Adjusted, con_id: 756733, sec_type: "STK".into(),
+        exchange: "SMART".into(), bars: Vec::new(), timezone: String::new(),
+        actions_asked: true, actions_query: None, complete: false,
+        // An action the venue named and this client cannot classify. It may be
+        // one that moves the scale, so the fold refuses rather than hand back
+        // a raw price under an adjusted one's name.
+        actions: Some(vec![crate::control::adjustments::Adjustment {
+            kind: None,
+            date: "20240610".into(),
+            ..Default::default()
+        }]),
+    });
+    let xml = "<ResultSetBar><id>hist_1</id><eoq>true</eoq><tz>US/Eastern</tz>\
+               <Events><Bar><time>20240611  09:30:00</time><open>10</open>\
+               <high>11</high><low>9</low><close>10.5</close><volume>100</volume>\
+               </Bar></Events></ResultSetBar>";
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"35=W\x016118=");
+    msg.extend_from_slice(xml.as_bytes());
+    msg.push(0x01);
+    hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+    assert!(
+        !shared.reference.drain_historical_errors().is_empty(),
+        "the caller is told the series could not be folded",
+    );
+    assert!(!hmds.keep_up_to_date_reqs.contains(&9), "the number is freed");
+    assert!(hmds.rtbar_subs.iter().all(|(_, rid, ..)| *rid != 9), "the stream is gone");
+    let cancel = String::from_utf8_lossy(&super::read_frame(&mut peer)).into_owned();
+    assert!(cancel.contains("ticker:4002"), "and withdrawn at the venue: {cancel:?}");
+}
 }
 
 mod hmds_transport_tests {
