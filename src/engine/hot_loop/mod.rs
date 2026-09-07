@@ -513,6 +513,24 @@ impl HotLoop {
                 if self.farm.holds_market_data(instrument) {
                     continue;
                 }
+                // A feed given up on since the request was taken. The refusal
+                // raised where a caller asks cannot see this one: the request
+                // was accepted while the feed was alive, waited on the venue to
+                // name its contract, and arrives here afterwards. Sent anyway
+                // it reached a socket that is not there and was recorded for a
+                // replay that is not coming, and the caller — told it had a
+                // subscription when it asked — heard nothing for the rest of
+                // the session.
+                if let Some(why) = self.farm_halted {
+                    self.shared.market.push_subscription_failure(
+                        instrument,
+                        format!(
+                            "market data is unavailable for the rest of this session: {}",
+                            why.as_str(),
+                        ),
+                    );
+                    continue;
+                }
                 let (sec_type, exchange) =
                     self.described_as(con_id, &p.sec_type, &p.exchange);
                 self.farm.send_mktdata_subscribe(
@@ -4404,6 +4422,49 @@ mod tests {
                 "the slot was handed on while its lookup was {stage}",
             );
         }
+    }
+
+    /// A subscription the venue names after the feed is given up on is
+    /// refused, not sent to a socket that is not there.
+    ///
+    /// This is the one path the refusal on the caller's side cannot see. The
+    /// request was accepted while the feed was alive — it had to be, the
+    /// contract was stated by description and the venue had to name it — and it
+    /// arrives back here once the naming lands, which can be after the feed has
+    /// been given up on. Sent anyway it went to nothing and was recorded for a
+    /// replay that is not coming, and the caller, told it had a subscription
+    /// when it asked, heard nothing for the rest of the session.
+    #[test]
+    fn a_subscription_named_after_the_feed_was_given_up_is_refused() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let instrument = hl.context.market.register(0);
+        hl.ccp.resolved_md_subscribe.push((756733, crate::engine::hot_loop::ccp::PendingSubscribe {
+            con_id: 0,
+            instrument,
+            symbol: "SPY".into(),
+            exchange: "SMART".into(),
+            sec_type: "STK".into(),
+            currency: "USD".into(),
+            last_trade_date: String::new(),
+            strike: 0.0,
+            right: String::new(),
+            multiplier: String::new(),
+            mode_9887: 0, regulatory_snapshot: false,
+        }));
+        hl.farm_halted = Some(retry::DisconnectReason::RecoveryExhausted);
+
+        hl.send_resolved_subscriptions();
+
+        assert!(
+            !hl.farm.holds_market_data(instrument),
+            "nothing was recorded for a replay that is not coming",
+        );
+        let told = shared.market.drain_subscription_failures();
+        assert!(
+            told.iter().any(|(at, _)| *at == instrument),
+            "and the caller is told the feed is done: {told:?}",
+        );
     }
 
     /// The slot guard lists what still refers to a contract, and a holding was

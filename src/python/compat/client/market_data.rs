@@ -337,6 +337,21 @@ impl EClient {
         // wire cannot carry holds nothing, and taking the slot first left it
         // held against a request that was then refused.
         let wire = wire_req_id(req_id)?;
+        // A book rides the quote feed, so a feed given up on serves none. The
+        // other surface refuses this and this one did not: a book asked for
+        // here took a slot, reached a sender with no connection to write it to,
+        // and said nothing — and a book that never arrives is what a market
+        // with nothing to say looks like.
+        if let Some(why) = self.shared.lock().unwrap().as_ref()
+            .and_then(|s| s.market.market_data_over())
+        {
+            return self.report_refusal(
+                py, req_id,
+                Refusal::not_connected(format!(
+                    "market data is unavailable for the rest of this session: {why}",
+                )),
+            );
+        }
         if let Err(why) = self.core.hold_the_book(req_id) {
             return self.report_refusal(py, req_id, why);
         }

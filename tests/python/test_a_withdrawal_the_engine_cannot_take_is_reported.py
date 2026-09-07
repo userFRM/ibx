@@ -109,3 +109,27 @@ def test_a_slot_taken_for_a_request_that_never_went_goes_back():
     assert w.seen and w.seen[-1][1] == 504, (
         f"a retry is refused as not connected, not as a duplicate: {w.seen}"
     )
+
+
+def test_no_book_is_taken_on_a_feed_that_is_over():
+    """The other surface refuses this and this one did not.
+
+    A book rides the quote feed, so a feed the engine has given up on serves
+    none. Accepted, the request took a slot and reached a sender with no
+    connection to write it to — and a book that never arrives is what a market
+    with nothing to say looks like, so nothing told the two apart.
+    """
+    w = Errors()
+    c = ibx.EClient(w)
+    c._test_connect("T")
+    c._test_say_the_feed_is_over("the venue would not take the connection back")
+
+    book = ibx.Contract()
+    book.conId = 756733
+    book.symbol = "SPY"
+    book.secType = "STK"
+    book.exchange = "SMART"
+    book.currency = "USD"
+    assert c.reqMktDepth(21, book, 5, False, []) is None
+    assert w.seen, "the caller is told"
+    assert w.seen[-1][1] == 504, w.seen

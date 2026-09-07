@@ -201,6 +201,17 @@ impl EClient {
         self.disconnects.load(Ordering::Acquire)
     }
 
+    /// Say the quote feed is done for the rest of this session, as the engine
+    /// does when it gives up on it.
+    #[doc(hidden)]
+    fn _test_say_the_feed_is_over(&self, why: &str) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        // Leaked deliberately: the engine states this from a fixed set of
+        // reasons, and a test naming its own needs the same lifetime.
+        shared.market.set_market_data_over(Box::leak(why.to_string().into_boxed_str()));
+        Ok(())
+    }
+
     /// What this session has queued for the engine, taken and cleared.
     ///
     /// Written out rather than handed over as objects: a test asks whether a
