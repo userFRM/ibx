@@ -37,14 +37,39 @@ def script_python():
     return str(VENV) if VENV.exists() else sys.executable
 
 
-def python_ci_pins():
-    """The interpreter version the workflow runs the Python suite on.
+def jobs_in_workflow():
+    """Each job the workflow declares, as `(name, body)`.
 
-    Read out of the workflow for the same reason the suite list is: a pin that
-    moves there and not here leaves this gate answering for a run it did not do.
+    A job key sits at two spaces of indent under `jobs:`. Anything above that
+    line is triggers and permissions, which carry keys at the same depth.
     """
-    found = re.search(r'python-version:\s*"?(\d+\.\d+)"?', WORKFLOW.read_text())
-    return found.group(1) if found else None
+    text = WORKFLOW.read_text()
+    at = text.find("\njobs:\n")
+    if at < 0:
+        return
+    text = text[at:]
+    starts = [(m.start(), m.group(1)) for m in re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):$", text)]
+    for i, (start, name) in enumerate(starts):
+        end = starts[i + 1][0] if i + 1 < len(starts) else len(text)
+        yield name, text[start:end]
+
+
+def python_ci_pins():
+    """The interpreter the workflow runs the Python suite on, where it names one.
+
+    Read out of the job that runs the suite rather than out of the file. The
+    first `python-version` in this workflow belongs to the documentation job,
+    and taking that one answered for a run it has nothing to do with — the
+    suite's own job installs its interpreter another way and names no version
+    at all. `None` says that, which is the honest answer; a version borrowed
+    from another job is worse than no answer, because it reads like one.
+    """
+    for _, body in jobs_in_workflow():
+        if "pytest" not in body:
+            continue
+        found = re.search(r'python-version:\s*"?(\d+\.\d+)"?', body)
+        return found.group(1) if found else None
+    return None
 
 
 def python_version_here():
@@ -199,10 +224,16 @@ def main():
     # a day of pushes, because a write through the attribute protocol is not the
     # same operation on both. So the verdict says which interpreter answered.
     pinned, here = python_ci_pins(), python_version_here()
-    if pinned and here and pinned != here:
+    if here and pinned and pinned != here:
         print(f"\nevery suite passed, but the Python suite ran on {here} and the "
               f"workflow runs it on {pinned}. That is not the same evidence — run "
               f"it on {pinned} before reading this as what the workflow will say.")
+        return 0
+    if here and pinned is None:
+        print(f"\nevery suite passed, with the Python suite on {here}. The workflow "
+              f"names no interpreter for that job — it takes whatever the runner "
+              f"ships — so an answer that depends on the version can still differ "
+              f"there, and this run cannot tell you it will not.")
         return 0
 
     print(f"\nall of it passed, across {len(suites)} suites: {' '.join(suites)}")
