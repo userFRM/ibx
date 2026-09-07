@@ -463,12 +463,18 @@ class _LoopBound:
         """
         from ib_async.objects import HistogramData
 
+        # Built as theirs either way. This engine states a bucket the way the
+        # reference client does — `price` and `size` — and their wrapper reads
+        # `price` and `count`, so an entry passed straight through carries a
+        # name they do not read. Handing back whatever arrived was right only
+        # while this engine handed back a pair.
         self._wrapper.histogramData(
             req_id,
             [
-                item
-                if hasattr(item, "price")
-                else HistogramData(price=item[0], count=item[1])
+                HistogramData(
+                    price=item.price if hasattr(item, "price") else item[0],
+                    count=int(item.size if hasattr(item, "size") else item[1]),
+                )
                 for item in items
             ],
         )
