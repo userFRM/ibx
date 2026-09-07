@@ -707,6 +707,27 @@ pub struct HistoricalAsk {
     pub zone: String,
 }
 
+/// A request number held for the length of a registration.
+///
+/// Given back when this drops, which is every way out of the call that took it
+/// — the refusals before the engine is asked, the wait timing out, the `?` on
+/// a send. A release written at each of those instead is a release somebody
+/// adds a path around later.
+struct Registering<'a> {
+    held: &'a Mutex<std::collections::HashSet<(u8, i64)>>,
+    key: (u8, i64),
+}
+
+impl Drop for Registering<'_> {
+    fn drop(&mut self) {
+        self.held.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
+    }
+}
+
+/// Which record a registration is taking: the quotes, or the tick stream.
+const TAKING_QUOTES: u8 = 0;
+const TAKING_TICKS: u8 = 1;
+
 pub struct ClientCore {
     /// How long a caller waits for the engine to name an instrument.
     ///
@@ -723,6 +744,22 @@ pub struct ClientCore {
     // reqId <-> InstrumentId mapping
     /// Which contract each quote request is on.
     pub req_to_instrument: Mutex<HashMap<i64, InstrumentId>>,
+    /// Numbers a registration is in the middle of taking.
+    ///
+    /// The map above answers which contract a number watches, and it cannot be
+    /// written until the engine has named the slot — which is a wait, and a
+    /// long one where the engine is busy. Two callers registering one number
+    /// in that window both read the map as free and both went on: two slots
+    /// ended up holding contracts under one number, the map kept whichever
+    /// finished last, and the other slot's subscription stayed live on the
+    /// wire with nothing able to withdraw it. That is the failure the check
+    /// beside the map is written to prevent, and checking a map nobody has
+    /// written yet cannot prevent it.
+    /// Keyed by which record is being taken as well as by the number: a
+    /// number may carry a quote subscription and a tick stream at once, and
+    /// the two are refused against their own records, so a claim that did not
+    /// say which would refuse a pair the client allows.
+    registering: Mutex<std::collections::HashSet<(u8, i64)>>,
     /// Which request owns each contract's quotes. One per contract:
     /// later callers follow it rather than opening a second.
     pub instrument_to_req: Mutex<HashMap<InstrumentId, i64>>,
@@ -977,6 +1014,7 @@ impl ClientCore {
             }),
             readonly: std::sync::atomic::AtomicBool::new(false),
             req_to_instrument: Mutex::new(HashMap::new()),
+            registering: Mutex::new(std::collections::HashSet::new()),
             instrument_to_req: Mutex::new(HashMap::new()),
             tbt_to_instrument: Mutex::new(HashMap::new()),
             instrument_followers: Mutex::new(HashMap::new()),
@@ -1683,15 +1721,23 @@ impl ClientCore {
         // Refused here, before anything is sent: the venue is asked before the
         // slot this request would take is known, so there is no later point at
         // which refusing leaves nothing behind.
-        if self.req_to_instrument.lock().unwrap().contains_key(&req_id) {
-            return Err(Refusal::stated(
-                DUPLICATE_TICKER_ID,
-                format!(
-                    "request {req_id} is already watching a contract: withdraw it before \
-                     asking for another under the same number",
-                ),
-            ));
-        }
+        // Read and claimed under one lock, so a second caller on this number
+        // cannot pass the check while the first is still waiting to be given a
+        // slot. Held until this call returns, however it returns.
+        let _claim = {
+            let watching = self.req_to_instrument.lock().unwrap();
+            let mut taking = self.registering.lock().unwrap();
+            if watching.contains_key(&req_id) || !taking.insert((TAKING_QUOTES, req_id)) {
+                return Err(Refusal::stated(
+                    DUPLICATE_TICKER_ID,
+                    format!(
+                        "request {req_id} is already watching a contract: withdraw it before \
+                         asking for another under the same number",
+                    ),
+                ));
+            }
+            Registering { held: &self.registering, key: (TAKING_QUOTES, req_id) }
+        };
 
         // A quote feed the engine has given up on serves nothing more this
         // session. Refused here rather than beside the socket, because the two
@@ -2152,15 +2198,25 @@ impl ClientCore {
         // downstream would still leave this record overwritten and the first
         // stream orphaned. Before the send is the only point that leaves
         // nothing behind.
-        if self.tbt_to_instrument.lock().unwrap().contains_key(&req_id) {
-            return Err(Refusal::stated(
-                DUPLICATE_TICKER_ID,
-                format!(
-                    "request {req_id} is already carrying a tick stream: withdraw it \
-                     before asking for another under the same number",
-                ),
-            ));
-        }
+        //
+        // Read and claimed under one lock, as the quote path above does it and
+        // for the same reason: the record below cannot be written until the
+        // engine names the slot, so two callers on this number both read it as
+        // free and both went on.
+        let _claim = {
+            let carrying = self.tbt_to_instrument.lock().unwrap();
+            let mut taking = self.registering.lock().unwrap();
+            if carrying.contains_key(&req_id) || !taking.insert((TAKING_TICKS, req_id)) {
+                return Err(Refusal::stated(
+                    DUPLICATE_TICKER_ID,
+                    format!(
+                        "request {req_id} is already carrying a tick stream: withdraw it \
+                         before asking for another under the same number",
+                    ),
+                ));
+            }
+            Registering { held: &self.registering, key: (TAKING_TICKS, req_id) }
+        };
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::SubscribeTbt {
             contract: ContractRef { con_id, symbol: symbol.to_string(), sec_type: sec_type.to_string(), exchange: exchange.to_string(), ..Default::default() },

@@ -2651,3 +2651,46 @@ fn a_pnl_number_taken_for_another_contract_starts_clean() {
     );
 }
 
+/// One number cannot be taken by two registrations at once.
+///
+/// The map that answers which contract a number watches cannot be written
+/// until the engine has named the slot, and that is a wait. Two callers on one
+/// number both read the map as free in that window and both went on: two slots
+/// ended up holding contracts under one number, the map kept whichever
+/// finished last, and the other slot's subscription stayed live on the wire
+/// with nothing able to withdraw it. That is the failure the check is written
+/// to prevent, and a check against a map nobody has written yet cannot.
+#[test]
+fn one_number_cannot_be_registered_twice_at_once() {
+    use std::sync::Arc;
+    let core = Arc::new(ClientCore::new());
+    let shared = Arc::new(SharedState::new());
+    shared.market.set_instrument_count(8);
+    // Long enough that the first registration is still waiting when the second
+    // asks — the window the check has to cover.
+    core.set_registration_timeout(std::time::Duration::from_millis(1500));
+    let (tx, _rx) = std::sync::mpsc::sync_channel(64);
+
+    let first = {
+        let (core, shared, tx) = (Arc::clone(&core), Arc::clone(&shared), tx.clone());
+        std::thread::spawn(move || {
+            core.register_mkt_data(
+                &shared, &tx, 7, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+                false, false, "", 0,
+            )
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let second = core.register_mkt_data(
+        &shared, &tx, 7, 272093, "MSFT", "SMART", "STK", "USD", "", 0.0, "", "",
+        false, false, "", 0,
+    );
+    let refusal = second.expect_err("the second is refused, not admitted");
+    assert_eq!(
+        refusal.code, crate::error_codes::DUPLICATE_TICKER_ID,
+        "refused as a duplicate number, not left to time out on its own: {refusal:?}",
+    );
+    let _ = first.join();
+}
+
