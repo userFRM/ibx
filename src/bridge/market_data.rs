@@ -95,6 +95,14 @@ pub struct MarketDataState {
     /// that follows an existing subscription can be told it too: the venue
     /// sends one tickReqParams per reqMktData, and a follower asked for none.
     last_min_tick: Mutex<std::collections::HashMap<crate::types::InstrumentId, f64>>,
+    /// Why the venue refused a contract's subscription, kept for whoever asks
+    /// for it next. The failure itself is drained once and told to whoever
+    /// held it then; a request that joins the same contract afterwards was
+    /// told nothing and received nothing, because the subscription it joined
+    /// had already been refused.
+    last_subscription_failure: Mutex<std::collections::HashMap<crate::types::InstrumentId, String>>,
+    /// A refusal owed to one request that joined a contract already refused.
+    subscription_failures_direct: Mutex<Vec<(i64, String)>>,
     /// tickReqParams owed to a single request that followed a live
     /// subscription, delivered to that request alone rather than fanned.
     tick_req_params_direct: Mutex<Vec<(i64, f64)>>,
@@ -136,6 +144,8 @@ impl MarketDataState {
             news_rejections: Mutex::new(Vec::new()),
             tick_req_params: Mutex::new(Vec::new()),
             last_min_tick: Mutex::new(std::collections::HashMap::new()),
+            last_subscription_failure: Mutex::new(std::collections::HashMap::new()),
+            subscription_failures_direct: Mutex::new(Vec::new()),
             tick_req_params_direct: Mutex::new(Vec::new()),
             subscription_moves: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
@@ -169,6 +179,7 @@ impl MarketDataState {
     #[doc(hidden)] pub fn note_released_slot(&self, instrument: crate::types::InstrumentId) {
         self.released_slots.lock().unwrap().push(instrument);
         self.last_min_tick.lock().unwrap().remove(&instrument);
+        self.last_subscription_failure.lock().unwrap().remove(&instrument);
     }
 
     /// The slots given back since this was last asked.
@@ -185,6 +196,7 @@ impl MarketDataState {
     /// watching this one.
     #[doc(hidden)] pub fn forget_subscription_failures(&self, id: crate::types::InstrumentId) {
         self.subscription_failures.lock().unwrap().retain(|(at, _)| *at != id);
+        self.last_subscription_failure.lock().unwrap().remove(&id);
     }
 
     /// Drop the model last published for a slot, because the slot has gone
@@ -626,7 +638,25 @@ impl MarketDataState {
     }
 
     #[doc(hidden)] pub fn push_subscription_failure(&self, instrument: crate::types::InstrumentId, reason: String) {
+        self.last_subscription_failure.lock().unwrap()
+            .insert(instrument, reason.clone());
         self.subscription_failures.lock().unwrap().push((instrument, reason));
+    }
+
+    /// Why a contract a request is about to join was refused, if it was.
+    /// `None` where the subscription it joins is live.
+    pub fn failure_for_follower(&self, instrument: crate::types::InstrumentId) -> Option<String> {
+        self.last_subscription_failure.lock().unwrap().get(&instrument).cloned()
+    }
+
+    /// A refusal owed to one request that joined a contract already refused.
+    #[doc(hidden)] pub fn push_subscription_failure_for(&self, req_id: i64, reason: String) {
+        self.subscription_failures_direct.lock().unwrap().push((req_id, reason));
+    }
+
+    /// Take every refusal owed to a single request, leaving none.
+    pub fn drain_subscription_failures_direct(&self) -> Vec<(i64, String)> {
+        self.subscription_failures_direct.lock().unwrap().drain(..).collect()
     }
 
     #[doc(hidden)] pub fn set_instrument_count(&self, count: u32) {

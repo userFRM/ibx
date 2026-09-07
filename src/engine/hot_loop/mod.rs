@@ -2395,13 +2395,20 @@ impl HotLoop {
     /// Say once that recovery has stopped, so a caller waiting on a connection
     /// that is never coming back is told rather than left waiting.
     fn report_recovery_exhausted(&mut self, which: &str) {
-        // The market-data farm alone, with the trading connection up: the
-        // transport that ran out of recovery is what has ended, not the
+        // The market-data farm running out is the transport ending, never the
         // session. Ended as the session, every reader was refused as not
         // connected and both event loops exited, while the trading connection
         // stayed up and went on taking orders on a session the caller could
         // no longer read.
-        if which == "farm" && !self.ccp.disconnected {
+        //
+        // Read once against the trading connection being up, which made the
+        // quote feed's spent budget end the session whenever the trading
+        // connection happened to be down as well — spending, on the feed's
+        // exhaustion, attempts the caller had allowed the trading connection
+        // and it had not used. The session's budget is the trading
+        // connection's alone: where that one runs out it is reported under
+        // `"ccp"`, and that is what ends the session.
+        if which == "farm" {
             if self.farm_halted.is_none() {
                 log::error!(
                     "market-data farm recovery abandoned after {} attempts — the limits the \
@@ -4936,6 +4943,29 @@ mod tests {
         hl.announce_reconnected();
         assert!(shared.take_connection_restored(), "the return is announced");
         assert!(!hl.loss_announced);
+    }
+
+    /// The quote feed's spent budget is not the session's, whatever the trading
+    /// connection is doing at the time.
+    ///
+    /// Read once against the trading connection being up, so a farm that ran out
+    /// while the trading connection happened to also be down ended the session —
+    /// spending, on the feed's exhaustion, attempts the caller had allowed the
+    /// trading connection and it had not used yet.
+    #[test]
+    fn a_spent_farm_budget_does_not_end_a_session_the_trading_connection_is_still_recovering() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.farm.disconnected = true;
+        hl.ccp.disconnected = true;
+        hl.report_recovery_exhausted("farm");
+        assert!(shared.reference.session_over().is_none(), "the farm's budget is not the session's");
+        assert!(shared.reference.trading_over().is_none(), "and trading is not ended");
+        assert!(hl.farm_halted.is_some(), "the farm alone is given up on");
+
+        // The trading connection running out is what ends it.
+        hl.report_recovery_exhausted("ccp");
+        assert!(shared.reference.session_over().is_some(), "the trading connection's budget is");
     }
 
     /// And the loop says it, rather than only a test calling by hand.

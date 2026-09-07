@@ -1779,6 +1779,14 @@ impl ClientCore {
             if let Some(min_tick) = shared.market.min_tick_for_follower(instrument) {
                 shared.market.push_tick_req_params_for(req_id, min_tick);
             }
+            // And where the subscription this one joins was refused, it is
+            // refused too. The refusal is drained once and told to whoever held
+            // the contract then; a request joining afterwards heard nothing and
+            // received nothing — it had joined a subscription the venue had
+            // already declined, and nothing was ever going to arrive on it.
+            if let Some(reason) = shared.market.failure_for_follower(instrument) {
+                shared.market.push_subscription_failure_for(req_id, reason);
+            }
             // The news subscription was sent above whether or not the quotes
             // were already up, so it is recorded here as well. Recorded only
             // on the path that also opened the quotes, it was never withdrawn:
@@ -3500,6 +3508,21 @@ impl ClientCore {
                 continue;
             }
 
+            // A position with no seed row and no cost cannot be sized at all.
+            // The opening cash synthesized below is `-qty*avgCost`, which is
+            // nought where the cost is unknown, and the midnight value is
+            // nought too because there is nothing to seed it from — so the
+            // whole of what the position is worth now was booked as the day's
+            // profit. The feed states a cost often rather than always, so this
+            // is reached with the venue's own rows. Counted as one that could
+            // not be priced, which is what it is: the unrealized sum below
+            // already declines to use an unknown basis, and counting it as
+            // priced kept the venue's own figures from standing in.
+            if seed.is_none() && avg_cost == 0 {
+                unpriceable += 1;
+                continue;
+            }
+
             // moneyTradedSinceMidnight (wire 6822) is signed net cash: SELL
             // positive, BUY negative. An intraday-only position
             // has no seed row, so synthesize the opening trade's net cash:
@@ -3657,9 +3680,17 @@ impl ClientCore {
             // all reports the day's move as the position's entire unrealized.
             let midnight_value = stated_midnight
                 .or_else(|| qty_midnight.map(|q| q * prev_close as f64 / PRICE_SCALE_F));
+            // A position with no seed row and no cost is in the same case as an
+            // unknown overnight size: the opening cash synthesized above is
+            // nought where the cost is unknown, and the midnight value is
+            // nought because there is nothing to seed it from, so the whole of
+            // what the position is worth now would go out as the day's profit.
+            // The feed states a cost often rather than always. Held at what was
+            // last reported, as the arm below already holds it.
+            let basis_unknown = seed.is_none() && avg_cost == 0;
             let daily = match midnight_value {
-                Some(mv_midnight) => mv_now - mv_midnight + money_traded,
-                None => last_cache.get(&req_id)
+                Some(mv_midnight) if !basis_unknown => mv_now - mv_midnight + money_traded,
+                _ => last_cache.get(&req_id)
                     .map_or(0.0, |prev| prev[1] as f64 / PRICE_SCALE_F),
             };
             // The venue states what the position has made and not realised,

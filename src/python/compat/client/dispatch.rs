@@ -687,6 +687,14 @@ impl EClient {
         for (req_id, min_tick) in shared.market.drain_tick_req_params_direct() {
             call_wrapper!(self.wrapper, py, "tick_req_params", (req_id, min_tick, "", 0i64));
         }
+
+        // A request that joined a contract the venue had already refused. The
+        // refusal it joined was drained and told once, to whoever held the
+        // contract then, so this one heard nothing and had nothing coming.
+        for (req_id, reason) in shared.market.drain_subscription_failures_direct() {
+            call_wrapper!(self.wrapper, py, "error",
+                (req_id, 0i64, 200i64, reason.as_str(), ""));
+        }
         for (instrument, min_tick) in shared.market.drain_tick_req_params() {
             let held_by = self.core.req_id_for_instrument(instrument);
             let watching: Vec<i64> = std::iter::once(held_by)

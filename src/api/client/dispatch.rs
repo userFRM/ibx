@@ -461,6 +461,12 @@ impl EClient {
         for (req_id, min_tick) in self.shared.market.drain_tick_req_params_direct() {
             wrapper.tick_req_params(req_id, min_tick, "", 0);
         }
+        // A request that joined a contract the venue had already refused. The
+        // refusal it joined was drained and told once, to whoever held the
+        // contract then, so this one heard nothing and had nothing coming.
+        for (req_id, reason) in self.shared.market.drain_subscription_failures_direct() {
+            wrapper.error(req_id, NO_SECURITY_DEFINITION, &reason, "");
+        }
         for (instrument, min_tick) in self.shared.market.drain_tick_req_params() {
             let held_by = self.core.req_id_for_instrument(instrument);
             let watching = std::iter::once(held_by)

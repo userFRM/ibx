@@ -1290,7 +1290,7 @@ impl HmdsState {
                                                 {
                                                     self.held[apos].actions = Some(actions.clone());
                                                     shared.reference.note_adjustments(contract, actions, answers);
-                                                    self.try_file_held(answers, shared, event_tx);
+                                                    self.try_file_held(answers, hmds_conn, hb, shared, event_tx);
                                                 } else {
                                                     shared.reference.note_adjustments(contract, actions, answers);
                                                 }
@@ -1993,7 +1993,7 @@ fn build_tbt_query(
                 entry.actions_query = sent_under;
             }
         }
-        self.try_file_held(req_id, shared, event_tx);
+        self.try_file_held(req_id, hmds_conn, hb, shared, event_tx);
     }
 
     /// File a held series once it is whole — and, if it is to be folded, once
@@ -2005,7 +2005,8 @@ fn build_tbt_query(
     /// terminal sentinel rather than the raw price handed back under an
     /// adjusted name.
     fn try_file_held(
-        &mut self, req_id: u32, shared: &SharedState, event_tx: &Option<EventSink>,
+        &mut self, req_id: u32, hmds_conn: &mut Option<Connection>, hb: &mut HeartbeatState,
+        shared: &SharedState, event_tx: &Option<EventSink>,
     ) {
         let Some(pos) = self.held.iter().position(|a| a.req_id == req_id) else {
             return;
@@ -2065,6 +2066,16 @@ fn build_tbt_query(
             }
             Err(why) => {
                 log::warn!("req_id={} could not be folded: {why}", entry.req_id);
+                // The series failing fails the whole request, so the stream it
+                // was asked for alongside goes with it — as it does where the
+                // venue states the refusal and where a page cannot be read.
+                // Left running, five-second bars kept arriving under a number
+                // the caller had just been told had failed, the next reconnect
+                // asked for the stream again, and the number answered nothing
+                // else for the rest of the session.
+                if self.keep_up_to_date_reqs.remove(&entry.req_id) {
+                    self.withdraw_the_stream_half(entry.req_id, hmds_conn, hb);
+                }
                 super::push_hmds_error(shared, entry.req_id, why, true);
             }
         }

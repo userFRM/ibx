@@ -602,19 +602,6 @@ impl EClient {
         Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Cancel { order_id: oid }))
     }
 
-    /// Say that a withdrawal's annotation has nowhere to go, without stopping
-    /// the withdrawal.
-    ///
-    /// The order still comes back. A record of who withdrew it and when is a
-    /// regulatory one, and losing it matters — but not as much as a live order
-    /// left working because the record could not be filed, which is what
-    /// refusing did.
-    fn say_the_annotation_did_not_travel(
-        &self, py: Python<'_>, order_id: i64, stated: String,
-    ) -> PyResult<()> {
-        self.report_refusal(py, order_id, Refusal::validation(stated))
-    }
-
     /// Cancel an order identified by `permId` — stable across sessions, unlike
     /// the local order id. The cancel frame is orderId-only, so the local id is
     /// looked up from the open-order cache; fails if `perm_id` is not tracked.
@@ -1088,6 +1075,28 @@ impl EClient {
             self.deliver(py, "completed_orders_end", ())?;
         }
         Ok(())
+    }
+}
+
+/// This client's own helpers, kept out of the block above.
+///
+/// Everything in a `#[pymethods]` block is published, whether or not it names
+/// anything the reference client has. A plain helper written there arrived on
+/// the Python surface as a call of its own — and this one fabricates an error
+/// at the caller's wrapper, so a program could be told a withdrawal's
+/// annotation had not travelled when nothing had been withdrawn at all.
+impl EClient {
+    /// Say that a withdrawal's annotation has nowhere to go, without stopping
+    /// the withdrawal.
+    ///
+    /// The order still comes back. A record of who withdrew it and when is a
+    /// regulatory one, and losing it matters — but not as much as a live order
+    /// left working because the record could not be filed, which is what
+    /// refusing did.
+    pub(super) fn say_the_annotation_did_not_travel(
+        &self, py: Python<'_>, order_id: i64, stated: String,
+    ) -> PyResult<()> {
+        self.report_refusal(py, order_id, Refusal::validation(stated))
     }
 }
 

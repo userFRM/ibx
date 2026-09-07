@@ -725,21 +725,6 @@ def cancel_order(order_id, order_cancel=None)
 
 ---
 
-#### `say_the_annotation_did_not_travel`
-
-Say that a withdrawal's annotation has nowhere to go, without stopping the withdrawal.  The order still comes back. A record of who withdrew it and when is a regulatory one, and losing it matters — but not as much as a live order left working because the record could not be filed, which is what refusing did.
-
-```python
-def say_the_annotation_did_not_travel(order_id, stated)
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `order_id` | `int` | Order identifier. Must be unique per session. |
-| `stated` | `str` |  |
-
----
-
 #### `cancel_order_by_perm_id`
 
 Cancel an order identified by `permId` — stable across sessions, unlike the local order id. The cancel frame is orderId-only, so the local id is looked up from the open-order cache; fails if `perm_id` is not tracked.

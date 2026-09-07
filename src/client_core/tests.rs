@@ -2275,6 +2275,39 @@ fn a_condition_trigger_of_7_or_8_is_carried() {
     }
 }
 
+/// A request joining a contract the venue already refused is refused too.
+///
+/// The refusal is drained once and told to whoever held the contract then. A
+/// request that joins afterwards follows the existing subscription, so nothing
+/// is sent for it and nothing comes back — and it was told nothing either. The
+/// reason is kept for it, and let go with the slot, so the next contract on that
+/// slot does not inherit the last one's refusal.
+#[test]
+fn a_request_joining_a_refused_subscription_is_told_the_same_reason() {
+    let shared = SharedState::new();
+    let instrument = 0;
+    shared.market.push_subscription_failure(instrument, "no entitlement".to_string());
+    assert_eq!(
+        shared.market.drain_subscription_failures().len(), 1,
+        "whoever held it is told once",
+    );
+
+    let owed = shared.market
+        .failure_for_follower(instrument)
+        .expect("and the reason is kept for whoever joins next");
+    shared.market.push_subscription_failure_for(7, owed);
+    let direct = shared.market.drain_subscription_failures_direct();
+    assert_eq!(direct.len(), 1, "the joiner is told: {direct:?}");
+    assert_eq!(direct[0].0, 7, "under its own number");
+    assert_eq!(direct[0].1, "no entitlement");
+
+    shared.market.note_released_slot(instrument);
+    assert!(
+        shared.market.failure_for_follower(instrument).is_none(),
+        "and the slot's next contract does not inherit it",
+    );
+}
+
 /// A news subscription the venue refuses leaves nobody holding it, so a later
 /// ask on the same contract is the first again and sends anew. Without the
 /// release, the dedup that keeps one venue subscription for many askers holds
