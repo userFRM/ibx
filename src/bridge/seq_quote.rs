@@ -41,6 +41,15 @@ impl SeqQuote {
         // above this store. Release alone only fences what precedes it; the
         // Acquire half is what pins *following* accesses inside the odd window.
         self.version.fetch_add(1, Ordering::AcqRel); // odd = writing
+        // And the reader needs something to pair with. Not reordering the
+        // payload writes is a statement about this thread; a reader that took
+        // one of them still has no edge back to the counter that says a write
+        // was in flight, because a relaxed store is not a release operation
+        // and its acquire fence synchronises with nothing. Left out, a reader
+        // may take a word from this pass and then read the version it started
+        // with, and the torn snapshot passes a counter that never moved. This
+        // is what the reader's fence pairs with. Free on x86-64.
+        std::sync::atomic::fence(Ordering::Release);
         for (slot, word) in self.data.iter().zip(quote_to_words(quote)) {
             slot.store(word, Ordering::Relaxed);
         }
