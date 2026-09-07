@@ -2500,6 +2500,17 @@ fn a_released_slot_leaves_nothing_queued_under_it() {
 
     shared.market.push_tick_req_params(slot, 0.01);
     shared.market.push_subscription_move(slot, 9);
+    shared.market.push_tick_news(crate::types::TickNews {
+        instrument: slot,
+        provider_code: "BRFG".into(),
+        article_id: "BRFG$1".into(),
+        headline: "about the contract that left".into(),
+        timestamp: 0,
+    });
+    shared.market.push_option_computation(crate::types::OptionComputation {
+        instrument: slot,
+        ..Default::default()
+    });
     shared.market.note_released_slot(slot);
 
     assert!(
@@ -2509,6 +2520,14 @@ fn a_released_slot_leaves_nothing_queued_under_it() {
     assert!(
         shared.market.drain_subscription_moves().iter().all(|(a, b)| *a != slot && *b != slot),
         "and no move naming its slot",
+    );
+    assert!(
+        shared.market.drain_tick_news().iter().all(|n| n.instrument != slot),
+        "nor a headline about the contract that left, under the one that took its slot",
+    );
+    assert!(
+        shared.market.drain_option_computations().iter().all(|c| c.instrument != slot),
+        "nor a model solved against the previous contract's volatility and price",
     );
 }
 

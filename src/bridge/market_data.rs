@@ -199,6 +199,18 @@ impl MarketDataState {
         self.tick_req_params.lock().unwrap().retain(|(at, _)| *at != instrument);
         self.subscription_moves.lock().unwrap()
             .retain(|(from, to)| *from != instrument && *to != instrument);
+        // And the two streams that carry a slot of their own. A headline is
+        // about the contract that was named when it arrived, and a model was
+        // solved against that contract's volatility and price: delivered after
+        // the release, both read as the next occupant's. The model has a cache
+        // beside it that is already dropped with the slot, and the queue in
+        // front of that cache was not — so the stale answer was gone from the
+        // lookup and still on its way to the caller.
+        //
+        // An account-wide notice is not among these. It names no contract, so
+        // no slot can carry it to the wrong one.
+        self.tick_news.lock().unwrap().retain(|n| n.instrument != instrument);
+        self.option_computations.lock().unwrap().retain(|c| c.instrument != instrument);
     }
 
     /// The slots given back since this was last asked.
