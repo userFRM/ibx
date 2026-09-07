@@ -431,6 +431,68 @@ fn a_position_the_venue_says_has_made_nothing_is_reported_as_nothing() {
     );
 }
 
+/// A position with no midnight row and no cost has no basis to be measured
+/// against, so the day's figure is held rather than invented.
+///
+/// The opening cash synthesized for an intraday position is `-qty * avgCost`,
+/// which is nought where the cost is unknown, and there is no midnight value to
+/// seed from either. Worked out anyway, the whole of what the position is worth
+/// went out as the day's profit — a position bought at an unstated price and
+/// marked at 105 was reported as having made its entire market value today. The
+/// venue states a cost often rather than always, so this is reached with the
+/// venue's own rows.
+#[test]
+fn a_position_with_no_seed_and_no_cost_does_not_report_its_whole_value_as_the_day() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.portfolio.account_download_is_settled();
+    core.subscribe_pnl_single(11, 8003);
+
+    // Ten held, marked at 105, and the venue has stated no cost for them.
+    seed_pnl_position(&core, &shared, 8003, 0, 10.0, 0.0, 105.0, 0.0);
+
+    let updates = core.poll_pnl_single(&shared);
+    let update = updates.first().expect("callback must fire");
+    assert_eq!(
+        update.daily_pnl, 0.0,
+        "nothing is known to measure the day against, so nothing is claimed for it",
+    );
+}
+
+/// And the account total does the same: a position it cannot price sends the
+/// whole account to the venue's own figures.
+///
+/// Counted as priced, the client-side sum stood as the account's total while
+/// booking a position's entire market value as the day's profit — and the
+/// realized figure had already accrued for it, so the three did not even agree
+/// with one another.
+#[test]
+fn a_position_with_no_seed_and_no_cost_sends_the_account_total_to_the_venues_figures() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.portfolio.account_download_is_settled();
+    core.subscribe_pnl(42).unwrap();
+
+    // What the venue says the account has made, which is complete by
+    // construction and is what an incomplete local sum falls back to.
+    shared.portfolio.set_account(&AccountState {
+        daily_pnl: (12.5 * PRICE_SCALE_F) as i64,
+        unrealized_pnl: (7.5 * PRICE_SCALE_F) as i64,
+        realized_pnl: (5.0 * PRICE_SCALE_F) as i64,
+        ..Default::default()
+    });
+    seed_pnl_position(&core, &shared, 8004, 0, 10.0, 0.0, 105.0, 0.0);
+
+    let update = core.poll_pnl(&shared).expect("a subscription is answered");
+    assert!(
+        (update.daily_pnl - 12.5).abs() < 1e-6,
+        "the venue's own total stands in: daily={}",
+        update.daily_pnl,
+    );
+    assert!((update.unrealized_pnl - 7.5).abs() < 1e-6);
+    assert!((update.realized_pnl - 5.0).abs() < 1e-6);
+}
+
 #[test]
 fn poll_pnl_intraday_opened_position_fires_callback() {
     // An account flat at midnight that opens a position during the day.
@@ -2287,23 +2349,38 @@ fn a_condition_trigger_of_7_or_8_is_carried() {
 fn a_forgotten_baseline_states_the_quote_as_it_stands() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    shared.market.set_instrument_count(1);
-    shared.market.push_quote(0, &crate::types::Quote {
+    let (tx, _rx) = std::sync::mpsc::sync_channel(64);
+    shared.market.set_instrument_count(4);
+
+    // Request 1 already holds the contract, as a first subscription leaves it.
+    // Seeded rather than registered: taking it needs an engine to answer, and
+    // what is under test is the branch a JOINING request takes, which returns
+    // before the engine is asked.
+    let iid: InstrumentId = 0;
+    core.con_id_to_instrument.lock().unwrap().insert(756733, iid);
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, iid);
+    shared.market.push_quote(iid, &crate::types::Quote {
         bid: 100 * PRICE_SCALE,
         ask: 101 * PRICE_SCALE,
         ..Default::default()
     });
-
-    assert!(core.poll_instrument_ticks(&shared, 0, 1).delivered, "the quote is stated once");
+    assert!(core.poll_instrument_ticks(&shared, iid, 1).delivered, "the quote is stated once");
     assert!(
-        !core.poll_instrument_ticks(&shared, 0, 1).delivered,
+        !core.poll_instrument_ticks(&shared, iid, 1).delivered,
         "and not again while it stands still",
     );
 
-    // What a joining request does.
-    core.last_quotes.lock().unwrap().remove(&0);
+    // The second joins it — through the register, which is where the baseline
+    // is forgotten. Doing that here instead would prove only that a cleared
+    // baseline restates, which the two lines above already say.
+    let joined = core.register_mkt_data(
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        false, false, "", 0,
+    ).expect("the second request joins it");
+    assert_eq!(joined, iid, "the same contract, so it followed rather than took one");
     assert!(
-        core.poll_instrument_ticks(&shared, 0, 2).delivered,
+        core.poll_instrument_ticks(&shared, iid, 2).delivered,
         "a request that joins is owed the quote as it stands, not the next move",
     );
 }
@@ -2317,27 +2394,70 @@ fn a_forgotten_baseline_states_the_quote_as_it_stands() {
 /// slot does not inherit the last one's refusal.
 #[test]
 fn a_request_joining_a_refused_subscription_is_told_the_same_reason() {
+    let core = ClientCore::new();
     let shared = SharedState::new();
-    let instrument = 0;
-    shared.market.push_subscription_failure(instrument, "no entitlement".to_string());
-    assert_eq!(
-        shared.market.drain_subscription_failures().len(), 1,
-        "whoever held it is told once",
-    );
+    let (tx, _rx) = std::sync::mpsc::sync_channel(64);
+    shared.market.set_instrument_count(4);
 
-    let owed = shared.market
-        .failure_for_follower(instrument)
-        .expect("and the reason is kept for whoever joins next");
-    shared.market.push_subscription_failure_for(7, owed);
+    // Request 1 already holds the contract, as a first subscription leaves it.
+    // Seeded rather than registered: taking it needs an engine to answer, and
+    // what is under test is the branch a JOINING request takes, which returns
+    // before the engine is asked.
+    let iid: InstrumentId = 0;
+    core.con_id_to_instrument.lock().unwrap().insert(756733, iid);
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, iid);
+
+    // The venue refuses it, and whoever held it is told once.
+    shared.market.push_subscription_failure(iid, "no entitlement".to_string());
+    assert_eq!(shared.market.drain_subscription_failures().len(), 1);
+
+    // A second request joins the same contract — through the register, which is
+    // where the kept reason is handed to it.
+    core.register_mkt_data(
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        false, false, "", 0,
+    ).expect("the second request joins it");
     let direct = shared.market.drain_subscription_failures_direct();
     assert_eq!(direct.len(), 1, "the joiner is told: {direct:?}");
-    assert_eq!(direct[0].0, 7, "under its own number");
+    assert_eq!(direct[0].0, 2, "under its own number");
     assert_eq!(direct[0].1, "no entitlement");
 
-    shared.market.note_released_slot(instrument);
+    shared.market.note_released_slot(iid);
     assert!(
-        shared.market.failure_for_follower(instrument).is_none(),
+        shared.market.failure_for_follower(iid).is_none(),
         "and the slot's next contract does not inherit it",
+    );
+}
+
+/// And a refusal the venue has since taken back is not what a joiner is owed.
+///
+/// Let go only with the slot, the reason a contract could not be subscribed
+/// before a reconnect was still there afterwards: the feed came back, the
+/// subscription was replayed and accepted, and every request joining the live
+/// subscription was handed a refusal off the outage it had already recovered
+/// from. What is queued is not touched — those are deliveries owed to the
+/// request that was refused, and a later success does not unsay them.
+#[test]
+fn a_subscription_the_venue_has_taken_is_no_longer_refused_for_a_joiner() {
+    let shared = SharedState::new();
+    let iid: InstrumentId = 0;
+
+    shared.market.push_subscription_failure(iid, "no entitlement".to_string());
+    assert_eq!(
+        shared.market.failure_for_follower(iid).as_deref(),
+        Some("no entitlement"),
+    );
+
+    // What the acknowledgement of a replayed subscription says.
+    shared.market.note_subscription_accepted(iid);
+    assert!(
+        shared.market.failure_for_follower(iid).is_none(),
+        "the contract is live, so a joiner is owed the quote and not a refusal",
+    );
+    assert_eq!(
+        shared.market.drain_subscription_failures().len(), 1,
+        "and the request that was refused is still owed the reason it was",
     );
 }
 

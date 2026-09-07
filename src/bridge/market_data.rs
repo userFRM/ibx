@@ -649,6 +649,21 @@ impl MarketDataState {
         self.last_subscription_failure.lock().unwrap().get(&instrument).cloned()
     }
 
+    /// The venue has taken this contract's subscription, so the reason it
+    /// last refused one is no longer what a joining request is owed.
+    ///
+    /// Only the copy kept for joiners is dropped. The queued refusals are
+    /// deliveries the caller that asked has not read yet, and a later success
+    /// does not unsay them — the request they name was refused.
+    ///
+    /// Kept until the slot went back to the table, the reason a contract could
+    /// not be subscribed before a reconnect was still there afterwards, and
+    /// every request joining the subscription that had since come up was told
+    /// it had been refused.
+    #[doc(hidden)] pub fn note_subscription_accepted(&self, id: crate::types::InstrumentId) {
+        self.last_subscription_failure.lock().unwrap().remove(&id);
+    }
+
     /// A refusal owed to one request that joined a contract already refused.
     #[doc(hidden)] pub fn push_subscription_failure_for(&self, req_id: i64, reason: String) {
         self.subscription_failures_direct.lock().unwrap().push((req_id, reason));

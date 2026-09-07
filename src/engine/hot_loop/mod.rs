@@ -1066,6 +1066,32 @@ impl HotLoop {
             else {
                 continue;
             };
+            // A feed given up on takes no more subscriptions. The three below
+            // are the ones a caller waits on an answer for, and each was told
+            // it had one: the slot was taken, the request recorded for a
+            // replay that is not coming, and nothing went to the venue, since
+            // there is no connection to write it to. The caller read that as a
+            // live subscription and waited out the session for a first tick.
+            //
+            // Said here rather than at the socket because the socket cannot
+            // tell this from the ordinary case it shares: a subscription
+            // raised while the feed is between attempts is also written
+            // nowhere, and that one *is* replayed when the feed returns.
+            if let Some(reason) = self.farm_halted
+                && let ControlCommand::Subscribe { reply_tx, .. }
+                    | ControlCommand::SubscribeTbt { reply_tx, .. }
+                    | ControlCommand::SubscribeNews { reply_tx, .. } = &cmd
+            {
+                let told = format!(
+                    "market data is unavailable for the rest of this session: {}",
+                    reason.as_str(),
+                );
+                log::warn!("{told}");
+                if let Some(tx) = reply_tx {
+                    let _ = tx.try_send(Err(told));
+                }
+                continue;
+            }
             // A contract numbered beyond what a request carries. Refused where
             // every request passes rather than narrowed on the way out: a
             // request naming one is asked under the number that survives the
@@ -2627,6 +2653,18 @@ impl HotLoop {
                     "Farm is down and cannot be reconnected: no credentials were cached. \
                      The connection has to be rebuilt by the caller.",
                 );
+                // The same rule the two branches below keep, which this one
+                // did not: what cannot be rebuilt is the quote feed, and with
+                // the trading connection up that is a transport ending, not
+                // the session. Ended as the session it refused every reader as
+                // not connected and exited both event loops, while the trading
+                // connection stayed up and went on taking orders on a session
+                // the caller could no longer read.
+                if !self.ccp.disconnected {
+                    self.farm_halted = Some(retry::DisconnectReason::AuthorizationFailed);
+                    self.announce_reconnected();
+                    return;
+                }
                 self.halt_recovery(retry::DisconnectReason::AuthorizationFailed);
                 return;
             }
@@ -4990,6 +5028,78 @@ mod tests {
             "and the return the farm was holding back is announced",
         );
         assert!(!hl.loss_announced);
+    }
+
+    /// A feed that cannot be rebuilt for want of credentials is the feed
+    /// ending, on the same rule as a feed the venue refuses and a feed whose
+    /// budget runs out. Only those two kept it: the third path ended the
+    /// session, so every reader was refused as not connected and both event
+    /// loops exited, while the trading connection stayed up and went on taking
+    /// orders on a session the caller could no longer read.
+    #[test]
+    fn a_farm_with_no_cached_credentials_ends_the_farm_not_the_session() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.loss_announced = true;
+        hl.ccp.disconnected = false;
+        hl.farm.disconnected = true;
+        // Nothing was cached, which is the case under test.
+        assert!(hl.reconnect_auth.is_none());
+        hl.spawn_farm_reconnect();
+        assert!(shared.reference.session_over().is_none(), "the session stands");
+        assert!(shared.reference.trading_over().is_none(), "and trading is not ended");
+        assert!(hl.farm_halted.is_some(), "the farm alone is given up on");
+        assert!(
+            shared.take_connection_restored(),
+            "and the return the farm was holding back is announced",
+        );
+    }
+
+    /// And with the trading connection down as well, it is the session: there
+    /// is nothing left to keep.
+    #[test]
+    fn a_farm_with_no_cached_credentials_ends_the_session_when_trading_is_down_too() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.ccp.disconnected = true;
+        hl.farm.disconnected = true;
+        hl.spawn_farm_reconnect();
+        assert!(shared.reference.session_over().is_some(), "the session is over");
+    }
+
+    /// A feed given up on takes no more subscriptions.
+    ///
+    /// The caller was told it had one: the slot was taken, the request was
+    /// recorded for a replay that is not coming, and nothing went to the venue
+    /// — there is no connection to write it to. The caller read that as a live
+    /// subscription and waited out the session for a first tick.
+    #[test]
+    fn a_subscription_on_a_feed_given_up_on_is_refused_rather_than_acknowledged() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.running = true;
+        hl.farm.disconnected = true;
+        hl.farm_halted = Some(retry::DisconnectReason::RecoveryExhausted);
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        hl.set_control_rx(rx);
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(crate::types::ControlCommand::Subscribe {
+            contract: crate::types::ContractRef {
+                con_id: 265598,
+                symbol: "AAPL".to_string(),
+                sec_type: "STK".to_string(),
+                exchange: "SMART".to_string(),
+                ..Default::default()
+            },
+            mode_9887: 0,
+            regulatory_snapshot: false,
+            reply_tx: Some(reply_tx),
+        }).unwrap();
+        hl.poll_control_commands();
+
+        let answered = reply_rx.try_recv().expect("the caller is answered at once");
+        assert!(answered.is_err(), "and told it has no subscription: {answered:?}");
     }
 
     /// The market-data farm running out of recovery ends the market-data farm,

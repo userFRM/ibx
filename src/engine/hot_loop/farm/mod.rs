@@ -1202,6 +1202,9 @@ impl FarmState {
         context.market.register_server_tag(server_tag, instrument);
         context.market.set_min_tick(instrument, min_tick);
         shared.market.push_tick_req_params(instrument, min_tick);
+        // The venue has taken it, so whatever it said the last time it would
+        // not is no longer what a request joining this contract is owed.
+        shared.market.note_subscription_accepted(instrument);
         if let Some(size_tick) = trailing_size_increment(&parts) {
             context.market.set_size_tick(instrument, size_tick);
         }
