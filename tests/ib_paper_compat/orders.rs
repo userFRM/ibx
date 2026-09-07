@@ -1328,7 +1328,7 @@ pub(super) fn phase_what_if_order(conns: Conns) -> Conns {
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
 
     assert!(what_if_received, "What-if response was never received");
-    let commission = response_snapshot.map(|r| r.commission).unwrap_or(0);
+    let commission = response_snapshot.and_then(|r| r.commission).unwrap_or(0);
     if commission > 0 {
         println!("  Commission: ${:.2}", commission as f64 / PRICE_SCALE as f64);
         assert!(dispatcher_validated, "Dispatcher path (open_order carrying the what-if state) failed validation");

@@ -1,6 +1,7 @@
 //! Reference data: contract details, historical data, scanners, news, fundamentals.
 
 use pyo3::prelude::*;
+use crate::error_codes::Refusal;
 
 use crate::types::*;
 use super::{wire_req_id, EClient};
@@ -67,27 +68,31 @@ impl EClient {
         let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
         let contract = &*by_venue;
         if what_to_show.eq_ignore_ascii_case("SCHEDULE") {
-            Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
-                contract: contract.into(),
-                req_id: wire_req_id(req_id)?,
-                end_date_time: end_date_time.to_string(),
-                duration: duration_str.to_string(),
-                use_rth: use_rth != 0,
-                filters: contract.lookup_filters(),
-            })?;
+            if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
+                    contract: contract.into(),
+                    req_id: wire_req_id(req_id)?,
+                    end_date_time: end_date_time.to_string(),
+                    duration: duration_str.to_string(),
+                    use_rth: use_rth != 0,
+                    filters: contract.lookup_filters(),
+                }) {
+                return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+            }
         } else {
-            Self::send_control(py, &tx, ControlCommand::FetchHistorical {
-                contract: contract.into(),
-                req_id: wire_req_id(req_id)?,
-                end_date_time: end_date_time.to_string(),
-                duration: duration_str.to_string(),
-                bar_size: bar_size_setting.to_string(),
-                what_to_show: what_to_show.to_string(),
-                use_rth: use_rth != 0,
-                keep_up_to_date,
-                include_expired: contract.include_expired,
-                filters: contract.lookup_filters(),
-            })?;
+            if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchHistorical {
+                    contract: contract.into(),
+                    req_id: wire_req_id(req_id)?,
+                    end_date_time: end_date_time.to_string(),
+                    duration: duration_str.to_string(),
+                    bar_size: bar_size_setting.to_string(),
+                    what_to_show: what_to_show.to_string(),
+                    use_rth: use_rth != 0,
+                    keep_up_to_date,
+                    include_expired: contract.include_expired,
+                    filters: contract.lookup_filters(),
+                }) {
+                return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+            }
         }
         Ok(())
     }
@@ -98,7 +103,9 @@ impl EClient {
         let wire = wire_req_id(req_id)?;
         // A withdrawn stream leaves nothing running under this id.
         self.core.historical_request_is_new(wire);
-        Self::send_control(py, &tx, ControlCommand::CancelHistorical { req_id: wire })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::CancelHistorical { req_id: wire }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -123,39 +130,47 @@ impl EClient {
         // answer dispatched between the send and the note was written in the
         // wrong form.
         self.core.note_date_format(req_id, format_date);
-        Self::send_control(py, &tx, ControlCommand::FetchHeadTimestamp {
-            contract: contract.into(),
-            req_id: wire_req_id(req_id)?,
-            what_to_show: what_to_show.to_string(),
-            use_rth: use_rth != 0,
-            include_expired: contract.include_expired,
-            filters: contract.lookup_filters(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchHeadTimestamp {
+                contract: contract.into(),
+                req_id: wire_req_id(req_id)?,
+                what_to_show: what_to_show.to_string(),
+                use_rth: use_rth != 0,
+                include_expired: contract.include_expired,
+                filters: contract.lookup_filters(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
     /// Cancel head timestamp request.
     fn cancel_head_time_stamp(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::CancelHeadTimestamp { req_id: wire_req_id(req_id)? })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::CancelHeadTimestamp { req_id: wire_req_id(req_id)? }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
     /// Request contract details.
     pub(crate) fn req_contract_details(&self, py: Python<'_>, req_id: i64, contract: &Contract) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::FetchContractDetails {
-            contract: contract.into(),
-            req_id: wire_req_id(req_id)?,
-            filters: contract.lookup_filters(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchContractDetails {
+                contract: contract.into(),
+                req_id: wire_req_id(req_id)?,
+                filters: contract.lookup_filters(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
     /// Request available exchanges for market depth.
     fn req_mkt_depth_exchanges(&self, py: Python<'_>) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::FetchMktDepthExchanges)?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchMktDepthExchanges) {
+            return self.report_refusal(py, -1, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -163,10 +178,12 @@ impl EClient {
     pub(crate) fn req_matching_symbols(&self, py: Python<'_>, req_id: i64, pattern: &str) -> PyResult<()> {
         super::wire_text("a matching-symbols pattern", pattern)?;
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::FetchMatchingSymbols {
-            req_id: wire_req_id(req_id)?,
-            pattern: pattern.to_string(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchMatchingSymbols {
+                req_id: wire_req_id(req_id)?,
+                pattern: pattern.to_string(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -187,13 +204,15 @@ impl EClient {
         underlying_con_id: i64,
     ) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::FetchOptionParams {
-            req_id: wire_req_id(req_id)?,
-            symbol: underlying_symbol.to_string(),
-            fut_fop_exchange: fut_fop_exchange.to_string(),
-            underlying_sec_type: underlying_sec_type.to_string(),
-            underlying_con_id,
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchOptionParams {
+                req_id: wire_req_id(req_id)?,
+                symbol: underlying_symbol.to_string(),
+                fut_fop_exchange: fut_fop_exchange.to_string(),
+                underlying_sec_type: underlying_sec_type.to_string(),
+                underlying_con_id,
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -259,14 +278,18 @@ impl EClient {
     /// Cancel scanner subscription.
     fn cancel_scanner_subscription(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::CancelScanner { req_id: wire_req_id(req_id)? })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::CancelScanner { req_id: wire_req_id(req_id)? }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
     /// Request scanner parameters XML.
     fn req_scanner_parameters(&self, py: Python<'_>) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::FetchScannerParams)?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchScannerParams) {
+            return self.report_refusal(py, -1, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -286,11 +309,13 @@ impl EClient {
     ) -> PyResult<()> {
         let _ = news_article_options;
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::FetchNewsArticle {
-            req_id: wire_req_id(req_id)?,
-            provider_code: provider_code.to_string(),
-            article_id: article_id.to_string(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchNewsArticle {
+                req_id: wire_req_id(req_id)?,
+                provider_code: provider_code.to_string(),
+                article_id: article_id.to_string(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -319,16 +344,18 @@ impl EClient {
         ) {
             return self.report_refusal(py, req_id, why.into());
         }
-        Self::send_control(py, &tx, ControlCommand::FetchHistoricalNews {
-            req_id: wire_req_id(req_id)?,
-            con_id: super::wire_con_id("a request for headlines", con_id)?,
-            provider_codes: provider_codes.to_string(),
-            start_time: start_date_time.to_string(),
-            end_time: end_date_time.to_string(),
-            // No more than the reference client asks for, whatever was wanted.
-            max_results: super::wire_u32("total_results", total_results as i64)?
-                .min(crate::control::news::MOST_HEADLINES_ASKED_FOR),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchHistoricalNews {
+                req_id: wire_req_id(req_id)?,
+                con_id: super::wire_con_id("a request for headlines", con_id)?,
+                provider_codes: provider_codes.to_string(),
+                start_time: start_date_time.to_string(),
+                end_time: end_date_time.to_string(),
+                // No more than the reference client asks for, whatever was wanted.
+                max_results: super::wire_u32("total_results", total_results as i64)?
+                    .min(crate::control::news::MOST_HEADLINES_ASKED_FOR),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -374,14 +401,16 @@ impl EClient {
                  comes back",
             ))
         })?;
-        Self::send_control(py, &tx, ControlCommand::FetchAdjustments {
-            req_id: wire_req_id(req_id)?,
-            con_id,
-            sec_type: sec_type.to_string(),
-            exchange: exchange.to_string(),
-            start_date: start_date.to_string(),
-            end_date: end_date.to_string(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchAdjustments {
+                req_id: wire_req_id(req_id)?,
+                con_id,
+                sec_type: sec_type.to_string(),
+                exchange: exchange.to_string(),
+                start_date: start_date.to_string(),
+                end_date: end_date.to_string(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -402,18 +431,22 @@ impl EClient {
     ) -> PyResult<()> {
         let _ = fundamental_data_options;
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::FetchFundamentalData {
-            req_id: wire_req_id(req_id)?,
-            con_id: super::wire_con_id("a request for a fundamental report", contract.con_id)?,
-            report_type: report_type.to_string(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchFundamentalData {
+                req_id: wire_req_id(req_id)?,
+                con_id: super::wire_con_id("a request for a fundamental report", contract.con_id)?,
+                report_type: report_type.to_string(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
     /// Cancel fundamental data.
     fn cancel_fundamental_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::CancelFundamentalData { req_id: wire_req_id(req_id)? })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::CancelFundamentalData { req_id: wire_req_id(req_id)? }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -451,17 +484,19 @@ impl EClient {
         // are the venue's to say.
         let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
         let contract = &*by_venue;
-        Self::send_control(py, &tx, ControlCommand::FetchHistoricalTicks {
-            contract: contract.into(),
-            req_id: wire_req_id(req_id)?,
-            start_date_time: start_date_time.to_string(),
-            end_date_time: end_date_time.to_string(),
-            number_of_ticks: super::wire_u32("number_of_ticks", number_of_ticks as i64)?,
-            what_to_show: what_to_show.to_string(),
-            use_rth: use_rth != 0,
-            include_expired: contract.include_expired,
-            filters: contract.lookup_filters(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchHistoricalTicks {
+                contract: contract.into(),
+                req_id: wire_req_id(req_id)?,
+                start_date_time: start_date_time.to_string(),
+                end_date_time: end_date_time.to_string(),
+                number_of_ticks: super::wire_u32("number_of_ticks", number_of_ticks as i64)?,
+                what_to_show: what_to_show.to_string(),
+                use_rth: use_rth != 0,
+                include_expired: contract.include_expired,
+                filters: contract.lookup_filters(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -509,21 +544,25 @@ impl EClient {
         // are the venue's to say.
         let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
         let contract = &*by_venue;
-        Self::send_control(py, &tx, ControlCommand::FetchHistogramData {
-            req_id: wire_req_id(req_id)?,
-            con_id: super::wire_con_id("a request for a histogram", contract.con_id)?,
-            sec_type: contract.sec_type.clone(),
-            exchange: contract.exchange.clone(),
-            use_rth,
-            period: time_period.to_string(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchHistogramData {
+                req_id: wire_req_id(req_id)?,
+                con_id: super::wire_con_id("a request for a histogram", contract.con_id)?,
+                sec_type: contract.sec_type.clone(),
+                exchange: contract.exchange.clone(),
+                use_rth,
+                period: time_period.to_string(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
     /// Cancel histogram data.
     fn cancel_histogram_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::CancelHistogramData { req_id: wire_req_id(req_id)? })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::CancelHistogramData { req_id: wire_req_id(req_id)? }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -539,14 +578,16 @@ impl EClient {
         // are the venue's to say.
         let Some(by_venue) = self.named_or_report(py, req_id, contract)? else { return Ok(()) };
         let contract = &*by_venue;
-        Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
-            contract: contract.into(),
-            req_id: wire_req_id(req_id)?,
-            end_date_time: end_date_time.into(),
-            duration: duration_str.into(),
-            use_rth,
-            filters: contract.lookup_filters(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchHistoricalSchedule {
+                contract: contract.into(),
+                req_id: wire_req_id(req_id)?,
+                end_date_time: end_date_time.into(),
+                duration: duration_str.into(),
+                use_rth,
+                filters: contract.lookup_filters(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 }

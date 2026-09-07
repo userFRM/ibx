@@ -253,6 +253,46 @@ fn a_definition_whose_id_cannot_be_read_is_not_a_negative_answer() {
     assert_eq!(def.con_id, 0);
 }
 
+/// And the three other numbers a definition states are read the same way.
+///
+/// Each fell to a default instead, and each default is a figure the venue did
+/// not state: a multiplier of one values a contract worth a hundred times its
+/// price at its price; a strike of nought leaves every option on the
+/// definition struck at zero, deep in the money whatever it is, and priced
+/// there by the model that reads it; an underlying of nought says a derivative
+/// has none. The id beside them already refused, and said why.
+#[test]
+fn a_definition_whose_numbers_cannot_be_read_is_refused_as_its_id_is() {
+    let stating = |tag: u32, value: &str| {
+        fix::fix_build(
+            &[
+                (TAG_MSG_TYPE, "d"),
+                (TAG_IB_CON_ID, "265598"),
+                (TAG_SYMBOL, "AAPL"),
+                (TAG_SECURITY_TYPE, "CS"),
+                (TAG_CURRENCY, "USD"),
+                (tag, value),
+            ],
+            1,
+        )
+    };
+    for (tag, name) in [
+        (TAG_MULTIPLIER, "multiplier"),
+        (TAG_STRIKE, "strike"),
+        (TAG_UNDERLYING_CON_ID, "underlying id"),
+    ] {
+        assert!(
+            super::parse_secdef_response(&stating(tag, "not-a-number"), true).is_none(),
+            "an unreadable {name} is refused, not answered as the default",
+        );
+        // And a readable one is still read.
+        assert!(
+            super::parse_secdef_response(&stating(tag, "100"), true).is_some(),
+            "a {name} the venue states is read",
+        );
+    }
+}
+
 // A US equity secdef carries an inline price-increment block whose start
 // sentinel is `6019=1`. Tag 6019 is not min_tick — reading it as one
 // yields 1.0; min_tick is the smallest increment the block states.

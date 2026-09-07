@@ -422,7 +422,7 @@ fn what_if_response_is_copy() {
         init_margin_after: 895_786 * (PRICE_SCALE / 100),
         maint_margin_after: 814_351 * (PRICE_SCALE / 100),
         equity_with_loan_after: 75_425_514 * (PRICE_SCALE / 100),
-        commission: PRICE_SCALE,
+        commission: Some(PRICE_SCALE),
         min_commission: None,
         max_commission: None,
         commission_currency: String::new(),
@@ -434,6 +434,30 @@ fn what_if_response_is_copy() {
     assert_eq!(r.init_margin_after, r2.init_margin_after);
     // The change is the difference, which the venue leaves to be taken.
     assert_eq!(r.init_margin_change(), r.init_margin_after - r.init_margin_before);
+}
+
+/// A cost the venue did not state is not a cost of nought.
+///
+/// The two bounds beside it are already stated-or-not, and the record this
+/// becomes writes `f64::MAX` for a figure nobody gave. The cost itself fell to
+/// nought instead, so a preview carrying the margin figures and no cost tag —
+/// which is a preview the venue sends — reported the order as free.
+#[test]
+fn a_preview_that_states_no_cost_does_not_report_a_free_trade() {
+    let unstated = WhatIfResponse { commission: None, ..Default::default() };
+    let stated = crate::types::model::OrderState::from(&unstated);
+    assert_eq!(
+        stated.commission_and_fees, f64::MAX,
+        "the sentinel this record gives every other unstated figure",
+    );
+
+    let quoted = WhatIfResponse { commission: Some(PRICE_SCALE), ..Default::default() };
+    let stated = crate::types::model::OrderState::from(&quoted);
+    assert!((stated.commission_and_fees - 1.0).abs() < 1e-9, "a stated cost is the cost");
+
+    // And nought is a cost the venue can state.
+    let free = WhatIfResponse { commission: Some(0), ..Default::default() };
+    assert_eq!(crate::types::model::OrderState::from(&free).commission_and_fees, 0.0);
 }
 
 /// Both margin figures come off the wire, so their difference need not be one.
@@ -483,7 +507,7 @@ fn a_preview_carries_the_cost_the_venue_quoted() {
         init_margin_after: 0,
         maint_margin_after: 0,
         equity_with_loan_after: 0,
-        commission: 0,
+        commission: Some(0),
         min_commission: Some(175 * (PRICE_SCALE / 100)),
         max_commission: Some(320 * (PRICE_SCALE / 100)),
         commission_currency: "USD".into(),

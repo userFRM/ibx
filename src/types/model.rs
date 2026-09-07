@@ -1353,7 +1353,10 @@ impl From<&WhatIfResponse> for OrderState {
             init_margin_after: fmt(wi.init_margin_after),
             maint_margin_after: fmt(wi.maint_margin_after),
             equity_with_loan_after: fmt(wi.equity_with_loan_after),
-            commission_and_fees: wi.commission as f64 / PRICE_SCALE_F,
+            // The sentinel this record already uses for an unstated figure,
+            // which is what the two bounds beside it are given.
+            commission_and_fees: wi.commission
+                .map_or(f64::MAX, |c| c as f64 / PRICE_SCALE_F),
             // A commission the venue quotes as a range, and what it quotes it
             // in. Left off, a preview reported a cost of zero for every order
             // whose commission the venue could only bound, and a warning it

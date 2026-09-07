@@ -686,16 +686,15 @@ impl ReferenceState {
     /// callback pump instead, and the call then waits out its timeout for
     /// something that has already been delivered somewhere else.
     pub fn drain_option_params_for_dispatch(&self) -> Vec<(u32, i64, Vec<OptionChainScope>)> {
+        // Partitioned rather than removed one at a time: each `remove` shifts
+        // the tail, so a pass over a queue that has grown costs the square of
+        // it — under the lock the hot loop pushes into, on exactly the path a
+        // stalled reader takes when it resumes. The `take_*_for` siblings were
+        // already changed for this; these were not.
         let mut held = self.option_params.lock().unwrap();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < held.len() {
-            if self.is_ours(RecordKind::Answer, held[i].0 as i64) {
-                i += 1;
-            } else {
-                out.push(held.remove(i));
-            }
-        }
+        let (out, kept): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut *held).into_iter().partition(|e| !(self.is_ours(RecordKind::Answer, e.0 as i64)));
+        *held = kept;
         out
     }
 
@@ -718,12 +717,15 @@ impl ReferenceState {
     pub fn drain_scanner_data_for_dispatch(
         &self, mine: impl Fn(u32) -> bool,
     ) -> Vec<(u32, ScannerResult)> {
+        // Partitioned rather than removed one at a time: each `remove` shifts
+        // the tail, so a pass over a queue that has grown costs the square of
+        // it — under the lock the hot loop pushes into, on exactly the path a
+        // stalled reader takes when it resumes. The `take_*_for` siblings were
+        // already changed for this; these were not.
         let mut held = self.scanner_data.lock().unwrap();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < held.len() {
-            if mine(held[i].0) { i += 1; } else { out.push(held.remove(i)); }
-        }
+        let (out, kept): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut *held).into_iter().partition(|e| !(mine(e.0)));
+        *held = kept;
         out
     }
 
@@ -759,16 +761,15 @@ impl ReferenceState {
     /// What a dispatch loop should deliver, leaving what an answering call is
     /// waiting to take.
     pub fn drain_historical_news_for_dispatch(&self) -> Vec<(u32, Vec<NewsHeadline>, bool)> {
+        // Partitioned rather than removed one at a time: each `remove` shifts
+        // the tail, so a pass over a queue that has grown costs the square of
+        // it — under the lock the hot loop pushes into, on exactly the path a
+        // stalled reader takes when it resumes. The `take_*_for` siblings were
+        // already changed for this; these were not.
         let mut held = self.historical_news.lock().unwrap();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < held.len() {
-            if self.is_ours(RecordKind::Answer, held[i].0 as i64) {
-                i += 1;
-            } else {
-                out.push(held.remove(i));
-            }
-        }
+        let (out, kept): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut *held).into_iter().partition(|e| !(self.is_ours(RecordKind::Answer, e.0 as i64)));
+        *held = kept;
         out
     }
 

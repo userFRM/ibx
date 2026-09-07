@@ -569,9 +569,14 @@ pub fn parse_bar_response(xml: &str) -> Option<HistoricalResponse> {
 
     while let Some(bar_start) = xml[search_start..].find("<Bar>") {
         let abs_start = search_start + bar_start;
-        let bar_end = match xml[abs_start..].find("</Bar>") {
-            Some(e) => abs_start + e + 6,
-            None => break,
+        let bar_end = {
+            // A row never closed is an answer cut short: the whole of it is
+            // refused rather than what is in hand delivered as though
+            // complete, which is how the histogram rows beside it are read.
+            // Broken out of, a reply cut mid-row lost that row and everything
+            // after it, and a short series arrived under the completeness the
+            // reply's own end-of-query flag stated.
+            xml[abs_start..].find("</Bar>")? + abs_start + 6
         };
         let bar_xml = &xml[abs_start..bar_end];
 
@@ -866,9 +871,15 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
             let mut ticks = Vec::new();
             while let Some(tick_pos) = xml[search_start..].find("<Tick>") {
                 let abs = search_start + tick_pos;
-                let end = match xml[abs..].find("</Tick>") {
-                    Some(e) => abs + e + 7,
-                    None => break,
+                let end = {
+                    // A row never closed is an answer cut short: the whole of
+                    // it is refused rather than what is in hand delivered as
+                    // though complete, which is how the histogram rows beside
+                    // it are read. Broken out of, a reply cut mid-row lost
+                    // that row and everything after it, and a short series
+                    // arrived under the completeness the reply's own
+                    // end-of-query flag stated.
+                    xml[abs..].find("</Tick>")? + abs + 7
                 };
                 let t = &xml[abs..end];
                 ticks.push(crate::types::HistoricalTickBidAsk {
@@ -889,9 +900,15 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
             let mut ticks = Vec::new();
             while let Some(tick_pos) = xml[search_start..].find("<Tick>") {
                 let abs = search_start + tick_pos;
-                let end = match xml[abs..].find("</Tick>") {
-                    Some(e) => abs + e + 7,
-                    None => break,
+                let end = {
+                    // A row never closed is an answer cut short: the whole of
+                    // it is refused rather than what is in hand delivered as
+                    // though complete, which is how the histogram rows beside
+                    // it are read. Broken out of, a reply cut mid-row lost
+                    // that row and everything after it, and a short series
+                    // arrived under the completeness the reply's own
+                    // end-of-query flag stated.
+                    xml[abs..].find("</Tick>")? + abs + 7
                 };
                 let t = &xml[abs..end];
                 ticks.push(crate::types::HistoricalTickMidpoint {
@@ -907,9 +924,15 @@ pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, cra
             let mut ticks = Vec::new();
             while let Some(tick_pos) = xml[search_start..].find("<Tick>") {
                 let abs = search_start + tick_pos;
-                let end = match xml[abs..].find("</Tick>") {
-                    Some(e) => abs + e + 7,
-                    None => break,
+                let end = {
+                    // A row never closed is an answer cut short: the whole of
+                    // it is refused rather than what is in hand delivered as
+                    // though complete, which is how the histogram rows beside
+                    // it are read. Broken out of, a reply cut mid-row lost
+                    // that row and everything after it, and a short series
+                    // arrived under the completeness the reply's own
+                    // end-of-query flag stated.
+                    xml[abs..].find("</Tick>")? + abs + 7
                 };
                 let t = &xml[abs..end];
                 ticks.push(crate::types::HistoricalTickLast {
@@ -1020,12 +1043,25 @@ pub fn decode_bar_payload(
     let count = if read_bits(&mut pos, 1) == 1 {
         read_bits(&mut pos, 8) as i32
     } else {
-        // As the other decoder of this field reads it: a stated count past
-        // what the width every surface reports it in carries is not one this
-        // client can hold, and is read as a bar that states none. Cast
-        // straight through, a count above two billion reached the caller as a
-        // bar made by minus two billion trades.
-        i32::try_from(read_bits(&mut pos, 32)).unwrap_or(0)
+        // A stated count past what the width every surface reports it in
+        // carries is not one this client can hold, and the payload is refused.
+        //
+        // Cast straight through, it reached the caller as a bar made by minus
+        // two billion trades. Read as a bar stating no count — which is what
+        // the other decoder of this field does with an unreadable one — it is
+        // worse: the count decides whether the fields after it are here at
+        // all, so calling it nought skips bits the sender wrote, and every
+        // field behind it is read from the wrong offset. The cursor ends short
+        // rather than past the end, so the overrun guard below never fires and
+        // the bar arrives complete, plausible, and made up.
+        //
+        // That decoder can hold its field alone because its fields do not
+        // position each other. This one cannot, so it refuses the payload the
+        // way it refuses one whose prices will not read.
+        match i32::try_from(read_bits(&mut pos, 32)) {
+            Ok(stated) => stated,
+            Err(_) => return None,
+        }
     };
 
     // Low price in ticks (31-bit signed)
@@ -1153,9 +1189,14 @@ pub fn parse_schedule_response(xml: &str) -> Option<crate::types::HistoricalSche
     // Parse Open/Close pairs into sessions
     while let Some(open_pos) = xml[search_start..].find("<Open>") {
         let abs_open = search_start + open_pos;
-        let open_end = match xml[abs_open..].find("</Open>") {
-            Some(e) => abs_open + e + 7,
-            None => break,
+        let open_end = {
+            // A row never closed is an answer cut short: the whole of it is
+            // refused rather than what is in hand delivered as though
+            // complete, which is how the histogram rows beside it are read.
+            // Broken out of, a reply cut mid-row lost that row and everything
+            // after it, and a short series arrived under the completeness the
+            // reply's own end-of-query flag stated.
+            xml[abs_open..].find("</Open>")? + abs_open + 7
         };
         let open_xml = &xml[abs_open..open_end];
 
@@ -1165,9 +1206,14 @@ pub fn parse_schedule_response(xml: &str) -> Option<crate::types::HistoricalSche
         // Find the matching Close
         let close_time = if let Some(close_pos) = xml[open_end..].find("<Close>") {
             let abs_close = open_end + close_pos;
-            let close_end = match xml[abs_close..].find("</Close>") {
-                Some(e) => abs_close + e + 8,
-                None => break,
+            let close_end = {
+                // A row never closed is an answer cut short: the whole of it
+                // is refused rather than what is in hand delivered as though
+                // complete, which is how the histogram rows beside it are
+                // read. Broken out of, a reply cut mid-row lost that row and
+                // everything after it, and a short series arrived under the
+                // completeness the reply's own end-of-query flag stated.
+                xml[abs_close..].find("</Close>")? + abs_close + 8
             };
             let close_xml = &xml[abs_close..close_end];
             search_start = close_end;

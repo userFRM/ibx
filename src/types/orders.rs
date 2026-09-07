@@ -320,8 +320,12 @@ pub struct WhatIfResponse {
     pub maint_margin_after: Price,
     /// And equity with loan value.
     pub equity_with_loan_after: Price,
-    /// What the order would cost.
-    pub commission: Price,
+    /// What the order would cost, where the venue states it.
+    ///
+    /// Stated or not, as the two bounds below are: a cost the venue did not
+    /// state is not a cost of nought. Read as nought, a preview that carried
+    /// the margin figures and no cost tag reported the order as free.
+    pub commission: Option<Price>,
     /// Where a commission is given as a range rather than a number, and the
     /// money it is quoted in. A preview that states the margin and not the cost
     /// is half a preview.

@@ -71,6 +71,20 @@ pub struct EClient {
     /// Every account this login holds, the first being `account_id`.
     pub(crate) accounts: Mutex<Vec<String>>,
     pub(crate) connected: AtomicBool,
+    /// How many times this client has been disconnected.
+    ///
+    /// A connect claims the flag, then releases the GIL for the whole logon —
+    /// which is what the documented pattern asks for, a connect on a worker
+    /// thread the caller times out itself. A disconnect landing in that window
+    /// finds nothing installed to stop, clears what is already clear, and says
+    /// the session closed. The connect behind it then installs a live session
+    /// and says it is connected, so the caller was told the session closed
+    /// while a logged-in venue session went on running.
+    ///
+    /// Read either side of the logon: a change across it means a disconnect
+    /// answered for this connect, and the session it produced is not one the
+    /// caller asked to keep.
+    pub(crate) disconnects: AtomicU64,
     /// Whether the caller asked for positions and has not withdrawn the ask.
     ///
     /// `reqPositions` subscribes to a real-time feed, so a holding that moves
@@ -316,6 +330,7 @@ impl EClient {
             _thread: Mutex::new(None),
             account_id: Mutex::new(None),
             accounts: Mutex::new(Vec::new()),
+            disconnects: AtomicU64::new(0),
             connected: AtomicBool::new(false),
             positions_requested: AtomicBool::new(false),
             deferred_evictions: Mutex::new(std::collections::HashSet::new()),
@@ -499,7 +514,23 @@ impl EClient {
             }),
         };
 
+        // Read before the GIL goes, compared after it comes back.
+        let disconnects_before = self.disconnects.load(Ordering::Acquire);
         let result = py.detach(|| Gateway::connect(&config));
+        // A disconnect answered for this connect while it was in the venue's
+        // hands. It found nothing installed to stop and said the session
+        // closed; going on to install this one would leave the caller holding
+        // a client it was told had closed, in front of a logged-in venue
+        // session. The session that did open is closed here instead, which is
+        // what the caller asked for.
+        if self.disconnects.load(Ordering::Acquire) != disconnects_before {
+            // Dropped rather than installed, which closes every socket it
+            // opened. Detached because those closes talk to the venue.
+            py.detach(move || drop(result));
+            return Err(PyRuntimeError::new_err(
+                "Connection abandoned: disconnect() was called while it was still logging in",
+            ));
+        }
         let Session { gateway: gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, security_definition: secdef_conn } = result
             .map_err(|e| PyRuntimeError::new_err(format!("Connection failed: {e}")))?;
 
@@ -640,6 +671,9 @@ impl EClient {
         // A session that was held has ended; a client that never connected
         // has no session to be told the close of.
         let had_a_session = self.shared.lock().unwrap().is_some();
+        // Counted before anything is torn down, so a connect still inside its
+        // logon sees this one on the way out however the two interleave.
+        self.disconnects.fetch_add(1, Ordering::AcqRel);
         self.stop_engine(py);
         self.connected.store(false, Ordering::Release);
         if had_a_session {

@@ -288,7 +288,7 @@ fn take_what_if(
                     init_margin_after: parse_price_tag(parsed.get(&6092)),
                     maint_margin_after: parse_price_tag(parsed.get(&6093)),
                     equity_with_loan_after: parse_price_tag(parsed.get(&6094)),
-                    commission: parse_price_tag(parsed.get(&6378)),
+                    commission: stated_price(parsed.get(&6378)),
                     // Stated or not: a bound the venue did not state is not a
                     // bound of nought.
                     min_commission: stated_price(parsed.get(&6379)),
@@ -301,7 +301,7 @@ fn take_what_if(
                     clord_id,
                     response.init_margin_before as f64 / PRICE_SCALE as f64,
                     response.init_margin_after as f64 / PRICE_SCALE as f64,
-                    response.commission as f64 / PRICE_SCALE as f64);
+                    response.commission.map_or(f64::NAN, |c| c as f64 / PRICE_SCALE as f64));
                 context.retire_order(clord_id);
                 shared.orders.push_what_if(response.clone());
                 emit(event_tx, Event::WhatIf(response));

@@ -150,9 +150,14 @@ pub fn parse_scanner_response(xml: &str) -> Option<ScannerResult> {
 
     while let Some(c_start) = xml[search_start..].find("<Contract>") {
         let abs_start = search_start + c_start;
-        let c_end = match xml[abs_start..].find("</Contract>") {
-            Some(e) => abs_start + e + 11,
-            None => break,
+        let c_end = {
+            // A row never closed is an answer cut short: the whole of it is
+            // refused rather than what is in hand delivered as though
+            // complete, which is how the histogram rows beside it are read.
+            // Broken out of, a reply cut mid-row lost that row and everything
+            // after it, and a short series arrived under the completeness the
+            // reply's own end-of-query flag stated.
+            xml[abs_start..].find("</Contract>")? + abs_start + 11
         };
         let contract_xml = &xml[abs_start..c_end];
 

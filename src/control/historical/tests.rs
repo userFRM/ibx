@@ -151,6 +151,49 @@ fn cancel_request_structure() {
     assert!(tags[&TAG_HISTORICAL_XML].contains("ticker:12345"));
 }
 
+/// A reply cut mid-row is refused, not delivered as the rows it managed.
+///
+/// The completeness a caller reads comes off the reply's own end-of-query
+/// flag, and that flag is at the front. Broken out of on the unclosed row, a
+/// reply cut in the middle lost that row and everything after it — and the
+/// short series that came back said it was the whole answer. The histogram
+/// rows beside these are already read the other way, and say so.
+#[test]
+fn a_series_cut_mid_row_is_not_read_as_the_rows_it_managed() {
+    let truncated = "<ResultSetBar><id>q1</id><eoq>true</eoq><tz>US/Eastern</tz>\
+        <Events>\
+        <Bar><time>20260227-14:30:00</time><open>272.77</open><close>269.47</close>\
+        <high>272.81</high><low>269.2</low><volume>1411775</volume><count>5165</count></Bar>\
+        <Bar><time>20260227-14:35:00</time><open>269.48</open><close";
+    assert!(
+        parse_bar_response(truncated).is_none(),
+        "a reply cut short is not an answer, whatever its end-of-query flag says",
+    );
+
+    // And the whole reply still reads.
+    let whole = "<ResultSetBar><id>q1</id><eoq>true</eoq><tz>US/Eastern</tz>\
+        <Events>\
+        <Bar><time>20260227-14:30:00</time><open>272.77</open><close>269.47</close>\
+        <high>272.81</high><low>269.2</low><volume>1411775</volume><count>5165</count></Bar>\
+        </Events></ResultSetBar>";
+    let resp = parse_bar_response(whole).expect("a complete reply is an answer");
+    assert_eq!(resp.bars.len(), 1);
+}
+
+/// The same for a trading schedule, where an unclosed session did worse than
+/// vanish: the session before it took the next one's closing time.
+#[test]
+fn a_schedule_cut_mid_session_is_not_read_as_the_sessions_it_managed() {
+    let truncated = "<ResultSetSchedule><id>q1</id><tz>US/Eastern</tz>\
+        <Open><refDate>20260227</refDate><time>20260227-09:30:00</time></Open>\
+        <Close><time>20260227-16:00:00</time></Close>\
+        <Open><refDate>20260228</refDate><time";
+    assert!(
+        parse_schedule_response(truncated).is_none(),
+        "a schedule cut short is not an answer",
+    );
+}
+
 #[test]
 fn parse_bar_response_basic() {
     let xml = r#"<ResultSetBar>
@@ -715,16 +758,18 @@ fn a_bars_volume_counts_the_increment_and_its_weighted_price_does_not() {
 }
 
 
-/// A trade count past the width every surface reports it in is read as a bar
-/// that states none, which is the rule the field itself carries and the rule
-/// the other decoder of this field already kept.
+/// A trade count past the width every surface reports it in refuses the
+/// payload.
 ///
 /// The wide form takes the full thirty-two bits off the wire. Cast straight
 /// through to the signed width the field is held in, a count above two billion
-/// reached the caller as a bar made by minus two billion trades — and the
-/// aggregation that folds such bars together works on it afterwards.
+/// reached the caller as a bar made by minus two billion trades. Held at nought
+/// instead it is worse: this count decides whether the delta and weighted
+/// fields were written at all, so nought skips bits the sender wrote and every
+/// field behind it is read from the wrong offset — and the cursor ends short of
+/// the end rather than past it, so the overrun guard never fires.
 #[test]
-fn a_bar_count_past_what_the_field_carries_is_read_as_none() {
+fn a_bar_count_past_what_the_field_carries_refuses_the_payload() {
     let mut bits: Vec<u8> = Vec::new();
     let put = |v: u32, w: usize, bits: &mut Vec<u8>| {
         for i in 0..w { bits.push(((v >> i) & 1) as u8); }
@@ -753,8 +798,14 @@ fn a_bar_count_past_what_the_field_carries_is_read_as_none() {
         payload.extend_from_slice(&c);
     }
 
-    let bar = decode_bar_payload(&payload, 0.01, 1.0).expect("decodes");
-    assert_eq!(bar.count, 0, "a count that will not fit states none, not a negative one");
+    // Refused, not read as a bar stating no count: the count decides whether
+    // the fields behind it were written at all, so calling it nought reads
+    // every one of them from the wrong offset and hands back a bar that is
+    // complete, plausible and made up.
+    assert!(
+        decode_bar_payload(&payload, 0.01, 1.0).is_none(),
+        "a count that will not fit refuses the payload",
+    );
 }
 
 #[test]

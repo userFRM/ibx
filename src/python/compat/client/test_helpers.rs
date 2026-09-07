@@ -179,6 +179,28 @@ impl EClient {
         Ok(())
     }
 
+    /// Let go of the engine's end of the control channel, leaving a session
+    /// that reports itself connected and can send nothing.
+    ///
+    /// The window a real session reaches this through is narrow — the engine
+    /// stops between the check a call makes and the send it then does — and it
+    /// is the window in which the two surfaces answered the same failure
+    /// differently. Held open here so a test can ask which way a call answers.
+    #[doc(hidden)]
+    fn _test_drop_engine(&self) {
+        *self._test_control_rx.lock().unwrap() = None;
+    }
+
+    /// How many disconnects this client has counted.
+    ///
+    /// What the connect race turns on: a disconnect landing while a connect is
+    /// still in the venue's hands has nothing installed to stop, so the only
+    /// trace it leaves for that connect to read is this.
+    #[doc(hidden)]
+    fn _test_disconnects(&self) -> u64 {
+        self.disconnects.load(Ordering::Acquire)
+    }
+
     /// What this session has queued for the engine, taken and cleared.
     ///
     /// Written out rather than handed over as objects: a test asks whether a
@@ -483,7 +505,7 @@ impl EClient {
             init_margin_after: (init_margin_after * ps) as i64,
             maint_margin_after: (maint_margin_after * ps) as i64,
             equity_with_loan_after: (equity_with_loan_after * ps) as i64,
-            commission: (commission * ps) as i64,
+            commission: Some((commission * ps) as i64),
             min_commission: None,
             max_commission: None,
             commission_currency: String::new(),

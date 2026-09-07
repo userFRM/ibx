@@ -249,12 +249,15 @@ impl MarketDataState {
     pub fn drain_real_time_bars_for_dispatch(
         &self, mine: impl Fn(u32) -> bool,
     ) -> Vec<(u32, RealTimeBar)> {
+        // Partitioned rather than removed one at a time: each `remove` shifts
+        // the tail, so a pass over a queue that has grown costs the square of
+        // it — under the lock the hot loop pushes into, on exactly the path a
+        // stalled reader takes when it resumes. The `take_*_for` siblings were
+        // already changed for this; these were not.
         let mut held = self.real_time_bars.lock().unwrap();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < held.len() {
-            if mine(held[i].0) { i += 1; } else { out.push(held.remove(i)); }
-        }
+        let (out, kept): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut *held).into_iter().partition(|e| !(mine(e.0)));
+        *held = kept;
         out
     }
 
@@ -292,12 +295,15 @@ impl MarketDataState {
     pub fn drain_depth_updates_for_dispatch(
         &self, mine: impl Fn(u32) -> bool,
     ) -> Vec<DepthUpdate> {
+        // Partitioned rather than removed one at a time: each `remove` shifts
+        // the tail, so a pass over a queue that has grown costs the square of
+        // it — under the lock the hot loop pushes into, on exactly the path a
+        // stalled reader takes when it resumes. The `take_*_for` siblings were
+        // already changed for this; these were not.
         let mut held = self.depth_updates.lock().unwrap();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < held.len() {
-            if mine(held[i].req_id) { i += 1; } else { out.push(held.remove(i)); }
-        }
+        let (out, kept): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut *held).into_iter().partition(|e| !(mine(e.req_id)));
+        *held = kept;
         out
     }
 
@@ -582,12 +588,15 @@ impl MarketDataState {
     pub fn drain_depth_drops_for_dispatch(
         &self, mine: impl Fn(u32) -> bool,
     ) -> Vec<(u32, String)> {
+        // Partitioned rather than removed one at a time: each `remove` shifts
+        // the tail, so a pass over a queue that has grown costs the square of
+        // it — under the lock the hot loop pushes into, on exactly the path a
+        // stalled reader takes when it resumes. The `take_*_for` siblings were
+        // already changed for this; these were not.
         let mut held = self.depth_drops_unsaid.lock().unwrap();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < held.len() {
-            if mine(held[i].0) { i += 1; } else { out.push(held.remove(i)); }
-        }
+        let (out, kept): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut *held).into_iter().partition(|e| !(mine(e.0)));
+        *held = kept;
         out
     }
 

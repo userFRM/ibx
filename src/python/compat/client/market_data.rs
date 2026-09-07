@@ -214,11 +214,13 @@ impl EClient {
         };
 
         let shared = self.shared_state()?;
-        Self::send_control(py, &tx, ControlCommand::RegisterInstrument {
-            contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), sec_type: contract.sec_type.clone(), exchange: contract.exchange.clone(), ..Default::default() },
-            identity: String::new(),
-            reply_tx: None,
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::RegisterInstrument {
+                contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), sec_type: contract.sec_type.clone(), exchange: contract.exchange.clone(), ..Default::default() },
+                identity: String::new(),
+                reply_tx: None,
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         // Same registration-wait hazard as req_mkt_data: release the GIL for
         // the reply round trip.
         let con_id = contract.con_id;
@@ -260,7 +262,9 @@ impl EClient {
                 format!("no tick stream is held under request {req_id}"),
             ));
         };
-        Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { req_id, instrument })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { req_id, instrument }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -270,7 +274,9 @@ impl EClient {
     /// moment for the result.
     fn req_ping(&self, py: Python<'_>) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::Ping)?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::Ping) {
+            return self.report_refusal(py, -1, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -334,13 +340,20 @@ impl EClient {
         if let Err(why) = self.core.hold_the_book(req_id) {
             return self.report_refusal(py, req_id, why);
         }
-        Self::send_control(py, &tx, ControlCommand::SubscribeDepth {
-            contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), exchange: contract.exchange.clone(), sec_type: contract.sec_type.clone(), currency: contract.currency.clone(), ..Default::default() },
-            req_id: wire,
-            num_rows,
-            is_smart_depth,
-            filters: contract.lookup_filters(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::SubscribeDepth {
+                contract: ContractRef { con_id: contract.con_id, symbol: contract.symbol.clone(), exchange: contract.exchange.clone(), sec_type: contract.sec_type.clone(), currency: contract.currency.clone(), ..Default::default() },
+                req_id: wire,
+                num_rows,
+                is_smart_depth,
+                filters: contract.lookup_filters(),
+            }) {
+            // The slot goes back with it. Kept, the number stayed held
+            // against a request the venue never heard, and the caller's
+            // retry under it was refused as a duplicate of that one until
+            // the session was rebuilt.
+            let _ = self.core.release_the_book(req_id);
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -360,7 +373,9 @@ impl EClient {
         if let Err(why) = self.core.release_the_book(req_id) {
             return self.report_refusal(py, req_id, why);
         }
-        Self::send_control(py, &tx, ControlCommand::UnsubscribeDepth { req_id: wire })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::UnsubscribeDepth { req_id: wire }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -393,20 +408,24 @@ impl EClient {
         // bar of the stream arrived as `historical_data_update`, so a caller
         // that overrode only `real_time_bar` read the stream as dead.
         self.core.historical_request_is_new(wire);
-        Self::send_control(py, &tx, ControlCommand::SubscribeRealTimeBar {
-            contract: contract.into(),
-            req_id: wire,
-            what_to_show: what_to_show.to_string(),
-            use_rth: use_rth != 0,
-            filters: contract.lookup_filters(),
-        })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::SubscribeRealTimeBar {
+                contract: contract.into(),
+                req_id: wire,
+                what_to_show: what_to_show.to_string(),
+                use_rth: use_rth != 0,
+                filters: contract.lookup_filters(),
+            }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
     /// Cancel real-time bars.
     fn cancel_real_time_bars(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
-        Self::send_control(py, &tx, ControlCommand::CancelRealTimeBar { req_id: wire_req_id(req_id)? })?;
+        if let Err(why) = Self::send_control(py, &tx, ControlCommand::CancelRealTimeBar { req_id: wire_req_id(req_id)? }) {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
         Ok(())
     }
 
@@ -498,8 +517,10 @@ impl EClient {
         if let Some(instrument) = stop_news {
             let _ = Self::send_control(py, tx, ControlCommand::UnsubscribeNews { instrument });
         }
-        if let Some(instrument) = instrument {
-            Self::send_control(py, tx, ControlCommand::Unsubscribe { instrument })?;
+        if let Some(instrument) = instrument
+            && let Err(why) = Self::send_control(py, tx, ControlCommand::Unsubscribe { instrument })
+        {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
         }
         Ok(())
     }

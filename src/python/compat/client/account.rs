@@ -77,6 +77,10 @@ impl EClient {
         if let Err(why) =
             Self::send_control(py, &tx, ControlCommand::SubscribePnl { req_id, account: acct })
         {
+            // And the one slot there is goes back with it. Held, the next
+            // request under any number was refused as a duplicate of a
+            // subscription the venue was never asked for.
+            self.core.unsubscribe_pnl(req_id);
             return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
         }
         Ok(())

@@ -964,7 +964,16 @@ pub fn parse_secdef_response(
         def.suggested_size_increment = size;
     }
     if let Some(v) = tags.get(&TAG_MULTIPLIER) {
-        def.multiplier = v.parse().unwrap_or(1.0);
+        // A multiplier that does not read is not the multiplier one. This is
+        // what a contract's price is worth per unit of it, so falling to one
+        // values a contract worth a hundred times its price at its price —
+        // and every figure worked out from it, on this client and on the
+        // caller's side, is wrong by that factor with nothing saying so.
+        let Some(m) = v.parse().ok() else {
+            log::warn!("a definition states a multiplier that does not read: {v:?}");
+            return None;
+        };
+        def.multiplier = m;
     }
     if let Some(v) = tags.get(&TAG_IB_VALID_EXCHANGES) {
         def.valid_exchanges = v.split(',').map(|s| exchange_from_fix(s).to_string()).collect();
@@ -984,7 +993,14 @@ pub fn parse_secdef_response(
         def.last_trade_date = v.clone();
     }
     if let Some(v) = tags.get(&TAG_STRIKE) {
-        def.strike = v.parse().unwrap_or(0.0);
+        // A strike that does not read is not the strike nought. Read that way
+        // every option on the definition is struck at zero — deep in the money
+        // whatever it is, and priced there by the model that reads it.
+        let Some(k) = v.parse().ok() else {
+            log::warn!("a definition states a strike that does not read: {v:?}");
+            return None;
+        };
+        def.strike = k;
     }
     if let Some(v) = tags.get(&TAG_RIGHT) {
         // The definition states this numerically — 1 for a call, 0 for a put —
@@ -1008,7 +1024,14 @@ pub fn parse_secdef_response(
         def.ev_multiplier = x;
     }
     if let Some(v) = tags.get(&TAG_UNDERLYING_CON_ID) {
-        def.under_con_id = v.parse().unwrap_or(0);
+        // As the contract's own id above: nought states there is no underlying,
+        // so an unreadable one answered as nought says this derivative has
+        // none.
+        let Some(id) = v.parse().ok() else {
+            log::warn!("a definition states an underlying id that does not read: {v:?}");
+            return None;
+        };
+        def.under_con_id = id;
     }
     if let Some(v) = tags.get(&TAG_UNDERLYING_SYMBOL) {
         def.under_symbol = v.clone();
