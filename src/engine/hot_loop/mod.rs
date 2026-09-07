@@ -1066,32 +1066,6 @@ impl HotLoop {
             else {
                 continue;
             };
-            // A feed given up on takes no more subscriptions. The three below
-            // are the ones a caller waits on an answer for, and each was told
-            // it had one: the slot was taken, the request recorded for a
-            // replay that is not coming, and nothing went to the venue, since
-            // there is no connection to write it to. The caller read that as a
-            // live subscription and waited out the session for a first tick.
-            //
-            // Said here rather than at the socket because the socket cannot
-            // tell this from the ordinary case it shares: a subscription
-            // raised while the feed is between attempts is also written
-            // nowhere, and that one *is* replayed when the feed returns.
-            if let Some(reason) = self.farm_halted
-                && let ControlCommand::Subscribe { reply_tx, .. }
-                    | ControlCommand::SubscribeTbt { reply_tx, .. }
-                    | ControlCommand::SubscribeNews { reply_tx, .. } = &cmd
-            {
-                let told = format!(
-                    "market data is unavailable for the rest of this session: {}",
-                    reason.as_str(),
-                );
-                log::warn!("{told}");
-                if let Some(tx) = reply_tx {
-                    let _ = tx.try_send(Err(told));
-                }
-                continue;
-            }
             // A contract numbered beyond what a request carries. Refused where
             // every request passes rather than narrowed on the way out: a
             // request naming one is asked under the number that survives the
@@ -2443,6 +2417,9 @@ impl HotLoop {
                 );
             }
             self.farm_halted = Some(retry::DisconnectReason::RecoveryExhausted);
+            self.shared.market.set_market_data_over(
+                retry::DisconnectReason::RecoveryExhausted.as_str(),
+            );
             self.pending_farm_reconnect = None;
             // A feed given up on is no longer one the return waits for, which
             // is what the guard in `announce_reconnected` says. Nothing called
@@ -2662,6 +2639,9 @@ impl HotLoop {
                 // the caller could no longer read.
                 if !self.ccp.disconnected {
                     self.farm_halted = Some(retry::DisconnectReason::AuthorizationFailed);
+                    self.shared.market.set_market_data_over(
+                        retry::DisconnectReason::AuthorizationFailed.as_str(),
+                    );
                     self.announce_reconnected();
                     return;
                 }
@@ -2757,6 +2737,7 @@ impl HotLoop {
                     // no longer read.
                     if !self.ccp.disconnected {
                         self.farm_halted = Some(reason);
+                        self.shared.market.set_market_data_over(reason.as_str());
                         self.pending_farm_reconnect = None;
                         // And the return the farm was holding back is said, as
                         // where its budget runs out: this is the same moment,
@@ -5055,6 +5036,37 @@ mod tests {
         );
     }
 
+    /// Every way of giving up on the feed says so where a subscription is
+    /// asked for.
+    ///
+    /// The refusal is raised on the caller's side, because the two ways a
+    /// request can be told it has a subscription part company before the engine
+    /// sees either: a request joining a contract already watched is answered
+    /// there and never arrives here. So the halt has to be readable from there,
+    /// and each of the ways of reaching it has to say so.
+    ///
+    /// The third way — a reason the venue will not take back — is reached from
+    /// a worker thread's answer and is not driven here; it sets the same flag
+    /// beside the same field.
+    #[test]
+    fn giving_up_on_the_feed_says_so_where_a_subscription_is_asked_for() {
+        for reach_it in ["the budget ran out", "no credentials were cached"] {
+            let shared = Arc::new(SharedState::new());
+            let mut hl = HotLoop::new(shared.clone(), None, None);
+            hl.ccp.disconnected = false;
+            hl.farm.disconnected = true;
+            match reach_it {
+                "the budget ran out" => hl.report_recovery_exhausted("farm"),
+                _ => hl.spawn_farm_reconnect(),
+            }
+            assert!(hl.farm_halted.is_some(), "{reach_it}: the feed is given up on");
+            assert!(
+                shared.market.market_data_over().is_some(),
+                "{reach_it}: a subscription asked for after this cannot be served",
+            );
+        }
+    }
+
     /// And with the trading connection down as well, it is the session: there
     /// is nothing left to keep.
     #[test]
@@ -5065,41 +5077,6 @@ mod tests {
         hl.farm.disconnected = true;
         hl.spawn_farm_reconnect();
         assert!(shared.reference.session_over().is_some(), "the session is over");
-    }
-
-    /// A feed given up on takes no more subscriptions.
-    ///
-    /// The caller was told it had one: the slot was taken, the request was
-    /// recorded for a replay that is not coming, and nothing went to the venue
-    /// — there is no connection to write it to. The caller read that as a live
-    /// subscription and waited out the session for a first tick.
-    #[test]
-    fn a_subscription_on_a_feed_given_up_on_is_refused_rather_than_acknowledged() {
-        let shared = Arc::new(SharedState::new());
-        let mut hl = HotLoop::new(shared.clone(), None, None);
-        hl.running = true;
-        hl.farm.disconnected = true;
-        hl.farm_halted = Some(retry::DisconnectReason::RecoveryExhausted);
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        hl.set_control_rx(rx);
-        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
-        tx.send(crate::types::ControlCommand::Subscribe {
-            contract: crate::types::ContractRef {
-                con_id: 265598,
-                symbol: "AAPL".to_string(),
-                sec_type: "STK".to_string(),
-                exchange: "SMART".to_string(),
-                ..Default::default()
-            },
-            mode_9887: 0,
-            regulatory_snapshot: false,
-            reply_tx: Some(reply_tx),
-        }).unwrap();
-        hl.poll_control_commands();
-
-        let answered = reply_rx.try_recv().expect("the caller is answered at once");
-        assert!(answered.is_err(), "and told it has no subscription: {answered:?}");
     }
 
     /// The market-data farm running out of recovery ends the market-data farm,

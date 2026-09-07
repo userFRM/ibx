@@ -2461,6 +2461,78 @@ fn a_subscription_the_venue_has_taken_is_no_longer_refused_for_a_joiner() {
     );
 }
 
+/// A quote feed the engine has given up on takes no more subscriptions.
+///
+/// The caller was told it had one either way. A new contract took a slot and
+/// its request was recorded for a replay that is not coming, with nothing sent
+/// — there is no connection to write it to. A request joining a contract
+/// already watched never reached the engine at all: it is answered from this
+/// side, off a subscription that had stopped. Both read as live and waited out
+/// the session for a first tick.
+#[test]
+fn no_subscription_is_taken_on_a_feed_that_is_over_for_the_session() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let (tx, _rx) = std::sync::mpsc::sync_channel(64);
+    shared.market.set_instrument_count(4);
+
+    // A contract already watched, which is what a joining request finds.
+    let iid: InstrumentId = 0;
+    core.con_id_to_instrument.lock().unwrap().insert(756733, iid);
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, iid);
+
+    shared.market.set_market_data_over("the venue would not take the connection back");
+
+    let joining = core.register_mkt_data(
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        false, false, "", 0,
+    );
+    assert!(joining.is_err(), "the joiner is refused: {joining:?}");
+
+    let fresh = core.register_mkt_data(
+        &shared, &tx, 3, 272093, "MSFT", "SMART", "STK", "USD", "", 0.0, "", "",
+        false, false, "", 0,
+    );
+    assert!(fresh.is_err(), "and so is a contract nobody is watching: {fresh:?}");
+}
+
+/// A quote and a cost both come off the wire, so their difference need not
+/// fit the width either is held in.
+///
+/// Each is parsed into that width and held at its edge where it will not fit,
+/// so a position marked at one end against a cost at the other asks for a
+/// difference no figure can carry. Subtracted plain, the unrealized figure
+/// came back wrapped, and a caller was told a position had made money it had
+/// lost — by the width of the whole range.
+#[test]
+fn an_unrealized_figure_holds_at_the_edge_rather_than_wrapping_past_it() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.portfolio.account_download_is_settled();
+    core.subscribe_pnl_single(11, 8005);
+
+    let iid: InstrumentId = 0;
+    core.con_id_to_instrument.lock().unwrap().insert(8005, iid);
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 8005,
+        position: 1.0,
+        avg_cost: Price::MIN,
+        symbol: "SYM8005".into(),
+        sec_type: "STK".into(),
+        currency: "USD".into(),
+        multiplier: String::new(),
+        ..Default::default()
+    });
+    shared.market.push_quote(iid, &Quote { last: Price::MAX, ..Default::default() });
+
+    // What matters is that the answer arrives at all: the subtraction runs on
+    // the caller's own thread, and a panic there is the caller's process.
+    let updates = core.poll_pnl_single(&shared);
+    assert!(!updates.is_empty(), "the position is still reported");
+}
+
 /// A news subscription the venue refuses leaves nobody holding it, so a later
 /// ask on the same contract is the first again and sends anew. Without the
 /// release, the dedup that keeps one venue subscription for many askers holds

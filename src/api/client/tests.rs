@@ -7952,6 +7952,25 @@ fn a_depth_request_states_the_contract_it_was_given() {
     }
 }
 
+/// A book rides the quote feed, so a feed given up on serves none.
+///
+/// Accepted, the request took a book slot and reached a sender with no
+/// connection to write it to, which is silent. A book that never arrives is
+/// what a market with nothing to say looks like, so nothing told the two
+/// apart, and the slot stayed held for a request the venue never heard.
+#[test]
+fn no_book_is_taken_on_a_feed_that_is_over_for_the_session() {
+    let (client, rx, shared) = test_client();
+    shared.market.set_market_data_over("the venue would not take the connection back");
+    let contract = crate::types::model::Contract { con_id: 495512563, ..Default::default() };
+    let asked = client.req_mkt_depth(1, &contract, 5, false);
+    assert!(asked.is_err(), "the caller is refused: {asked:?}");
+    assert!(rx.try_recv().is_err(), "and nothing was sent for it");
+    // The slot is free, so a later session's request under the same number is
+    // not refused as a book this one is already holding.
+    assert!(client.core.hold_the_book(1).is_ok(), "the book slot was not taken");
+}
+
 /// A caller chooses how its bar times are written, and the choice is per
 /// request. Discarded, a caller that asked for seconds since the epoch is
 /// handed the wire's spelling and reads a date where it expects a number.

@@ -1693,6 +1693,21 @@ impl ClientCore {
             ));
         }
 
+        // A quote feed the engine has given up on serves nothing more this
+        // session. Refused here rather than beside the socket, because the two
+        // ways a request can be told it has a subscription part company before
+        // then: a request joining a contract already watched is answered from
+        // this side and never reaches the engine at all, so a guard there
+        // cannot see it. Both were told they had one — the joiner off a
+        // subscription that had stopped, the new one off a slot taken and a
+        // request recorded for a replay that is not coming — and both waited
+        // out the session for a first tick.
+        if let Some(why) = shared.market.market_data_over() {
+            return Err(Refusal::not_connected(format!(
+                "market data is unavailable for the rest of this session: {why}",
+            )));
+        }
+
         // The chargeable snapshot is one burst by construction, so it ends the
         // way an ordinary snapshot does and the caller hears the same end.
         let snapshot = snapshot || regulatory_snapshot;
@@ -3554,7 +3569,8 @@ impl ClientCore {
             total_daily += mv_now - mv_midnight + money_traded;
 
             if avg_cost != 0 {
-                total_unrealized += qty_now * (price_now - avg_cost) as f64 / PRICE_SCALE_F;
+                total_unrealized +=
+                    qty_now * price_now.saturating_sub(avg_cost) as f64 / PRICE_SCALE_F;
             }
             priced += 1;
         }
@@ -3710,7 +3726,7 @@ impl ClientCore {
             let unrealized = if pi.unrealized_stated {
                 pi.unrealized_pnl as f64 / PRICE_SCALE_F
             } else if avg_cost != 0 && !position_is_multiplied(&pi) {
-                qty_now * (price_now - avg_cost) as f64 / PRICE_SCALE_F
+                qty_now * price_now.saturating_sub(avg_cost) as f64 / PRICE_SCALE_F
             } else { 0.0 };
             let realized = seed.map(|s| s.realized_pnl).unwrap_or(0.0);
             let value = mv_now;

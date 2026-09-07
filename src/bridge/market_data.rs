@@ -103,6 +103,14 @@ pub struct MarketDataState {
     last_subscription_failure: Mutex<std::collections::HashMap<crate::types::InstrumentId, String>>,
     /// A refusal owed to one request that joined a contract already refused.
     subscription_failures_direct: Mutex<Vec<(i64, String)>>,
+    /// Why the quote feed is done for the rest of this session, where it is.
+    ///
+    /// Set once the engine gives up on the feed, and never cleared: the feed
+    /// is not coming back within this session, which is what giving up on it
+    /// means. Read where a subscription is asked for, so a request that cannot
+    /// be served is refused rather than acknowledged into a table nothing will
+    /// replay.
+    market_data_over: Mutex<Option<&'static str>>,
     /// tickReqParams owed to a single request that followed a live
     /// subscription, delivered to that request alone rather than fanned.
     tick_req_params_direct: Mutex<Vec<(i64, f64)>>,
@@ -146,6 +154,7 @@ impl MarketDataState {
             last_min_tick: Mutex::new(std::collections::HashMap::new()),
             last_subscription_failure: Mutex::new(std::collections::HashMap::new()),
             subscription_failures_direct: Mutex::new(Vec::new()),
+            market_data_over: Mutex::new(None),
             tick_req_params_direct: Mutex::new(Vec::new()),
             subscription_moves: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
@@ -647,6 +656,19 @@ impl MarketDataState {
     /// `None` where the subscription it joins is live.
     pub fn failure_for_follower(&self, instrument: crate::types::InstrumentId) -> Option<String> {
         self.last_subscription_failure.lock().unwrap().get(&instrument).cloned()
+    }
+
+    /// Why the quote feed is done for the rest of this session, if it is.
+    ///
+    /// A subscription asked for after this is set cannot be served: there is
+    /// no connection to write it to and no reconnect coming to replay it.
+    pub fn market_data_over(&self) -> Option<&'static str> {
+        *self.market_data_over.lock().unwrap()
+    }
+
+    /// Say the quote feed is done for the rest of this session.
+    #[doc(hidden)] pub fn set_market_data_over(&self, why: &'static str) {
+        *self.market_data_over.lock().unwrap() = Some(why);
     }
 
     /// The venue has taken this contract's subscription, so the reason it

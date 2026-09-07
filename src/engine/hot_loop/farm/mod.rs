@@ -1204,7 +1204,21 @@ impl FarmState {
         shared.market.push_tick_req_params(instrument, min_tick);
         // The venue has taken it, so whatever it said the last time it would
         // not is no longer what a request joining this contract is owed.
-        shared.market.note_subscription_accepted(instrument);
+        //
+        // The chargeable snapshot does not say that. It is a request of its
+        // own and nothing joins it — one is never followed — so a snapshot the
+        // venue takes on a contract whose stream it refused says only that the
+        // snapshot was served. Read as the contract being live, it cleared the
+        // refusal a joiner of that dead stream was owed, and the joiner was
+        // told nothing was wrong with a subscription nothing was arriving on.
+        let is_a_snapshot = self.instrument_md_reqs.iter()
+            .find(|(id, _)| *id == instrument)
+            .is_some_and(|(_, record)| record.entries.iter().any(|e| {
+                e.req_id == req_id && e.request_type == REGULATORY_SNAPSHOT_REQUEST_TYPE
+            }));
+        if !is_a_snapshot {
+            shared.market.note_subscription_accepted(instrument);
+        }
         if let Some(size_tick) = trailing_size_increment(&parts) {
             context.market.set_size_tick(instrument, size_tick);
         }

@@ -234,6 +234,16 @@ impl EClient {
         // wire cannot carry holds nothing, and taking the slot first left it
         // held against a request that was then refused.
         let wire = wire_req_id(req_id)?;
+        // A book rides the quote feed, so a feed the engine has given up on
+        // serves none. Accepted, the request took a book slot and reached a
+        // sender with no connection to write it to, which is silent — and a
+        // book that never arrives is what a market with nothing to say looks
+        // like, so nothing distinguished the two.
+        if let Some(why) = self.shared.market.market_data_over() {
+            return Err(Refusal::not_connected(format!(
+                "market data is unavailable for the rest of this session: {why}",
+            )));
+        }
         self.core.hold_the_book(req_id)?;
         self.send(ControlCommand::SubscribeDepth {
             contract: ContractRef {
