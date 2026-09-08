@@ -89,7 +89,7 @@ pub const TAG_HMAC_SIGNATURE: u32 = 8349;
 /// [`carries_signature`], so the two cannot state different geometry.
 const SIG_FIELD_LEN: usize = 5 + 8 + 1;
 /// What a FIX.4.1 frame carries after its body: `10=XXX` and the separator.
-const FIX41_TRAILER_LEN: usize = 7;
+pub(crate) const FIX41_TRAILER_LEN: usize = 7;
 
 // Message types
 /// Message type `0`: a heartbeat.

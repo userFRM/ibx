@@ -618,6 +618,35 @@ fn try_frame_farm_msg_garbage_prefix() {
     }
 }
 
+/// A control frame carries no checksum, and is not framed as though it did.
+///
+/// The venue answers the token step with an `8=1`, which ends where its own
+/// length says — the reader that frames those alone stops exactly there. Seven
+/// bytes for a checksum added to one runs past its end into the message behind
+/// it, so the logon ACK that followed arrived with its header eaten and was
+/// never recognised, and the establishment waited out its deadline on a reply
+/// it had already been sent.
+#[test]
+fn a_control_frame_is_not_framed_as_though_it_carried_a_checksum() {
+    // As the venue sends it, and as the reader beside this one builds it:
+    // header, stated length, body, and nothing after the body.
+    let body = b"35=X\x01PASSED\x01";
+    let mut control = format!("8=1\x019={:04}\x01", body.len()).into_bytes();
+    control.extend_from_slice(body);
+
+    let ack = fix_build(&[(35, "A"), (108, "30")], 1);
+    let mut buf = control.clone();
+    buf.extend_from_slice(&ack);
+
+    let (framed, consumed) = try_frame_farm_msg(&buf).expect("the control frame is complete");
+    assert_eq!(consumed, control.len(), "it ends where its own length says");
+    assert_eq!(framed, control);
+
+    // And what followed it is still a whole message.
+    let (next, _) = try_frame_farm_msg(&buf[consumed..]).expect("the ACK behind it survives");
+    assert_eq!(next, ack, "the frame in front of it took its header");
+}
+
 #[test]
 fn try_frame_farm_msg_multiple_sequential() {
     // Two FIX messages back to back

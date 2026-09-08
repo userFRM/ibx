@@ -1029,7 +1029,18 @@ pub(super) fn try_frame_farm_msg(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
     // frame can have. Added unchecked it aborts the thread this runs on, and
     // the join for it turns that into the process; where overflow is not
     // checked it wraps small and this returns part of a frame as a whole one.
-    let total = soh_pos.checked_add(8)?.checked_add(body_len)?; // +1 SOH, +7 for "10=XXX\x01"
+    // The checksum is a FIX.4.1 field, and more than FIX.4.1 arrives here. The
+    // venue's auth-control frames end where their own length says — the reader
+    // that frames those alone stops exactly there — so seven bytes added to one
+    // of them runs past its end and takes the head of whatever came behind it,
+    // leaving that message unrecognisable and the establishment waiting on a
+    // reply it had already been sent.
+    let trailer = if buf.starts_with(b"8=FIX.4.1") {
+        crate::protocol::fix::FIX41_TRAILER_LEN
+    } else {
+        0
+    };
+    let total = soh_pos.checked_add(1)?.checked_add(body_len)?.checked_add(trailer)?;
     if buf.len() < total {
         return None;
     }
