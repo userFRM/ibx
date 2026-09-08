@@ -172,7 +172,7 @@ ibx = { git = "https://github.com/userFRM/ibx", features = ["async"] }
 let client = AsyncClient::connect(config).await?;
 let spy = client.qualify(Contract::stock("SPY")).await?;
 
-client.watch(&spy)?;                 // sends, does not wait
+client.watch(&spy).await?;           // may have to ask about the contract
 let quote = client.ticker(&spy);     // a memory read
 
 let order = client.place(&spy, &Order::limit("BUY", 1.0, 1.0)).await?;

@@ -20,9 +20,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let spy = client.qualify(Contract::stock("SPY")).await?;
 
-    // Watching sends and returns, so it is not awaited. Neither is reading the
-    // quote it produces: that is a memory read.
-    client.watch(&spy)?;
+    // Watching can have to ask the venue about the contract first, so it is
+    // awaited like anything else here that may wait. Reading the quote it
+    // produces is not: that is a memory read.
+    client.watch(&spy).await?;
     tokio::time::sleep(Duration::from_secs(3)).await;
     if let Some(quote) = client.ticker(&spy) {
         println!("bid {} ask {}", quote.bid, quote.ask);

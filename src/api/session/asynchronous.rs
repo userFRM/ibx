@@ -293,9 +293,14 @@ impl AsyncClient {
 
     /// Start a market-data subscription, and hand back the id that withdraws it.
     ///
-    /// Not moved off the reactor: this sends and returns without waiting.
-    pub fn watch(&self, contract: &Contract) -> Result<i64, Refusal> {
-        self.inner.watch(contract)
+    /// Subscribing does not always only send: a contract named by symbol
+    /// rather than by the venue's id has to be asked about first, and so does
+    /// one carrying an id and nothing else — which is the shape a holding
+    /// arrives in. That waits on the venue and on this session's turn to ask,
+    /// and done on the reactor it stalls every other task on it.
+    pub async fn watch(&self, contract: &Contract) -> Result<i64, Refusal> {
+        let contract = contract.clone();
+        off_the_reactor!(self, |client| client.watch(&contract))
     }
 
     /// Place an order, and hand back what is known of it so far.
@@ -458,4 +463,32 @@ mod tests {
             "named on the blocking session and not on this one: {absent:?}",
         );
     }
+    /// A call here that can wait goes off the reactor, `watch` included.
+    ///
+    /// Subscribing does not always only send: a contract named by symbol, and
+    /// one carrying the venue's id and nothing else — the shape a holding
+    /// arrives in — both have to be asked about first, and that waits on the
+    /// venue and on this session's turn to ask. Left inline it holds the
+    /// reactor for as long as the lookup takes, which is the bug this surface
+    /// exists to prevent.
+    #[test]
+    fn watching_a_contract_does_not_hold_the_reactor() {
+        let here = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src/api/session/asynchronous.rs"),
+        )
+        .expect("this file");
+        // At the start of its own line, or this finds where this test names
+        // the method rather than where the file declares it — which is this
+        // line, so the search would answer itself.
+        let at = here
+            .find("\n    pub async fn watch(")
+            .expect("watch answers on the reactor, so a lookup inside it holds every task on it");
+        let ends = here[at..].find("\n    }").map_or(here.len(), |e| at + e);
+        assert!(
+            here[at..ends].contains("off_the_reactor!"),
+            "watch waits inline, and every other task on the reactor waits with it",
+        );
+    }
+
 }
