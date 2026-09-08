@@ -210,7 +210,13 @@ impl MarketDataState {
         // An account-wide notice is not among these. It names no contract, so
         // no slot can carry it to the wrong one.
         self.tick_news.lock().unwrap().retain(|n| n.instrument != instrument);
-        self.option_computations.lock().unwrap().retain(|c| c.instrument != instrument);
+        // An answer worked out here is not one of these. It belongs to the
+        // question that asked it and names no contract at all, so it is filed
+        // under slot zero — which is a real slot, and dropping that one took
+        // every answer waiting on it. The same rule the cache beside this
+        // queue already keeps.
+        self.option_computations.lock().unwrap()
+            .retain(|c| c.answers.is_some() || c.instrument != instrument);
     }
 
     /// The slots given back since this was last asked.

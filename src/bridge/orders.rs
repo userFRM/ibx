@@ -303,6 +303,30 @@ impl OrderState {
         self.order_cache.lock().unwrap().remove(&order_id);
     }
 
+    /// Write the status an order has finished on into the entry kept for it.
+    ///
+    /// Not a removal, which is the other way to stop the entry being read as a
+    /// working order. What is asked of it afterwards is what the order was:
+    /// the completed-orders reader takes the contract, the quantity, the price
+    /// and the venue's permanent number from here, and where the entry is gone
+    /// it files an order carrying nothing but its own id. Restated instead,
+    /// the open-order union skips it — it reads the status, and a finished one
+    /// is not open — and everything the order was is still there to report.
+    #[doc(hidden)] pub fn note_order_finished(
+        &self, order_id: u64, status: &str, completed_status: &str,
+    ) {
+        if let Some(info) = self.order_cache.lock().unwrap().get_mut(&order_id) {
+            info.order_state.status = status.into();
+            // A refusal and an order the venue merely holds are the same word
+            // here, and this is what tells them apart. Left as it was, a
+            // refused order read as one that can come back and the union went
+            // on listing it as working.
+            if !completed_status.is_empty() {
+                info.order_state.completed_status = completed_status.into();
+            }
+        }
+    }
+
     // ── Hot-loop-side writers ──
 
     #[doc(hidden)] pub fn push_fill(&self, fill: Fill) {

@@ -324,6 +324,21 @@ const A_YEAR_OF_DAYS: f64 = 365.0;
 /// below and never with a feed named beside it.
 const REGULATORY_SNAPSHOT_REQUEST_TYPE: u32 = 624;
 
+/// The entries that are the quote itself.
+///
+/// A realtime subscription asks for the pair; a delayed or frozen one is
+/// served on the single top; the chargeable snapshot is its own. Everything
+/// else a subscription registers — the trading status, the exchange map, the
+/// model — rides beside whichever of these was asked for and says nothing
+/// about which it was. Read as though it did, a contract carrying nothing but
+/// a snapshot answered to "is there a stream here" because the companions
+/// beside the snapshot are not the snapshot's number.
+const REALTIME_BID_ASK_REQUEST_TYPE: u32 = 442;
+/// The other half of a realtime pair: what last traded.
+const REALTIME_LAST_REQUEST_TYPE: u32 = 443;
+/// The single top a delayed or frozen feed is served on.
+const TOP_REQUEST_TYPE: u32 = 1;
+
 /// Deliver the request once, on tag 263, in place of subscribing to it.
 const SNAPSHOT_ACTION: &str = "3";
 
@@ -702,8 +717,14 @@ impl FarmState {
     pub(crate) fn holds_a_stream(&self, instrument: InstrumentId) -> bool {
         self.instrument_md_reqs.iter().any(|(id, record)| {
             *id == instrument
-                && record.entries.iter()
-                    .any(|e| e.request_type != REGULATORY_SNAPSHOT_REQUEST_TYPE)
+                && record.entries.iter().any(|e| {
+                    matches!(
+                        e.request_type,
+                        REALTIME_BID_ASK_REQUEST_TYPE
+                            | REALTIME_LAST_REQUEST_TYPE
+                            | TOP_REQUEST_TYPE,
+                    )
+                })
         }) || self.md_resub_info.iter().any(|r| r.0 == instrument)
             || self.replay_queue.iter().any(|r| r.0 == instrument)
     }
@@ -1631,13 +1652,21 @@ impl FarmState {
         let venue = venue.to_string();
         let mut entries = if realtime {
             vec![
-                MdReqEntry { req_id: bid_ask_id, request_type: 442, venue: venue.clone() },
-                MdReqEntry { req_id: last_id, request_type: 443, venue: venue.clone() },
+                MdReqEntry {
+                    req_id: bid_ask_id,
+                    request_type: REALTIME_BID_ASK_REQUEST_TYPE,
+                    venue: venue.clone(),
+                },
+                MdReqEntry {
+                    req_id: last_id,
+                    request_type: REALTIME_LAST_REQUEST_TYPE,
+                    venue: venue.clone(),
+                },
             ]
         } else if regulatory_snapshot {
             vec![MdReqEntry { req_id: bid_ask_id, request_type: REGULATORY_SNAPSHOT_REQUEST_TYPE, venue: venue.clone() }]
         } else {
-            vec![MdReqEntry { req_id: bid_ask_id, request_type: 1, venue: venue.clone() }]
+            vec![MdReqEntry { req_id: bid_ask_id, request_type: TOP_REQUEST_TYPE, venue: venue.clone() }]
         };
         entries.push(MdReqEntry { req_id: status_req_id, request_type: TRADING_STATUS_REQUEST_TYPE, venue: venue.clone() });
         entries.push(MdReqEntry { req_id: venue_map_req_id, request_type: BBO_EXCHANGE_MAP_REQUEST_TYPE, venue: venue.clone() });

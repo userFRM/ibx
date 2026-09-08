@@ -870,21 +870,26 @@ mod resub_tests {
     /// recorded for replay, so a subscribe pointed at it was never sent and
     /// the withdrawal then took the record it was pointed at. The caller was
     /// left holding a number that reads as subscribed with nothing on it.
+    ///
+    /// Built by the subscribe itself rather than by hand. A record written out
+    /// here states only what the test thought of, and a subscription registers
+    /// more than its quote — the trading status and the exchange map ride
+    /// beside whichever kind was asked for. Read as "anything that is not the
+    /// snapshot's own number", those companions answered for a stream that was
+    /// never asked for, and the guard below was inert against the case it
+    /// exists for.
     #[test]
     fn a_snapshot_holds_the_slot_and_is_not_a_stream_to_follow() {
         let mut farm = FarmState::new();
-        let mut market = MarketState::new();
-        let instrument = market.register(756733);
-        farm.instrument_md_reqs.push((instrument, MdReqRecord {
-            con_id: 756733,
-            sec_type: "CS".into(),
-            mode_9887: 0,
-            entries: vec![MdReqEntry {
-                req_id: 7,
-                request_type: REGULATORY_SNAPSHOT_REQUEST_TYPE,
-                venue: "BEST".into(),
-            }],
-        }));
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        let mut hb = HeartbeatState::new();
+
+        // A snapshot and nothing else, sent the way the engine sends one.
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "",
+            instrument, 0, true, &mut None, &mut hb,
+        );
 
         assert!(
             farm.holds_market_data(instrument),
@@ -896,10 +901,11 @@ mod resub_tests {
              snapshot's own withdrawal takes the record with it",
         );
 
-        // And a real subscription beside it is one, snapshot or no snapshot.
-        farm.instrument_md_reqs[0].1.entries.push(MdReqEntry {
-            req_id: 8, request_type: 442, venue: "BEST".into(),
-        });
+        // And an ordinary subscription on the same contract is one.
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "",
+            instrument, 0, false, &mut None, &mut hb,
+        );
         assert!(farm.holds_a_stream(instrument), "a live subscription");
     }
 }

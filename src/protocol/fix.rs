@@ -540,15 +540,19 @@ pub fn fix_sign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>) {
 /// the third thing a text search would do and the reason this is not one.
 pub fn carries_signature(msg: &[u8]) -> bool {
     let trailer = if msg.starts_with(b"8=FIX.4.1") { FIX41_TRAILER_LEN } else { 0 };
-    // The whole shape, not the tag alone. A reject reason quoting the tag can
-    // sit at exactly this offset and end where the separator is expected —
-    // the eight characters between are what tell that apart from a signature.
+    // The whole shape, and a field of its own. A reject reason quoting the tag
+    // can sit at exactly this offset, carry eight characters that read as hex,
+    // and end where the separator is expected — `58=rejected: 8349=DEADBEEF`
+    // is all three. What it cannot do is start a field: the byte in front of a
+    // real one ends the field before it.
     let at_the_trailer = msg
         .len()
         .checked_sub(trailer + SIG_FIELD_LEN)
         .is_some_and(|at| {
             let field = &msg[at..at + SIG_FIELD_LEN];
-            field.starts_with(b"8349=")
+            at > 0
+                && msg[at - 1] == SOH
+                && field.starts_with(b"8349=")
                 && field[SIG_FIELD_LEN - 1] == SOH
                 && field[5..SIG_FIELD_LEN - 1].iter().all(|b| b.is_ascii_hexdigit())
         });
@@ -1304,6 +1308,24 @@ mod hostile_frame_tests {
             frame_end(&frame),
             Some(frame.len()),
             "the frame was cut at a checksum inside the block it carries",
+        );
+    }
+
+    /// A quoted signature at the trailer's own offset is not a signature.
+    ///
+    /// A reject reason can carry the tag, eight characters that read as hex,
+    /// and end where the separator is expected — every part of the shape, at
+    /// exactly the offset a real one occupies. What it cannot do is begin a
+    /// field. Taken for one on a signed connection, the frame went to a verify
+    /// that found no signature field, and a failed verify gives the transport
+    /// up: the frame is dropped and the session rebuilt, on a message that was
+    /// never signed.
+    #[test]
+    fn a_signature_quoted_inside_a_value_is_not_one() {
+        let frame = fix_build(&[(35, "3"), (58, "rejected: 8349=DEADBEEF")], 1);
+        assert!(
+            !carries_signature(&frame),
+            "an unsigned frame was sent to a verify that can only fail it",
         );
     }
 }

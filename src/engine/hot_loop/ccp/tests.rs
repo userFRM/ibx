@@ -7440,9 +7440,14 @@ fn a_cancel_refused_because_the_order_is_over_ends_it() {
             "39={stated}: the order the venue says is over is still in the book, \
              where a cancel-all walks to it and a replace names it",
         );
+        let row = shared.orders.get_order_info(42)
+            .expect("39={stated}: the row is what the completed order is reported from");
         assert!(
-            shared.orders.get_order_info(42).is_none(),
-            "39={stated}: and the row a caller reads still lists it as working",
+            !crate::types::order_status::is_open_or_reactivatable(
+                &row.order_state.status, &row.order_state.completed_status,
+            ),
+            "39={stated}: the row a caller reads still lists it as working: {:?}",
+            row.order_state.status,
         );
         let completed = shared.orders.drain_completed_orders();
         assert!(

@@ -2055,7 +2055,21 @@ impl CcpState {
                 timestamp_ns: context.now_ns(),
             });
             context.retire_order(oid);
-            shared.orders.remove_order_info(oid);
+            // Restated, not removed. What the order was is what the
+            // completed-orders reader asks for next — the contract, the
+            // quantity, the price, the venue's own number — and taking the
+            // entry away filed an order carrying nothing but its id. The union
+            // that lists working orders reads the status, so restating it is
+            // what stops the order being listed.
+            shared.orders.note_order_finished(
+                oid,
+                crate::types::order_status::order_status_str(status),
+                // Which of the two an "Inactive" is. Filled and Cancelled say
+                // so on their own; a refusal shares its word with an order the
+                // venue is merely holding, and only the reason beside it
+                // separates them.
+                if status == crate::types::OrderStatus::Rejected { reason } else { "" },
+            );
         }
 
         // Tag 58 carries the venue's text. The structured reject has tags 434

@@ -2917,3 +2917,39 @@ fn a_withdrawal_during_registration_is_not_told_there_is_nothing_there() {
     });
     let _ = engine.join();
 }
+
+/// An answer worked out here survives a slot going back to the table.
+///
+/// A model the venue publishes names the contract it is about. One solved on
+/// this side belongs to the question that asked it and names no contract at
+/// all, so it is filed under slot zero — a real slot, held by whatever
+/// contract happens to have it. Dropping that slot took every answer waiting
+/// on it, and the callbacks their callers were owed never arrived.
+#[test]
+fn an_answer_this_side_worked_out_is_not_dropped_with_a_slot() {
+    let shared = SharedState::new();
+    let slot: InstrumentId = 0;
+
+    // The venue's own model for the contract on that slot.
+    shared.market.push_option_computation(crate::types::OptionComputation {
+        instrument: slot,
+        ..Default::default()
+    });
+    // And an answer to a question asked here, which names no contract.
+    shared.market.push_option_computation(crate::types::OptionComputation {
+        opt_price: 1.25,
+        ..crate::types::OptionComputation::solved(77)
+    });
+
+    shared.market.note_released_slot(slot);
+
+    let left = shared.market.drain_option_computations();
+    assert!(
+        left.iter().any(|c| c.answers == Some(77)),
+        "the answer to a question asked here went with somebody else's slot: {left:?}",
+    );
+    assert!(
+        !left.iter().any(|c| c.answers.is_none()),
+        "and the model the venue published for the slot did go with it: {left:?}",
+    );
+}
