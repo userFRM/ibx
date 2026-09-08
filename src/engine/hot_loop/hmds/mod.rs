@@ -998,7 +998,7 @@ impl HmdsState {
                                 let (_, req_id) = self.pending_scanner.remove(pos);
                                 released_req_id = Some(req_id);
                             } else if let Some(pos) =
-                                self.tbt_subscriptions.iter().position(|sub| &sub.query_id == qid)
+                                self.tbt_subscriptions.iter().position(|sub| states(qid, &sub.query_id))
                             {
                                 // A stream the venue refused. Left out of this
                                 // chain, its refusal was logged against a query

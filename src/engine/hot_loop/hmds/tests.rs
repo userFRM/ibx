@@ -2477,3 +2477,33 @@ fn a_refusal_naming_a_continued_query_name_still_reaches_it() {
     let told = shared.reference.drain_historical_errors();
     assert!(told.iter().any(|(r, ..)| *r == 77), "and the caller is told why: {told:?}");
 }
+
+/// A refused stream is recognised however the venue spells the name back.
+///
+/// The venue does not always echo the bare name it was given, and every other
+/// branch of this chain matches the way the paths that read data match. This
+/// one asked for the two to be equal, so a refusal naming the continued
+/// spelling matched nothing: the caller was never told why, the record stayed
+/// until the connection went, and a stream that was never coming was waited on
+/// for the rest of the session.
+#[test]
+fn a_refused_tick_stream_is_matched_the_way_every_other_refusal_is() {
+    let shared = std::sync::Arc::new(crate::bridge::SharedState::new());
+    let mut hmds = HmdsState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+    hmds.tbt_subscriptions.push(TbtSubscription {
+        ignore_size: false, instrument: 0, query_id: "tbt_7".to_string(),
+        kind: TbtType::Last, caller_req_id: 41, venue_id: 0, min_tick: 0,
+        size_tick: 0.0, running: Default::default(),
+    });
+
+    // The name it was given, continued — which is what a reply may state.
+    let msg = make_query_error_msg("tbt_7.1", "no such stream");
+    hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+    assert!(
+        hmds.tbt_subscriptions.is_empty(),
+        "the refusal named this stream and was read as naming none",
+    );
+}
