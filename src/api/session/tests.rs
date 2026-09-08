@@ -908,3 +908,33 @@ fn a_reader_and_an_answering_call_do_not_wedge_each_other() {
     );
     let _ = asking.join();
 }
+
+/// A subscription that was never made leaves no stream behind.
+///
+/// The stream is recorded before the subscription is asked for, so a tick
+/// arriving between the two has somewhere to go. Where the asking then fails
+/// there is no subscription and no reader — the caller has its error and has
+/// dropped both ends — and the record stayed: the sweep that clears a dead
+/// stream only runs when something arrives under its number, and for a
+/// subscription that was never made nothing ever does. A session churning
+/// streams grew them for as long as it ran.
+#[test]
+fn a_subscription_that_was_never_made_leaves_no_stream() {
+    let shared = Arc::new(crate::bridge::SharedState::new());
+    let (session, rx) = a_session(&shared);
+    // The engine is gone, so what the subscription is asked for on cannot be
+    // sent and the call fails.
+    drop(rx);
+
+    let refused = session.ticks(&Contract::stock("SPY"));
+    assert!(refused.is_err(), "the subscription was asked for after the engine went");
+    assert_eq!(
+        session.kept().streams_recorded(), 0,
+        "the stream stayed with its reader already dropped, and nothing will \
+         ever arrive under its number to sweep it",
+    );
+
+    let refused = session.live_bar_stream(&Contract::stock("SPY"));
+    assert!(refused.is_err(), "and the same for bars");
+    assert_eq!(session.kept().streams_recorded(), 0, "which also leaves none behind");
+}

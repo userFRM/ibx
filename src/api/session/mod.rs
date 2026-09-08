@@ -430,7 +430,14 @@ impl Client {
         let req_id = asked.get();
         let (tx, rx) = std::sync::mpsc::sync_channel(TICK_BACKLOG);
         self.kept().stream_ticks(req_id, tx);
-        self.client.req_tick_by_tick_data(req_id, contract, "Last", 0, false)?;
+        // Recorded first, so a tick arriving between the asking and the record
+        // has somewhere to go — and taken back where the asking fails, or the
+        // record stays with its reader already dropped and nothing ever
+        // arrives under that number to sweep it.
+        if let Err(why) = self.client.req_tick_by_tick_data(req_id, contract, "Last", 0, false) {
+            self.kept().forget_stream(req_id);
+            return Err(why);
+        }
         Ok(Ticks { session: self.clone(), req_id, rx })
     }
 
@@ -449,7 +456,11 @@ impl Client {
         let (tx, rx) = std::sync::mpsc::sync_channel(TICK_BACKLOG);
         self.kept().stream_bars(req_id, tx);
         let what = if contract.is_quoted_not_traded() { "MIDPOINT" } else { "TRADES" };
-        self.client.req_real_time_bars(req_id, contract, 5, what, true)?;
+        // As the ticks beside this: taken back where the asking fails.
+        if let Err(why) = self.client.req_real_time_bars(req_id, contract, 5, what, true) {
+            self.kept().forget_stream(req_id);
+            return Err(why);
+        }
         Ok(LiveBars { session: self.clone(), req_id, rx })
     }
 

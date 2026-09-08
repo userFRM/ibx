@@ -521,6 +521,26 @@ impl LiveState {
         self.bar_streams.push((req_id, to));
     }
 
+    /// Take back a stream nothing will arrive on.
+    ///
+    /// The stream is recorded before the subscription is asked for, so that a
+    /// tick arriving between the two has somewhere to go. Where the asking
+    /// then fails there is no subscription, and the record stays with its
+    /// reader already dropped: the sweep that clears a dead one only runs when
+    /// something arrives under its number, and for a subscription that was
+    /// never made nothing ever does.
+    pub(crate) fn forget_stream(&mut self, req_id: i64) {
+        self.tick_streams.retain(|(id, _)| *id != req_id);
+        self.bar_streams.retain(|(id, _)| *id != req_id);
+    }
+
+    /// How many streams are recorded. For the test that a subscription which
+    /// was never made leaves none behind.
+    #[cfg(test)]
+    pub(crate) fn streams_recorded(&self) -> usize {
+        self.tick_streams.len() + self.bar_streams.len()
+    }
+
     /// Send the headlines to a caller who asked for them.
     pub(crate) fn stream_news(&mut self, to: SyncSender<NewsTick>) {
         self.news_streams.push(to);
