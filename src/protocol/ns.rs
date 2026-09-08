@@ -179,9 +179,7 @@ fn read_bounded<R: Read>(reader: &mut R, buf: &mut [u8], deadline: Instant) -> i
             // half-collected, so a pause the deadline had time for became a
             // frame that could not be parsed and an establishment that failed.
             // The clock is what bounds this read, and it is checked above.
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut => {}
+            Err(e) if super::connection::read_found_nothing(&e) => {}
             Err(e) => return Err(e),
         }
     }

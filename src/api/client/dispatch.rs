@@ -405,6 +405,43 @@ impl EClient {
             // stated it. Reported as zero, a status arriving just after a fill
             // told the caller the order had filled at no price at all.
             let avg = update.avg_price as f64 / crate::types::PRICE_SCALE as f64;
+            // The order as this client sent it, beside the status it is now
+            // in. The reference client answers an order's every change with
+            // both, from the order it holds — its own method for it sends the
+            // pair — and a program that waits for the order to confirm what it
+            // asked for waited on a callback that only arrived if it asked for
+            // its open orders. The other surface sends the pair here too.
+            //
+            // Copied out before the callback rather than read across it: a
+            // guard built in the scrutinee is held for the whole body, and the
+            // body calls the caller's own code. A wrapper that reaches the
+            // order cache from there would wait on a lock its own caller holds.
+            let tracked = self.core.open_orders.lock().unwrap().get(&update.order_id).cloned();
+            // Not for a preview. What the venue would do with an order is
+            // asked for by placing one, so a preview is a tracked order like
+            // any other and its statuses arrive here — but the answer to a
+            // preview is the margin the venue states, and that arrives on its
+            // own reply further down. The question waits on the first of these
+            // carrying its number, so a pair sent from the status alone
+            // answered it: no margin figures, and a cost of nought rather than
+            // the number that means unstated, on the one call whose whole
+            // purpose is to say what an order would cost.
+            if let Some(tracked) = tracked.filter(|t| !t.order.what_if) {
+                // What the venue said about the order, under the status this
+                // client names it by. Built from the status alone, everything
+                // beside it — what the order would cost, the margin figures and
+                // the warning — came back at nought on every change, to the
+                // caller this pair exists for.
+                let state = OrderState {
+                    status: status.to_string(),
+                    ..self.shared.orders.get_order_info(update.order_id)
+                        .map(|i| i.order_state)
+                        .unwrap_or_default()
+                };
+                wrapper.open_order(
+                    update.order_id as i64, &tracked.contract, &tracked.order, &state,
+                );
+            }
             wrapper.order_status(
                 update.order_id as i64, status, update.filled_qty,
                 update.remaining_qty, avg, update.perm_id, parent_id, 0.0,
@@ -1137,5 +1174,100 @@ mod delivered_size_tests {
         assert!(client.deferred_evictions.lock().unwrap().contains(&7));
         client.process_msgs(&mut wrapper);
         assert!(shared.orders.get_order_info(7).is_none(), "a terminal row is still reclaimed");
+    }
+
+    /// What each order callback was told, in the order it was told.
+    #[derive(Default)]
+    struct Pairs(Vec<(&'static str, i64, String, String)>);
+
+    impl Wrapper for Pairs {
+        fn open_order(
+            &mut self, order_id: i64, contract: &crate::types::model::Contract,
+            order: &crate::types::model::Order, state: &crate::types::model::OrderState,
+        ) {
+            self.0.push(("open_order", order_id, contract.symbol.clone(), state.status.clone()));
+            assert_eq!(order.order_id, order_id, "the order it holds, not a blank one");
+        }
+        fn order_status(
+            &mut self, order_id: i64, status: &str, _filled: f64, _remaining: f64,
+            _avg_fill_price: f64, _perm_id: i64, _parent_id: i64,
+            _last_fill_price: f64, _client_id: i64, _why_held: &str, _mkt_cap_price: f64,
+        ) {
+            self.0.push(("order_status", order_id, String::new(), status.into()));
+        }
+    }
+
+    /// A status change with no fill on the report states the order beside the
+    /// status, as the other surface does and as this one's contract says.
+    #[test]
+    fn a_status_change_states_the_order_beside_it() {
+        let (client, _rx, shared) = crate::api::client::tests::test_client();
+        client.core.track_order(
+            7,
+            crate::types::model::Contract {
+                con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+                exchange: "SMART".into(), ..Default::default()
+            },
+            crate::types::model::Order {
+                order_id: 7, action: "BUY".into(), total_quantity: 100.0,
+                order_type: "LMT".into(), lmt_price: 400.0, ..Default::default()
+            },
+            0,
+        );
+        shared.orders.push_order_update(crate::types::OrderUpdate {
+            order_id: 7, instrument: 0, status: crate::types::OrderStatus::Submitted,
+            filled_qty: 0.0, remaining_qty: 100.0, avg_price: 0,
+            perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        });
+
+        let mut pairs = Pairs::default();
+        client.process_msgs(&mut pairs);
+        assert_eq!(
+            pairs.0,
+            vec![
+                ("open_order", 7, "SPY".to_string(), "Submitted".to_string()),
+                ("order_status", 7, String::new(), "Submitted".to_string()),
+            ],
+        );
+    }
+
+    /// And a preview is not stated that way, because a preview is answered by
+    /// what the venue says it would cost.
+    ///
+    /// Asking what an order would do places one, so a preview is a tracked
+    /// order like any other and its statuses arrive on this path. The question
+    /// waits on the first statement carrying its number, so a pair sent from
+    /// the status alone answered it — with no margin figures and a cost of
+    /// nought rather than the number that means unstated, on the one call whose
+    /// whole purpose is to say what an order would cost.
+    #[test]
+    fn a_preview_is_not_answered_by_the_status_beside_it() {
+        let (client, _rx, shared) = crate::api::client::tests::test_client();
+        client.core.track_order(
+            8,
+            crate::types::model::Contract {
+                con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+                exchange: "SMART".into(), ..Default::default()
+            },
+            crate::types::model::Order {
+                order_id: 8, action: "BUY".into(), total_quantity: 100.0,
+                order_type: "LMT".into(), lmt_price: 400.0,
+                what_if: true, ..Default::default()
+            },
+            0,
+        );
+        shared.orders.push_order_update(crate::types::OrderUpdate {
+            order_id: 8, instrument: 0, status: crate::types::OrderStatus::PreSubmitted,
+            filled_qty: 0.0, remaining_qty: 100.0, avg_price: 0,
+            perm_id: 0, parent_id: 0, timestamp_ns: 0,
+        });
+
+        let mut pairs = Pairs::default();
+        client.process_msgs(&mut pairs);
+        assert!(
+            pairs.0.iter().all(|(what, ..)| *what != "open_order"),
+            "the status answered the preview in place of the venue's own reply: {:?}",
+            pairs.0,
+        );
     }
 }

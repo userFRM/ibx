@@ -285,7 +285,13 @@ impl EClient {
                 if shared.orders.has_pending_fill(*oid) {
                     return true;
                 }
-                shared.orders.remove_order_info(*oid);
+                // The row goes only while the order is finished. A correction
+                // the venue sends after the completion was delivered puts the
+                // order back in the book, and this cleanup runs afterwards:
+                // taken then, the row removed is the live one and what reads
+                // the order next finds nothing and seeds an empty contract and
+                // order in its place.
+                shared.orders.remove_completed_order_info(*oid);
                 false
             });
         }
@@ -1446,6 +1452,55 @@ mod scanner_tests {
                 "against the requesting id");
             assert_eq!(args.get_item(3).unwrap().extract::<String>().unwrap(),
                 "Scanner subscription not allowed", "in the venue's own words");
+        });
+    }
+}
+
+#[cfg(test)]
+mod eviction_tests {
+    use super::*;
+
+    /// A completion arms the cleanup of the record kept for an order, and the
+    /// venue can restate the execution before the pass that runs it: a trade
+    /// correction puts the order back in the book, and the row taken then is
+    /// the live one — what reads the order next finds nothing and seeds an
+    /// empty contract and order in its place. Only a finished order's row is
+    /// reclaimed.
+    #[test]
+    fn a_reopened_order_keeps_its_record_when_the_armed_cleanup_runs() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+            let wrapper = py
+                .eval(c"type('W', (), {'__getattr__': lambda s, n: (lambda *a: None)})()", None, None)
+                .unwrap()
+                .unbind();
+            client.__init__(wrapper).unwrap();
+            let shared = Arc::new(SharedState::new());
+            *client.shared.lock().unwrap() = Some(shared.clone());
+            let row = |order_id: i64, status: &str| crate::bridge::RichOrderInfo {
+                contract: crate::types::model::Contract {
+                    con_id: 756733, symbol: "SPY".into(), ..Default::default()
+                },
+                order: crate::types::model::Order { order_id, ..Default::default() },
+                order_state: crate::types::model::OrderState {
+                    status: status.into(), ..Default::default()
+                },
+                last_exec: Default::default(),
+            };
+            // One the venue has put back to working, and one that has finished.
+            shared.orders.push_order_info(7, row(7, "Submitted"));
+            shared.orders.push_order_info(8, row(8, "Filled"));
+            client.deferred_evictions.lock().unwrap().extend([7, 8]);
+
+            client.dispatch_once(py, &shared).expect("the pass ends");
+
+            assert!(shared.orders.get_order_info(7).is_some(),
+                "the working row outlives the cleanup its completion armed");
+            assert!(shared.orders.get_order_info(8).is_none(),
+                "and a finished one is still reclaimed");
+            assert!(client.deferred_evictions.lock().unwrap().is_empty(),
+                "both were swept");
         });
     }
 }

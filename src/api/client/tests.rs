@@ -9996,3 +9996,198 @@ fn a_first_ask_does_not_read_the_model_of_another_contract() {
          happened to be watching: {answered:?}",
     );
 }
+
+/// A tick withdrawal that is refused leaves the stream's kind where it found
+/// it.
+///
+/// The kind was taken out ahead of the record that says the stream is there,
+/// so a refused withdrawal took it anyway. A stream with no kind recorded is
+/// reported as the exchange's own, so every print of an AllLast stream after
+/// such a withdrawal was labelled as a different stream's — the withdrawal
+/// that was refused is the one thing that must leave nothing changed.
+#[test]
+fn a_refused_tick_withdrawal_leaves_the_kind_of_the_stream_still_running() {
+    let (client, _rx, _shared) = test_client();
+    // A kind on this number, and no mapping to withdraw a stream by.
+    client.tbt_kinds.lock().unwrap().insert(7, TbtType::AllLast);
+
+    let refused = client.cancel_tick_by_tick_data(7);
+    assert!(
+        refused.as_ref().is_err_and(|why| why.code == 300),
+        "nothing is held under that number: {refused:?}",
+    );
+    assert_eq!(
+        client.tbt_kinds.lock().unwrap().get(&7).copied(),
+        Some(TbtType::AllLast),
+        "the kind went with a withdrawal that was refused, and the stream it \
+         belongs to is still running",
+    );
+}
+
+/// Placing under the next id keeps the hedge and the legs the caller stated.
+///
+/// `place` names the contract before it takes the turn, because a lookup takes
+/// a turn of its own and one asked from inside this one would never run. Named
+/// here, the contract reaches `place_order` already carrying an id, so the
+/// restore `place_order` does around its own naming does not run — and what
+/// the venue names is a description of one contract, which has neither a hedge
+/// nor legs.
+#[test]
+fn placing_by_description_keeps_the_hedge_the_caller_stated() {
+    let (client, _rx, _shared) = test_client();
+    let mut hedged = spy();
+    hedged.con_id = 0;
+    hedged.delta_neutral_contract = Some(crate::types::model::DeltaNeutralContract {
+        con_id: 265598, delta: 0.5, price: 100.0,
+    });
+    // Named already, so the naming is answered from the record rather than the
+    // venue: the question here is what survives it, not the naming.
+    let key = ClientCore::description_key(&hedged);
+    let mut as_the_venue_names_it = spy();
+    as_the_venue_names_it.con_id = 756733;
+    as_the_venue_names_it.delta_neutral_contract = None;
+    client.core.remember_named(key, as_the_venue_names_it);
+
+    // Nothing answers the order, so this waits out the settling window and
+    // reports what is known; what it was placed on is on the book either way.
+    let _ = client.place(&hedged, &Order::limit("BUY", 100.0, 100.0));
+
+    let held = client.core.open_orders.lock().unwrap();
+    let (_, placed) = held.iter().next().expect("the order is tracked");
+    assert!(
+        placed.contract.delta_neutral_contract.is_some(),
+        "the contract this order hedges against is what the caller stated: {:?}",
+        placed.contract,
+    );
+}
+
+/// A preview of a description keeps the hedge and the legs the caller stated,
+/// for the same reason placing one does.
+///
+/// A preview names an unqualified contract itself, ahead of the turn, and then
+/// hands `place_order` the venue's naming — so the preview came back for a
+/// bare contract while the caller asked about a delta-neutral order.
+#[test]
+fn previewing_by_description_keeps_the_hedge_the_caller_stated() {
+    let (client, rx, shared) = test_client();
+    let mut hedged = spy();
+    hedged.con_id = 0;
+    hedged.delta_neutral_contract = Some(crate::types::model::DeltaNeutralContract {
+        con_id: 265598, delta: 0.5, price: 100.0,
+    });
+    let preview = Order {
+        action: "BUY".into(), total_quantity: 100.0, order_type: "LMT".into(),
+        lmt_price: 150.0, what_if: true, ..Default::default()
+    };
+
+    let previewed_on: std::sync::Mutex<Option<Contract>> = std::sync::Mutex::new(None);
+    let pushed = Arc::clone(&shared);
+    // The channel is not shared, it is handed over: the answering side owns it
+    // for as long as the question runs.
+    let placing = &client;
+    let previewed = &previewed_on;
+    let refused = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let give_up = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            // The lookup goes out first, under a number of this client's own
+            // choosing. Answered as the venue answers it: one contract, and
+            // nothing about a hedge.
+            let looked_up = loop {
+                assert!(std::time::Instant::now() < give_up, "no lookup was asked");
+                match rx.try_recv() {
+                    Ok(ControlCommand::FetchContractDetails { req_id, .. }) => break req_id,
+                    Ok(_) => {}
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+                }
+            };
+            pushed.reference.push_contract_details(looked_up, ContractDefinition {
+                con_id: 756733, symbol: "SPY".into(), sec_type: SecurityType::Stock,
+                exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+            });
+            pushed.reference.push_contract_details_end(looked_up);
+            // Then the preview is placed, and what it was placed on is the
+            // question. Refused as soon as it is read, so the wait ends here
+            // rather than at the answer timeout.
+            let order_id = loop {
+                assert!(std::time::Instant::now() < give_up, "no preview was placed");
+                let found = placing.core.open_orders.lock().unwrap().iter()
+                    .find(|(_, tracked)| tracked.order.what_if)
+                    .map(|(id, tracked)| (*id, tracked.contract.clone()));
+                if let Some((id, on)) = found {
+                    *previewed.lock().unwrap() = Some(on);
+                    break id;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            };
+            pushed.orders.push_order_inactive(order_id, 201, "the margin cannot be stated".into());
+        });
+        client.what_if_order(&hedged, &preview).expect_err("the venue refused")
+    });
+
+    assert_eq!(refused.code, 201, "the venue's number reaches the caller: {refused}");
+    let on = previewed_on.lock().unwrap().clone().expect("the preview was placed");
+    assert!(
+        on.delta_neutral_contract.is_some(),
+        "the preview went out on the venue's naming, which hedges against \
+         nothing: {on:?}",
+    );
+}
+
+/// A withdrawal arriving while the number is still taking its tick stream is
+/// told so, not told there is nothing there.
+///
+/// The record a withdrawal reads is written when the farm names the contract,
+/// and a registration waits on that. In between there is nothing to find, so
+/// the withdrawal read as a number holding no stream — and that is the one
+/// answer a caller acts on by stopping. It stopped, the registration finished
+/// behind it, and it held a live stream it believed was gone. The quote
+/// withdrawal says which of the two it is looking at; this one said the wrong
+/// one.
+#[test]
+fn a_tick_withdrawal_during_registration_is_not_told_there_is_nothing_there() {
+    let (client, rx, _shared) = test_client();
+    // Wide enough that the withdrawal lands inside the wait. A session states
+    // five seconds and the tests here a millisecond, which would close the
+    // window this is about before anything could arrive in it.
+    client.core.set_registration_timeout(std::time::Duration::from_secs(5));
+
+    // The engine holds its answer back until the withdrawal has been tried,
+    // which is the window under test.
+    let (seen_tx, seen_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let (go_tx, go_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let engine = std::thread::spawn(move || {
+        while let Ok(cmd) = rx.recv() {
+            if let ControlCommand::SubscribeTbt { reply_tx: Some(reply), .. } = cmd {
+                let _ = seen_tx.send(());
+                let _ = go_rx.recv();
+                let _ = reply.try_send(Ok(0));
+                return;
+            }
+        }
+    });
+
+    let taking = &client;
+    let refused = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let _ = taking.req_tick_by_tick_data(7, &spy(), "AllLast", 0, false);
+        });
+        seen_rx.recv().expect("the stream reached the engine");
+        assert!(
+            client.core.tbt_to_instrument.lock().unwrap().get(&7).is_none(),
+            "nothing is recorded for it yet, which is the window",
+        );
+        let refused = client.cancel_tick_by_tick_data(7);
+        let _ = go_tx.send(());
+        refused
+    });
+    let _ = engine.join();
+
+    let why = refused.expect_err("the stream is not held yet, so it cannot be withdrawn");
+    assert_eq!(why.code, 300, "under the number a withdrawal of nothing is refused under: {why}");
+    assert!(
+        why.message.contains("still taking its tick stream"),
+        "a withdrawal in the registration window was told the number holds \
+         nothing, and the stream that finished behind it runs with nothing \
+         able to stop it: {why}",
+    );
+}

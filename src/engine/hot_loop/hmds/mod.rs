@@ -41,6 +41,10 @@ pub(crate) struct TbtSubscription {
     /// The increment its sizes are counted in.
     pub(crate) size_tick: f64,
     /// Where its price has got to. A move is measured from here.
+    ///
+    /// Two subscriptions the venue serves under one number read one stream,
+    /// and one stream has one anchor: the second to be acknowledged takes the
+    /// first's rather than starting from nothing.
     pub(crate) running: crate::protocol::tbt_stream::RunningPrice,
 }
 
@@ -695,12 +699,32 @@ impl HmdsState {
                             .iter()
                             .position(|sub| sub.query_id == ack.query_id)
                         {
+                            // Where the stream it has been given already
+                            // stands. The venue answers a second query on a
+                            // contract and kind with the number it gave the
+                            // first and goes on writing the one stream from
+                            // where it had got to, so a move on it is a step
+                            // from the price the caller already there has
+                            // reached. Anchored at nothing instead, the second
+                            // caller read every move as a step from zero and
+                            // was handed prices that were the stream's moves
+                            // added up rather than the market's — for as long
+                            // as the stream ran, with nothing saying so. A
+                            // number no other subscription holds is a stream
+                            // the venue is opening, and that does start from
+                            // nothing.
+                            let joined = self
+                                .tbt_subscriptions
+                                .iter()
+                                .enumerate()
+                                .find(|(at, sub)| *at != pos && sub.venue_id == ack.venue_id)
+                                .map(|(_, sub)| sub.running);
                             let sub = &mut self.tbt_subscriptions[pos];
                             sub.venue_id = ack.venue_id;
                             sub.min_tick =
                                 (ack.min_tick * crate::types::PRICE_SCALE as f64).round() as i64;
                             sub.size_tick = ack.size_min_tick;
-                            sub.running = Default::default();
+                            sub.running = joined.unwrap_or_default();
                             log::info!(
                                 "tick subscription {} is number {} to the venue, moving in {} \
                                  with sizes in {}",

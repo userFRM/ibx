@@ -1140,6 +1140,21 @@ mod industry_tests {
         assert_eq!(def.sec_id_list.len(), 2, "and every identifier is kept");
     }
 
+    /// The identifier block reuses the symbol tag — `55=BBG` and `55=US` sit
+    /// there naming where each identifier comes from — and a keyed parse keeps
+    /// the last of a repeated tag, so a contract carrying identifiers came back
+    /// named after one of their sources. The contract's own symbol is the first
+    /// one stated.
+    #[test]
+    fn the_symbol_names_the_contract_not_its_last_identifier() {
+        let def = parse_secdef_response(&secdef(
+            "55=BBG\u{1}455=BBG000B9XRY4\u{1}456=A\u{1}\
+             55=US\u{1}455=US0378331005\u{1}456=4\u{1}",
+        ), true).expect("the definition parses");
+        assert_eq!(def.symbol, "SPY", "the contract is named after itself");
+        assert_eq!(def.isin, "US0378331005", "and the identifiers still read");
+    }
+
     /// A bond is its terms: what it pays, when it can be called, what it is
     /// rated. Read from nothing, a caller asking about a bond received a
     /// contract with none of what makes it one.
@@ -1237,6 +1252,7 @@ mod unread_tag_tests {
     fn the_tags_read_include_the_ones_walked_rather_than_looked_up() {
         let read = tags_read_from_a_definition();
         for walked in [
+            TAG_SYMBOL,
             TAG_SECURITY_EXCHANGE,
             455, 456,
             TAG_MARKET_RULE_START,

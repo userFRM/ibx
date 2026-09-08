@@ -116,7 +116,7 @@ impl EClient {
         let named;
         let contract = if contract.con_id == 0 && !contract.symbol.is_empty() {
             let key = crate::client_core::ClientCore::description_key(contract);
-            named = match self.core.named_for(&key) {
+            let by_the_venue = match self.core.named_for(&key) {
                 Some(already) => already,
                 None => {
                     let answer = self.qualify_contract(contract)?;
@@ -124,6 +124,13 @@ impl EClient {
                     answer
                 }
             };
+            // Remembered as the venue named it, and handed on with what the
+            // caller stated put back around it. Named here, the contract
+            // reaches `place_order` carrying an id, so the restore it does
+            // around its own naming does not run — and a delta-neutral order
+            // went to the venue without the contract it hedges against, and a
+            // combination without a single leg.
+            named = super::ask::named_with_what_the_caller_stated(by_the_venue, contract);
             &named
         } else {
             contract

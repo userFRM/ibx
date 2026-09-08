@@ -284,7 +284,11 @@ fn build_greeks_subscribe_tags(req_id: u32, con_id: i64, sec_type: &str, ts: &st
 ///
 /// Unlike the model, this names the contract's **own** exchange rather than a
 /// stand-in: the model and the news feed are the exceptions that go by a name of
-/// their own, and everything else is asked for where it trades.
+/// their own, and everything else is asked for where it trades. It is stated the
+/// way the prices beside it state it — the wire's own spelling of the venue, the
+/// smart route where the caller named none — because the entry is written down
+/// under that name and withdrawn under it, and a withdrawal naming a venue the
+/// subscription never named is one the venue leaves being served.
 fn build_trading_status_subscribe_tags(
     req_id: u32,
     con_id: i64,
@@ -292,7 +296,7 @@ fn build_trading_status_subscribe_tags(
     exchange: &str,
     ts: &str,
 ) -> Vec<(u32, String)> {
-    let fix_sec_type = crate::control::contracts::sec_type_to_fix(sec_type);
+    let (fix_exchange, fix_sec_type) = stated_venue_and_type(sec_type, exchange);
     vec![
         (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ.to_string()),
         (fix::TAG_SENDING_TIME, ts.to_string()),
@@ -300,7 +304,7 @@ fn build_trading_status_subscribe_tags(
         (146, "1".to_string()),
         (262, req_id.to_string()),
         (6008, (con_id as u32).to_string()),
-        (207, exchange.to_string()),
+        (207, fix_exchange.to_string()),
         (167, fix_sec_type.to_string()),
         (264, TRADING_STATUS_REQUEST_TYPE.to_string()),
         (6088, "Socket".to_string()),

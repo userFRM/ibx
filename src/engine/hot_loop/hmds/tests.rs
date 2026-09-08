@@ -1260,6 +1260,64 @@ mod withdrawing_one_stream_tests {
         assert!(withdrawn.contains(&format!("ticker:{number}")), "the last to leave withdraws it: {withdrawn:?}");
         assert!(hmds.tbt_withdrawn.contains(&number));
     }
+
+    /// A caller taken on under a number another caller already holds joins
+    /// that stream where it stands. A price is not sent — a move from the
+    /// last one is — so a subscription anchored at nothing reads the frames
+    /// the venue is already sending as though the stream began with it, and
+    /// the caller is handed prices that are those moves added up. Nothing on
+    /// the wire or in the log says so: the two callers simply disagree about
+    /// what the market is.
+    #[test]
+    fn a_caller_joining_a_running_stream_is_anchored_where_that_stream_stands() {
+        let mut hmds = HmdsState::new();
+        let shared = crate::bridge::SharedState::new();
+        let mut conn = None;
+        let mut hb = HeartbeatState::new();
+        let hex = crate::protocol::tbt_stream::A_CAPTURED_QUOTE_FRAME;
+        let frame: Vec<u8> = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        let start = frame.windows(5).position(|w| w == b"35=E\x01").unwrap() + 5;
+        let end = frame.windows(6).position(|w| w == b"\x018349=").unwrap();
+        let number = crate::protocol::tbt_stream::frame_ticker_id(&frame[start..end])
+            .expect("the frame names its stream");
+        let scaled = (0.00005 * crate::types::PRICE_SCALE as f64).round() as i64;
+
+        // The first caller, which has been reading the stream for a while.
+        let mut first = stream(1, 7, TbtType::BidAsk);
+        first.venue_id = number;
+        first.min_tick = scaled;
+        hmds.tbt_subscriptions.push(first);
+        hmds.process_hmds_message(&frame, &mut conn, &shared, &None, &mut hb);
+        let opening = shared.market.drain_tbt_quotes();
+        assert_eq!(opening.len(), 5, "the stream has moved on before the second caller arrives");
+
+        // The second, acknowledged under the number the first already holds.
+        let mut second = stream(2, 7, TbtType::BidAsk);
+        second.venue_id = 0;
+        hmds.tbt_subscriptions.push(second);
+        let ack = format!(
+            "35=W\x016118=<ResultSetTickerId><id>tbt_2</id><rtTickerId>{number}</rtTickerId>\
+             <minTick>0.00005</minTick><sizeMinTick>1</sizeMinTick></ResultSetTickerId>\x01",
+        );
+        hmds.process_hmds_message(ack.as_bytes(), &mut conn, &shared, &None, &mut hb);
+
+        hmds.process_hmds_message(&frame, &mut conn, &shared, &None, &mut hb);
+        let heard = shared.market.drain_tbt_quotes();
+        let quoted = |req_id: i64| -> Vec<(i64, i64)> {
+            heard.iter().filter(|q| q.req_id == req_id).map(|q| (q.bid, q.ask)).collect()
+        };
+        assert_eq!(quoted(1).len(), 5, "the first caller hears the frame");
+        assert_ne!(
+            quoted(1)[0], (opening[0].bid, opening[0].ask),
+            "the moves in this frame are steps from where the stream had got to",
+        );
+        assert_eq!(
+            quoted(2), quoted(1),
+            "one stream is one set of prices; the caller that joined it read the moves from zero",
+        );
+    }
 }
 mod counted_size_range_tests {
     use super::super::scaled_size;

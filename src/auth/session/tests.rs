@@ -5,6 +5,7 @@
 //! file belongs to.
 
 use super::*;
+use crate::reliability::retry;
 
 // ── get_session_id ──────────────────────────────────────────────────
 
@@ -358,6 +359,69 @@ fn reading_past_ends_when_the_connection_does() {
     let mut cursor = io::Cursor::new(wire);
     super::srp_result_fields(&mut cursor)
         .expect_err("a verdict was answered where the venue stated none");
+}
+
+/// The venue's own refusal, stated where the salt and B would be.
+///
+/// State 7 carries the verdict field the AUTH_RESULT carries, so it is the
+/// account's answer and every host answers for the same account. Raised with
+/// no kind on it the retry ladder read it as a connection that did not come
+/// up and dialled again with the same credentials, spending the recovery
+/// budget — and the account's attempts — on an answer that does not change.
+#[test]
+fn an_early_srp_refusal_is_not_dialled_again() {
+    let n_hex = format!("{:x}", srp::srp_venue_n());
+    let g_hex = format!("{:x}", srp::SRP_VENUE_G);
+    let mut wire = xyz::xyz_wrap(&xyz::xyz_build_srp_v20(2, &[("H", &n_hex), ("I", &g_hex)]));
+    wire.extend_from_slice(&xyz::xyz_wrap(&xyz::xyz_build_srp_v20(7, &[
+        ("P", "1;invalid username or password;"),
+    ])));
+
+    let mut stream = ScriptedStream::new(wire);
+    let err = super::do_srp(&mut stream, "user", "pw").unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    assert_eq!(
+        retry::DisconnectReason::from_error(&err).recovery(), retry::Recovery::Stop,
+        "the ladder re-dials a refusal the venue has already answered: {err}",
+    );
+}
+
+/// The same refusal on the farm exchange, which states it in FIX framing.
+#[test]
+fn an_early_farm_srp_refusal_is_not_dialled_again() {
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    let n_hex = format!("{:x}", srp::srp_venue_n());
+    let g_hex = format!("{:x}", srp::SRP_VENUE_G);
+    let mut wire = wrap_xyz_fix(&xyz::xyz_build_srp_v20(2, &[("H", &n_hex), ("I", &g_hex)]));
+    wire.extend_from_slice(&wrap_xyz_fix(&xyz::xyz_build_srp_v20(7, &[
+        ("P", "1;invalid username or password;"),
+    ])));
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        s.write_all(&wire).unwrap();
+        // Held open so the refusal is the reason the client reports, not a close.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    });
+
+    let mut client = TcpStream::connect(addr).unwrap();
+    client
+        .set_read_timeout(Some(std::time::Duration::from_millis(FARM_LOGON_POLL_MS)))
+        .unwrap();
+
+    let mut carry = Vec::new();
+    let err = do_srp_farm(&mut client, "user", "pw", &mut carry).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    assert_eq!(
+        retry::DisconnectReason::from_error(&err).recovery(), retry::Recovery::Stop,
+        "the ladder re-dials a refusal the venue has already answered: {err}",
+    );
+
+    server.join().unwrap();
 }
 
 #[test]

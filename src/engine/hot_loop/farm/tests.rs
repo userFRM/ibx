@@ -1316,6 +1316,63 @@ mod trading_status_subscribe_tests {
         let venue = tags.iter().find(|(k, _)| *k == 207).map(|(_, v)| v.as_str());
         assert_eq!(venue, Some("ARCA"), "not a stand-in");
     }
+
+    /// And names it the way the prices beside it name it: the wire's own
+    /// spelling of the venue, the smart route where the caller named none. The
+    /// caller's spelling reaches nothing — the legacy name for Nasdaq routes
+    /// nowhere, and a blank venue is answered with nothing at all.
+    #[test]
+    fn it_names_the_venue_the_way_the_wire_spells_it() {
+        let venue = |exchange: &str| {
+            build_trading_status_subscribe_tags(1, 1, "STK", exchange, "t")
+                .into_iter()
+                .find(|(k, _)| *k == 207)
+                .map(|(_, v)| v)
+                .expect("the venue is always stated")
+        };
+        assert_eq!(venue("SMART"), "BEST", "the wire's name for the smart route");
+        assert_eq!(venue(""), "BEST", "a caller naming no venue means the smart route");
+        assert_eq!(venue("ISLAND"), "NASDAQ", "the legacy spelling routes nowhere");
+    }
+
+    /// So the entry written down against each companion names the venue it went
+    /// out on. Recorded under one name and asked under another, the withdrawal
+    /// states a venue the subscription never named and the venue leaves it being
+    /// served.
+    #[test]
+    fn the_companions_are_recorded_under_the_venue_they_go_out_on() {
+        use super::super::*;
+
+        for exchange in ["SMART", "", "ISLAND", "ARCA"] {
+            let mut farm = FarmState::new();
+            let mut context = Context::new();
+            let mut hb = HeartbeatState::new();
+            let instrument = context.market.register(756733);
+
+            farm.send_mktdata_subscribe(
+                756733, "SPY", exchange, "STK", "", 0.0, "", "", instrument, 0,
+                false, &mut None, &mut hb,
+            );
+
+            let tags = build_trading_status_subscribe_tags(1, 756733, "STK", exchange, "t");
+            let asked_on = tags.iter().find(|(k, _)| *k == 207).map(|(_, v)| v.as_str()).unwrap();
+            let (_, record) = farm.instrument_md_reqs.iter()
+                .find(|(id, _)| *id == instrument)
+                .expect("the subscription is recorded");
+            let recorded: Vec<&str> = record.entries.iter()
+                .filter(|e| e.request_type == TRADING_STATUS_REQUEST_TYPE
+                    || e.request_type == BBO_EXCHANGE_MAP_REQUEST_TYPE)
+                .map(|e| e.venue.as_str())
+                .collect();
+            assert_eq!(recorded.len(), 2, "the status and the exchange map both ride along");
+            for venue in recorded {
+                assert_eq!(
+                    venue, asked_on,
+                    "exchange {exchange:?}: withdrawn on a venue it was never asked on",
+                );
+            }
+        }
+    }
 }
 mod depth_identity_tests {
     use super::super::*;

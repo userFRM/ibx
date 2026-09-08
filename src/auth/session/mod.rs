@@ -567,11 +567,12 @@ pub fn do_srp<S: Read + Write>(stream: &mut S, username: &str, password: &str) -
         }
     };
 
+    // The venue's verdict, stated instead of the salt and B a logon it means
+    // to check would get. It is the field the AUTH_RESULT carries, so it is
+    // raised the way that one is: a refusal, not a door that did not open.
     if state4 == 7 {
         let result = fields4.get(9).map(|s| s.as_str()).unwrap_or("FAILED");
-        return Err(io::Error::other(
-            format!("SRP early error (state 7): {result}"),
-        ));
+        return Err(ns::refused_by_the_venue("SRP early error (state 7)", result.to_string()));
     }
     if state4 != 4 {
         return Err(io::Error::new(
@@ -698,9 +699,7 @@ fn recv_8eq1(stream: &mut TcpStream, carry: &mut Vec<u8>) -> io::Result<Vec<u8>>
         }
         let n = match stream.read(&mut tmp) {
             Ok(n) => n,
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock
-                || e.kind() == io::ErrorKind::TimedOut =>
-            {
+            Err(e) if crate::protocol::connection::read_found_nothing(&e) => {
                 if std::time::Instant::now() >= deadline {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
@@ -974,9 +973,9 @@ impl GateReader {
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock
                 || e.kind() == io::ErrorKind::TimedOut
-                // `read_exact` retries this for every other reader in this
-                // file; the raw read here is the only one that would die on a
-                // signal, taking the operator's code with it.
+                // A signal is not the peer's doing. Every read on this wire
+                // answers it the same way now — `read_exact` retries it, and the
+                // raw reads ask the one predicate that says so.
                 || e.kind() == io::ErrorKind::Interrupted => Ok(None),
             Err(e) => Err(e),
         }
@@ -1673,9 +1672,7 @@ pub fn do_srp_farm(
 
     if state4 == 7 {
         let result = fields4.get(9).map(|s| s.as_str()).unwrap_or("FAILED");
-        return Err(io::Error::other(
-            format!("Farm SRP early error (state 7): {result}"),
-        ));
+        return Err(ns::refused_by_the_venue("Farm SRP early error (state 7)", result.to_string()));
     }
     if state4 != 4 {
         return Err(io::Error::new(

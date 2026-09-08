@@ -2094,6 +2094,16 @@ impl ClientCore {
         self.registering.lock().unwrap().contains(&(TAKING_QUOTES, req_id))
     }
 
+    /// The same question about a tick stream.
+    ///
+    /// The two are claimed under keys of their own, so the quote answer above
+    /// says nothing about a number in the middle of taking one of these — and a
+    /// withdrawal that asked the wrong one read a stream still being registered
+    /// as a stream that was never there.
+    pub fn is_registering_tbt(&self, req_id: i64) -> bool {
+        self.registering.lock().unwrap().contains(&(TAKING_TICKS, req_id))
+    }
+
     /// Which contract's slot a number is watching, if it is watching one.
     pub fn watching(&self, req_id: i64) -> Option<InstrumentId> {
         self.req_to_instrument.lock().unwrap().get(&req_id).copied()

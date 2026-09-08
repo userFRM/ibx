@@ -856,9 +856,7 @@ pub fn farm_logon_exchange(
             let mut tmp = [0u8; FARM_RECV_BUF];
             let n = match stream.read(&mut tmp) {
                 Ok(n) => n,
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
-                {
+                Err(e) if crate::protocol::connection::read_found_nothing(&e) => {
                     if std::time::Instant::now() >= deadline {
                         return Err(io::Error::new(
                             io::ErrorKind::TimedOut,

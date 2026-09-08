@@ -712,9 +712,7 @@ pub fn fix_read_deadline<R: Read>(
                 "socket closed while reading FIX message",
             )),
             Ok(n) => buf.extend_from_slice(&tmp[..n]),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock
-                || e.kind() == io::ErrorKind::TimedOut =>
-            {
+            Err(e) if super::connection::read_found_nothing(&e) => {
                 // Nothing came. The deadline is measured at the top of the
                 // loop, so this waits for the next poll.
             }
@@ -727,14 +725,14 @@ pub fn fix_read_deadline<R: Read>(
 mod tests {
     use super::*;
 
-    // A reader that returns WouldBlock a fixed number of times before yielding
-    // its bytes — models a slow socket with a short read timeout.
-    struct SlowReader { blocks_left: u32, data: std::io::Cursor<Vec<u8>> }
+    // A reader that fails `blocks_left` times with `kind` before yielding its
+    // bytes — models a slow socket with a short read timeout.
+    struct SlowReader { blocks_left: u32, kind: io::ErrorKind, data: std::io::Cursor<Vec<u8>> }
     impl Read for SlowReader {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             if self.blocks_left > 0 {
                 self.blocks_left -= 1;
-                return Err(io::Error::new(io::ErrorKind::WouldBlock, "would block"));
+                return Err(io::Error::new(self.kind, "nothing yet"));
             }
             self.data.read(buf)
         }
@@ -743,7 +741,27 @@ mod tests {
     #[test]
     fn fix_read_deadline_retries_wouldblock_then_reads() {
         let msg = fix_build(&[(35, "A"), (108, "30")], 1);
-        let mut reader = SlowReader { blocks_left: 3, data: std::io::Cursor::new(msg.clone()) };
+        let mut reader = SlowReader {
+            blocks_left: 3,
+            kind: io::ErrorKind::WouldBlock,
+            data: std::io::Cursor::new(msg.clone()),
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let got = fix_read_deadline(&mut reader, &mut Vec::new(), deadline).unwrap();
+        assert_eq!(got, msg);
+    }
+
+    // The logon socket carries a read timeout, so a signal landing in the read
+    // comes back interrupted instead of being restarted. Read as a failure it
+    // fails the logon over something the peer never did.
+    #[test]
+    fn fix_read_deadline_retries_a_signal_then_reads() {
+        let msg = fix_build(&[(35, "A"), (108, "30")], 1);
+        let mut reader = SlowReader {
+            blocks_left: 3,
+            kind: io::ErrorKind::Interrupted,
+            data: std::io::Cursor::new(msg.clone()),
+        };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let got = fix_read_deadline(&mut reader, &mut Vec::new(), deadline).unwrap();
         assert_eq!(got, msg);
@@ -751,7 +769,11 @@ mod tests {
 
     #[test]
     fn fix_read_deadline_times_out_past_deadline() {
-        let mut reader = SlowReader { blocks_left: u32::MAX, data: std::io::Cursor::new(Vec::new()) };
+        let mut reader = SlowReader {
+            blocks_left: u32::MAX,
+            kind: io::ErrorKind::WouldBlock,
+            data: std::io::Cursor::new(Vec::new()),
+        };
         // Deadline already passed: the first WouldBlock must surface as TimedOut.
         let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
         let err = fix_read_deadline(&mut reader, &mut Vec::new(), deadline).unwrap_err();

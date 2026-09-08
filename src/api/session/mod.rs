@@ -612,6 +612,13 @@ impl Drop for Ticks {
         // and withdrawing ordinary market data instead withdraws nothing and
         // leaves the venue printing every trade at a session nobody reads.
         let _ = self.session.client.cancel_tick_by_tick_data(self.req_id);
+        // And the record goes back with it, the same way it does where the
+        // asking fails. Nothing arrives under a number that has been
+        // withdrawn, and the sweep that clears a dead stream only runs when
+        // something does — so the record stayed, with its reader already
+        // dropped, and a session churning streams grew that list for the whole
+        // of its life.
+        self.session.kept().forget_stream(self.req_id);
     }
 }
 
@@ -633,6 +640,9 @@ impl Iterator for LiveBars {
 impl Drop for LiveBars {
     fn drop(&mut self) {
         let _ = self.session.client.cancel_real_time_bars(self.req_id);
+        // As the ticks above: the record is taken back too, or a withdrawn
+        // subscription leaves one nothing will ever sweep.
+        self.session.kept().forget_stream(self.req_id);
     }
 }
 

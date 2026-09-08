@@ -2939,13 +2939,27 @@ impl CcpState {
 /// Fill in a holding's contract once its definition arrives.
 ///
 /// The position feed states a contract id, a quantity and often a cost, and
-/// nothing else — so a holding was reported with no symbol at all until some
-/// richer message happened to arrive first. The definition is already being
-/// fetched for exactly this reason; this is what puts it on the row.
+/// little else — so a holding was reported unnamed, or named and priced by
+/// the unit, until some richer message happened to arrive first. The
+/// definition is already being fetched for exactly this reason; this is what
+/// puts what it carries on the row.
 fn identify_position(shared: &SharedState, def: &crate::control::contracts::ContractDefinition) {
     let con_id = def.con_id as i64;
     let Some(existing) = shared.portfolio.position_info(con_id) else { return };
-    if !existing.symbol.is_empty() {
+    let sec_type = def.sec_type.to_api_str();
+    let multiplier = if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() };
+    // Only where the definition still fills something in. The write leaves
+    // every field the row already carries standing, so the question is whether
+    // any of them is missing. Asked of the symbol alone, a holding the
+    // position feed had already named never took the multiplier — which the
+    // definition is the only carrier of on that path — and a contract without
+    // it is valued a unit at a time.
+    let fills_a_gap = |on_row: &str, stated: &str| on_row.is_empty() && !stated.is_empty();
+    if !(fills_a_gap(&existing.symbol, &def.symbol)
+        || fills_a_gap(&existing.sec_type, sec_type)
+        || fills_a_gap(&existing.currency, &def.currency)
+        || fills_a_gap(&existing.multiplier, &multiplier))
+    {
         return;
     }
     shared.portfolio.set_position_info(PositionInfo {
@@ -2953,9 +2967,9 @@ fn identify_position(shared: &SharedState, def: &crate::control::contracts::Cont
         position: existing.position,
         avg_cost: existing.avg_cost,
         symbol: def.symbol.clone(),
-        sec_type: def.sec_type.to_api_str().to_string(),
+        sec_type: sec_type.to_string(),
         currency: def.currency.clone(),
-        multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
+        multiplier,
         ..Default::default()
     });
 }

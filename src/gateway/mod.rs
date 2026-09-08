@@ -754,10 +754,7 @@ fn drain_init_burst<R: Read>(
                 quiet = 0;
                 crate::protocol::connection::hold_what_was_read(&mut data, &tmp[..n])?;
             }
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
-            {
+            Err(e) if crate::protocol::connection::read_found_nothing(&e) => {
                 quiet += 1;
                 if quiet >= quiet_reads_at_the_end {
                     break;
@@ -1346,10 +1343,7 @@ fn wait_for_data_start(
         } else {
             match ns::ns_recv(&mut *tls, fix_deadline) {
                 Ok((payload, _)) => payload,
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
-                {
+                Err(e) if crate::protocol::connection::read_found_nothing(&e) => {
                     log::warn!("Post-auth recv timeout, retrying until deadline: {e}");
                     continue;
                 }
@@ -1480,10 +1474,7 @@ fn read_routing_response<R: Read>(
                     return Ok(resp_buf);
                 }
             }
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
-            {
+            Err(e) if crate::protocol::connection::read_found_nothing(&e) => {
                 // The reply itself here too, on the same rule as the read
                 // above. A quiet socket is not an answer: the farm's own
                 // traffic arriving and the socket then pausing for one poll

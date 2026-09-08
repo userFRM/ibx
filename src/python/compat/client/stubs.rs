@@ -562,37 +562,40 @@ impl EClient {
 /// locally. The answer is reported on `tick_option_computation`, the same
 /// callback tick type 13 arrives on.
 impl EClient {
-    /// Whether something is already watching the contract, which is what makes
-    /// the venue state a model for it.
-    fn watching_contract(&self, shared: &crate::bridge::SharedState, con_id: i64) -> bool {
-        self.core.cached_instrument(shared, con_id).is_some_and(|instrument| {
-            self.core.instrument_to_req.lock().unwrap().contains_key(&instrument)
-        })
-    }
-
     /// Open a watch on the contract and keep the question until the venue
     /// states a model for it. Answers whether the question is now kept.
+    ///
+    /// The watch is held under the caller's own request, whoever else is
+    /// watching the contract: a question that opened none of its own is
+    /// answerable only while somebody else keeps theirs up, and the moment
+    /// they withdraw it there is no model coming and nothing said about it.
     fn watch_for_option_model(
         &self, py: Python<'_>, req_id: i64, contract: &Contract,
         wants_volatility: bool, option_price: f64, under_price: f64,
     ) -> PyResult<bool> {
-        let api = contract.to_api();
-        let Ok(shared) = self.shared_state() else { return Ok(false) };
         // A subscription this client opens rather than the caller. Refusals
         // are reported by the subscribe itself and leave nothing watching,
         // which is what is read back here rather than the call's own result:
         // this surface answers a refusal on the error callback and returns
         // normally, so the result alone does not say whether it took.
-        if !self.watching_contract(&shared, api.con_id) {
-            self.req_mkt_data(py, req_id, contract, "", false, false, Vec::new())?;
-            if !self.watching_contract(&shared, api.con_id) {
-                return Ok(false);
-            }
+        //
+        // What is read back is the slot the request holds. Not one found under
+        // the contract's conId: a contract stated by description carries none,
+        // and the engine is the first to know which slot it resolved to — so
+        // asked by conId the answer was no however the subscribe went, and
+        // every question about a described contract was refused with the watch
+        // it had just opened left running. A request already watching
+        // something is refused a second watch, so a slot it held before this
+        // call is that other contract's and says nothing about this one.
+        let held_before = self.core.holds_mkt_data(req_id);
+        self.req_mkt_data(py, req_id, contract, "", false, false, Vec::new())?;
+        if held_before || !self.core.holds_mkt_data(req_id) {
+            return Ok(false);
         }
         self.pending_option_calcs.lock().unwrap().insert(
             req_id,
             crate::api::client::PendingOptionCalc {
-                contract: api,
+                contract: contract.to_api(),
                 wants_volatility,
                 option_price,
                 under_price,
@@ -602,24 +605,21 @@ impl EClient {
         Ok(true)
     }
 
-    /// Drop a kept question, and the watch it opened if it was the last on it.
+    /// Drop a kept question, and the watch it opened.
     ///
-    /// The venue states a model only for a contract something is watching, so
-    /// the first question on a contract opens the watch and the next one finds
-    /// it already open and opens nothing. Withdrawing the first therefore took
-    /// the watch out from under the second, which could then never be answered
-    /// and was never refused either — no model, no error, for the rest of the
-    /// session.
+    /// Only its own hold goes: a contract another question is still watching
+    /// keeps its subscription, which passes to whoever is left. Held back here
+    /// instead, on questions naming the same contract, two contracts stated by
+    /// description read as one — neither carries a conId to tell them apart —
+    /// and the withdrawal of the first was skipped for a second that was
+    /// watching something else entirely.
     fn forget_option_calc(&self, py: Python<'_>, req_id: i64) {
-        let mut kept = self.pending_option_calcs.lock().unwrap();
-        let Some(gone) = kept.remove(&req_id) else { return };
-        let still_watched = kept
-            .values()
-            .any(|other| other.contract.con_id == gone.contract.con_id);
-        drop(kept);
+        if self.pending_option_calcs.lock().unwrap().remove(&req_id).is_none() {
+            return;
+        }
         // The watch was this client's own, so it goes without a word: the
         // caller withdrew a question, not a subscription.
-        if !still_watched && let Ok(tx) = self.tx() {
+        if let Ok(tx) = self.tx() {
             let _ = self.withdraw_mkt_data(py, &tx, req_id);
         }
     }
@@ -795,5 +795,120 @@ mod advisor_partition_tests {
         for unknown in [0, 4, -1, 99] {
             assert_eq!(advisor_partition(unknown), None, "{unknown}");
         }
+    }
+}
+
+#[cfg(test)]
+mod option_model_watch_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::mpsc::Receiver;
+    use std::sync::atomic::Ordering;
+    use crate::bridge::SharedState;
+
+    /// A connected client whose engine is a channel the test reads, and the
+    /// wrapper it reports to.
+    fn wired(py: Python<'_>) -> (EClient, Receiver<ControlCommand>, Py<PyAny>) {
+        let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+        let wrapper = py
+            .eval(c"__import__('builtins').type('W', (), {'__init__': lambda s: setattr(s, 'calls', []), '__getattr__': lambda s, n: (lambda *a: s.calls.append((n, a)))})()", None, None)
+            .unwrap()
+            .unbind();
+        client.__init__(wrapper.clone_ref(py)).unwrap();
+        let shared = Arc::new(SharedState::new());
+        shared.market.set_instrument_count(2);
+        let (tx, rx) = std::sync::mpsc::sync_channel(16);
+        *client.shared.lock().unwrap() = Some(shared);
+        *client.control_tx.lock().unwrap() = Some(tx);
+        client.connected.store(true, Ordering::Release);
+        (client, rx, wrapper)
+    }
+
+    /// An engine that answers the next subscribe with the slot it resolved
+    /// the description to, which is the only side that knows it, and hands the
+    /// channel back.
+    fn resolves_to(
+        rx: Receiver<ControlCommand>, slot: u32,
+    ) -> std::thread::JoinHandle<Receiver<ControlCommand>> {
+        std::thread::spawn(move || {
+            while let Ok(cmd) = rx.recv() {
+                if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
+                    reply.send(Ok(slot)).unwrap();
+                    return rx;
+                }
+            }
+            panic!("the watch must reach the engine");
+        })
+    }
+
+    /// An option the caller states by description, carrying no conId.
+    fn described(symbol: &str) -> Contract {
+        Contract {
+            symbol: symbol.into(), sec_type: "OPT".into(), exchange: "SMART".into(),
+            currency: "USD".into(), last_trade_date_or_contract_month: "20261218".into(),
+            strike: 100.0, right: "C".into(), multiplier: "100".into(), ..Default::default()
+        }
+    }
+
+    /// A question about a contract the caller described is kept.
+    ///
+    /// The venue states a model only for a contract that is watched, so the
+    /// question opens a watch and waits. What says the watch took is the slot
+    /// the request now holds: a described contract carries no conId, and the
+    /// engine is the first to know which slot it resolved to. Asked for a
+    /// conId the answer was no however the subscribe went — the question was
+    /// refused every time, with the watch it had just opened left running.
+    #[test]
+    fn a_question_about_a_described_contract_is_kept_against_the_slot_the_request_took() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, wrapper) = wired(py);
+            let engine = resolves_to(rx, 0);
+            client.calculate_implied_volatility(py, 7, &described("SPY"), 1.0, 100.0, Vec::new())
+                .unwrap();
+            let _rx = py.detach(|| engine.join().unwrap());
+
+            assert!(client.pending_option_calcs.lock().unwrap().contains_key(&7),
+                "the question waits on the model the watch will bring");
+            assert_eq!(client.core.watching(7), Some(0), "under the slot the engine resolved");
+            let told: Vec<String> = wrapper.getattr(py, "calls").unwrap()
+                .cast_bound::<pyo3::types::PyList>(py).unwrap().iter()
+                .map(|c| c.get_item(0).unwrap().extract::<String>().unwrap())
+                .collect();
+            assert!(told.is_empty(), "and the caller is told nothing while it waits: {told:?}");
+        });
+    }
+
+    /// Withdrawing one question takes down its own watch, whatever else is
+    /// waiting. Two contracts stated by description carry the same nought
+    /// where a conId would be, so a withdrawal held back for a question naming
+    /// "the same contract" was held back for one watching something else, and
+    /// the subscription ran for the rest of the session with nothing left to
+    /// withdraw it.
+    #[test]
+    fn withdrawing_one_described_question_withdraws_its_own_watch() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, _wrapper) = wired(py);
+            let engine = resolves_to(rx, 0);
+            client.calculate_implied_volatility(py, 7, &described("SPY"), 1.0, 100.0, Vec::new())
+                .unwrap();
+            let rx = py.detach(|| engine.join().unwrap());
+            let engine = resolves_to(rx, 1);
+            client.calculate_implied_volatility(py, 8, &described("QQQ"), 1.0, 100.0, Vec::new())
+                .unwrap();
+            let rx = py.detach(|| engine.join().unwrap());
+
+            client.cancel_calculate_implied_volatility(py, 7).unwrap();
+            let withdrawn: Vec<u32> = rx.try_iter()
+                .filter_map(|cmd| match cmd {
+                    ControlCommand::Unsubscribe { instrument } => Some(instrument),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(withdrawn, [0], "the withdrawn question's own slot, and only it");
+            assert!(client.pending_option_calcs.lock().unwrap().contains_key(&8),
+                "the question still waiting keeps its watch");
+        });
     }
 }

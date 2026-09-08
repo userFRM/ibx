@@ -908,7 +908,17 @@ impl CcpState {
         // disagreed: the caller was shown an open order, a cancel-all walked
         // the book and did not reach it, and the quantity the correction gave
         // back had no cumulative baseline to be booked against.
-        let restates_a_trade = matches!(exec_type, "G" | "H");
+        //
+        // The venue states it two ways, either one on its own: on the
+        // transaction type, 20=1 for a cancelled execution and 20=2 for a
+        // corrected one, or on the report type, 150=H and 150=G. Read from the
+        // report type alone here while the booking below read both, a bust
+        // arriving under the transaction type took its quantity off the account
+        // and left the order finished — out of the book a withdrawal walks, out
+        // of the names one is sent under, and out of the correction the caller
+        // reads.
+        let restates_a_trade = matches!(parsed.get(&20).map(String::as_str), Some("1" | "2"))
+            || matches!(exec_type, "G" | "H");
         let recovering = !status.is_terminal() && !marked_resend && !revision_refused
             && clord_id != 0 && (!already_finished || restates_a_trade)
             && (context.order(clord_id).is_none() || unknown);
@@ -1276,18 +1286,13 @@ impl CcpState {
         // new one: a busted trade and a corrected one both arrive as executions,
         // and adding their quantity booked a fill the account no longer has.
         // The cumulative figure is the truth on those, which is the same
-        // arithmetic a replayed execution needs.
-        let trans_type = parsed.get(&20).map(|s| s.as_str()).unwrap_or("");
-        // 20=1 is a cancelled execution and 20=2 a corrected one. Both restate
-        // what the account holds and may restate it downwards, which a replay
-        // never does.
-        // The venue also states a restatement on the report type itself: a
-        // trade cancel and a trade correction. Read only from tag 20, one
-        // arriving under the report type alone booked nothing at all, so the
-        // quantity the venue had just undone stayed on the account.
-        let restates_history = matches!(trans_type, "1" | "2")
-            || matches!(exec_type, "G" | "H");
-        let is_resend = is_resend || restates_history;
+        // arithmetic a replayed execution needs: both restate what the account
+        // holds and may restate it downwards, which a replay never does. Which
+        // reports those are was settled above, on the two tags the venue states
+        // it on, and is read here rather than worked out a second time — the
+        // two answers drifted apart, and a bust one recognised and the other
+        // did not came off the account without reopening the order it was on.
+        let is_resend = is_resend || restates_a_trade;
 
         // CumQty — the order's cumulative filled quantity as of this report.
         // Held in the same fixed-point unit as what the order has already
@@ -1323,7 +1328,7 @@ impl CcpState {
         let is_execution = matches!(exec_type, "F" | "1" | "2" | "G" | "H") && last_shares > 0;
         let filled = if is_execution {
             self.book_fill(
-                parsed, clord_id, &dedup_key, is_resend, restates_history, last_px,
+                parsed, clord_id, &dedup_key, is_resend, restates_a_trade, last_px,
                 last_shares, report_cum_qty, leaves_qty, order_cum_qty,
                 order_avg_px, context, shared,
             )
@@ -1767,13 +1772,21 @@ impl CcpState {
                 shared.orders.push_restated_execution(contract.clone(), last_exec.clone());
             }
 
-            // A trade cancel (150=H) or trade correction (150=G) restates an
-            // execution already reported, so it may legitimately return a
-            // completed order to a working quantity. Every other report
-            // that would do that is a replay.
+            // A trade cancel or a trade correction restates an execution
+            // already reported, so it may legitimately return a completed order
+            // to a working quantity. Every other report that would do that is a
+            // replay.
             let info = RichOrderInfo { contract, order, order_state, last_exec };
             booked_off = filled.is_some().then(|| info.clone());
-            if matches!(exec_type, "G" | "H") {
+            // A replay is not a correction, whatever it restates. The venue
+            // states the kind on nearly every report it sends again at connect,
+            // so a widened reading that does not say so routes the whole replay
+            // burst through here: an order that finished this session comes
+            // back as a correction, is listed as working by a book a cancel-all
+            // walks and can never reach, and its completion is purged from what
+            // the caller reads. The recovery test beside this one keeps the
+            // same condition for the same reason.
+            if restates_a_trade && !marked_resend {
                 shared.orders.push_order_correction(clord_id, info);
             } else {
                 // A late duplicate of an earlier partial must not rewrite a

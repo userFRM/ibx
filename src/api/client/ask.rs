@@ -268,6 +268,29 @@ fn reraise_the_loss(went_during: bool, heard_by_the_caller: bool, restored_since
     went_during && !heard_by_the_caller && !restored_since
 }
 
+/// The venue's naming of a description, with what the caller stated put back
+/// around it.
+///
+/// What the venue names is a description of one contract, and a description
+/// carries no hedge and no legs. Sent in place of what the caller stated, a
+/// delta-neutral order loses the contract it hedges against and a combination
+/// loses every leg, and each goes to the venue as something else entirely. The
+/// naming supplies what the caller left out; it does not take away what they
+/// said.
+///
+/// [`EClient::place_order`] does this around the naming it does itself. A call
+/// that names ahead of it — because the lookup takes a turn of its own, and
+/// asked while this call held that turn neither would ever run again — hands
+/// it a contract that already carries an id, so that restore does not run and
+/// this stands in for it.
+pub(super) fn named_with_what_the_caller_stated(mut named: Contract, stated: &Contract) -> Contract {
+    named.delta_neutral_contract = stated.delta_neutral_contract.clone();
+    if !stated.combo_legs.is_empty() {
+        named.combo_legs = stated.combo_legs.clone();
+    }
+    named
+}
+
 /// Holds the caller's right to be told the session closed, across pumping that
 /// this client does on its own behalf.
 ///
@@ -858,8 +881,16 @@ impl EClient {
         // waits its own turn — asked while this one holds it, on a lock that is
         // not re-entrant, neither ever runs again and the deadline that would
         // have said so never starts.
+        //
+        // Named here, the contract reaches `place_order` carrying an id, so the
+        // restore it does around its own naming does not run and this call
+        // carries it instead: the preview of a delta-neutral order or of a
+        // combination is a preview of the order that would be placed, not of a
+        // bare contract the venue was asked to name.
+        let named;
         let contract = if contract.con_id == 0 {
-            &self.qualify_contract(contract)?
+            named = named_with_what_the_caller_stated(self.qualify_contract(contract)?, contract);
+            &named
         } else {
             contract
         };

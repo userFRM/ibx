@@ -176,6 +176,23 @@ fn write_is_recoverable(err: &io::Error, written: usize, tls: bool) -> bool {
         && matches!(err.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
 }
 
+/// Whether a read that stopped with `err` means nothing arrived, rather than a
+/// transport that is gone.
+///
+/// Every socket here carries a short read timeout, so an idle peer reports one
+/// on almost every poll. A signal delivered to the reading thread reports
+/// `Interrupted` from the same place, and Linux does not restart a socket read
+/// that carries a timeout — so a signal that has nothing to do with the peer
+/// arrives looking exactly like a failure. Read as one it costs the whole
+/// connection: the hot loop's pollers reconnect and replay on any error at
+/// all, and a logon fails outright.
+pub(crate) fn read_found_nothing(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted,
+    )
+}
+
 /// Per-connection state for an auth or data socket.
 pub struct Connection {
     stream: Stream,
@@ -361,8 +378,7 @@ impl Connection {
                 self.buf.extend_from_slice(&tmp[..n]);
                 Ok(n)
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock
-                || e.kind() == io::ErrorKind::TimedOut => Ok(0),
+            Err(e) if read_found_nothing(&e) => Ok(0),
             Err(e) => Err(e),
         }
     }
@@ -1732,6 +1748,27 @@ mod tests {
         for kind in [io::ErrorKind::BrokenPipe, io::ErrorKind::ConnectionReset] {
             let e = io::Error::new(kind, "gone");
             assert!(!write_is_recoverable(&e, 0, false), "{kind:?} is not a stall");
+        }
+    }
+
+    /// A signal is not the peer hanging up. Every socket here carries a read
+    /// timeout, which stops Linux restarting the read a signal landed in, so
+    /// the poll comes back interrupted with the connection perfectly alive —
+    /// and the pollers above treat any error as a connection to tear down and
+    /// replay.
+    #[test]
+    fn a_signal_is_nothing_arriving_not_a_lost_connection() {
+        for kind in [
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::Interrupted,
+        ] {
+            let e = io::Error::new(kind, "nothing yet");
+            assert!(read_found_nothing(&e), "{kind:?} means nothing arrived, not a dead socket");
+        }
+        for kind in [io::ErrorKind::ConnectionReset, io::ErrorKind::BrokenPipe] {
+            let e = io::Error::new(kind, "gone");
+            assert!(!read_found_nothing(&e), "{kind:?} is the transport ending");
         }
     }
 

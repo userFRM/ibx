@@ -938,3 +938,31 @@ fn a_subscription_that_was_never_made_leaves_no_stream() {
     assert!(refused.is_err(), "and the same for bars");
     assert_eq!(session.kept().streams_recorded(), 0, "which also leaves none behind");
 }
+
+/// A stream the caller has finished with leaves no record either.
+///
+/// Dropping the stream is how a caller says so, and the subscription is
+/// withdrawn with it. Nothing arrives under a number that has been withdrawn,
+/// and the sweep that clears a dead stream only runs when something does — so
+/// the record stayed behind with its reader already dropped, and a session
+/// opening and finishing with streams grew those lists for as long as it ran.
+#[test]
+fn a_stream_the_caller_finished_with_leaves_no_record() {
+    let shared = Arc::new(crate::bridge::SharedState::new());
+    let (session, _rx) = a_session(&shared);
+
+    let bars = session.live_bar_stream(&Contract::stock("SPY")).expect("a bar stream to open");
+    assert_eq!(session.kept().streams_recorded(), 1, "the bar stream is recorded");
+    drop(bars);
+    assert_eq!(session.kept().streams_recorded(), 0, "and goes with the caller");
+
+    // Recorded by hand: asking for the ticks waits on the engine to name the
+    // instrument, which this harness has none of. What the record is, and what
+    // dropping the stream does to it, is the same either way.
+    let (to, from) = std::sync::mpsc::sync_channel(TICK_BACKLOG);
+    session.kept().stream_ticks(7, to);
+    let ticks = Ticks { session: session.clone(), req_id: 7, rx: from };
+    assert_eq!(session.kept().streams_recorded(), 1, "the tick stream is recorded");
+    drop(ticks);
+    assert_eq!(session.kept().streams_recorded(), 0, "and goes the same way");
+}

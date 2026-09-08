@@ -938,8 +938,12 @@ pub fn parse_secdef_response(
         };
         def.con_id = id;
     }
-    if let Some(v) = tags.get(&TAG_SYMBOL) {
-        def.symbol = v.clone();
+    // Tag 55 repeats: the identifier block states one per identifier — `55=BBG`
+    // and `55=US` sit there — and a keyed parse keeps the last of them, so a
+    // contract carrying identifiers came back named after an identifier's
+    // source rather than after itself. The contract's own is the first.
+    if let Some(v) = data.split(|&b| b == fix::SOH).find_map(|p| p.strip_prefix(b"55=")) {
+        def.symbol = String::from_utf8_lossy(v).into_owned();
     }
     if let Some(v) = tags.get(&TAG_SECURITY_TYPE) {
         def.sec_type = SecurityType::from_fix(v);

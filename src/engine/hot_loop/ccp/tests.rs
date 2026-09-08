@@ -704,6 +704,42 @@ fn a_holding_takes_its_contract_from_the_definition_that_follows() {
     assert_eq!(row.avg_cost, 38270, "or the basis");
 }
 
+/// The lean feed names a holding and states no multiplier, and the definition
+/// is the only thing on that path that carries one. Stopping at the first
+/// message to name the contract left a future or an option on the row priced
+/// a unit at a time.
+#[test]
+fn a_named_holding_still_takes_the_multiplier_from_its_definition() {
+    use crate::control::contracts::{ContractDefinition, SecurityType};
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+
+    ccp.handle_position_feed(
+        "6008=793356217\x016068=MES\x01167=FUT\x016064=1\x016101=38270\x01".as_bytes(),
+        &mut None, &mut context, &shared, &None, &mut hb,
+    );
+    let row = shared.portfolio.position_info(793356217).unwrap();
+    assert_eq!(row.symbol, "MES", "the feed names the contract");
+    assert!(row.multiplier.is_empty(), "and states no multiplier for it");
+
+    identify_position(&shared, &ContractDefinition {
+        con_id: 793356217,
+        symbol: "MES".to_string(),
+        sec_type: SecurityType::Future,
+        currency: "USD".to_string(),
+        multiplier: 5.0,
+        ..ContractDefinition::default()
+    });
+
+    let row = shared.portfolio.position_info(793356217).unwrap();
+    assert_eq!(row.multiplier, "5", "which the definition supplies");
+    assert_eq!(row.currency, "USD", "along with what it is priced in");
+    assert_eq!(row.position, 1.0, "and neither disturbs the quantity");
+    assert_eq!(row.symbol, "MES", "nor the name already on the row");
+}
+
 /// The lean feed states a quantity and often no cost. Reading the absence
 /// as a cost of zero erased the basis of a live holding, and the P&L path
 /// reads a zero basis as having acquired it for nothing.
@@ -5458,7 +5494,11 @@ fn a_restated_partial_fill_of_an_order_not_held_lists_no_working_order() {
     let shared = SharedState::new();
     let mut lapsed = std::collections::HashMap::new();
     for (tag, val) in [
-        (11u32, "1788103664.0"), (39u32, "1"), (150u32, "1"), (97u32, "Y"),
+        // Tag 20 as the venue states it: the measured replay burst carries it
+        // on 148 of 149 frames, so a fixture without it is not the wire — and
+        // a reading of the correction that does not exclude a replay routes
+        // the whole burst through as corrections, which this test then misses.
+        (11u32, "1788103664.0"), (39u32, "1"), (150u32, "1"), (97u32, "Y"), (20u32, "1"),
         (17u32, "00012dbb.6a93b90b.01.01"), (6008u32, "479624278"), (55u32, "BTC"),
         (54u32, "1"), (38u32, "0.001"), (14u32, "0.00018171"), (32u32, "0.00018171"),
         (31u32, "78882"), (151u32, "0.00081829"), (44u32, "78882"), (59u32, "3"),
@@ -7593,39 +7633,60 @@ fn a_cancel_refused_because_the_order_is_over_ends_it() {
 /// open order, a cancel-all walked the book and never reached it, and the
 /// quantity the correction gave back had no cumulative baseline to be booked
 /// against.
+///
+/// However the venue states it. A cancelled or corrected execution arrives on
+/// the report type, 150=H and 150=G, or on the transaction type, 20=1 and 20=2
+/// — and the wire states the transaction type on every report. Read from the
+/// report type alone, the second shape took its quantity off the account and
+/// left the order finished: out of the book, out of the name a withdrawal is
+/// sent under, and out of the correction the caller reads.
 #[test]
 fn a_correction_that_reopens_an_order_puts_it_back_in_the_book() {
-    let mut ccp = CcpState::new();
-    let mut context = Context::new();
-    let instrument = context.register_instrument(756733);
-    context.set_symbol(instrument, "SPY".to_string());
-    let shared = SharedState::new();
-    context.insert_order(crate::types::Order::new(
-        42, instrument, Side::Buy, 100 * QTY_SCALE, 400 * PRICE_SCALE, b'2', b'0', 0,
-    ));
+    for undone in [&[(150u32, "H")][..], &[(150, "F"), (20, "1")][..]] {
+        let mut ccp = CcpState::new();
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".to_string());
+        let shared = SharedState::new();
+        context.insert_order(crate::types::Order::new(
+            42, instrument, Side::Buy, 100 * QTY_SCALE, 400 * PRICE_SCALE, b'2', b'0', 0,
+        ));
 
-    // Filled whole, so the order finishes and is retired.
-    let fill = exec_report_frame(&[
-        (39, "2"), (150, "F"), (17, "exec-1"),
-        (32, "100"), (31, "412.25"), (14, "100"), (38, "100"),
-    ]);
-    ccp.handle_exec_report(&fill, b"", &mut context, &shared, &None, "");
-    assert!(context.order(42).is_none(), "a filled order is retired");
-    let _ = shared.orders.drain_fills();
+        // Filled whole, so the order finishes and is retired.
+        let fill = exec_report_frame(&[
+            (39, "2"), (150, "F"), (17, "exec-1"),
+            (32, "100"), (31, "412.25"), (14, "100"), (38, "100"),
+        ]);
+        ccp.handle_exec_report(&fill, b"", &mut context, &shared, &None, "");
+        assert!(context.order(42).is_none(), "a filled order is retired");
+        assert!(!context.last_clord.contains_key(&42), "and its name goes with it");
+        let _ = shared.orders.drain_fills();
 
-    // The venue then undoes half of that trade, leaving the order working.
-    // Stating its side, which is what putting an order back needs: a guessed
-    // one books every later fill the wrong way, by twice the fill.
-    let corrected = exec_report_frame(&[
-        (39, "1"), (150, "H"), (17, "exec-2"), (54, "1"), (6008, "756733"),
-        (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
-    ]);
-    ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
+        // The venue then undoes half of that trade, leaving the order working.
+        // Stating its side, which is what putting an order back needs: a guessed
+        // one books every later fill the wrong way, by twice the fill.
+        let mut corrected = exec_report_frame(&[
+            (39, "1"), (17, "exec-2"), (54, "1"), (6008, "756733"),
+            (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
+        ]);
+        for (tag, val) in undone {
+            corrected.insert(*tag, val.to_string());
+        }
+        ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
 
-    assert!(
-        context.order(42).is_some(),
-        "the order the correction reopened is not in the book a withdrawal walks",
-    );
+        assert!(
+            context.order(42).is_some(),
+            "{undone:?}: the order the correction reopened is not in the book a withdrawal walks",
+        );
+        assert!(
+            context.last_clord.contains_key(&42),
+            "{undone:?}: and a withdrawal has no name to send it under",
+        );
+        assert_eq!(
+            shared.orders.drain_order_corrections(), vec![42],
+            "{undone:?}: the caller is still told the order finished",
+        );
+    }
 }
 
 /// A report arriving behind a finished order leaves no name behind it.
