@@ -39,12 +39,35 @@ use crate::api::client::EClientConfig;
 /// A session read from a runtime.
 ///
 /// Cloning shares the session rather than opening another.
+///
+/// Every question here that may wait is answered on a thread of its own, and
+/// that thread is not stopped by the caller giving up on it. A `timeout`
+/// around one of these, or a `select!` that takes another branch, drops the
+/// future and detaches the work: it goes on, reaches the venue, and its answer
+/// is thrown away. Where that answer was the only handle to what the call did
+/// — the number a subscription is withdrawn under, the order a placement put
+/// on the market — what it did is live afterwards and cannot be reached. A
+/// call that starts something at the venue is one to let finish; each already
+/// answers within a deadline of the session's own.
 #[derive(Clone)]
 pub struct AsyncClient {
     inner: Client,
 }
 
 /// Ask on a thread that may wait, and hand the answer back.
+///
+/// The thread is not stopped by the caller giving up on it. A `timeout` around
+/// one of these, or a `select!` that takes another branch, drops the future
+/// and detaches the work — it goes on, reaches the venue, and its answer is
+/// thrown away. Where that answer was the only handle to what the call did,
+/// what it did is now unnamed: the number a subscription is withdrawn under,
+/// or the order a placement put on the market. Both are live afterwards and
+/// neither can be reached.
+///
+/// So a call here that starts something at the venue is one to let finish.
+/// Bounding it is what the session's own deadlines are for — every question
+/// under here already answers within one — rather than a timeout wrapped
+/// around the waiting.
 macro_rules! off_the_reactor {
     ($self:expr, |$client:ident| $ask:expr) => {{
         let $client = $self.inner.clone();
