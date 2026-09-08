@@ -166,9 +166,13 @@ impl EClient {
             // question it cannot answer is not something waiting will fix,
             // and kept anyway the caller was given neither an answer nor a
             // reason and waited on a model that had already arrived.
-            Err(why) if why.message == crate::client_core::OPTION_MODEL_UNSTATED
-                && self.watch_for_option_model(req_id, contract, true,
-                                               option_price, under_price) => {}
+            Err(why) if why.message == crate::client_core::OPTION_MODEL_UNSTATED => {
+                if let Err(why) = self.watch_for_option_model(
+                    req_id, contract, true, option_price, under_price,
+                ) {
+                    self.report_reason(req_id, &why);
+                }
+            }
             Err(why) => self.report_reason(req_id, &why),
         }
     }
@@ -192,9 +196,13 @@ impl EClient {
             // As above: the watch is opened where the model has not been
             // stated, and the answer follows it. Where it has, and the
             // question still cannot be answered, that is said.
-            Err(why) if why.message == crate::client_core::OPTION_MODEL_UNSTATED
-                && self.watch_for_option_model(req_id, contract, false,
-                                               volatility, under_price) => {}
+            Err(why) if why.message == crate::client_core::OPTION_MODEL_UNSTATED => {
+                if let Err(why) = self.watch_for_option_model(
+                    req_id, contract, false, volatility, under_price,
+                ) {
+                    self.report_reason(req_id, &why);
+                }
+            }
             Err(why) => self.report_reason(req_id, &why),
         }
     }
@@ -270,21 +278,15 @@ impl EClient {
     /// Watch a contract so the venue states a model for it, and keep the
     /// question until it does.
     ///
-    /// Answers whether the question was kept, which is only false where the
-    /// watch could not be opened at all.
+    /// A watch that cannot be opened returns its refusal to the caller.
     fn watch_for_option_model(
         &self, req_id: i64, contract: &super::Contract,
         wants_volatility: bool, option_price: f64, under_price: f64,
-    ) -> bool {
-        // Knowing the contract is not watching it, and only a watched
-        // contract has a model stated for it. Already watching, the question
-        // is kept as it stands and the model is waited for.
-        let watched = self.core.cached_instrument(&self.shared, contract.con_id).is_some_and(|instrument| {
-            self.core.instrument_to_req.lock().unwrap().contains_key(&instrument)
-        });
-        if !watched && self.req_mkt_data(req_id, contract, "", false, false).is_err() {
-            return false;
-        }
+    ) -> Result<(), Refusal> {
+        // Each question holds the watch under its own request. Market data
+        // shares an existing subscription and keeps it up until its last
+        // watcher withdraws, including where the venue resolves a description.
+        self.req_mkt_data(req_id, contract, "", false, false)?;
         self.pending_option_calcs.lock().unwrap().insert(req_id, super::PendingOptionCalc {
             contract: contract.clone(),
             wants_volatility,
@@ -292,7 +294,7 @@ impl EClient {
             under_price,
             answered: false,
         });
-        true
+        Ok(())
     }
 
     /// The contract's terms and the venue's model for it, or why neither
@@ -326,19 +328,8 @@ impl EClient {
 
     /// Drop a kept question and the watch it opened.
     fn forget_option_calc(&self, req_id: i64) {
-        // The watch goes with the last question on the contract, not the
-        // first. The venue states a model only for a contract something is
-        // watching, so the first question opens the watch and the next finds
-        // it open and opens nothing; withdrawing the first took the watch out
-        // from under the second, which could then never be answered and was
-        // never refused either. The other surface says the same.
-        let mut kept = self.pending_option_calcs.lock().unwrap();
-        let Some(gone) = kept.remove(&req_id) else { return };
-        let still_watched = kept
-            .values()
-            .any(|other| other.contract.con_id == gone.contract.con_id);
-        drop(kept);
-        if !still_watched {
+        let gone = self.pending_option_calcs.lock().unwrap().remove(&req_id);
+        if gone.is_some() {
             let _ = self.cancel_mkt_data(req_id);
         }
     }
@@ -535,5 +526,205 @@ mod expiry_tests {
         assert!(years_to_expiry("21000229").is_none(), "February the 29th on a century year");
         // The calendar edge that must not be refused: leap day where one is.
         assert!(years_to_expiry("20320229").is_some(), "February the 29th on a leap year");
+    }
+
+    fn option_contract(con_id: i64, symbol: &str) -> crate::types::model::Contract {
+        crate::types::model::Contract {
+            con_id,
+            symbol: symbol.into(),
+            sec_type: "OPT".into(),
+            exchange: "SMART".into(),
+            currency: "USD".into(),
+            last_trade_date_or_contract_month: "20301220".into(),
+            strike: 100.0,
+            right: "C".into(),
+            ..Default::default()
+        }
+    }
+
+    fn answer_option_watch(
+        rx: &std::sync::mpsc::Receiver<crate::types::ControlCommand>,
+        instrument: crate::types::InstrumentId,
+    ) {
+        use crate::types::ControlCommand;
+        let wait = std::time::Duration::from_secs(5);
+        assert!(matches!(rx.recv_timeout(wait), Ok(ControlCommand::RegisterInstrument { .. })));
+        match rx.recv_timeout(wait).expect("the subscription") {
+            ControlCommand::Subscribe { reply_tx: Some(reply), .. } => {
+                reply.send(Ok(instrument)).unwrap();
+            }
+            other => panic!("expected a subscription, got {other:?}"),
+        }
+    }
+
+    /// Questions on one contract share its subscription, and either order of
+    /// withdrawal takes it down only when the last question goes.
+    #[test]
+    fn the_last_option_calculation_withdraws_the_shared_watch() {
+        use crate::api::client::tests::test_client;
+        use crate::types::ControlCommand;
+
+        for [first, last] in [[1, 2], [2, 1]] {
+            let (client, rx, shared) = test_client();
+            client.core.set_registration_timeout(std::time::Duration::from_secs(5));
+            let option = option_contract(756733, "SPY");
+            std::thread::scope(|scope| {
+                let asking = scope.spawn(|| {
+                    client.calculate_implied_volatility(1, &option, 5.0, 100.0);
+                });
+                answer_option_watch(&rx, 0);
+                asking.join().unwrap();
+            });
+            client.calculate_implied_volatility(2, &option, 5.0, 100.0);
+            assert_eq!(client.pending_option_calcs.lock().unwrap().len(), 2);
+            assert!(shared.reference.drain_historical_errors().is_empty());
+            assert!(rx.try_recv().is_err(), "the second question shares the watch");
+
+            client.cancel_calculate_implied_volatility(first);
+            assert!(rx.try_recv().is_err(), "the remaining question still needs the model");
+            assert!(!client.core.instrument_to_req.lock().unwrap().is_empty());
+
+            client.cancel_calculate_implied_volatility(last);
+            assert!(
+                matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 0 })),
+                "the last withdrawal leaves the subscription running",
+            );
+            assert!(client.pending_option_calcs.lock().unwrap().is_empty());
+            assert!(!client.core.holds_mkt_data(1));
+            assert!(!client.core.holds_mkt_data(2));
+            assert!(client.core.instrument_to_req.lock().unwrap().is_empty());
+            assert!(rx.try_recv().is_err(), "the watch is withdrawn once");
+        }
+    }
+
+    /// Descriptions carry no conId, so their zeroes say nothing about whether
+    /// two questions share a watch. The engine's subscriptions say which goes.
+    #[test]
+    fn described_option_calculations_withdraw_their_own_watches() {
+        use crate::api::client::tests::test_client;
+        use crate::types::ControlCommand;
+
+        let (client, rx, shared) = test_client();
+        client.core.set_registration_timeout(std::time::Duration::from_secs(5));
+        for (req_id, symbol, instrument) in [(1, "SPY", 0), (2, "QQQ", 1)] {
+            let option = option_contract(0, symbol);
+            std::thread::scope(|scope| {
+                let asking = scope.spawn(|| {
+                    client.calculate_option_price(req_id, &option, 0.2, 100.0);
+                });
+                answer_option_watch(&rx, instrument);
+                asking.join().unwrap();
+            });
+        }
+        assert_eq!(client.pending_option_calcs.lock().unwrap().len(), 2);
+        assert!(shared.reference.drain_historical_errors().is_empty());
+
+        client.cancel_calculate_option_price(1);
+        assert!(
+            matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 0 })),
+            "another description's zero conId keeps this watch running",
+        );
+        assert!(!client.core.holds_mkt_data(1));
+        assert!(client.core.holds_mkt_data(2), "the other description remains watched");
+
+        client.cancel_calculate_option_price(2);
+        assert!(matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 1 })));
+        assert!(client.pending_option_calcs.lock().unwrap().is_empty());
+        assert!(!client.core.holds_mkt_data(2));
+        assert!(client.core.instrument_to_req.lock().unwrap().is_empty());
+        assert!(rx.try_recv().is_err(), "each watch is withdrawn once");
+    }
+
+    /// A number already watching another contract needs a different number,
+    /// and waiting for an option model cannot make that number available.
+    #[test]
+    fn option_calculations_report_the_duplicate_watch_refusal() {
+        use crate::api::client::tests::test_client;
+        use crate::error_codes::DUPLICATE_TICKER_ID;
+        use crate::types::ControlCommand;
+
+        for wants_volatility in [true, false] {
+            let (client, rx, shared) = test_client();
+            client.core.set_registration_timeout(std::time::Duration::from_secs(5));
+            let watched = option_contract(756733, "SPY");
+            std::thread::scope(|scope| {
+                let asking = scope.spawn(|| client.req_mkt_data(7, &watched, "", false, false));
+                answer_option_watch(&rx, 0);
+                asking.join().unwrap().unwrap();
+            });
+            let other = option_contract(0, "QQQ");
+            let refused = client.req_mkt_data(7, &other, "", false, false).unwrap_err();
+            assert_eq!(refused.code, DUPLICATE_TICKER_ID);
+
+            if wants_volatility {
+                client.calculate_implied_volatility(7, &other, 5.0, 100.0);
+            } else {
+                client.calculate_option_price(7, &other, 0.2, 100.0);
+            }
+            assert_eq!(
+                shared.reference.drain_historical_errors(),
+                vec![(7, refused.code, refused.message)],
+                "the caller needs the watch's refusal, not a reason to wait for a model",
+            );
+            assert!(client.pending_option_calcs.lock().unwrap().is_empty());
+            client.cancel_calculate_implied_volatility(7);
+            client.cancel_calculate_option_price(7);
+            assert!(client.core.holds_mkt_data(7), "a refused question owns no watch to withdraw");
+            assert!(rx.try_recv().is_err(), "the original watch stays up");
+            client.cancel_mkt_data(7).unwrap();
+            assert!(matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 0 })));
+        }
+    }
+
+    fn answer_empty_contract_lookup(
+        rx: &std::sync::mpsc::Receiver<crate::types::ControlCommand>,
+        shared: &crate::bridge::SharedState,
+    ) {
+        match rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the contract lookup") {
+            crate::types::ControlCommand::FetchContractDetails { req_id, .. } => {
+                shared.reference.push_contract_details_end(req_id);
+            }
+            other => panic!("expected a contract lookup, got {other:?}"),
+        }
+    }
+
+    /// A contract the venue cannot name cannot be watched, so the question
+    /// reports that refusal under its own number.
+    #[test]
+    fn option_calculations_report_the_qualification_refusal() {
+        use crate::api::client::tests::test_client;
+        use crate::error_codes::Refusal;
+
+        for wants_volatility in [true, false] {
+            let (client, rx, shared) = test_client();
+            let mut option = option_contract(756734, "QQQ");
+            option.sec_type.clear();
+            let refused = std::thread::scope(|scope| {
+                let asking = scope.spawn(|| client.req_mkt_data(7, &option, "", false, false));
+                answer_empty_contract_lookup(&rx, &shared);
+                asking.join().unwrap().unwrap_err()
+            });
+            assert_eq!(refused.code, Refusal::NO_DEFINITION);
+
+            std::thread::scope(|scope| {
+                let asking = scope.spawn(|| {
+                    if wants_volatility {
+                        client.calculate_implied_volatility(7, &option, 5.0, 100.0);
+                    } else {
+                        client.calculate_option_price(7, &option, 0.2, 100.0);
+                    }
+                });
+                answer_empty_contract_lookup(&rx, &shared);
+                asking.join().unwrap();
+            });
+            assert_eq!(
+                shared.reference.drain_historical_errors(),
+                vec![(7, refused.code, refused.message)],
+                "the caller needs the qualification refusal, not a reason to wait for a model",
+            );
+            assert!(client.pending_option_calcs.lock().unwrap().is_empty());
+            assert!(!client.core.holds_mkt_data(7));
+            assert!(rx.try_recv().is_err(), "no subscription follows a refused qualification");
+        }
     }
 }
