@@ -2226,4 +2226,38 @@ fn a_given_up_number_is_refused_on_the_ticker_setup_too() {
             "the stream on the contract was reported to its watchers as refused",
         );
     }
+
+    /// A book the venue will not serve is not asked for again every reconnect.
+    ///
+    /// The withdrawal drops the record a reconnect rebuilds from, and says why:
+    /// left behind, a book the caller let go was asked for again by the next
+    /// reconnect. A refusal ends the book just as finally and dropped only the
+    /// routing, so every reconnect told the caller its book had been emptied,
+    /// re-sent the book, and drew the same refusal — two messages a reconnect
+    /// for the rest of the session, on a request already answered once. The
+    /// headlines beside it release their own replay record for this reason.
+    #[test]
+    fn a_refused_book_is_not_asked_for_again_by_the_next_reconnect() {
+        let mut farm = FarmState::new();
+        let context = Context::new();
+        let shared = SharedState::new();
+        // A book asked for under one wire number on the caller's behalf.
+        farm.depth_fanout_map.push((900, 7));
+        farm.depth_subs.push((900, false));
+        farm.depth_fanout_exchange.push((900, "ARCA".into()));
+        farm.depth_resub_info.push((
+            7, 756733, "ARCA".into(), "STK".into(), "SPY".into(), 10, false,
+        ));
+
+        let refused = fix::fix_build(
+            &[(35, "3"), (262, "900"), (58, "Error&ARCA/NO_ENTITLEMENT/depth")], 1,
+        );
+        farm.handle_subscription_reject(&refused, &context, &shared);
+
+        assert!(
+            !farm.depth_resub_info.iter().any(|(id, ..)| *id == 7),
+            "the reconnect would ask for the refused book again and tell the \
+             caller its book had been emptied first",
+        );
+    }
 }

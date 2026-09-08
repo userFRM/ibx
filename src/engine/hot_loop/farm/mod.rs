@@ -1396,6 +1396,20 @@ impl FarmState {
                 if self.depth_fanout_map.iter().any(|(_, u)| *u == asked_for) {
                     return;
                 }
+                // No venue is going to answer, so the book is over — and what
+                // the withdrawal drops has to go the same way. The record the
+                // reconnect rebuilds from stayed, so every reconnect asked for
+                // the refused book again, told the caller its book had been
+                // emptied before doing so, and drew the same refusal: two
+                // messages a reconnect, for the rest of the session, on a
+                // request already answered once. The routing stayed with it,
+                // so a refusal arriving after an acknowledgement went on
+                // handing levels to a number that had been told there was no
+                // book. The headlines beside this release their own replay
+                // record for exactly this reason.
+                self.depth_resub_info.retain(|(id, ..)| *id != asked_for);
+                self.depth_tag_to_req.retain(|(_, rid, ..)| *rid != asked_for);
+                self.depth_rows.retain(|(id, _)| *id != asked_for);
                 shared.reference.push_historical_error(
                     asked_for,
                     DEPTH_VENUE_REFUSED,

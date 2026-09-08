@@ -539,6 +539,24 @@ impl HotLoop {
                     );
                     continue;
                 }
+                // A snapshot has no second chance. Every other request here
+                // survives an outage in a record of its own — a stream is
+                // replayed, the headlines and the book are re-sent — and the
+                // snapshot is deliberately not, because a reconnect that
+                // re-sent one would deliver, and bill for, a second burst
+                // nobody asked for. That is right for one that went out. With
+                // no transport to write it to it never went out, and there is
+                // no later moment when it does: it was accepted, dropped, and
+                // never answered.
+                if p.regulatory_snapshot && self.farm.disconnected {
+                    self.shared.market.push_subscription_failure(
+                        instrument,
+                        "the quote feed was down when this snapshot was asked for, so \
+                         it was never sent: ask for it again once the feed is back"
+                            .to_string(),
+                    );
+                    continue;
+                }
                 let (sec_type, exchange) =
                     self.described_as(con_id, &p.sec_type, &p.exchange);
                 self.farm.send_mktdata_subscribe(
@@ -1244,6 +1262,17 @@ impl HotLoop {
                                     &mut self.ccp_conn,
                                     &mut self.hb,
                                     &self.shared,
+                                );
+                            } else if regulatory_snapshot && self.farm.disconnected {
+                                // As on the resolved path: a snapshot is not
+                                // recorded for replay, so one with no
+                                // transport to carry it is simply lost.
+                                self.shared.market.push_subscription_failure(
+                                    id,
+                                    "the quote feed was down when this snapshot was \
+                                     asked for, so it was never sent: ask for it again \
+                                     once the feed is back"
+                                        .to_string(),
                                 );
                             } else {
                                 let (sec_type, exchange) =
@@ -4595,6 +4624,49 @@ mod tests {
             entries > 1,
             "the snapshot was answered with somebody else's stream, so nothing \
              was sent and nothing was billed",
+        );
+    }
+
+    /// A snapshot the feed cannot carry is refused, not dropped.
+    ///
+    /// Every other request here survives an outage in a record of its own —
+    /// a stream is replayed, the headlines and the book are re-sent — and the
+    /// snapshot is deliberately not, because a reconnect that re-sent one
+    /// would deliver, and bill for, a second burst nobody asked for. That is
+    /// right for one that went out. With no transport to write it to it never
+    /// went out, and there is no later moment when it does: it was accepted,
+    /// dropped, and never answered.
+    #[test]
+    fn a_snapshot_the_feed_cannot_carry_is_refused_rather_than_lost() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        // The feed has gone away, which is the outage. Not merely "no
+        // connection yet": the bookkeeping a subscribe does is meant to happen
+        // whether or not a transport is in hand, and only a feed that went is
+        // one nothing will carry this before it is forgotten.
+        hl.farm.handle_disconnect_for_test();
+
+        tx.send(ControlCommand::Subscribe {
+            contract: ContractRef {
+                con_id: 756733,
+                sec_type: "STK".into(),
+                exchange: "SMART".into(),
+                ..Default::default()
+            },
+            mode_9887: 0,
+            regulatory_snapshot: true,
+            reply_tx: None,
+        })
+        .expect("the engine holds the other end");
+        hl.poll_once();
+
+        let told = shared.market.drain_subscription_failures();
+        assert!(
+            !told.is_empty(),
+            "the snapshot was accepted, never sent, and never recorded for \
+             replay — so nothing was ever going to answer it",
         );
     }
 
