@@ -267,7 +267,7 @@ impl EClient {
                 if self.shared.orders.has_pending_fill(*oid) {
                     return true;
                 }
-                self.shared.orders.remove_order_info(*oid);
+                self.shared.orders.remove_completed_order_info(*oid);
                 false
             });
         }
@@ -1075,5 +1075,61 @@ mod delivered_size_tests {
         let mut sizes = Sizes::default();
         client.process_msgs(&mut sizes);
         assert_eq!(sizes.0, vec![100.0, 50.0, 1e-8]);
+    }
+
+    /// A correction can reopen an order after its completion has armed cleanup
+    /// and before anyone asks for completed orders again.
+    #[test]
+    fn a_deferred_completion_leaves_a_reopened_order_working() {
+        use crate::engine::{context::Context, hot_loop::ccp::CcpState};
+
+        let (client, _rx, shared) = crate::api::client::tests::test_client();
+        let mut ccp = CcpState::new();
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.set_symbol(instrument, "SPY".into());
+        context.insert_order(crate::types::Order::new(
+            7, instrument, crate::types::Side::Buy,
+            100 * QTY_SCALE, 400 * PRICE_SCALE, b'2', b'0', 0,
+        ));
+        let report = |status, kind, exec_id, filled| {
+            [(11, "7"), (39, status), (150, kind), (17, exec_id),
+             (54, "1"), (6008, "756733"), (38, "100"), (14, filled),
+             (32, filled), (31, "412.25")]
+                .into_iter().map(|(tag, value)| (tag, value.to_string())).collect()
+        };
+        let mut wrapper = Sizes::default();
+        ccp.handle_exec_report(
+            &report("2", "F", "fill-1", "100"), b"", &mut context, &shared, &None, "",
+        );
+        client.process_msgs(&mut wrapper);
+        client.req_completed_orders(false, &mut wrapper);
+        assert!(client.deferred_evictions.lock().unwrap().contains(&7));
+
+        ccp.handle_exec_report(
+            &report("1", "G", "correction-1", "50"), b"", &mut context, &shared, &None, "",
+        );
+        assert!(!shared.orders.has_pending_fill(7));
+        assert!(shared.orders.venue_is_working(7));
+        client.process_msgs(&mut wrapper);
+        let reopened = shared.orders.get_order_info(7).expect("the working row survives cleanup");
+        assert_eq!(reopened.contract.con_id, 756733);
+        assert_eq!(reopened.order.order_id, 7);
+        assert!(shared.orders.venue_is_working(7));
+        assert!(!client.deferred_evictions.lock().unwrap().contains(&7));
+
+        // The venue saying the order is unknown still removes a working row.
+        shared.orders.remove_order_info(7);
+        assert!(shared.orders.get_order_info(7).is_none());
+        shared.orders.push_order_correction(7, reopened);
+
+        ccp.handle_exec_report(
+            &report("2", "F", "fill-2", "100"), b"", &mut context, &shared, &None, "",
+        );
+        client.process_msgs(&mut wrapper);
+        client.req_completed_orders(false, &mut wrapper);
+        assert!(client.deferred_evictions.lock().unwrap().contains(&7));
+        client.process_msgs(&mut wrapper);
+        assert!(shared.orders.get_order_info(7).is_none(), "a terminal row is still reclaimed");
     }
 }

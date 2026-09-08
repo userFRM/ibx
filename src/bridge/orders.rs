@@ -51,7 +51,8 @@ pub struct OrderState {
     /// Every order whose message this client put on the wire.
     ///
     /// What the venue then said about it is a separate question, and the two
-    /// are indistinguishable from outside without this.
+    /// are indistinguishable from outside without this. Only tests keep this
+    /// record; ordinary sessions have no reader that needs it.
     orders_sent: Mutex<std::collections::HashSet<u64>>,
     cancel_rejects: Mutex<Vec<CancelReject>>,
     /// What each fill cost, as the venue states it on a record of its own.
@@ -297,9 +298,23 @@ impl OrderState {
         self.fills.lock().unwrap().iter().any(|(f, _)| f.order_id == order_id)
     }
 
-    /// Remove an enriched entry. Called after a completed order has been
-    /// delivered to the user, to bound `order_cache` growth in long sessions.
+    /// Remove an enriched entry when the venue says the order is unknown.
     pub fn remove_order_info(&self, order_id: u64) {
+        self.order_cache.lock().unwrap().remove(&order_id);
+    }
+
+    /// Free a delivered completion, unless the order is working again.
+    ///
+    /// A correction the venue sends after the completion was delivered puts the
+    /// order back in the book, and the cleanup armed by that completion runs
+    /// afterwards: taken then, the row it removes is the live one, and what
+    /// reads the order next finds nothing and seeds an empty contract and order
+    /// in its place. Asked before the lock rather than under it, because what
+    /// answers it takes the same lock.
+    pub fn remove_completed_order_info(&self, order_id: u64) {
+        if self.venue_is_working(order_id) {
+            return;
+        }
         self.order_cache.lock().unwrap().remove(&order_id);
     }
 

@@ -866,7 +866,11 @@ impl ReferenceState {
     }
 
     #[doc(hidden)] pub fn push_scanner_data(&self, req_id: u32, result: ScannerResult) {
-        self.scanner_data.lock().unwrap().push((req_id, result));
+        // A retained stream may never be read or dropped. Shed whole refreshes
+        // so every surviving batch still carries all the rows the venue sent.
+        super::market_data::push_bounded(
+            &self.scanner_data, (req_id, result), STREAM_BACKLOG_LIMIT, "scanner_data",
+        );
     }
 
     #[doc(hidden)] pub fn push_historical_news(&self, req_id: u32, headlines: Vec<NewsHeadline>, has_more: bool) {
@@ -1287,6 +1291,43 @@ mod ask_id_band {
             !theirs.is_ours(RecordKind::Answer, id),
             "and its own release still took effect",
         );
+    }
+
+    /// Dispatch leaves a retained scan's batches for its reader, even when
+    /// that reader never advances. The oldest refreshes leave whole.
+    #[test]
+    fn an_unread_scan_keeps_a_bounded_backlog_of_whole_batches() {
+        let state = ReferenceState::new();
+        let limit = super::STREAM_BACKLOG_LIMIT;
+        state.note_ours(RecordKind::Scanner, 7);
+        for batch in 0..=limit {
+            let result = crate::control::scanner::parse_scanner_response(&format!(
+                "<ScanResponse><scanTime>20260908 14:30:00</scanTime>\
+                 <Contract><contractID>{}</contractID></Contract>\
+                 <Contract><contractID>{}</contractID></Contract></ScanResponse>",
+                batch + 1, batch + 2,
+            )).expect("a complete refresh");
+            state.push_scanner_data(7, result);
+        }
+        assert!(state.drain_scanner_data_for_dispatch(
+            |id| state.is_ours(RecordKind::Scanner, id as i64),
+        ).is_empty(), "the stream's batches stay queued");
+
+        let batches = state.take_scanner_data_for(7);
+        let shed = limit / 10;
+        assert_eq!(batches.len(), limit - shed + 1, "unread refreshes stay bounded");
+        for (offset, batch) in batches.iter().enumerate() {
+            let first = (shed + offset + 1) as u32;
+            assert_eq!(batch.con_ids, vec![first, first + 1]);
+            assert_eq!(
+                batch.entries.iter().map(|entry| entry.con_id).collect::<Vec<_>>(),
+                batch.con_ids,
+                "each surviving refresh keeps every row in order",
+            );
+            assert_eq!(batch.scan_time, "20260908 14:30:00");
+            assert!(batch.error_text.is_empty());
+        }
+        assert!(state.take_scanner_data_for(7).is_empty());
     }
 }
 

@@ -22,7 +22,7 @@ pub const NEWS_BULLETIN_LIMIT: usize = 1000;
 pub const STREAM_BACKLOG_LIMIT: usize = 100_000;
 
 /// Push onto a stream that nobody may be draining, oldest out first.
-fn push_bounded<T>(queue: &Mutex<Vec<T>>, item: T, limit: usize, what: &str) {
+pub(super) fn push_bounded<T>(queue: &Mutex<Vec<T>>, item: T, limit: usize, what: &str) {
     let mut held = queue.lock().unwrap();
     if held.len() >= limit {
         // A tenth at a time rather than one at a time: dropping a single entry
@@ -412,8 +412,10 @@ impl MarketDataState {
     /// The increment a subscription was acknowledged with, kept for whoever
     /// watches the contract. Engine side.
     #[doc(hidden)] pub fn push_tick_req_params(&self, instrument: crate::types::InstrumentId, min_tick: f64) {
-        self.tick_req_params.lock().unwrap().push((instrument, min_tick));
+        // A follower joining after dispatch takes the acknowledgement reads
+        // this cache, so it is ready before the acknowledgement can be read.
         self.last_min_tick.lock().unwrap().insert(instrument, min_tick);
+        self.tick_req_params.lock().unwrap().push((instrument, min_tick));
     }
 
     /// The increment a follower should be told, if the subscription it follows
@@ -773,6 +775,31 @@ mod follower_tick_req_params_tests {
 
         m.note_released_slot(instrument);
         assert_eq!(m.min_tick_for_follower(instrument), None, "cleared when the slot is given back");
+    }
+
+    /// Publishing waits for the follower's copy to be ready, so a follower
+    /// joining after dispatch has taken its recipients still has an answer.
+    #[test]
+    fn the_followers_increment_is_ready_before_the_acknowledgement() {
+        let market = MarketDataState::new();
+        let queued = market.tick_req_params.lock().unwrap();
+        std::thread::scope(|scope| {
+            let writer = scope.spawn(|| market.push_tick_req_params(5, 0.025));
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let cached = loop {
+                let cached = market.min_tick_for_follower(5);
+                if cached.is_some() || std::time::Instant::now() >= deadline {
+                    break cached;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            assert!(queued.is_empty());
+            drop(queued);
+            writer.join().unwrap();
+            assert_eq!(cached, Some(0.025), "publication cannot precede the follower's copy");
+        });
+        assert_eq!(market.drain_tick_req_params(), vec![(5, 0.025)]);
+        assert_eq!(market.min_tick_for_follower(5), Some(0.025));
     }
 }
 
