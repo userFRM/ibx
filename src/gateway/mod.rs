@@ -1484,9 +1484,14 @@ fn read_routing_response<R: Read>(
                 if e.kind() == io::ErrorKind::WouldBlock
                     || e.kind() == io::ErrorKind::TimedOut =>
             {
-                if has_complete_response_frame(&resp_buf)
-                    || std::time::Instant::now() >= deadline
-                {
+                // The reply itself here too, on the same rule as the read
+                // above. A quiet socket is not an answer: the farm's own
+                // traffic arriving and the socket then pausing for one poll
+                // ended the wait on a frame that is not the reply, and the
+                // reply arrived afterwards where nothing takes a routing table
+                // out of it. A farm that sends no reply at all waits for the
+                // deadline as it already did — silence has always cost that.
+                if holds_a_routing_reply(&resp_buf) || std::time::Instant::now() >= deadline {
                     return Ok(resp_buf);
                 }
             }

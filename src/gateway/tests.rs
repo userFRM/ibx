@@ -1290,6 +1290,42 @@ mod routing_response_tests {
         );
     }
 
+    /// And a pause between the farm's own traffic and the reply does not end
+    /// the wait either.
+    ///
+    /// The read that takes the heartbeat and the read that takes the reply need
+    /// not be consecutive: a poll times out in between, and that branch had its
+    /// own shortcut on any complete frame. So the wait ended on the heartbeat
+    /// after all, and the reply arrived where nothing takes a routing table out
+    /// of it — the case the test above cannot reach, because it supplies the
+    /// two reads back to back.
+    #[test]
+    fn a_pause_between_the_heartbeat_and_the_reply_does_not_end_the_wait() {
+        let heartbeat = crate::protocol::fixcomp::fixcomp_build(
+            &crate::protocol::fix::fix_build(&[(35, "1"), (112, "probe")], 1),
+        );
+        let reply = b"8=O\x019=5\x01hello".to_vec();
+
+        let mut wire = RoutingReader {
+            script: vec![
+                Ok(heartbeat.clone()),
+                Err(io::Error::new(io::ErrorKind::TimedOut, "quiet")),
+                Ok(reply.clone()),
+                Ok(Vec::new()),
+            ],
+        };
+        let got = super::super::read_routing_response(
+            &mut wire,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .expect("the reply arrives after the pause");
+
+        assert!(
+            got.windows(reply.len()).any(|w| w == reply.as_slice()),
+            "a poll timing out between the two ended the wait on the heartbeat: {got:?}",
+        );
+    }
+
     /// The deadline stands for an answer that is not coming, and a peer that
     /// keeps sending is still not answering.
     ///

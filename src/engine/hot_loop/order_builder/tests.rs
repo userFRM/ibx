@@ -4303,3 +4303,65 @@ fn a_replace_names_the_venue_the_order_went_out_on() {
     );
     assert_eq!(tag("6210=").as_deref(), Some("NYSE"), "and its second statement too: {msg}");
 }
+
+/// And a bracket's legs keep the venue they were sent to, as a single order
+/// does.
+///
+/// The three legs go out on one instruction, and each is replaceable on its
+/// own afterwards. Recorded for the single submit and not for the bracket, a
+/// leg replaced after a watch was opened on the contract named somewhere it had
+/// never been working — the same defect the single order had, on the path that
+/// places three at a time.
+#[test]
+fn a_bracket_leg_is_replaced_on_the_venue_it_went_out_to() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    context.market.set_routing(instrument, "CS", "NYSE");
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    context.pending_orders.push(crate::types::OrderRequest::SubmitBracket {
+        con_id: 0,
+        parent_id: 60,
+        tp_id: 61,
+        sl_id: 62,
+        instrument,
+        side: Side::Buy,
+        qty: crate::types::QTY_SCALE,
+        entry_price: 400 * crate::types::PRICE_SCALE,
+        take_profit: 410 * crate::types::PRICE_SCALE,
+        stop_loss: 390 * crate::types::PRICE_SCALE,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let mut buf = [0u8; 16384];
+    let n = peer.read(&mut buf).unwrap();
+    let placed = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(placed.contains("\u{1}100=NYSE\u{1}"), "the legs went out to NYSE: {placed}");
+
+    // The contract is then watched somewhere else, which writes the slot.
+    context.market.set_routing(instrument, "CS", "SMART");
+
+    // The take-profit leg is replaced on its own.
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 61,
+        price: 411 * crate::types::PRICE_SCALE,
+        qty: crate::types::QTY_SCALE,
+        outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+    assert_eq!(
+        tag("100=").as_deref(), Some("NYSE"),
+        "the leg's replace named where the contract is watched now, not where the \
+         leg is working: {msg}",
+    );
+}

@@ -365,12 +365,17 @@ impl LogonAck {
         // take orders — and whose empty stamp reads to the reconnect logic as
         // every session belonging to another client.
         //
-        // Judged on what was read rather than on the last message type seen.
-        // The ACK arrives inside a compressed envelope whose inner messages are
-        // concatenated and parsed in one pass, and the parse is last-wins, so
-        // tag 35 names whatever the envelope ended on. An ack this loop filled
-        // is an answered logon whichever message that was.
-        if !acked && ack.account_id.is_empty() && ack.ccp_token.is_empty() {
+        // The acknowledgement itself, and nothing standing in for it. What a
+        // message happened to carry stood in while the acknowledgement was
+        // looked for by the type of whichever message ended the envelope —
+        // last-wins over concatenated inner messages, so a real answer read as
+        // no answer and something had to rescue it. It is looked for in each
+        // message now, so the rescue is only reached where there genuinely was
+        // no acknowledgement: five messages, one of them a holding that names
+        // the account, and the logon returned success on the strength of that
+        // name. The opening requests then went out on a session the venue had
+        // not answered.
+        if !acked {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "logon read past five messages without an ACK",
@@ -654,42 +659,6 @@ pub(super) fn holds_a_routing_reply(buf: &[u8]) -> bool {
     false
 }
 
-/// Returns true if `buf` contains at least one complete `8=O` (binary) or
-/// `8=FIXCOMP` frame. Used to terminate read drains as soon as the expected
-/// response is fully buffered.
-pub(super) fn has_complete_response_frame(buf: &[u8]) -> bool {
-    if buf.starts_with(b"8=O\x01") {
-        if let Some(tag9_off) = buf[4..].windows(2).position(|w| w == b"9=") {
-            let tag9_pos = 4 + tag9_off;
-            if let Some(soh_off) = buf[tag9_pos..].iter().position(|&b| b == b'\x01') {
-                let soh_pos = tag9_pos + soh_off;
-                if let Ok(s) = std::str::from_utf8(&buf[tag9_pos + 2..soh_pos])
-                    && let Ok(body_len) = s.parse::<usize>() {
-                        // Same as the framer below: a stated length that does
-                        // not fit is not a length. Wrapped, it reads as a frame
-                        // already complete and the drain stops early, leaving
-                        // the routing table unread for the whole session.
-                        return match soh_pos.checked_add(1).and_then(|n| n.checked_add(body_len)) {
-                            Some(total) => total <= buf.len(),
-                            None => false,
-                        };
-                    }
-            }
-        }
-        return false;
-    }
-    let mut cursor = 0usize;
-    while cursor + 12 <= buf.len() {
-        if buf[cursor..].starts_with(b"8=FIXCOMP\x01") {
-            if let Some(total_len) = fixcomp::fixcomp_length(&buf[cursor..]) {
-                return cursor + total_len <= buf.len();
-            }
-            return false;
-        }
-        cursor += 1;
-    }
-    false
-}
 
 /// Compute token short hash for farm logon (FIX tag 8483).
 ///
@@ -1247,7 +1216,7 @@ mod tests {
         assert!(try_frame_farm_msg(farm.as_bytes()).is_none());
 
         let response = format!("8=O\x019={}\x01", usize::MAX);
-        assert!(!has_complete_response_frame(response.as_bytes()));
+        assert!(!holds_a_routing_reply(response.as_bytes()));
     }
     use crate::protocol::fix::fix_parse;
     use std::collections::HashMap;
@@ -1727,6 +1696,29 @@ mod tests {
             carry.windows(fill.len()).any(|w| w == fill.as_slice()),
             "the report was dropped with the envelope the acknowledgement arrived in",
         );
+    }
+
+    /// And a holding that names the account does not answer for the logon.
+    ///
+    /// What a message happened to carry stood in for the acknowledgement while
+    /// that was looked for by the type of whichever message ended the envelope,
+    /// which a real answer often failed. It is looked for in each message now,
+    /// so the stand-in is only reached where there was genuinely no answer —
+    /// and the account's own traffic names the account, so five holdings and no
+    /// acknowledgement returned success and the opening requests went out on a
+    /// session the venue had not answered.
+    #[test]
+    fn a_holding_that_names_the_account_does_not_answer_the_logon() {
+        let holding = |seq: u32| fix_build(
+            &[(35, "U"), (6040, "75"), (1, "DU111111"), (6008, "756733")], seq,
+        );
+        let mut wire = Answer((1..=5).map(holding).collect());
+
+        let mut carry = Vec::new();
+        let err = LogonAck::read(&mut wire, &mut carry, a_minute_from_now())
+            .err()
+            .expect("a logon the venue never answered is not a session");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{err}");
     }
 
     /// A burst of nothing but holdings is not an answered logon.

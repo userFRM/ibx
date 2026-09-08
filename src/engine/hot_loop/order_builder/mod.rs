@@ -231,8 +231,20 @@ pub(crate) fn drain_and_send_orders(
                 let qty_str = format_qty(qty);
                 let symbol = context.market.symbol(instrument).to_string();
                 let (sec_type_str, destination) = context.market.order_routing(instrument);
+                // Where each leg is going, kept beside what it was submitted
+                // as, for the reason the single submit keeps it: the replace
+                // restates the destination and reads it from the slot, which
+                // the contract's own subscription writes too. Recorded for the
+                // one and not for the three, a bracket leg replaced after a
+                // watch was opened on the contract named somewhere the leg had
+                // never been working.
                 // What the contract is denominated in, not what most of them
                 // happen to be.
+                for id in [parent_id, tp_id, sl_id] {
+                    context
+                        .order_destination
+                        .insert(id, (sec_type_str.clone(), destination.clone()));
+                }
                 let currency = currency_for(context, shared, instrument);
                 // Versioned ClOrdIDs like every other submit path: a cancel or
                 // replace that has seen no echo yet computes `{id}.{ver}` for
