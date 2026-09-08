@@ -73,31 +73,10 @@ pub(super) struct LogonAck {
     pub trading_port: Option<u16>,
 }
 
-/// One read, with a compressed envelope inflated into the messages it carries.
-///
-/// The venue answers a logon with `8=FIXCOMP`: a DEFLATE-compressed body
-/// holding several messages, among them the ACK and the per-account routing
-/// tags. The inner messages are joined so that a single parse sees every tag —
-/// which does mean the parse keeps the last value for a repeated tag, tag 35
-/// among them, so the type it reports names whichever message ended the
-/// envelope rather than the one worth acting on.
-///
-/// Shared because a reader that does not do this reads compressed bytes as
-/// though they were FIX and finds nothing in them, and the two loops that read
-/// this socket read it one after the other.
-pub(super) fn read_fix_body(
-    r: &mut impl Read,
-    carry: &mut Vec<u8>,
-    deadline: Instant,
-) -> io::Result<Vec<u8>> {
-    let messages = read_fix_messages(r, carry, deadline)?;
-    Ok(joined_body(&messages))
-}
-
 /// The messages one answer carried, each whole.
 ///
 /// A caller that only asks what type arrived wants them joined, and
-/// [`read_fix_body`] joins them. A caller that has to hand on the ones it did
+/// [`joined_body`] joins them. A caller that has to hand on the ones it did
 /// not act on needs them apart: the venue pushes what it holds the moment a
 /// logon is answered, so the envelope carrying the acknowledgement carries the
 /// session's own state beside it — an execution report among it — and there is
@@ -214,7 +193,8 @@ impl LogonAck {
         let mut ack = Self { heartbeat_interval: CCP_HEARTBEAT, ..Self::default() };
         let mut acked = false;
         for _ in 0..5 {
-            let response = read_fix_body(r, carry, deadline)?;
+            let messages = read_fix_messages(r, carry, deadline)?;
+            let response = joined_body(&messages);
             let fields = fix_parse(&response);
             let msg_type = fields.get(&35).map(|s| s.as_str()).unwrap_or("");
             log::info!("Auth msg type={} ({} bytes parsed)", msg_type, response.len());
@@ -341,8 +321,13 @@ impl LogonAck {
                 }
             }
 
-            // Stop on the logon ACK or the server config message
-            if msg_type == "A" || msg_type == "U" {
+            // Stop on the acknowledgement, wherever in the envelope it sits.
+            // One answer holds several messages and a parse of the whole keeps
+            // the last value for tag 35, so an acknowledgement followed by
+            // anything at all read as that other thing: the loop went back for
+            // an answer it was already holding, and where the venue was
+            // waiting for the opening requests it waited until the deadline.
+            if messages.iter().any(|m| is_the_acknowledgement(m)) {
                 acked = true;
                 break;
             }
@@ -1338,8 +1323,10 @@ mod tests {
         let mut wire = Answer(
             [crate::protocol::fixcomp::fixcomp_build(&body)].into_iter().collect(),
         );
-        let inflated = read_fix_body(&mut wire, &mut Vec::new(), a_minute_from_now())
-            .expect("the envelope inflates");
+        let inflated = joined_body(
+            &read_fix_messages(&mut wire, &mut Vec::new(), a_minute_from_now())
+                .expect("the envelope inflates"),
+        );
         assert!(body_names_msg_type(&inflated, "A"), "the ACK survives the envelope");
         assert!(body_names_msg_type(&inflated, "9"), "and so does what followed it");
         assert!(!body_names_msg_type(&inflated, "U"));

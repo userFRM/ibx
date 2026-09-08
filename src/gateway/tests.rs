@@ -1394,3 +1394,61 @@ fn a_holding_that_shares_the_acks_message_type_is_kept() {
         "and the message that answered the logon is not handed on as traffic",
     );
 }
+
+/// An acknowledgement is recognised wherever in the envelope it sits.
+///
+/// One answer holds several messages, and a parse of the whole keeps the last
+/// value for the type tag — so an acknowledgement followed by anything at all
+/// read as that other thing. The loop went back for an answer it was already
+/// holding, and where the venue was waiting for the opening requests it waited
+/// until the deadline.
+#[test]
+fn an_acknowledgement_is_found_when_it_is_not_the_last_message() {
+    let ack = crate::protocol::fix::fix_build(&[(35, "A"), (58, "logged on")], 1);
+    let behind = crate::protocol::fix::fix_build(&[(35, "9"), (58, "something after")], 2);
+
+    // The two inside one compressed envelope, which is how the venue sends
+    // them and the only shape in which the parse sees them together.
+    let mut inner = Vec::new();
+    inner.extend_from_slice(&ack);
+    inner.extend_from_slice(&behind);
+    let envelope = crate::protocol::fixcomp::fixcomp_build(&inner);
+
+    // What a parse of the joined body says the answer was.
+    let last_wins = crate::protocol::fix::fix_parse(&inner);
+    assert_eq!(
+        last_wins.get(&35).map(|s| s.as_str()),
+        Some("9"),
+        "this test rests on the parse being last-wins; without that it proves nothing",
+    );
+
+    // A socket that answers once and then says nothing: if the loop goes back
+    // for another answer it runs to the deadline instead of returning.
+    struct SaysItOnce {
+        bytes: Vec<u8>,
+        at: usize,
+    }
+    impl std::io::Read for SaysItOnce {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            if self.at >= self.bytes.len() {
+                return Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "quiet"));
+            }
+            let n = out.len().min(self.bytes.len() - self.at);
+            out[..n].copy_from_slice(&self.bytes[self.at..self.at + n]);
+            self.at += n;
+            Ok(n)
+        }
+    }
+
+    let mut peer = SaysItOnce { bytes: envelope, at: 0 };
+    let read = super::logon::LogonAck::read(
+        &mut peer,
+        &mut Vec::new(),
+        std::time::Instant::now() + std::time::Duration::from_millis(400),
+    );
+    assert!(
+        read.is_ok(),
+        "the loop went back for an answer it was already holding, and waited out \
+         its deadline: {:?}", read.err(),
+    );
+}

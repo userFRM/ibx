@@ -293,13 +293,19 @@ def main() -> None:
     lines += ["## Handled", ""]
     # The logon exchange runs before the dispatch tables exist and tests the
     # message type directly, so it is stated rather than extracted.
+    # Three shapes, because the exchange tests the type three ways: against
+    # the parse, against an optional field, and by looking through the several
+    # messages one answer carries — a parse of the whole keeps only the last
+    # type, so what is looked for in each message is asked for by name.
     logon = sorted(set(re.findall(
-        r'msg_type == "([A-Za-z0-9]+)"|== Some\("([A-Za-z0-9]+)"\)',
+        r'msg_type == "([A-Za-z0-9]+)"'
+        r'|== Some\("([A-Za-z0-9]+)"\)'
+        r'|body_names_msg_type\([^,]+,\s*"([A-Za-z0-9]+)"\)',
         without_tests("\n".join(
             f.read_text(errors="ignore") for f in module_files("src/gateway")
         )),
     )))
-    logon = sorted({a or b for a, b in logon})
+    logon = sorted({a or b or c for a, b, c in logon})
     lines += table(
         "During the logon exchange, before the dispatch tables run", logon, TRADING,
     )
