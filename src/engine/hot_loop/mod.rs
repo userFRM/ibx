@@ -326,6 +326,35 @@ impl HeartbeatState {
     }
 }
 
+/// Take the holding the account has already stated onto a slot just given to
+/// its contract.
+///
+/// The account states what it holds before anything here asks for a slot, and
+/// until there is one that statement lands on the contract's number alone.
+/// Left behind, the engine's book reads the slot as flat: a withdrawal of
+/// everything composes its cancels from that book, and the guard that keeps a
+/// slot resident while the account holds something reads the same zero and
+/// hands the slot to the next contract that needs one.
+///
+/// Only onto a slot this registration created. Registration is also how an
+/// already-live contract is looked up, and the account's row is older than any
+/// fill booked since — reapplied on every call it rolled a filled position
+/// back to whatever the last account frame said.
+pub(super) fn take_what_the_account_already_holds(
+    context: &mut Context,
+    shared: &SharedState,
+    con_id: i64,
+    instrument: InstrumentId,
+    is_new_slot: bool,
+) {
+    if let Some(held) = shared.portfolio.position_info(con_id).filter(|_| is_new_slot)
+        && held.position != 0.0
+    {
+        context.update_position(instrument, held.position - context.position(instrument));
+        shared.portfolio.set_position(instrument, held.position);
+    }
+}
+
 impl HotLoop {
     /// Take a session that has logged on, and the connections it opened, and
     /// make the loop that will run them.
@@ -612,17 +641,9 @@ impl HotLoop {
                 // its name, and the order built from it went out with an empty
                 // symbol tag.
                 self.context.market.set_routing(id, sec_type, exchange);
-                // The account states what it holds before a caller subscribes
-                // to anything, and that statement had nowhere to land: with no
-                // slot yet, only the conId-keyed row was written. Taking it now
-                // is what makes the engine's position table agree with the
-                // account from the first callback, and what keeps the slot from
-                // being reclaimed as unheld.
-                if let Some(held) = self.shared.portfolio.position_info(con_id).filter(|_| is_new_slot)
-                    && held.position != 0.0 {
-                        self.context.update_position(id, held.position - self.context.position(id));
-                        self.shared.portfolio.set_position(id, held.position);
-                    }
+                take_what_the_account_already_holds(
+                    &mut self.context, &self.shared, con_id, id, is_new_slot,
+                );
                 self.shared.market.set_instrument_count(self.context.market.count());
                 if let Some(tx) = reply_tx { let _ = tx.try_send(Ok(id)); }
                 Some(id)

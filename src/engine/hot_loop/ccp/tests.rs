@@ -7617,3 +7617,39 @@ fn a_refusal_that_states_no_words_still_ends_the_order() {
         row.order_state.status, row.order_state.completed_status,
     );
 }
+
+/// An order recovered for a contract the account holds takes that holding.
+///
+/// The account states what it holds before anything here asks for a slot, and
+/// until there is one that statement lands on the contract's number alone. The
+/// control path takes it onto the slot it makes; recovery made a slot without
+/// it, so the book read the contract as flat while the account held it — and
+/// the guard that keeps a slot resident for a holding read the same zero and
+/// gave the slot to the next contract that needed one.
+#[test]
+fn an_order_recovered_on_a_held_contract_takes_the_holding() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    // The account named the holding before any slot existed for it.
+    shared.portfolio.set_position_info(crate::types::PositionInfo {
+        con_id: 756733,
+        position: 100.0,
+        ..Default::default()
+    });
+
+    // The venue names an order it is already working on that contract.
+    let recovered = exec_report_frame(&[
+        (11, "9000.0"), (150, "0"), (39, "0"), (54, "1"), (6008, "756733"),
+        (55, "SPY"), (38, "100"), (44, "400.00"),
+    ]);
+    ccp.handle_exec_report(&recovered, b"", &mut context, &shared, &None, "");
+
+    let instrument = context.market.instrument_by_con_id(756733)
+        .expect("recovery gave the contract a slot");
+    assert_eq!(
+        context.position(instrument), 100.0,
+        "the book reads the contract as flat, so the slot is handed away while \
+         the account holds it and a withdrawal of everything never names it",
+    );
+}

@@ -602,6 +602,12 @@ impl CcpState {
             // its cancels from the book, so an order that never reached the
             // book is one it silently skips, and the caller who asked for the
             // account to be flattened is answered as though it were.
+            // Whether the slot is this registration's to seed. Looking a
+            // live contract up returns the slot it already has, and the
+            // account's row is older than any fill booked since.
+            let is_new_slot = context.market.con_id(
+                context.market.instrument_by_con_id(con_id).unwrap_or(0),
+            ) != Some(con_id);
             match context.try_register_instrument(con_id) {
                 None => {
                     shared.orders.note_an_order_without_a_slot();
@@ -613,6 +619,14 @@ impl CcpState {
             if let Some(sym) = parsed.get(&55) {
                 context.set_symbol(instrument, sym.clone());
             }
+            // And what the account already said it holds on this contract. The
+            // control path takes it when it makes a slot; this one made a slot
+            // without it, so the book read the contract as flat while the
+            // account held it — and the guard that keeps a slot resident for a
+            // holding read that zero and gave the slot away.
+            crate::engine::hot_loop::take_what_the_account_already_holds(
+                context, shared, con_id, instrument, is_new_slot,
+            );
             context.insert_order(crate::types::Order {
                 order_id: clord_id,
                 instrument,
