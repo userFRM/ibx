@@ -598,6 +598,67 @@ fn an_adjusted_request_whose_actions_are_refused_is_a_stated_refusal() {
     assert!(filed[0].1.bars.is_empty(), "no unadjusted bar is handed back under the adjusted name");
 }
 
+/// And the stream half goes with it, on the same rule the batch keeps.
+///
+/// A request kept up to date is two queries under one number: the batch and a
+/// five-second stream beside it. What fails the request fails the stream with
+/// it — the batch refusal says so and withdraws it. A refusal of the actions
+/// the fold is waiting on ends the request just as finally, and left standing
+/// the bars go on arriving under a number the caller has been told failed,
+/// while the entry holding that number refuses every later request under it as
+/// a duplicate of a stream that is not running.
+#[test]
+fn a_kept_up_to_date_request_refused_on_its_actions_takes_its_stream_with_it() {
+    use crate::protocol::connection::Connection;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let sock = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let mut conn = Some(Connection::new_raw(sock).unwrap());
+
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+
+    hmds.pending_historical.push(("hist_1".to_string(), 42));
+    hmds.held.push(HeldSeries {
+        req_id: 42, con_id: 756733, sec_type: "STK".into(), exchange: "SMART".into(),
+        bars: Vec::new(), timezone: String::new(), actions_asked: false, actions_query: None,
+        fold: Fold::Adjusted, actions: None, complete: false,
+    });
+    // The stream half, as a request asked to be kept up to date carries one.
+    hmds.keep_up_to_date_reqs.insert(42);
+    hmds.rtbar_subs.push(("rt_1".to_string(), 42, Some(9001), 0.01, 1.0));
+    hmds.forming_bars.push(FormingBar {
+        req_id: 42, seconds: 300, opened_at: 0,
+        bar: crate::types::RealTimeBar::default(), weighted: 0.0,
+    });
+
+    hmds.process_hmds_message(
+        &adj_bar_msg("hist_1", "20240607", 1208.88, true), &mut conn, &shared, &None, &mut hb,
+    );
+    let _ = read_frame(&mut peer);
+    let qid = hmds.pending_adjustments.iter().find(|(_, rid, _)| *rid == 42)
+        .map(|(q, _, _)| q.clone()).expect("the actions query is outstanding");
+
+    hmds.process_hmds_message(
+        &make_query_error_msg(&qid, "no permission"), &mut conn, &shared, &None, &mut hb,
+    );
+
+    assert!(
+        !hmds.keep_up_to_date_reqs.contains(&42),
+        "the stream keeps running under a number the caller was told had failed",
+    );
+    assert!(hmds.rtbar_subs.is_empty(), "and its subscription record stands: {:?}", hmds.rtbar_subs.len());
+    assert!(hmds.forming_bars.is_empty(), "and its part-built bar goes on folding");
+    assert!(
+        !hmds.pending_historical.iter().any(|(_, r)| *r == 42),
+        "the number stays reserved, so every later request under it is refused \
+         as a duplicate for the rest of the session",
+    );
+}
+
 /// A series that comes back with no bars has nothing to fold, and the actions
 /// query only goes out on a first bar that never came. It is ended straight
 /// away rather than held for an answer nothing asked for — the empty series the

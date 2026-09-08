@@ -521,6 +521,30 @@ fn a_snapshot_fills_in_an_order_a_status_created_blank() {
     assert_eq!(trade.status.status, "Submitted", "the venue's word was overwritten");
 }
 
+/// What was said about the opening snapshot survives being merged into it.
+///
+/// Opening a session asks the venue for its holdings and its working orders,
+/// and either answer can come back short — the venue had not finished stating
+/// them, or the table had no slot left. Each says so on the channel a caller
+/// reads afterwards, and that is the only place it is ever said. Merged
+/// without them, the session began on a snapshot it had been warned about with
+/// no way to ask.
+#[test]
+fn the_warnings_about_an_opening_snapshot_survive_it() {
+    let mut kept = LiveState::default();
+
+    let mut answered = LiveState::default();
+    answered.error(-1, 2107, "the account had not finished stating its holdings", "");
+    kept.absorb(answered);
+
+    let said = kept.take_notices();
+    assert!(
+        said.iter().any(|n| n.code == 2107),
+        "the session started on a snapshot it had been warned about, with the \
+         warning nowhere a caller can read it: {said:?}",
+    );
+}
+
 /// An account value is keyed by account, tag and currency together.
 ///
 /// Keyed by the tag alone, the same account's dollar and euro cash overwrite

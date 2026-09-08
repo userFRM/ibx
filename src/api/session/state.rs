@@ -495,6 +495,19 @@ impl LiveState {
         if self.accounts.is_empty() {
             self.accounts = other.accounts;
         }
+        // What was said about the snapshot, not only the snapshot. Opening a
+        // session asks the venue for its holdings and its working orders, and
+        // either answer can arrive short — the venue had not finished stating
+        // them, or the table had no slot left — and each says so on the same
+        // channel a caller reads afterwards. Merged without them, a session
+        // began on a snapshot it had been warned about and had no way to ask:
+        // this is the only place those notices exist.
+        for notice in other.notices {
+            if self.notices.len() == NOTICES_KEPT {
+                self.notices.remove(0);
+            }
+            self.notices.push(notice);
+        }
         self.changed();
     }
 

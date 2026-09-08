@@ -70,7 +70,14 @@ SAYINGS: list[tuple[str, re.Pattern[str], str]] = [
         "narrates how the work was done",
         re.compile(
             r"\bcapture run [A-Z]\b|\brun-[A-Z] capture\b|\bround \d+\b"
-            r"|\bverification pass\b|\bBLOCKER\b|\bproduction readiness\b",
+            r"|\bverification pass\b|\bBLOCKER\b|\bproduction readiness\b"
+            # A round need not be numbered to be one. These name the sequence
+            # of attempts rather than the code, which is the same leak the
+            # numbered form is caught for.
+            r"|\b(?:last|previous|latest|earlier) round\b"
+            r"|\bround of (?:fixes|changes|work|review)\b"
+            r"|\baudit (?:fixes|pass|round)\b"
+            r"|\bfixes? to (?:the )?fix(?:es)?\b",
             re.I,
         ),
         "a reader wants what the code does, not the sequence of attempts behind it",

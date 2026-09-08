@@ -987,6 +987,25 @@ impl HmdsState {
                         {
                             self.held.retain(|a| a.req_id != rid);
                             from_historical = true;
+                            // And the stream half, on the same rule the batch
+                            // keeps: the request rides a five-second stream
+                            // under this same number, and what fails the
+                            // request fails the stream with it. A refusal of
+                            // the actions the fold waits on ends the request
+                            // as finally as a refusal of the batch — left
+                            // running, the bars go on arriving under a number
+                            // the caller has been told failed, and the next
+                            // reconnect asks for the stream again.
+                            if self.keep_up_to_date_reqs.remove(&rid) {
+                                self.withdraw_the_stream_half(rid, hmds_conn, hb);
+                            }
+                            // And the entry that holds the number. It is kept
+                            // past the batch for the stream's sake, so a
+                            // request that ends here left it standing: every
+                            // later request under that number was refused as a
+                            // duplicate of one that is not running, for the
+                            // rest of the session.
+                            self.pending_historical.retain(|(_, r)| *r != rid);
                         }
                         match released_req_id {
                             Some(req_id) => {
