@@ -796,6 +796,28 @@ pub fn tags_read_from_a_definition() -> Vec<u32> {
         .collect()
 }
 
+/// The text of one function in this file, so a scan for what it reads does not
+/// pick up what the function beside it reads.
+///
+/// Named with its opening bracket, and found at the start of a line. Without
+/// the bracket the name is a prefix of its neighbour's — one reply and the
+/// list of them differ by a letter. Without the line start it matches where
+/// this file names the function rather than where it defines it, which is the
+/// scan below naming it, so the scan read its own text.
+fn what_a_function_reads<'a>(source: &'a str, signature: &str) -> &'a str {
+    let at_a_line_start = format!("\n{signature}");
+    let Some(start) = source.find(&at_a_line_start).map(|at| at + 1) else { return "" };
+    let rest = &source[start..];
+    // Up to wherever the next item at the top level begins.
+    let end = rest[1..]
+        .match_indices("\nfn ")
+        .chain(rest[1..].match_indices("\npub fn "))
+        .map(|(at, _)| at + 1)
+        .min()
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
 /// The same set, worked out once.
 ///
 /// This is read for every definition the venue sends, and a definition is not
@@ -824,15 +846,26 @@ static READ_FROM_A_DEFINITION: std::sync::LazyLock<std::collections::HashSet<u32
     // on every definition, since the exchange is on all of them — which buried
     // the gap this is here to measure, and put fields already parsed into
     // named slots into the list of what this client could not name.
-    for cap in source.split("b\"").skip(1) {
+    //
+    // Read out of the two that read a definition, and not out of the file.
+    // Its neighbours walk their own replies the same way, and a matching
+    // symbol's or a schedule's tag counted here is a definition's field
+    // reported as read and then dropped from the very list that exists to
+    // catch it.
+    let walked = format!(
+        "{}{}",
+        what_a_function_reads(source, "pub fn parse_secdef_response("),
+        what_a_function_reads(source, "pub fn parse_market_rules("),
+    );
+    for cap in walked.split("b\"").skip(1) {
         note(&cap.chars().take_while(|c| *c != '=').collect::<String>());
     }
-    for cap in source.split("strip_prefix(\"").skip(1) {
+    for cap in walked.split("strip_prefix(\"").skip(1) {
         note(&cap.chars().take_while(|c| *c != '=').collect::<String>());
     }
     // And an arm of the walk's own match, which names its tag rather than
     // spelling the number.
-    for line in source.lines() {
+    for line in walked.lines() {
         let trimmed = line.trim();
         if let Some(name) = trimmed.strip_suffix(" => {").or_else(|| trimmed.strip_suffix(" =>"))
             && name.starts_with("TAG_")

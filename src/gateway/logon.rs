@@ -90,20 +90,65 @@ pub(super) fn read_fix_body(
     carry: &mut Vec<u8>,
     deadline: Instant,
 ) -> io::Result<Vec<u8>> {
+    let messages = read_fix_messages(r, carry, deadline)?;
+    Ok(joined_body(&messages))
+}
+
+/// The messages one answer carried, each whole.
+///
+/// A caller that only asks what type arrived wants them joined, and
+/// [`read_fix_body`] joins them. A caller that has to hand on the ones it did
+/// not act on needs them apart: the venue pushes what it holds the moment a
+/// logon is answered, so the envelope carrying the acknowledgement carries the
+/// session's own state beside it — an execution report among it — and there is
+/// no telling one message from the next once they are joined.
+pub(super) fn read_fix_messages(
+    r: &mut impl Read,
+    carry: &mut Vec<u8>,
+    deadline: Instant,
+) -> io::Result<Vec<Vec<u8>>> {
     let raw = fix_read_deadline(r, carry, deadline)?;
     if !raw.starts_with(b"8=FIXCOMP\x01") {
-        return Ok(raw);
+        return Ok(vec![raw]);
     }
     let inflated = fixcomp::fixcomp_decompress(&raw)?;
     let total: usize = inflated.iter().map(|m| m.len()).sum();
     log::info!("FIXCOMP envelope: {} bytes compressed → {} inner messages, ~{} inflated bytes",
         raw.len(), inflated.len(), total);
-    let mut body = Vec::with_capacity(total + inflated.len());
-    for inner in inflated {
-        body.extend_from_slice(&inner);
+    Ok(inflated)
+}
+
+/// The messages of one answer as a single body, the way a parse reads them.
+pub(super) fn joined_body(messages: &[Vec<u8>]) -> Vec<u8> {
+    if let [only] = messages {
+        return only.clone();
+    }
+    let total: usize = messages.iter().map(|m| m.len()).sum();
+    let mut body = Vec::with_capacity(total + messages.len());
+    for inner in messages {
+        body.extend_from_slice(inner);
         body.push(b'\x01');
     }
-    Ok(body)
+    body
+}
+
+/// What an envelope carried beside the acknowledgement, in the order it
+/// arrived.
+///
+/// The acknowledgement is what the logon was waiting for and is acted on here.
+/// Everything else in the same envelope is the session's own traffic and
+/// belongs to the connection this is about to build — dropped with the
+/// envelope it arrived in, an execution report reached nothing at all, and the
+/// fill it stated was never told to anyone.
+pub(super) fn what_rode_in_beside_the_ack(messages: &[Vec<u8>]) -> Vec<u8> {
+    let mut beside = Vec::new();
+    for message in messages {
+        if body_names_msg_type(message, "A") || body_names_msg_type(message, "U") {
+            continue;
+        }
+        beside.extend_from_slice(message);
+    }
+    beside
 }
 
 /// Whether a body states a message of this type at any point in it.

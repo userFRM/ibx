@@ -854,6 +854,23 @@ pub fn build_tick_query_xml(
     )
 }
 
+/// The shape a reply of this kind carries, with nothing in it.
+///
+/// Stated beside the parse that fills it, because the two have to agree: a
+/// series that cannot be read is still ended, and it is ended under the kind
+/// the caller asked for. Ended under another, the answer goes to a callback
+/// nobody is waiting on and the caller waits out its whole deadline for a
+/// completion it was already sent.
+pub fn no_ticks_of_the_kind(what_to_show: &str) -> crate::types::HistoricalTickData {
+    match what_to_show.to_uppercase().as_str() {
+        "BID_ASK" => crate::types::HistoricalTickData::BidAsk(Vec::new()),
+        "MIDPOINT" | "OPTION_EXERCISE_INTEREST_RATE" => {
+            crate::types::HistoricalTickData::Midpoint(Vec::new())
+        }
+        _ => crate::types::HistoricalTickData::Last(Vec::new()),
+    }
+}
+
 /// Parse a ResultSetTick XML response into historical tick data.
 pub fn parse_tick_response(xml: &str, what_to_show: &str) -> Option<(String, crate::types::HistoricalTickData, bool)> {
     if !xml.contains("<ResultSetTick>") {

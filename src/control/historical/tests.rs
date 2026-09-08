@@ -1216,3 +1216,32 @@ fn the_head_timestamp_query_states_expired_as_the_bar_query_does() {
     assert!(ask(true).contains("<expired>yes</expired>"), "{}", ask(true));
     assert!(ask(false).contains("<expired>no</expired>"), "{}", ask(false));
 }
+
+/// The empty shape and the filled one are the same kind.
+///
+/// A series that cannot be read is still ended, and it is ended under the kind
+/// the caller asked for. Ended under another, the answer goes to a callback
+/// nobody is waiting on: the caller waits out its whole deadline for a
+/// completion it was already sent.
+#[test]
+fn an_ended_series_is_the_kind_the_reply_would_have_been() {
+    fn kind(data: &crate::types::HistoricalTickData) -> &'static str {
+        match data {
+            crate::types::HistoricalTickData::Midpoint(_) => "midpoint",
+            crate::types::HistoricalTickData::Last(_) => "last",
+            crate::types::HistoricalTickData::BidAsk(_) => "bidask",
+        }
+    }
+    for what in ["TRADES", "MIDPOINT", "BID_ASK", "OPTION_EXERCISE_INTEREST_RATE"] {
+        let xml = "<ResultSetTick><id>q</id><eoq>true</eoq><tz>UTC</tz><Events>\
+             <Tick><time>20260714-13:30:00</time><price>1.0</price><size>1</size>\
+             <priceBid>1.0</priceBid><priceAsk>1.0</priceAsk><sizeBid>1</sizeBid>\
+             <sizeAsk>1</sizeAsk></Tick></Events></ResultSetTick>";
+        let filled = parse_tick_response(xml, what).expect("the reply reads");
+        assert_eq!(
+            kind(&filled.1),
+            kind(&no_ticks_of_the_kind(what)),
+            "{what}: a series ended without being read goes to another callback",
+        );
+    }
+}

@@ -1339,3 +1339,30 @@ mod reconnect_post_auth_tests {
         }
     }
 }
+
+/// An execution report that rides in with the reconnect acknowledgement is
+/// kept, not dropped with the envelope it arrived in.
+///
+/// The venue pushes what it holds the moment a logon is answered, so one
+/// envelope carries the acknowledgement and the session's own traffic beside
+/// it. The loop reads that envelope for the acknowledgement and then goes on
+/// to build the connection from the bytes a read took past the frame — so
+/// anything inside the envelope reached nothing at all, and the fill an
+/// execution report stated was never told to anyone.
+#[test]
+fn an_execution_report_riding_in_with_the_reconnect_ack_is_kept() {
+    let ack = crate::protocol::fix::fix_build(&[(35, "A"), (58, "reconnected")], 1);
+    let fill = crate::protocol::fix::fix_build(&[(35, "8"), (17, "exec-1"), (32, "100")], 2);
+
+    let beside = super::logon::what_rode_in_beside_the_ack(&[ack.clone(), fill.clone()]);
+
+    assert!(
+        beside.windows(fill.len()).any(|w| w == fill.as_slice()),
+        "the report was dropped with the envelope the acknowledgement arrived in",
+    );
+    assert!(
+        !beside.windows(ack.len()).any(|w| w == ack.as_slice()),
+        "and the acknowledgement, which this loop has already acted on, is not \
+         handed to the session as traffic",
+    );
+}

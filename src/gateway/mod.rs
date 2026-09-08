@@ -1092,7 +1092,8 @@ fn reconnect_ccp_attempt(
         // Read the same way the first logon reads it. This loop parsed the
         // frame as it arrived, so a compressed answer was read as FIX, found
         // nothing in it, and the reconnect failed on an answer it was holding.
-        let response = read_fix_body(&mut tls, &mut carry, fix_deadline)?;
+        let messages = logon::read_fix_messages(&mut tls, &mut carry, fix_deadline)?;
+        let response = logon::joined_body(&messages);
         let fields = fix_parse(&response);
         let msg_type = fields.get(&35).map(|s| s.as_str()).unwrap_or("");
         // The ACK is looked for in the body rather than taken from the parse.
@@ -1151,6 +1152,20 @@ fn reconnect_ccp_attempt(
                 venue_stamp = fields.get(&52).cloned();
                 logged_in_at = venue_stamp.clone()
                     .unwrap_or_else(|| chrono_free_timestamp().to_string());
+                // And what rode in with it. The venue pushes what it holds
+                // the moment the logon is answered, so the envelope carrying
+                // the acknowledgement carries the session's own traffic beside
+                // it — an execution report among it. Read for the
+                // acknowledgement and then dropped with the envelope, that
+                // report reached nothing: a fill nobody was ever told about.
+                // Ahead of what the read took past the frame, because that is
+                // the order they arrived in.
+                let mut beside = logon::what_rode_in_beside_the_ack(&messages);
+                if !beside.is_empty() {
+                    log::info!("{} bytes rode in with the reconnect ACK", beside.len());
+                    beside.extend_from_slice(&carry);
+                    carry = beside;
+                }
                 acked = true;
                 break;
             }

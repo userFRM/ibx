@@ -828,11 +828,9 @@ impl HmdsState {
                                     // And ended, or a caller reading these off
                                     // the callback waits on a last segment
                                     // that is not coming.
-                                    let ended = if what_to_show.eq_ignore_ascii_case("BID_ASK") {
-                                        crate::types::HistoricalTickData::BidAsk(Vec::new())
-                                    } else {
-                                        crate::types::HistoricalTickData::Last(Vec::new())
-                                    };
+                                    let ended = crate::control::historical::no_ticks_of_the_kind(
+                                        &what_to_show,
+                                    );
                                     shared.reference.push_historical_ticks(
                                         req_id, ended, what_to_show, true,
                                     );

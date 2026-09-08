@@ -1251,6 +1251,17 @@ mod unread_tag_tests {
                 "{walked} is walked over the bytes and read, and is reported dropped",
             );
         }
+        // And nothing a neighbour reads. The parsers beside this one walk
+        // their own replies the same way, and one of their tags counted here
+        // is a definition's field reported as read and then dropped from the
+        // very list that exists to catch it.
+        for elsewhere in [6453u32, 6070, 6841] {
+            assert!(
+                !read.contains(&elsewhere),
+                "{elsewhere} belongs to another reply, and a definition carrying it \
+                 has that field dropped without being counted",
+            );
+        }
     }
 
     /// A tag the venue sends that nothing reads is named, so the gap is
@@ -1684,3 +1695,4 @@ fn a_bond_definition_states_its_maturity_and_no_expiry() {
     let details = crate::types::model::ContractDetails::from_definition(&option);
     assert_eq!((details.maturity.as_str(), details.contract.last_trade_date_or_contract_month.as_str()), ("", "20260918"));
 }
+
