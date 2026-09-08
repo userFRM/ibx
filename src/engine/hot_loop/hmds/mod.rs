@@ -615,6 +615,9 @@ impl HmdsState {
         event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) {
+        // The number a caller is owed where the data service could not answer
+        // a request it accepted: a reply it refused, and one that did not read.
+        const HMDS_ERROR_CODE: i32 = 162;
         let parsed = fix::fix_parse(msg);
         let msg_type = match parsed.get(&fix::TAG_MSG_TYPE) {
             Some(t) => t.as_str(),
@@ -794,10 +797,46 @@ impl HmdsState {
                                     }
                                     shared.reference.push_historical_ticks(req_id, data, what_to_show, done);
                                 }
-                                None => log::warn!(
-                                    "HMDS tick segment for req_id={req_id} did not read; \
-                                     waiting for the rest of the answer",
-                                ),
+                                // A segment that does not read is this
+                                // request's answer all the same. The parse
+                                // refuses a row it never saw closed rather
+                                // than handing back what is in hand, so there
+                                // is nothing here to deliver — and nothing
+                                // more is coming under this number, because
+                                // the venue has answered it. Waited on
+                                // instead, the series either completed later
+                                // with a hole in it under the reply's own
+                                // statement that it was whole, or, where the
+                                // cut segment was the last, the request stood
+                                // until the connection died: the sweep that
+                                // fails an unreadable reply never sees a tick
+                                // payload. Failed the way an unreadable page
+                                // of bars is.
+                                None => {
+                                    self.pending_ticks.remove(pos);
+                                    log::warn!(
+                                        "HMDS tick segment for req_id={req_id} did not read, \
+                                         so the series it belongs to cannot be completed",
+                                    );
+                                    shared.reference.push_historical_error(
+                                        req_id,
+                                        HMDS_ERROR_CODE,
+                                        "a tick segment did not read, so the series it \
+                                         belongs to cannot be completed"
+                                            .to_string(),
+                                    );
+                                    // And ended, or a caller reading these off
+                                    // the callback waits on a last segment
+                                    // that is not coming.
+                                    let ended = if what_to_show.eq_ignore_ascii_case("BID_ASK") {
+                                        crate::types::HistoricalTickData::BidAsk(Vec::new())
+                                    } else {
+                                        crate::types::HistoricalTickData::Last(Vec::new())
+                                    };
+                                    shared.reference.push_historical_ticks(
+                                        req_id, ended, what_to_show, true,
+                                    );
+                                }
                             }
                         }
                     }
@@ -874,8 +913,6 @@ impl HmdsState {
                         let error_msg = crate::control::xml::tag(xml_tag, "error")
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| "unknown".to_string());
-                        // IB canonical error code for HMDS-side validation/rejection.
-                        const HMDS_ERROR_CODE: i32 = 162;
                         let mut released_req_id: Option<u32> = None;
                         let mut from_historical = false;
                         // Whether the query the venue refused is one a held

@@ -1446,6 +1446,48 @@ mod hmds_correlation_tests {
         );
     }
 
+    /// A segment cut mid-row ends the request rather than waiting on it.
+    ///
+    /// The parse refuses a row it never saw closed rather than handing back
+    /// what is in hand, so a cut segment carries nothing to deliver — and
+    /// nothing more is coming under that number, because the venue has
+    /// answered it. Waited on, the series either completed later with a hole
+    /// in it under the reply's own statement that it was whole, or, where the
+    /// cut segment was the last, the request stood until the connection died:
+    /// the sweep that fails an unreadable reply never sees a tick payload.
+    #[test]
+    fn a_tick_segment_cut_mid_row_ends_the_request() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        hmds.pending_ticks.push(("tk_9".to_string(), 31, "TRADES".to_string()));
+
+        // The last segment, cut inside a row: the opening tag is there and
+        // the close never arrives.
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"35=W\x016118=");
+        msg.extend_from_slice(
+            b"<ResultSetTick><id>tk_9</id><eoq>true</eoq><tz>UTC</tz><Events>\
+              <Tick><time>20260714-13:30:00</time><price>100.0</price>",
+        );
+        msg.push(0x01);
+        hmds.process_hmds_message(&msg, &mut conn, &shared, &None, &mut hb);
+
+        assert!(
+            hmds.pending_ticks.is_empty(),
+            "the request waits on a reply the venue has already sent",
+        );
+        let errors = shared.reference.drain_historical_errors();
+        assert!(errors.iter().any(|(r, ..)| *r == 31), "the caller is told: {errors:?}");
+        let delivered = shared.reference.drain_historical_ticks();
+        assert!(
+            delivered.iter().any(|(r, _, _, done)| *r == 31 && *done),
+            "and released, or a caller reading these off the callback waits on \
+             a last segment that is not coming: {delivered:?}",
+        );
+    }
+
     /// Tag 96 carries gzip bytes. The parsed field map is UTF-8 lossy, which
     /// replaces every invalid byte, so the payload is read from the raw
     /// frame.
