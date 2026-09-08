@@ -340,6 +340,14 @@ impl HeartbeatState {
 /// already-live contract is looked up, and the account's row is older than any
 /// fill booked since — reapplied on every call it rolled a filled position
 /// back to whatever the last account frame said.
+///
+/// That row is restated by the venue's own feed after a fill rather than by
+/// the booking, so a slot made for a contract whose last fill closed it can
+/// still be seeded from a figure the feed has not caught up with. The window
+/// is the feed's own latency, and it closes when the restatement lands.
+/// Nothing here can tell a stale row from a current one; what it can tell is
+/// that a slot with no holding on it is reclaimed, and a contract the account
+/// holds losing its slot does not correct itself.
 pub(super) fn take_what_the_account_already_holds(
     context: &mut Context,
     shared: &SharedState,

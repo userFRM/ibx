@@ -1366,3 +1366,31 @@ fn an_execution_report_riding_in_with_the_reconnect_ack_is_kept() {
          handed to the session as traffic",
     );
 }
+
+/// And the account traffic that shares the acknowledgement's type is kept too.
+///
+/// The logon is answered by a `35=A` or by the server-configuration message
+/// that stands in for it, and that message shares its type with the session's
+/// own account traffic — the holdings and the account's figures both arrive
+/// under it. Read as the acknowledgement, a holding riding in with one was
+/// dropped along with it: the execution report in the same envelope survived
+/// while the position it moved did not.
+#[test]
+fn a_holding_that_shares_the_acks_message_type_is_kept() {
+    let config = crate::protocol::fix::fix_build(&[(35, "U"), (58, "server config")], 1);
+    let holding = crate::protocol::fix::fix_build(
+        &[(35, "U"), (6040, "75"), (6008, "756733"), (6041, "100")], 2,
+    );
+
+    let beside = super::logon::what_rode_in_beside_the_ack(&[config.clone(), holding.clone()]);
+
+    assert!(
+        beside.windows(holding.len()).any(|w| w == holding.as_slice()),
+        "the account's own traffic was dropped as though it were the answer to \
+         the logon",
+    );
+    assert!(
+        !beside.windows(config.len()).any(|w| w == config.as_slice()),
+        "and the message that answered the logon is not handed on as traffic",
+    );
+}

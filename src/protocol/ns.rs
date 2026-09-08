@@ -170,6 +170,18 @@ fn read_bounded<R: Read>(reader: &mut R, buf: &mut [u8], deadline: Instant) -> i
             // `read_exact` retries this for every other reader in this file;
             // the raw read must too rather than die on a signal.
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            // And a socket that went quiet is not a frame that failed. The
+            // socket carries a short timeout so the deadline above stays
+            // reachable, and it expires whenever the peer pauses mid-frame —
+            // on a slow link, routinely. Handed back, the bytes already read
+            // went with it, because they live here: the caller retried and
+            // read a new header out of the middle of the payload it had
+            // half-collected, so a pause the deadline had time for became a
+            // frame that could not be parsed and an establishment that failed.
+            // The clock is what bounds this read, and it is checked above.
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut => {}
             Err(e) => return Err(e),
         }
     }
@@ -227,8 +239,52 @@ pub fn is_ns_text(payload: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use std::collections::HashSet;
+
+/// A frame split across a socket timeout is still one frame.
+///
+/// The socket carries a short read timeout so the deadline stays reachable,
+/// and it expires whenever the peer pauses mid-frame — on a slow link,
+/// routinely. Handed back as an error, the bytes already read went with it:
+/// the caller retried and read a new header out of the middle of the payload
+/// it had half-collected, so a pause the deadline had time for became a frame
+/// that could not be parsed and an establishment that failed.
+#[test]
+fn a_frame_paused_mid_payload_is_still_read_whole() {
+    /// A socket that goes quiet once, part way through the payload.
+    struct PausesOnce {
+        bytes: Vec<u8>,
+        at: usize,
+        paused: bool,
+    }
+    impl Read for PausesOnce {
+        fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+            if self.at >= 10 && !self.paused {
+                self.paused = true;
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, "quiet"));
+            }
+            if self.at >= self.bytes.len() {
+                return Ok(0);
+            }
+            // A byte at a time, so the pause lands inside the payload.
+            out[0] = self.bytes[self.at];
+            self.at += 1;
+            Ok(1)
+        }
+    }
+
+    let framed = ns_build(50, NS_TEST_REQUEST, &["the whole of it"], "");
+    let framed_payload = framed[8..].to_vec();
+    let mut peer = PausesOnce { bytes: framed, at: 0, paused: false };
+    let (payload, _) = ns_recv(&mut peer, Instant::now() + std::time::Duration::from_secs(5))
+        .expect("a pause inside a frame is not a frame that failed");
+    assert_eq!(
+        payload, &framed_payload[..],
+        "the read resumed from a new header in the middle of the payload",
+    );
+}
 
     // ── Existing tests ──────────────────────────────────────────────
 

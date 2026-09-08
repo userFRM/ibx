@@ -143,12 +143,30 @@ pub(super) fn joined_body(messages: &[Vec<u8>]) -> Vec<u8> {
 pub(super) fn what_rode_in_beside_the_ack(messages: &[Vec<u8>]) -> Vec<u8> {
     let mut beside = Vec::new();
     for message in messages {
-        if body_names_msg_type(message, "A") || body_names_msg_type(message, "U") {
+        if is_the_acknowledgement(message) {
             continue;
         }
         beside.extend_from_slice(message);
     }
     beside
+}
+
+/// Whether this message is the one the logon was waiting for.
+///
+/// The logon is answered by a `35=A`, or by the server-configuration message
+/// that stands in for it. That message shares its type with the session's own
+/// account traffic — the holdings and the account's figures both arrive under
+/// it — and the two are told apart by the kind the venue states beside them.
+/// Read as the acknowledgement, a holding riding in with it was dropped along
+/// with the acknowledgement, so the execution report in the same envelope
+/// survived while the position it moved did not.
+fn is_the_acknowledgement(message: &[u8]) -> bool {
+    if body_names_msg_type(message, "A") {
+        return true;
+    }
+    body_names_msg_type(message, "U")
+        && !message.windows(6).any(|w| w == b"\x016040=")
+        && !message.starts_with(b"6040=")
 }
 
 /// Whether a body states a message of this type at any point in it.
