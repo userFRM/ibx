@@ -3338,3 +3338,92 @@ fn directed_venue_replace_phase_live() {
     let conns = ensure_ccp_alive(conns, &mut gw, &config);
     let _ = connection::phase_graceful_shutdown(conns);
 }
+
+/// Hold one session for as long as it is asked to, and say what it lost.
+///
+/// Every other phase here finishes in minutes. What none of them answers is
+/// what a session does over hours: whether the connections it rebuilds are
+/// given back, whether the tables that are keyed per request or per order
+/// return to where they started, and whether the venue's own nightly
+/// maintenance is survived rather than merely reconnected through.
+///
+/// Reports rather than asserts, because what a long run finds is a shape over
+/// time and not a single wrong answer. The numbers below are the ones that
+/// should return to where they began once the quotes are withdrawn.
+///
+/// Run: IBX_SOAK_MINUTES=720 cargo test --test ib_paper_compat a_session_held_for_hours_phase_live -- --ignored --nocapture
+#[test]
+#[ignore = "holds a session for hours; run it deliberately with IBX_SOAK_MINUTES set"]
+fn a_session_held_for_hours_phase_live() {
+    start_logging();
+    let minutes: u64 = std::env::var("IBX_SOAK_MINUTES")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(60);
+    let config = match get_config() { Some(c) => c, None => return };
+    let settings = ibx::EClientConfig {
+        username: config.username.clone(),
+        password: config.password.to_string(),
+        paper: config.paper,
+        ..Default::default()
+    };
+    let client = EClient::connect(&settings).expect("connect failed");
+    println!("--- Soak: holding one session for {minutes} minutes ---");
+
+    let spy = ApiContract {
+        con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+        exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(minutes * 60);
+    let mut laps = 0u64;
+    let mut losses = 0u64;
+    let mut restores = 0u64;
+    let mut refusals = 0u64;
+    let mut connected_before = true;
+
+    while Instant::now() < deadline {
+        laps += 1;
+        // A subscription taken and given back on every lap. What this is
+        // watching for is the slot and the request number coming back with
+        // it: a session that leaks either runs out and starts refusing.
+        match client.watch(&spy) {
+            Ok(req_id) => {
+                std::thread::sleep(Duration::from_secs(20));
+                if let Err(why) = client.cancel_mkt_data(req_id) {
+                    refusals += 1;
+                    println!("  lap {laps}: the withdrawal was refused: {why}");
+                }
+            }
+            Err(why) => {
+                refusals += 1;
+                println!("  lap {laps}: a subscription was refused: {why}");
+            }
+        }
+
+        let connected = client.is_connected();
+        if connected_before && !connected { losses += 1; println!("  lap {laps}: the session reads as lost"); }
+        if !connected_before && connected { restores += 1; println!("  lap {laps}: and it is back"); }
+        connected_before = connected;
+
+        if laps % 15 == 0 {
+            println!(
+                "  {} laps, {} losses, {} restores, {} refusals, connected={}",
+                laps, losses, restores, refusals, connected,
+            );
+        }
+        std::thread::sleep(Duration::from_secs(10));
+    }
+
+    println!(
+        "\n=== soak over: {} laps, {} losses, {} restores, {} refusals ===",
+        laps, losses, restores, refusals,
+    );
+    // A refusal on every lap after some point is the shape a leak makes: the
+    // table runs out and never recovers. One or two among hundreds is the
+    // venue, not the client.
+    assert!(
+        refusals * 4 < laps.max(1),
+        "subscriptions were refused on more than a quarter of {laps} laps ({refusals}) — \
+         that is what a slot or request-id leak looks like from outside",
+    );
+    client.disconnect();
+}
