@@ -420,13 +420,13 @@ impl CcpState {
         };
         if let Some((instrument, side, already_filled)) = target {
             let booked = if is_resend {
-                // Recorded even though the cumulative figure is what decides
-                // this copy: the same execution can arrive again without its
-                // marker, and the window is what catches that one. Recorded
-                // here rather than earlier so an execution that reaches this
-                // handler before its order does is not spent on a delivery
-                // that had nothing to book against.
-                self.record_exec_id(dedup_key);
+                // A repeated correction carries the cumulative figure from
+                // before any later fills, so reconciling it again undoes them.
+                // Recorded here so a delivery with nothing to book against
+                // does not spend the execution's key.
+                if !self.record_exec_id(dedup_key) {
+                    return None;
+                }
                 let Some(report_cum_qty) = report_cum_qty.filter(|c| *c >= 0) else {
                     // Nothing to reconcile against. Booking the increment
                     // would double what the recovery record already seeded.
@@ -1648,7 +1648,10 @@ impl CcpState {
                 crate::types::OrderStatus::Filled => "Filled".to_string(),
                 crate::types::OrderStatus::Cancelled => "Cancelled".to_string(),
                 crate::types::OrderStatus::Rejected => {
-                    parsed.get(&58).cloned().unwrap_or_else(|| "Rejected".to_string())
+                    // An empty reason still marks a refusal: Inactive with
+                    // no completed status means the venue is holding it.
+                    parsed.get(&58).filter(|s| !s.is_empty())
+                        .cloned().unwrap_or_else(|| "Rejected".to_string())
                 }
                 _ => String::new(),
             };
@@ -1889,6 +1892,15 @@ impl CcpState {
         shared: &SharedState,
         event_tx: &Option<EventSink>,
     ) {
+        let reject_type: u8 = parsed.get(&434).and_then(|s| s.parse().ok()).unwrap_or(1);
+        // A replace records its new name before the answer arrives, so the
+        // recovered name on tag 41 may no longer be in last_clord. Tag 11
+        // names the local order and revision kept against that answer.
+        let replacement = parsed.get(&11).filter(|_| reject_type == 2).and_then(|stated| {
+            let (base, _) = stated.split_once('.')?;
+            let id = stated_order_id(base)?;
+            context.pre_replace.contains_key(&(id, revision_of(stated))).then_some(id)
+        });
         // Tag 41 is the name this client put on the cancel, echoed back. It is
         // resolved through the record it was taken from rather than read as
         // digits: the name an order carries is not always its number. An order
@@ -1898,7 +1910,7 @@ impl CcpState {
         // digits back pointed the refusal at an order whose number happened to
         // match the permanent id. The order the caller cancelled stayed
         // pending, and some other order was retired in its place.
-        let orig_clord = parsed.get(&41).and_then(|stated| {
+        let orig_clord = replacement.or_else(|| parsed.get(&41).and_then(|stated| {
             context
                 .last_clord
                 .iter()
@@ -1916,7 +1928,7 @@ impl CcpState {
                     // back as a negative one, which is no order at all.
                     stated_order_id(base)
                 })
-        });
+        }));
         // An empty tag is as good as an absent one. Kept as the empty string,
         // it travelled as the completed status a refusal is told apart by —
         // and an order whose status reads "Inactive" with nothing beside it is
@@ -1927,7 +1939,6 @@ impl CcpState {
             .map(|s| s.as_str())
             .filter(|s| !s.is_empty())
             .unwrap_or("Cancel rejected");
-        let reject_type: u8 = parsed.get(&434).and_then(|s| s.parse().ok()).unwrap_or(1);
         let reason_code: i32 = parsed.get(&102).and_then(|s| s.parse().ok()).unwrap_or(-1);
         log::warn!("CancelReject: origClOrd={orig_clord:?} type={reject_type} code={reason_code} reason={reason}");
 

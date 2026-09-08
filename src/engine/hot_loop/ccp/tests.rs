@@ -1824,6 +1824,49 @@ fn a_corrected_execution_reconciles_to_the_cumulative_figure() {
     assert_eq!(after, 10 * QTY_SCALE, "the correction books the difference, not the whole trade again");
 }
 
+/// A repeated correction states the total before a later fill, which still
+/// belongs to both the order and the position.
+#[test]
+fn a_replayed_correction_does_not_erase_a_later_fill() {
+    for (exec_type, trans_type, cumulative) in [
+        ("H", "0", 0), ("G", "0", 60), ("F", "1", 0), ("F", "2", 60),
+    ] {
+        for marker in [None, Some(97), Some(43)] {
+            let (mut ccp, mut context, shared) = tracked_order_state();
+            let first = fill_frame(&[(17, "E1"), (32, "50"), (14, "50"), (151, "50")]);
+            ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
+            assert_eq!(context.order(42).unwrap().filled, 50 * QTY_SCALE);
+            assert_eq!(context.position(0), 50.0);
+            let _ = shared.orders.drain_fills();
+
+            let mut correction = fill_frame(&[
+                (17, "E2"), (150, exec_type), (20, trans_type),
+                (32, if cumulative == 0 { "50" } else { "60" }),
+                (14, &cumulative.to_string()), (151, &(100 - cumulative).to_string()),
+            ]);
+            ccp.handle_exec_report(&correction, b"", &mut context, &shared, &None, "");
+            let fills = shared.orders.drain_fills();
+            assert_eq!(fills.len(), 1, "an unseen correction still reconciles");
+            assert_eq!(fills[0].0.qty, (cumulative - 50) * QTY_SCALE);
+            assert_eq!(context.order(42).unwrap().filled, cumulative * QTY_SCALE);
+            assert_eq!(context.position(0), cumulative as f64);
+
+            let later = fill_frame(&[
+                (17, "E3"), (32, "20"), (14, &(cumulative + 20).to_string()),
+                (151, &(80 - cumulative).to_string()),
+            ]);
+            ccp.handle_exec_report(&later, b"", &mut context, &shared, &None, "");
+            assert_eq!(shared.orders.drain_fills().len(), 1);
+            if let Some(tag) = marker { correction.insert(tag, "Y".to_string()); }
+            ccp.handle_exec_report(&correction, b"", &mut context, &shared, &None, "");
+
+            assert_eq!(context.order(42).unwrap().filled, (cumulative + 20) * QTY_SCALE);
+            assert_eq!(context.position(0), (cumulative + 20) as f64);
+            assert!(shared.orders.drain_fills().is_empty(), "the correction books only once");
+        }
+    }
+}
+
 /// A live order was retired by this: `D` is not in the terminal's terminal
 /// set, and reading it as cancelled told the caller an order was gone while
 /// it was still working and still able to fill.
@@ -2685,6 +2728,27 @@ fn a_refused_order_tells_the_caller_why() {
     // asks after the fact looks.
     let info = shared.orders.get_order_info(42).unwrap();
     assert_eq!(info.order_state.completed_status, "No valid bid/ask");
+}
+
+/// Empty reason text does not make a refused order one the venue can resume.
+#[test]
+fn an_execution_rejection_with_empty_text_stays_out_of_open_orders() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let core = crate::client_core::ClientCore::new();
+    let refusal = exec_report_frame(&[
+        (35, "8"), (11, "42.0"), (39, "8"), (150, "8"), (58, ""),
+    ]);
+    ccp.handle_exec_report(&refusal, b"", &mut context, &shared, &None, "");
+
+    assert!(context.order(42).is_none(), "the engine retires the refused order");
+    assert!(core.collect_open_orders(&shared).is_empty(), "the cache must not import it again");
+    let info = shared.orders.get_order_info(42).expect("the refusal is kept for completed orders");
+    assert_eq!(info.order_state.status, "Inactive");
+    assert_eq!(info.order_state.completed_status, "Rejected");
+    let completed = shared.orders.drain_completed_orders();
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].order_id, 42);
+    assert_eq!(completed[0].status, crate::types::OrderStatus::Rejected);
 }
 
 /// `completed_status` carries the reject text alone, so a caller reading it
@@ -5818,6 +5882,68 @@ fn a_replace_refused_on_the_reject_message_puts_back_the_prior_terms() {
     assert_eq!(order.qty, 100 * QTY_SCALE, "the refused quantity does not stand");
     assert_eq!(order.tif, b'0', "the refused time-in-force does not stand");
     assert_eq!(order.status, crate::types::OrderStatus::Submitted, "working again");
+}
+
+/// A recovered order's replace answers to its local revision even when the
+/// original wire name is built from a different number.
+#[test]
+fn a_recovered_orders_replace_rejection_restores_its_terms_and_name() {
+    use std::io::Read;
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let recovery = exec_report_frame(&[
+        (11, "9000.0"), (6121, "42"), (150, "0"), (39, "0"),
+        (6008, "756733"), (55, "SPY"), (54, "1"), (38, "100"),
+        (40, "2"), (44, "100"), (59, "0"), (100, "ARCA"), (198, "ARCA:1"),
+    ]);
+    ccp.handle_exec_report(&recovery, b"", &mut context, &shared, &None, "DU1");
+    assert_eq!(context.last_clord.get(&42).map(String::as_str), Some("9000.0"));
+
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut conn = Some(conn);
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+    context.modify_ex(42, 105 * PRICE_SCALE, 200, false, 0, b'1', 0);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let attempt = fix::fix_parse(&buf[..n]);
+    assert_eq!(attempt.get(&35).map(String::as_str), Some("G"));
+    assert_eq!(attempt.get(&11).map(String::as_str), Some("42.1"));
+    assert_eq!(attempt.get(&41).map(String::as_str), Some("9000.0"));
+    assert_eq!(context.last_clord.get(&42).map(String::as_str), Some("42.1"));
+    assert!(context.pre_replace.contains_key(&(42, 1)));
+    assert_eq!(context.order(42).unwrap().price, 105 * PRICE_SCALE);
+
+    let refusal = exec_report_frame(&[
+        (35, "9"), (434, "2"), (102, "0"),
+        (11, attempt.get(&11).unwrap()), (41, attempt.get(&41).unwrap()),
+    ]);
+    ccp.handle_cancel_reject(&refusal, &mut context, &shared, &None);
+
+    let order = context.order(42).expect("the recovered order still stands");
+    assert_eq!(order.price, 100 * PRICE_SCALE, "the refused price does not stand");
+    assert_eq!(order.qty, 100 * QTY_SCALE, "the refused quantity does not stand");
+    assert_eq!(order.tif, b'0', "the refused time-in-force does not stand");
+    assert_eq!(order.status, crate::types::OrderStatus::Submitted);
+    assert_eq!(context.last_clord.get(&42).map(String::as_str), Some("9000.0"));
+    assert!(!context.replace_is_outstanding(42));
+    let rejects = shared.orders.drain_cancel_rejects();
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(rejects[0].order_id, 42);
+    assert!(rejects[0].answers_a_live_change);
+
+    context.cancel(42);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let cancel = fix::fix_parse(&buf[..n]);
+    assert_eq!(cancel.get(&35).map(String::as_str), Some("F"));
+    assert_eq!(cancel.get(&41).map(String::as_str), Some("9000.0"));
+    assert_eq!(cancel.get(&38).map(String::as_str), Some("100"));
 }
 
 /// A refused revision puts back the name the venue holds, not only its terms.
