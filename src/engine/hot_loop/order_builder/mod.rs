@@ -646,7 +646,18 @@ pub(crate) fn drain_and_send_orders(
                     .map(|id| id.local_symbol)
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| if named_by_symbol { symbol.clone() } else { String::new() });
-                let (sec_type_str, destination) = context.market.order_routing(orig.instrument);
+                // What this order went out on, not what the slot says now. The
+                // slot's routing is written by the contract's subscription as
+                // well, so a watch opened on another venue since the order was
+                // placed moved it under the resting order. An order this
+                // session did not place — replayed at connect, or named by the
+                // venue — has no record of its own, and the slot is the only
+                // answer for it.
+                let (sec_type_str, destination) = context
+                    .order_destination
+                    .get(&order_id)
+                    .cloned()
+                    .unwrap_or_else(|| context.market.order_routing(orig.instrument));
                 let ord_type_str = crate::types::ord_type_fix_str(ord_type).to_string();
                 // An order recovered without a stated time-in-force has none to
                 // restate. Tag 59 carries a real instruction on a replace, so a
@@ -1314,6 +1325,15 @@ fn send_order_ex(
         );
     }
     let (sec_type_str, destination) = context.market.order_routing(instrument);
+    // Where this order is going, kept beside what it was submitted as. The
+    // replace restates the destination and read it from the slot, which the
+    // contract's own subscription writes too: a caller directing an order to
+    // one venue and then watching that contract on another had the routing
+    // moved under the resting order, and its next replace named somewhere the
+    // order was never working.
+    context
+        .order_destination
+        .insert(order_id, (sec_type_str.clone(), destination.clone()));
     let now = chrono_free_timestamp().to_string();
     let tif_byte = [tif];
     let tif_str = std::str::from_utf8(&tif_byte).unwrap_or("0");

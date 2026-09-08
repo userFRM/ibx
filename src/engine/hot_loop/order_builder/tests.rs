@@ -4238,3 +4238,68 @@ fn a_statement_for_a_refused_replace_goes_with_the_refusal() {
         "and the statement kept for it went with the refusal",
     );
 }
+
+/// A replace names where the order is working, not where the contract is
+/// watched now.
+///
+/// The destination is restated on every replace and was read from the slot the
+/// order sits in — and a subscription on the same contract writes that slot's
+/// routing too. A caller directing an order to one venue and then watching the
+/// contract on another had the routing moved under the resting order, so its
+/// next replace named a venue the order was never working on. What it went out
+/// on is kept beside what it was submitted as, and read back here.
+#[test]
+fn a_replace_names_the_venue_the_order_went_out_on() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    // Directed: the caller named the venue on the contract it ordered against.
+    context.market.set_routing(instrument, "CS", "NYSE");
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        con_id: 0,
+        order_id: 42,
+        instrument,
+        side: Side::Buy,
+        qty: 100 * crate::types::QTY_SCALE,
+        kind: crate::types::OrderKind::Limit { price: 400 * crate::types::PRICE_SCALE },
+        tif: b'0',
+        attrs: Default::default(),
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let mut buf = [0u8; 8192];
+    let n = peer.read(&mut buf).unwrap();
+    let placed = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(placed.contains("\u{1}100=NYSE\u{1}"), "it went out to NYSE: {placed}");
+
+    // And then the contract is watched somewhere else, which writes the slot.
+    context.market.set_routing(instrument, "CS", "SMART");
+
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 42,
+        price: 401 * crate::types::PRICE_SCALE,
+        qty: 100 * crate::types::QTY_SCALE,
+        outside_rth: false,
+        ord_type: 0,
+        tif: 0,
+        stop_price: 0,
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    let tag = |t: &str| msg.split('\u{1}').find_map(|f| f.strip_prefix(t).map(str::to_string));
+    assert_eq!(tag("35=").as_deref(), Some("G"), "a replace was sent: {msg}");
+    assert_eq!(
+        tag("100=").as_deref(), Some("NYSE"),
+        "the replace named where the contract is watched now, not where the \
+         order is working: {msg}",
+    );
+    assert_eq!(tag("6210=").as_deref(), Some("NYSE"), "and its second statement too: {msg}");
+}

@@ -83,6 +83,17 @@ pub struct Context {
     /// it appeared on the wire. Used as the OrigClOrdID on cancel/modify so that
     /// legacy orders recorded without a `.{ver}` suffix still match.
     pub(crate) last_clord: HashMap<OrderId, String>,
+    /// Where an order was sent, as it was stated on the wire when it went.
+    ///
+    /// A replace restates the destination, and it read that from the slot the
+    /// order sits in — which the contract's own subscription writes too. A
+    /// caller directing an order to one venue and then watching the contract
+    /// on another had the slot's routing moved under the resting order, so its
+    /// next replace named somewhere it was never working. Kept per order, as
+    /// what an order was submitted as is kept beside it, and read back on the
+    /// replace. An order this session did not place has none, and the slot's
+    /// routing is the only answer for it.
+    pub(crate) order_destination: HashMap<OrderId, (String, String)>,
     /// What an order was submitted as. A replace restates an order in full, so
     /// everything the submit stated has to still be here to be restated —
     /// without it a replaced order silently lost its algo, its all-or-none
@@ -149,6 +160,7 @@ impl Context {
             pending_orders: OrderBuffer::new(),
             modify_versions: HashMap::new(),
             last_clord: HashMap::new(),
+            order_destination: HashMap::new(),
             submitted: HashMap::new(),
             described: std::collections::HashSet::new(),
             cancel_attempts: HashMap::new(),
@@ -593,6 +605,7 @@ impl Context {
         self.modify_versions.remove(&order_id);
         self.described.remove(&order_id);
         self.last_clord.remove(&order_id);
+        self.order_destination.remove(&order_id);
         self.submitted.remove(&order_id);
         self.cancel_attempts.remove(&order_id);
         self.pre_replace.retain(|(id, _), _| *id != order_id);
