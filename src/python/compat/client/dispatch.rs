@@ -110,26 +110,16 @@ impl EClient {
         // connecting again leaves a session whose state is not this one's.
         // The events stay the announcement: a loss the caller asked for sets
         // the flag too, and is not something to report as connectivity gone.
-        // Whether this is still the session the client holds. A handler
-        // answering a loss with `disconnect()` then `connect()` installs a
-        // new session before this pass reads the old one's flags, and every
-        // store below would otherwise mark the live session lost.
-        let still_current = self
-            .shared
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|held| Arc::ptr_eq(held, shared));
         let went = shared.take_connection_lost();
         let came_back = shared.take_connection_restored();
         // What this surface believed before the flags below are applied. A
         // restore is only a restore from a loss the caller was told about, and
         // once these have been stored there is nothing left to ask.
         let believed_connected = self.connected.load(Ordering::Acquire);
-        if went && still_current {
+        if went {
             self.connected.store(false, Ordering::Release);
         }
-        if came_back && still_current {
+        if came_back {
             self.connected.store(true, Ordering::Release);
         }
         // Whether the session is down as of this pass, by the flags rather
@@ -142,25 +132,15 @@ impl EClient {
         // event meant a handler that reconnected on the first would then take a
         // stale second 1100 into the new session, marking it disconnected.
         if events.iter().any(|e| matches!(e, Event::Disconnected)) {
-            // Marked before the callback, and only on the session the client
-            // still holds: a handler that answers 1100 with disconnect() then
-            // connect() establishes a new session and sets connected=true, and
-            // a store from this pass would clobber the new session's state.
-            if still_current {
-                self.connected.store(false, Ordering::Release);
-                // A loss the engine is still working on and one it has
-                // abandoned are the same event; only the second records why
-                // the session finished. Taken as the end either way, a caller
-                // lost the recovery the engine was in the middle of.
-                if shared.reference.session_over().is_some() {
-                    self.session_ended.store(true, Ordering::Release);
-                    // A question kept for a model belongs to the session that
-                    // asked it, and this session is finished. `connect()` may
-                    // be called again without `disconnect()`, so a question
-                    // left here would be answered in the next one under a
-                    // request id nobody there ever used.
-                    self.pending_option_calcs.lock().unwrap().clear();
-                }
+            // Marked before any callback can install another session.
+            self.connected.store(false, Ordering::Release);
+            // A loss the engine is still working on and one it has abandoned
+            // are the same event; only the second records why it finished.
+            if shared.reference.session_over().is_some() {
+                self.session_ended.store(true, Ordering::Release);
+                // A question waiting for a model belongs to this session and
+                // cannot be answered under its number in a later one.
+                self.pending_option_calcs.lock().unwrap().clear();
             }
         }
         // A session the caller ended is not a session that was lost, and is
@@ -168,7 +148,7 @@ impl EClient {
         // `connection_closed`, which is what the reference client answers
         // `disconnect()` with. Reported as 1100 as well, a program that stands
         // down on connectivity loss stood down on the session it had closed.
-        if still_current && events.iter().any(|e| matches!(e, Event::Stopped)) {
+        if events.iter().any(|e| matches!(e, Event::Stopped)) {
             self.connected.store(false, Ordering::Release);
             self.session_ended.store(true, Ordering::Release);
         }
@@ -177,14 +157,7 @@ impl EClient {
         // program far enough behind loses the one event that ends `run()` and
         // then waits on a session that finished — while the reason for it has
         // been recorded the whole time.
-        //
-        // Read against the session still held, not whichever one this pass
-        // began with: a handler answering the loss above by connecting again
-        // leaves a new session in place by the time this runs, and the
-        // finished one read here would otherwise end it before it had done
-        // anything at all.
-        if still_current
-            && !self.session_ended.load(Ordering::Relaxed)
+        if !self.session_ended.load(Ordering::Relaxed)
             && shared.reference.session_over().is_some()
         {
             self.connected.store(false, Ordering::Release);
@@ -662,6 +635,7 @@ impl EClient {
                     let owner = self.core.req_id_for_instrument(comp.instrument);
                     (
                         std::iter::once(owner)
+                            .filter(|id| *id >= 0)
                             .chain(self.core.followers_of(comp.instrument))
                             .collect(),
                         MODEL_OPTION_COMPUTATION,
@@ -912,7 +886,7 @@ impl EClient {
             // are. The owner alone was told, so a second subscription on the
             // same contract heard no news at all.
             let watchers = self.core.followers_of(news.instrument);
-            for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
+            for id in std::iter::once(req_id).filter(|id| *id >= 0).chain(watchers.iter().copied()) {
                 call_wrapper!(self, py, shared, "tick_news", (id, news.timestamp as i64, news.provider_code.as_str(),
                      news.article_id.as_str(), news.headline.as_str(), ""));
             }

@@ -943,4 +943,42 @@ mod option_model_watch_tests {
                 "the question still waiting keeps its watch");
         });
     }
+
+    /// Each question holds the shared watch under its own number. Withdrawing
+    /// either first passes the subscription to the question that remains.
+    #[test]
+    fn shared_option_questions_release_the_watch_in_either_cancel_order() {
+        Python::initialize();
+        Python::attach(|py| {
+            for ids in [[7, 8], [8, 7]] {
+                let (client, rx, _wrapper) = wired(py);
+                client.core.set_registration_timeout(std::time::Duration::from_secs(5));
+                let option = Contract { con_id: 1234, ..described("SPY") };
+                let engine = resolves_to(rx, 0);
+                client.calculate_implied_volatility(py, 7, &option, 1.0, 100.0, Vec::new()).unwrap();
+                let rx = py.detach(|| engine.join().unwrap());
+                client.calculate_option_price(py, 8, &option, 0.2, 100.0, Vec::new()).unwrap();
+                assert_eq!(client.core.watching(7), Some(0));
+                assert_eq!(client.core.watching(8), Some(0));
+                assert!(!rx.try_iter().any(|cmd| matches!(cmd, ControlCommand::Subscribe { .. })),
+                    "both questions share one wire subscription");
+                let cancel = |id| {
+                    if id == 7 { client.cancel_calculate_implied_volatility(py, id).unwrap(); }
+                    else { client.cancel_calculate_option_price(py, id).unwrap(); }
+                };
+                cancel(ids[0]);
+                assert_eq!(client.core.watching(ids[0]), None);
+                assert_eq!(client.core.watching(ids[1]), Some(0));
+                assert!(!rx.try_iter().any(|cmd| matches!(cmd, ControlCommand::Unsubscribe { .. })));
+                cancel(ids[1]);
+                let withdrawn: Vec<_> = rx.try_iter().filter_map(|cmd| match cmd {
+                    ControlCommand::Unsubscribe { instrument } => Some(instrument),
+                    _ => None,
+                }).collect();
+                assert_eq!(withdrawn, [0]);
+                assert!(client.pending_option_calcs.lock().unwrap().is_empty());
+                assert_eq!(client.core.watching(ids[1]), None);
+            }
+        });
+    }
 }

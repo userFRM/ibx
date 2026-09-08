@@ -713,7 +713,7 @@ impl EClient {
             let req_id = self.core.req_id_for_instrument(news.instrument);
             // News goes to every subscriber of the contract, as its quotes do.
             let watchers = self.core.followers_of(news.instrument);
-            for id in std::iter::once(req_id).chain(watchers.iter().copied()) {
+            for id in std::iter::once(req_id).filter(|id| *id >= 0).chain(watchers.iter().copied()) {
                 wrapper.tick_news(
                     id, news.timestamp as i64,
                     &news.provider_code, &news.article_id, &news.headline, "",
@@ -741,6 +741,7 @@ impl EClient {
                     let owner = self.core.req_id_for_instrument(comp.instrument);
                     (
                         std::iter::once(owner)
+                            .filter(|id| *id >= 0)
                             .chain(self.core.followers_of(comp.instrument))
                             .collect(),
                         MODEL_OPTION_COMPUTATION,
@@ -1075,6 +1076,54 @@ mod delivered_size_tests {
     use crate::api::wrapper::Wrapper;
     use crate::types::model::{TickAttribBidAsk, TickAttribLast};
     use crate::types::{PRICE_SCALE, QTY_SCALE, TbtQuote, TbtTrade};
+
+    /// News and model publications belong to whoever still watches the
+    /// contract. An explicit calculation answer keeps its own request id.
+    #[test]
+    fn news_and_models_are_delivered_only_to_current_watchers() {
+        #[derive(Default)]
+        struct Heard { news: Vec<i64>, models: Vec<(i64, i32)> }
+        impl Wrapper for Heard {
+            fn tick_news(&mut self, id: i64, _: i64, _: &str, _: &str, _: &str, _: &str) {
+                self.news.push(id);
+            }
+            fn tick_option_computation(
+                &mut self, id: i64, kind: i32, _: i32, _: f64, _: f64, _: f64,
+                _: f64, _: f64, _: f64, _: f64, _: f64,
+            ) {
+                self.models.push((id, kind));
+            }
+        }
+        let (client, _rx, shared) = crate::api::client::tests::test_client();
+        client.core.req_to_instrument.lock().unwrap().extend([(1, 0), (2, 0)]);
+        client.core.instrument_to_req.lock().unwrap().insert(0, 1);
+        client.core.instrument_followers.lock().unwrap().insert(0, vec![2]);
+        let publish = || {
+            shared.market.push_tick_news(crate::types::TickNews {
+                instrument: 0, timestamp: 0, provider_code: "BRFG".into(),
+                article_id: "BRFG$1".into(), headline: "SPY headline".into(),
+            });
+            shared.market.push_option_computation(crate::types::OptionComputation {
+                instrument: 0, ..Default::default()
+            });
+        };
+        publish();
+        let mut heard = Heard::default();
+        client.dispatch_data(&mut heard);
+        assert_eq!(heard.news, [1, 2]);
+        assert_eq!(heard.models, [(1, 13), (2, 13)]);
+
+        publish();
+        client.cancel_mkt_data(1).unwrap();
+        client.cancel_mkt_data(2).unwrap();
+        shared.market.push_option_computation(crate::types::OptionComputation {
+            instrument: 0, answers: Some(7), ..Default::default()
+        });
+        let mut heard = Heard::default();
+        client.dispatch_data(&mut heard);
+        assert!(heard.news.is_empty(), "a withdrawn watch was sent news: {:?}", heard.news);
+        assert_eq!(heard.models, [(7, 53)], "only the explicitly addressed answer is owed");
+    }
 
     #[derive(Default)]
     struct Sizes(Vec<f64>);

@@ -1845,11 +1845,51 @@ w = W()",
         (Py::new(py, client).unwrap(), rx, shared, w)
     }
 
-    /// A pass that began on one session does not write the client's
-    /// connection flag from it once another session has taken its place. A
-    /// handler answering the loss with `disconnect()` then `connect()` had
-    /// installed a live session by the time the pass read the old one's
-    /// loss, and the new session was marked disconnected on the spot.
+    /// Queued publications stop naming a request once its watch is withdrawn.
+    /// An answer to a calculation still names the question that asked it.
+    #[test]
+    fn news_and_models_are_delivered_only_to_current_watchers() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            client.get().core.req_to_instrument.lock().unwrap().extend([(1, 0), (2, 0)]);
+            client.get().core.instrument_to_req.lock().unwrap().insert(0, 1);
+            client.get().core.instrument_followers.lock().unwrap().insert(0, vec![2]);
+            let publish = || {
+                shared.market.push_tick_news(TickNews {
+                    instrument: 0, timestamp: 0, provider_code: "BRFG".into(),
+                    article_id: "BRFG$1".into(), headline: "SPY headline".into(),
+                });
+                shared.market.push_option_computation(OptionComputation {
+                    instrument: 0, ..Default::default()
+                });
+            };
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            publish();
+            client.get().dispatch_once(py, &shared).unwrap();
+            py.run(c"
+assert [c[1] for c in w.calls if c[0] in ('tickNews', 'tick_news')] == [1, 2]
+assert [(c[1], c[2]) for c in w.calls if c[0] in ('tickOptionComputation', 'tick_option_computation')] == [(1, 13), (2, 13)]
+w.calls.clear()
+", Some(&g), None).unwrap();
+
+            publish();
+            client.call_method1(py, "cancel_mkt_data", (1,)).unwrap();
+            client.call_method1(py, "cancel_mkt_data", (2,)).unwrap();
+            shared.market.push_option_computation(OptionComputation {
+                instrument: 0, answers: Some(7), ..Default::default()
+            });
+            client.get().dispatch_once(py, &shared).unwrap();
+            py.run(c"
+assert [c[1] for c in w.calls if c[0] in ('tickNews', 'tick_news')] == []
+assert [(c[1], c[2]) for c in w.calls if c[0] in ('tickOptionComputation', 'tick_option_computation')] == [(7, 53)]
+", Some(&g), None).unwrap();
+        });
+    }
+
+    /// A pass handed a session that has already been replaced returns before
+    /// reading its flags. The live session keeps its own connection state.
     #[test]
     fn a_pass_on_a_replaced_session_leaves_the_new_sessions_flag_alone() {
         Python::initialize();

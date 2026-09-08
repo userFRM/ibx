@@ -137,6 +137,72 @@ fn a_contract_the_venue_said_nothing_about_comes_back_without_a_quote() {
     engine.join().expect("the stand-in engine");
 }
 
+/// A description has no conId, but the request still holds the slot the
+/// venue quotes. Each answer follows the subscription that asked for it.
+#[test]
+fn quotes_for_described_contracts_follow_their_request_ids() {
+    let shared = Arc::new(crate::bridge::SharedState::new());
+    let (session, control) = a_session(&shared);
+    session.client.core.set_registration_timeout(Duration::from_secs(5));
+    let quoted = shared.clone();
+    let engine = thread::spawn(move || {
+        let mut withdrawn = Vec::new();
+        while let Ok(command) = control.recv() {
+            match command {
+                crate::types::ControlCommand::Subscribe { contract, reply_tx: Some(reply), .. } => {
+                    let (slot, price) = if contract.symbol == "SPY" { (0, 42) } else { (1, 84) };
+                    quoted.market.push_quote(slot, &crate::types::Quote {
+                        last: price * crate::types::PRICE_SCALE, ..Default::default()
+                    });
+                    reply.send(Ok(slot)).unwrap();
+                }
+                crate::types::ControlCommand::Unsubscribe { instrument } => withdrawn.push(instrument),
+                _ => {}
+            }
+        }
+        withdrawn
+    });
+    let contracts = [Contract::stock("SPY"), Contract::stock("QQQ")];
+    assert!(contracts.iter().all(|c| c.con_id == 0));
+    let started = Instant::now();
+    let quotes = session.quotes(&contracts, Duration::from_secs(2)).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1), "both quotes were already stated");
+    assert_eq!(quotes.iter().map(|q| q.map(|q| q.last)).collect::<Vec<_>>(),
+        [Some(42 * crate::types::PRICE_SCALE), Some(84 * crate::types::PRICE_SCALE)]);
+    drop(session);
+    assert_eq!(engine.join().unwrap(), [0, 1], "each watch is withdrawn");
+}
+
+/// A bracket's numbers name the orders already sent, before the venue has
+/// acknowledged any leg. The records carry the terms and links sent with it.
+#[test]
+fn a_placed_bracket_is_readable_before_the_venue_answers() {
+    let shared = Arc::new(crate::bridge::SharedState::new());
+    let (session, control) = a_session(&shared);
+    shared.orders.set_replay_done();
+    session.client.core.con_id_to_instrument.lock().unwrap().insert(756733, 0);
+    let spy = Contract { con_id: 756733, ..Contract::stock("SPY") };
+    let ids = session.place_bracket(&spy, "BUY", 100.0, 42.0, 45.0, 40.0).unwrap();
+    assert!(control.try_iter().any(|cmd| matches!(cmd,
+        crate::types::ControlCommand::Order(crate::types::OrderRequest::SubmitBracket { .. }))));
+    assert_eq!(session.open_trades().len(), 3);
+    for (index, id) in ids.iter().enumerate() {
+        let trade = session.trade(*id).expect("each returned number names a trade");
+        assert_eq!(trade.contract.con_id, 756733);
+        assert_eq!(trade.status.status, "PendingSubmit");
+        assert_eq!(trade.order.order_id, *id);
+        assert_eq!(trade.order.total_quantity, 100.0);
+        assert_eq!(trade.order.action, if index == 0 { "BUY" } else { "SELL" });
+        assert_eq!(trade.order.parent_id, if index == 0 { 0 } else { ids[0] });
+        assert_eq!(trade.order.oca_type, if index == 0 { 0 } else { 3 });
+        assert_eq!(trade.order.oca_group, if index == 0 { String::new() } else { format!("OCA_{}", ids[0]) });
+        assert_eq!(trade.order.tif, if index == 0 { "DAY" } else { "GTC" });
+        assert_eq!(trade.order.order_type, if index == 2 { "STP" } else { "LMT" });
+        assert_eq!(trade.order.lmt_price, [42.0, 45.0, 0.0][index]);
+        assert_eq!(trade.order.aux_price, [0.0, 0.0, 40.0][index]);
+    }
+}
+
 /// A stream ends when the session does.
 ///
 /// Disconnecting drops the senders. A caller iterating order events or ticks

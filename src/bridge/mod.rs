@@ -936,6 +936,37 @@ mod tests {
         assert_eq!(shared.orders.get_order_info(7).unwrap().order_state.status, "Submitted");
     }
 
+    /// A correction and a delivered completion can reach the cache together.
+    /// Whichever takes the lock first, the corrected working row survives.
+    #[test]
+    fn a_correction_racing_completion_cleanup_keeps_the_working_row() {
+        let shared = SharedState::new();
+        let gate = std::sync::Barrier::new(2);
+        let mut lost = 0;
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for _ in 0..250_000 {
+                    let corrected = info("Submitted");
+                    gate.wait();
+                    shared.orders.push_order_correction(7, corrected);
+                    gate.wait();
+                }
+            });
+            for _ in 0..250_000 {
+                shared.orders.push_order_info(7, info("Filled"));
+                gate.wait();
+                shared.orders.remove_completed_order_info(7);
+                gate.wait();
+                if !shared.orders.venue_is_working(7) { lost += 1; }
+                shared.orders.drain_order_corrections();
+            }
+        });
+        assert_eq!(lost, 0, "cleanup removed a correction's working row");
+        shared.orders.push_order_info(7, info("Filled"));
+        shared.orders.remove_completed_order_info(7);
+        assert!(shared.orders.get_order_info(7).is_none(), "a finished row is still removed");
+    }
+
     /// The ordinary direction still works — without this the guards above would
     /// pass against a cache that refuses every update.
     #[test]

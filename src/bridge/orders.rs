@@ -309,13 +309,18 @@ impl OrderState {
     /// order back in the book, and the cleanup armed by that completion runs
     /// afterwards: taken then, the row it removes is the live one, and what
     /// reads the order next finds nothing and seeds an empty contract and order
-    /// in its place. Asked before the lock rather than under it, because what
-    /// answers it takes the same lock.
+    /// in its place. The lock spans the test and the removal, so a correction
+    /// cannot replace the finished row between them.
     pub fn remove_completed_order_info(&self, order_id: u64) {
-        if self.venue_is_working(order_id) {
+        let mut cache = self.order_cache.lock().unwrap();
+        if cache.get(&order_id).is_some_and(|info| {
+            crate::types::order_status::is_open_or_reactivatable(
+                &info.order_state.status, &info.order_state.completed_status,
+            )
+        }) {
             return;
         }
-        self.order_cache.lock().unwrap().remove(&order_id);
+        cache.remove(&order_id);
     }
 
     /// Write the status an order has finished on into the entry kept for it.
@@ -557,31 +562,6 @@ impl OrderState {
             .is_some_and(|at| at.elapsed() < COMPLETED_RETENTION)
     }
 
-    /// Cache the enriched view of an order.
-    ///
-    /// An order that has completed is not returned to a working status. Nothing
-    /// remembered that an order was done, so a replayed frame — the reconnect
-    /// open-order burst racing a fill, or any message the venue resends —
-    /// wrote `Submitted` over the terminal entry, and `req_open_orders` then
-    /// reported a completed order as live.
-    ///
-    /// The cached status alone cannot carry that knowledge, because completing
-    /// an order evicts its cache row: the replayed frame finds nothing to refuse
-    /// and inserts itself. The completed-id memory is what survives the
-    /// eviction, and an intervening terminal report cannot overwrite the
-    /// evidence the way a cached string could.
-    ///
-    /// A correction from the venue is not a replay and goes through
-    /// [`push_order_correction`](Self::push_order_correction).
-    /// The venue has named this id, whatever became of the order under it.
-    ///
-    /// A withdrawn id is free again and a filled one is not, so counting past
-    /// the working set alone handed out an id a fill had spent and the venue
-    /// refused it. Said on its own rather than as a consequence of keeping a
-    /// row: a record the venue replays and this client does not keep — the
-    /// history of an order that partly filled and then went — named an id all
-    /// the same, and every guard that stopped the row from being kept stopped
-    /// the mark with it.
     /// Note that this client put an order's message on the wire.
     ///
     /// Distinct from anything the venue then says about it. A caller, and a
@@ -598,6 +578,15 @@ impl OrderState {
         self.orders_sent.lock().unwrap().contains(&order_id)
     }
 
+    /// The venue has named this id, whatever became of the order under it.
+    ///
+    /// A withdrawn id is free again and a filled one is not, so counting past
+    /// the working set alone handed out an id a fill had spent and the venue
+    /// refused it. Said on its own rather than as a consequence of keeping a
+    /// row: a record the venue replays and this client does not keep — the
+    /// history of an order that partly filled and then went — named an id all
+    /// the same, and every guard that stopped the row from being kept stopped
+    /// the mark with it.
     #[doc(hidden)] pub fn note_the_venue_named(&self, order_id: u64) {
         self.working_id_watermark.fetch_max(order_id, Ordering::AcqRel);
         if order_id <= u32::MAX as u64 {
@@ -605,6 +594,22 @@ impl OrderState {
         }
     }
 
+    /// Cache the enriched view of an order.
+    ///
+    /// An order that has completed is not returned to a working status. Nothing
+    /// remembered that an order was done, so a replayed frame — the reconnect
+    /// open-order burst racing a fill, or any message the venue resends —
+    /// wrote `Submitted` over the terminal entry, and `req_open_orders` then
+    /// reported a completed order as live.
+    ///
+    /// The cached status alone cannot carry that knowledge, because completing
+    /// an order evicts its cache row: the replayed frame finds nothing to refuse
+    /// and inserts itself. The completed-id memory is what survives the
+    /// eviction, and an intervening terminal report cannot overwrite the
+    /// evidence the way a cached string could.
+    ///
+    /// A correction from the venue is not a replay and goes through
+    /// [`push_order_correction`](Self::push_order_correction).
     #[doc(hidden)] pub fn push_order_info(&self, order_id: u64, info: RichOrderInfo) {
         self.note_the_venue_named(order_id);
         if crate::types::order_status::is_open_status(&info.order_state.status) {

@@ -1677,6 +1677,28 @@ mod tests {
     use super::*;
     use pyo3::types::PyDict;
 
+    /// The reference spelling sets the same disconnect instruction as the
+    /// native field, both as a keyword and after construction.
+    #[test]
+    fn deactivate_on_disconnect_accepts_the_reference_spelling() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("Order", py.get_type::<Order>()).unwrap();
+            py.run(c"
+order = Order(deactivateOnDisconnect=True)
+assert order.deactivate_on_disconnect is True
+assert order.deactivateOnDisconnect is True
+order.deactivateOnDisconnect = False
+assert order.deactivate_on_disconnect is False
+order.deactivate_on_disconnect = True
+assert order.deactivateOnDisconnect is True
+", None, Some(&locals)).unwrap();
+            let order = locals.get_item("order").unwrap().unwrap();
+            assert!(order.extract::<PyRef<'_, Order>>().unwrap().to_api().deactivate_on_disconnect);
+        });
+    }
+
     /// The parameters appended the way the reference samples append them are
     /// the parameters the algo goes out with.
     ///
@@ -1875,6 +1897,7 @@ camel_aliases_copy! {
         get_conditions_cancel_order_alias set_conditions_cancel_order_alias conditionsCancelOrder conditions_cancel_order bool;
         get_conditions_ignore_rth_alias set_conditions_ignore_rth_alias conditionsIgnoreRth conditions_ignore_rth bool;
         get_continuous_update_alias set_continuous_update_alias continuousUpdate continuous_update bool;
+        get_deactivate_on_disconnect_alias set_deactivate_on_disconnect_alias deactivateOnDisconnect deactivate_on_disconnect bool;
         get_delta_neutral_aux_price_alias set_delta_neutral_aux_price_alias deltaNeutralAuxPrice delta_neutral_aux_price f64;
         get_delta_neutral_con_id_alias set_delta_neutral_con_id_alias deltaNeutralConId delta_neutral_con_id i32;
         get_delta_neutral_short_sale_alias set_delta_neutral_short_sale_alias deltaNeutralShortSale delta_neutral_short_sale bool;

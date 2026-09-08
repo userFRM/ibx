@@ -398,7 +398,7 @@ impl Client {
                 || q.open != 0 || q.high != 0 || q.low != 0 || q.close != 0
         };
         while Instant::now() < deadline
-            && contracts.iter().any(|c| self.ticker(c).is_none_or(|q| !stated(&q)))
+            && watching.iter().any(|id| self.quote(*id).is_none_or(|q| !stated(&q)))
         {
             thread::sleep(BETWEEN_READS);
         }
@@ -406,9 +406,9 @@ impl Client {
         // registered. Handed back as it stands, a contract the venue said
         // nothing about came back quoted at zero, which is a price, and reads
         // as a market at nothing rather than as no answer.
-        let quoted = contracts
+        let quoted = watching
             .iter()
-            .map(|c| self.ticker(c).filter(stated))
+            .map(|id| self.quote(*id).filter(stated))
             .collect();
         withdraw(&watching);
         Ok(quoted)
@@ -543,7 +543,14 @@ impl Client {
         &self, contract: &Contract, side: &str, quantity: f64,
         entry: f64, take_profit: f64, stop_loss: f64,
     ) -> Result<[i64; 3], Refusal> {
-        self.client.place_bracket(contract, side, quantity, entry, take_profit, stop_loss)
+        let ids = self.client.place_bracket(contract, side, quantity, entry, take_profit, stop_loss)?;
+        // The three legs are already tracked as sent. Keep that view before
+        // returning their numbers, so each reads as pending while the venue
+        // has yet to answer, with the parent and group the legs went out under.
+        let mut answered = LiveState::default();
+        self.client.req_all_open_orders(&mut answered);
+        self.kept().absorb(answered);
+        Ok(ids)
     }
 
     /// Link orders so that a fill on one withdraws the rest.
