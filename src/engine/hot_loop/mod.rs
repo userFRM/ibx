@@ -123,6 +123,9 @@ pub struct HotLoop {
     pub(crate) hmds: HmdsState,
     // ── Auto-reconnect ──
     reconnect_auth: Option<ReconnectAuth>,
+    /// Slots whose watchers were sent to another slot, waiting to be given
+    /// back once the move saying so has been read.
+    slots_awaiting_their_move: Vec<InstrumentId>,
     pending_farm_reconnect: Option<Receiver<io::Result<Connection>>>,
     farm_reconnect_attempt: u32,
     pending_ccp_reconnect: Option<Receiver<io::Result<Connection>>>,
@@ -436,6 +439,7 @@ impl HotLoop {
             ccp: CcpState::new(),
             hmds: HmdsState::new(),
             reconnect_auth: None,
+            slots_awaiting_their_move: Vec::new(),
             pending_farm_reconnect: None,
             ccp_next_attempt_at: None,
             farm_next_attempt_at: None,
@@ -525,9 +529,38 @@ impl HotLoop {
         hl.hmds_conn = hmds_conn;
         (hl, tx)
     }
+    /// Give back the slots whose watchers have gone to another slot.
+    ///
+    /// A request whose contract turned out to be held by another slot leaves
+    /// its own slot holding nothing: the watchers follow the move to where the
+    /// contract lives, and nothing will withdraw the slot they left, which is
+    /// the only thing that gives one back. One goes out of the table on every
+    /// such collision, and a table that runs out refuses the next subscription
+    /// for want of a slot.
+    ///
+    /// Not given back at the moment of the move, because giving a slot back
+    /// purges the moves that name it and that move is the only thing telling
+    /// its watchers where to follow. Once the move has been read, both hold.
+    fn give_back_slots_their_move_has_left(&mut self) {
+        if self.slots_awaiting_their_move.is_empty() {
+            return;
+        }
+        let ready: Vec<InstrumentId> = self
+            .slots_awaiting_their_move
+            .iter()
+            .copied()
+            .filter(|slot| !self.shared.market.a_move_is_pending_from(*slot))
+            .collect();
+        self.slots_awaiting_their_move.retain(|slot| !ready.contains(slot));
+        for slot in ready {
+            self.try_reclaim_instrument(slot);
+        }
+    }
+
     /// Subscriptions the venue can now be asked for: named by symbol, and the
     /// lookup has come back with the contract's own id.
     fn send_resolved_subscriptions(&mut self) {
+        self.give_back_slots_their_move_has_left();
         for (con_id, p) in std::mem::take(&mut self.ccp.resolved_md_subscribe) {
                 // The slot keeps the id so a reconnect resubscribes by it
                 // rather than starting the lookup again. Where another slot
@@ -543,6 +576,21 @@ impl HotLoop {
                     match self.context.market.instrument_by_con_id(con_id) {
                         Some(owner) if owner != p.instrument => {
                             self.shared.market.push_subscription_move(p.instrument, owner);
+                            // And the slot this request took is owed back. It
+                            // holds nothing now — its watchers follow the move
+                            // to the slot the contract lives in, and nothing
+                            // will ever withdraw it, which is what gives a slot
+                            // back. Left, one goes out of the table on every
+                            // collision until the table is full and the next
+                            // subscription is refused for want of one.
+                            //
+                            // Not here, though: the release purges the moves
+                            // that name this slot, and that move is the only
+                            // thing telling its watchers where to follow. It is
+                            // given back once the move has been read.
+                            if !self.slots_awaiting_their_move.contains(&p.instrument) {
+                                self.slots_awaiting_their_move.push(p.instrument);
+                            }
                             owner
                         }
                         _ => p.instrument,
@@ -4719,6 +4767,62 @@ mod tests {
         assert!(
             told.iter().any(|(at, _)| *at == instrument),
             "and the caller is told the feed is done: {told:?}",
+        );
+    }
+
+    /// A slot whose watchers followed the contract elsewhere is given back.
+    ///
+    /// Two callers name one contract, one of them by a description the venue
+    /// has to resolve. The second finds the contract already living in another
+    /// slot, and its own watchers are sent there — so nothing will ever
+    /// withdraw the slot it took, and withdrawing is the only thing that gives
+    /// one back. One went out of the table on every such collision, until the
+    /// table was full and the next subscription was refused for want of a slot.
+    ///
+    /// It is given back once the move has been read, and not before: giving a
+    /// slot back purges the moves that name it, and that move is the only thing
+    /// telling this slot's watchers where their contract went.
+    #[test]
+    fn a_slot_whose_watchers_followed_the_contract_is_given_back_after_the_move() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+
+        // The contract already lives in a slot of its own.
+        let holds_it = hl.context.market.register(756733);
+        // And a second request, taken before the venue named its contract.
+        let followed = hl.context.market.register(0);
+        assert_ne!(holds_it, followed, "two slots to begin with");
+
+        hl.ccp.resolved_md_subscribe.push((756733, crate::engine::hot_loop::ccp::PendingSubscribe {
+            con_id: 0,
+            instrument: followed,
+            symbol: "SPY".into(),
+            exchange: "SMART".into(),
+            sec_type: "STK".into(),
+            currency: "USD".into(),
+            last_trade_date: String::new(),
+            strike: 0.0,
+            right: String::new(),
+            multiplier: String::new(),
+            mode_9887: 0, regulatory_snapshot: false,
+        }));
+        hl.send_resolved_subscriptions();
+
+        let moves = shared.market.drain_subscription_moves();
+        assert!(
+            moves.iter().any(|(from, to)| *from == followed && *to == holds_it),
+            "the watchers are sent to the slot the contract lives in: {moves:?}",
+        );
+        assert!(
+            !hl.slots_awaiting_their_move.is_empty(),
+            "and the slot they left is owed back rather than dropped",
+        );
+
+        // Read, so the watchers know where to follow. Only now is it safe.
+        hl.send_resolved_subscriptions();
+        assert!(
+            hl.slots_awaiting_their_move.is_empty(),
+            "the slot was owed back and never given",
         );
     }
 

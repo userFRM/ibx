@@ -440,6 +440,16 @@ impl MarketDataState {
         self.tick_req_params.lock().unwrap().drain(..).collect()
     }
 
+    /// Whether a move away from this slot is still waiting to be read.
+    ///
+    /// The slot a move points away from cannot be given back while the move is
+    /// still queued: the release purges the moves that name it, and the move is
+    /// the only thing telling this slot's watchers where their contract went.
+    /// Given back afterwards, once the move has been read, both hold.
+    pub fn a_move_is_pending_from(&self, instrument: crate::types::InstrumentId) -> bool {
+        self.subscription_moves.lock().unwrap().iter().any(|(from, _)| *from == instrument)
+    }
+
     /// Where a caller's slot has to follow, because the contract it named is
     /// already held by another. Read the way a refusal is.
     pub fn drain_subscription_moves(
