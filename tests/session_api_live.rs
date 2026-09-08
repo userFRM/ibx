@@ -26,12 +26,7 @@ use ibx::api::session::Client;
 fn a_session() -> Option<Client> {
     let username = std::env::var("IB_USERNAME").ok().filter(|v| !v.trim().is_empty())?;
     let password = std::env::var("IB_PASSWORD").ok().filter(|v| !v.trim().is_empty())?;
-    let config = EClientConfig {
-        username,
-        password,
-        paper: true,
-        ..Default::default()
-    };
+    let config = EClientConfig { username, password, paper: true, ..Default::default() };
     match Client::connect(&config) {
         Ok(session) => Some(session),
         Err(why) => panic!("the session did not open: {why}"),
@@ -79,7 +74,8 @@ fn a_session_answers_questions_while_its_reader_runs() {
         });
         assert!(
             at.elapsed() < Duration::from_secs(30),
-            "round {round}: the session stopped answering after {:?}", at.elapsed(),
+            "round {round}: the session stopped answering after {:?}",
+            at.elapsed(),
         );
         assert!(again.is_ok(), "round {round}: {again:?}");
     }
@@ -95,7 +91,8 @@ fn a_session_answers_questions_while_its_reader_runs() {
     drop(session);
     assert!(
         closed_at.elapsed() < Duration::from_secs(30),
-        "closing the session took {:?}", closed_at.elapsed(),
+        "closing the session took {:?}",
+        closed_at.elapsed(),
     );
     println!("session closed in {:?}", closed_at.elapsed());
 }
