@@ -104,6 +104,26 @@ impl EClient {
         use std::sync::atomic::Ordering;
         let went = self.shared.take_connection_lost();
         let came_back = self.shared.take_connection_restored();
+        // Applied in the order they were read, which is the order they
+        // happened in: each setter clears the other, so both in hand means the
+        // recovery landed between the two reads above and the loss is the
+        // older of the two. Applied the other way round, the loss went on last
+        // and a session that had come back read as disconnected for the rest
+        // of its life, with the caller told it recovered before it was told it
+        // had gone. The other surface reads and applies them in this order.
+        if went {
+            self.connected.store(false, Ordering::Release);
+            // A loss the engine is still working to recover is said under
+            // 1100, as the other surface says it and as this surface's own
+            // contract states; `connection_closed` answered it instead, and a
+            // program that stands down on that stood down on an outage the
+            // engine recovered from. A stop the caller asked for says nothing
+            // here: the reference client answers `disconnect()` with
+            // `connection_closed` alone.
+            if !self.shared.connection_lost_by_design() && !self.stopped_by_caller.load(Ordering::Acquire) {
+                wrapper.error(-1, 1100, "Connectivity between client and server has been lost", "");
+            }
+        }
         // A recovered session is connected again, and `close_notified` has to
         // come back with it: left latched, the next loss would pass without
         // firing `connection_closed` at all.
@@ -118,19 +138,6 @@ impl EClient {
             // than 1101 because the reconnect re-establishes the subscriptions.
             if !was_connected {
                 wrapper.error(-1, 1102, "Connectivity between client and server has been restored - data maintained", "");
-            }
-        }
-        if went {
-            self.connected.store(false, Ordering::Release);
-            // A loss the engine is still working to recover is said under
-            // 1100, as the other surface says it and as this surface's own
-            // contract states; `connection_closed` answered it instead, and a
-            // program that stands down on that stood down on an outage the
-            // engine recovered from. A stop the caller asked for says nothing
-            // here: the reference client answers `disconnect()` with
-            // `connection_closed` alone.
-            if !self.shared.connection_lost_by_design() && !self.stopped_by_caller.load(Ordering::Acquire) {
-                wrapper.error(-1, 1100, "Connectivity between client and server has been lost", "");
             }
         }
         // The session over — ended by the caller, or given up on — is what

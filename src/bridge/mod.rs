@@ -335,6 +335,19 @@ impl SharedState {
         self.connection_restored.swap(false, Ordering::AcqRel)
     }
 
+    /// Both transitions raised at once, as a reader observes them when the
+    /// recovery lands between its two reads.
+    ///
+    /// The setters clear one another, so this state is not reachable through
+    /// them and a reader that mishandles it cannot be shown to. It is the
+    /// interleaving itself: the loss is taken, the engine recovers, and the
+    /// recovery is taken on the same pass.
+    #[doc(hidden)]
+    pub fn raise_a_loss_a_recovery_landed_behind_for_test(&self) {
+        self.connection_lost.store(true, Ordering::Release);
+        self.connection_restored.store(true, Ordering::Release);
+    }
+
     /// One of the connections the venue keeps data on went away or came back.
     /// Hot-loop side; kept here so a client with no event channel hears it.
     #[doc(hidden)]

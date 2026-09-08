@@ -1754,6 +1754,44 @@ fn a_restore_without_a_loss_the_caller_saw_is_not_announced() {
     );
 }
 
+/// A recovery that lands between the two reads is not undone by the loss it
+/// followed.
+///
+/// The pair is read one flag at a time, and the engine can recover in the gap:
+/// the loss is taken, the recovery lands, and the recovery is taken on the
+/// same pass. Each setter clears the other, so holding both means the recovery
+/// is the later of the two. Applied the other way round the loss went on last,
+/// and a session that had come back — resubscribed and answering — read as
+/// disconnected for the rest of its life, with nothing queued to say otherwise
+/// and the caller told it recovered before it was told it had gone.
+#[test]
+fn a_recovery_landing_between_the_two_reads_is_not_undone_by_the_loss() {
+    let (client, _rx, shared) = test_client();
+    assert!(client.is_connected(), "connected to begin with");
+
+    shared.raise_a_loss_a_recovery_landed_behind_for_test();
+    let mut w = RecordingWrapper::default();
+    client.process_msgs(&mut w);
+
+    assert!(
+        client.is_connected(),
+        "the session came back and this surface holds it down: {:?}", w.events,
+    );
+    let announced: Vec<&String> = w
+        .events
+        .iter()
+        .filter(|e| e.starts_with("error:-1:1100:") || e.starts_with("error:-1:1102:"))
+        .collect();
+    assert_eq!(
+        announced.len(), 2,
+        "the loss and the recovery are both said: {:?}", w.events,
+    );
+    assert!(
+        announced[0].starts_with("error:-1:1100:"),
+        "and the loss is said before the recovery from it: {announced:?}",
+    );
+}
+
 /// A session that goes away while a question is being answered still tells the
 /// caller so.
 ///
