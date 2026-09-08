@@ -695,10 +695,14 @@ impl EClient {
     ///
     /// `req_id` reaches nothing here: this states the answer and the caller
     /// above it is what carries the number, so naming it twice would let the
-    /// two disagree.
+    /// two disagree. Nor does it name the request the model is watched for —
+    /// this is a first ask, which has opened no watch yet, and the number is
+    /// the caller's own: it may already be watching a contract of its
+    /// choosing, and for one with no id of its own that other contract's slot
+    /// is what a fall-back to it would find.
     fn answer_option_model(
         &self,
-        req_id: i64,
+        _req_id: i64,
         contract: &Contract,
         solve: impl Fn(
             crate::control::option_model::OptionTerms,
@@ -712,7 +716,7 @@ impl EClient {
         // branches on.
         let shared = self.shared_state()
             .map_err(|_| Refusal::not_connected("not connected"))?;
-        let answer = self.core.solve_option(&shared, &contract.to_api(), Some(req_id), solve)?;
+        let answer = self.core.solve_option(&shared, &contract.to_api(), None, solve)?;
         shared.market.push_option_computation(into_computation(answer));
         Ok(())
     }

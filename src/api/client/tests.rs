@@ -9839,7 +9839,7 @@ fn a_contract_named_by_description_is_answered_once_its_model_is_stated() {
         sec_type: "OPT".into(),
         exchange: "SMART".into(),
         currency: "USD".into(),
-        last_trade_date_or_contract_month: "20260320".into(),
+        last_trade_date_or_contract_month: "20270320".into(),
         strike: 100.0,
         right: "C".into(),
         ..Default::default()
@@ -9856,5 +9856,54 @@ fn a_contract_named_by_description_is_answered_once_its_model_is_stated() {
         client.solve_and_push_volatility(9, &kept),
         "the question is kept and re-solved for ever, with its caller told \
          neither an answer nor a reason",
+    );
+}
+
+/// A first ask does not read the model of whatever else its number watches.
+///
+/// The number is the caller's own, and it may already be watching a contract
+/// of its own choosing. For a contract with no id there is nothing to look a
+/// model up by, so a fallback to that number would find the other contract's
+/// slot — and a model belonging to a different contract answers as readily as
+/// the right one. Only a question this client has already opened a watch for
+/// reads one that way.
+#[test]
+fn a_first_ask_does_not_read_the_model_of_another_contract() {
+    let (client, _rx, shared) = test_client();
+    let iid: InstrumentId = 0;
+    // The caller's number is watching a contract of its own.
+    client.core.req_to_instrument.lock().unwrap().insert(9, iid);
+    shared.market.set_instrument_count(1);
+    shared.market.push_option_computation(crate::types::OptionComputation {
+        instrument: iid,
+        implied_vol: 0.2,
+        opt_price: 5.0,
+        und_price: 100.0,
+        pv_dividend: 0.0,
+        ..Default::default()
+    });
+
+    // And it asks about a different contract, named by description.
+    let other = Contract {
+        con_id: 0,
+        symbol: "QQQ".into(),
+        sec_type: "OPT".into(),
+        exchange: "SMART".into(),
+        currency: "USD".into(),
+        // Terms the watched contract's model would solve for, so that reading
+        // it produces an answer rather than failing on the arithmetic — which
+        // is what makes this test about the lookup and not about the numbers.
+        last_trade_date_or_contract_month: "20270320".into(),
+        strike: 100.0,
+        right: "C".into(),
+        ..Default::default()
+    };
+    client.calculate_implied_volatility(9, &other, 5.0, 100.0);
+
+    let answered = shared.market.drain_option_computations();
+    assert!(
+        !answered.iter().any(|c| c.answers == Some(9)),
+        "the question was answered from the model of whatever else that number \
+         happened to be watching: {answered:?}",
     );
 }

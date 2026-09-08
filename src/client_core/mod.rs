@@ -5206,14 +5206,27 @@ impl ClientCore {
         // the refusal it gave is the one refusal here that means "not yet":
         // the question was kept, re-solved on every pass, and its caller told
         // neither an answer nor a reason for the life of the session.
+        //
+        // `None` on a first ask, which has opened no watch yet. The number is
+        // the caller's own and may already be watching something else — and
+        // for a contract with no id of its own, that other contract's slot is
+        // what the fallback would find. A model belonging to a different
+        // contract answers as readily as the right one and is not the right
+        // one.
         watched_under: Option<i64>,
         solve: impl Fn(
             crate::control::option_model::OptionTerms,
             crate::control::option_model::VenueModel,
         ) -> Option<f64>,
     ) -> Result<f64, crate::error_codes::Refusal> {
-        let instrument = self
-            .con_id_to_instrument.lock().unwrap().get(&contract.con_id).copied()
+        // Read out and let go of before anything else is taken. Held across
+        // the fall-back below it, this takes the contract map and then the
+        // request map, while a withdrawal that gives back the last watcher
+        // takes them the other way round — and two threads each holding the
+        // one the other wants do not finish.
+        let by_its_own_id =
+            self.con_id_to_instrument.lock().unwrap().get(&contract.con_id).copied();
+        let instrument = by_its_own_id
             .or_else(|| watched_under.and_then(|req_id| self.watching(req_id)))
             .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;
         let stated = shared

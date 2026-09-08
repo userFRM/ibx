@@ -1485,9 +1485,18 @@ impl HotLoop {
                              built out of those",
                         );
                         log::error!("historical req_id={req_id}: {told}");
+                        // Refused without ending anything, as the duplicate
+                        // number below it is: a number already answering goes
+                        // on answering. Released with an empty terminal
+                        // response, the live request's end fired before its
+                        // bars had arrived and every bar after it went out as
+                        // an update. Nothing waits on that sentinel here —
+                        // the surfaces refuse this before it is sent, so only
+                        // a caller on the control channel reaches it, and
+                        // those do not wait.
                         push_hmds_refusal(
                             &self.shared, req_id, crate::error_codes::Refusal::VALIDATION,
-                            told, true,
+                            told, false,
                         );
                     } else if self.hmds_conn.is_none() {
                         // keepUpToDate sends via CCP but bars/end arrive on
@@ -4802,6 +4811,45 @@ mod tests {
         assert!(
             told.is_empty(),
             "the stream's watchers were told their quote had been refused: {told:?}",
+        );
+    }
+
+    /// Refusing one request does not end another running under its number.
+    ///
+    /// A number already answering goes on answering. Released with an empty
+    /// terminal response, the live request's end fires before its bars have
+    /// arrived and every bar after it goes out as an update — which is the
+    /// reason the refusal for a number already in use ends nothing either.
+    #[test]
+    fn refusing_a_request_does_not_end_one_already_running_under_its_number() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+
+        tx.send(ControlCommand::FetchHistorical {
+            contract: ContractRef { con_id: 756733, sec_type: "STK".into(), ..Default::default() },
+            req_id: 64,
+            end_date_time: String::new(),
+            duration: "1 D".into(),
+            bar_size: "1 secs".into(),
+            what_to_show: "TRADES".into(),
+            use_rth: true,
+            keep_up_to_date: true,
+            include_expired: false,
+            filters: Default::default(),
+        })
+        .expect("the engine holds the other end");
+        hl.poll_once();
+
+        assert!(
+            shared.reference.drain_historical_errors().iter().any(|(r, ..)| *r == 64),
+            "the caller is told why",
+        );
+        assert!(
+            shared.reference.drain_historical_data().is_empty(),
+            "and nothing was ended under that number: a request answering there \
+             would have its end fired before its bars arrived",
         );
     }
 

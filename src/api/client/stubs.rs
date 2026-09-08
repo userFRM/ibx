@@ -144,7 +144,7 @@ impl EClient {
         &self, req_id: i64, contract: &super::Contract,
         option_price: f64, under_price: f64,
     ) {
-        match self.solve_option(contract, Some(req_id), |terms, model| {
+        match self.solve_option(contract, None, |terms, model| {
             crate::control::option_model::implied_volatility(
                 terms, model, option_price, under_price,
             )
@@ -178,7 +178,7 @@ impl EClient {
         &self, req_id: i64, contract: &super::Contract,
         volatility: f64, under_price: f64,
     ) {
-        match self.solve_option(contract, Some(req_id), |terms, model| {
+        match self.solve_option(contract, None, |terms, model| {
             crate::control::option_model::option_price(terms, model, volatility, under_price)
         }) {
             Ok(price) => self.shared.market.push_option_computation(
