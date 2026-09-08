@@ -348,6 +348,57 @@ fn a_what_if_preview_reports_the_parent_the_child_was_given() {
     );
 }
 
+/// A preview is finished when its callback runs, not after it.
+///
+/// The number a preview was asked under is the caller's to place under next,
+/// and that is what a caller does from inside the callback that answers the
+/// preview. Still recorded while the callback ran, the placement read as a
+/// change to a what-if and was refused for being one; a callback that ended
+/// the read another way left the finished preview recorded under a number
+/// nothing could place again.
+#[test]
+fn a_preview_is_no_longer_tracked_while_its_own_callback_runs() {
+    use std::sync::Mutex;
+
+    let (client, rx, shared) = test_client();
+    let preview = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 110.0, tif: "DAY".into(), what_if: true, ..Default::default()
+    };
+    client.place_order(9404, &spy(), &preview).unwrap();
+    while rx.try_recv().is_ok() {}
+
+    shared.orders.push_what_if(WhatIfResponse {
+        order_id: 9404, instrument: 0,
+        init_margin_before: 0, maint_margin_before: 0, equity_with_loan_before: 0,
+        init_margin_after: 0, maint_margin_after: 0, equity_with_loan_after: 0,
+        commission: Some(0), min_commission: None, max_commission: None,
+        commission_currency: String::new(), warning_text: String::new(),
+    });
+
+    /// Reads, from inside the callback, whether the preview is still recorded.
+    struct AsksWhileItRuns<'a>(&'a Mutex<Option<bool>>, &'a crate::client_core::ClientCore);
+    impl crate::api::wrapper::Wrapper for AsksWhileItRuns<'_> {
+        fn open_order(
+            &mut self, order_id: i64, _c: &Contract, _o: &ApiOrder,
+            _s: &crate::types::model::OrderState,
+        ) {
+            let held = self.1.open_orders.lock().unwrap().contains_key(&(order_id as u64));
+            *self.0.lock().unwrap() = Some(held);
+        }
+    }
+
+    let seen = Mutex::new(None);
+    let mut w = AsksWhileItRuns(&seen, &client.core);
+    client.process_msgs(&mut w);
+
+    assert_eq!(
+        *seen.lock().unwrap(), Some(false),
+        "the preview was still recorded while its own callback ran, so an order \
+         placed under that number from inside it reads as a change to a what-if",
+    );
+}
+
 /// Every request checks the number it was given, including this one.
 ///
 /// It was the only surface that did not. Unchecked here, the number was

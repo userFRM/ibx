@@ -448,12 +448,18 @@ impl EClient {
         // an open order calls one callback and this is it.
         for wi in self.shared.orders.drain_what_if_responses() {
             let state = OrderState::from(&wi);
-            let tracked = self.core.open_orders.lock().unwrap().get(&wi.order_id).cloned();
+            // Taken before the callback rather than after it. A preview is
+            // finished the moment it is answered, and left recorded while its
+            // own callback runs an order placed from inside that callback under
+            // the same number read as a change to the preview and was refused
+            // for being one. A callback that ends the read another way left it
+            // recorded for the rest of the session, under a number nothing
+            // could place again.
+            let tracked = self.core.open_orders.lock().unwrap().remove(&wi.order_id);
             let (contract, order) = tracked
                 .map(|t| (t.contract, t.order))
                 .unwrap_or_else(|| (Contract::default(), ApiOrder::default()));
             wrapper.open_order(wi.order_id as i64, &contract, &order, &state);
-            self.core.open_orders.lock().unwrap().remove(&wi.order_id);
         }
     }
 
