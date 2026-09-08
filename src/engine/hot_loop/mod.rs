@@ -1466,9 +1466,33 @@ impl HotLoop {
                 }
                 ControlCommand::FetchHistorical { contract, req_id, end_date_time, duration, bar_size, what_to_show, use_rth, keep_up_to_date, include_expired, .. } => {
                     let ContractRef { con_id, symbol, sec_type, exchange, .. } = contract;
-                    // keepUpToDate sends via CCP but bars/end arrive on HMDS — both
-                    // paths require an authed HMDS socket to deliver a completion.
-                    if self.hmds_conn.is_none() {
+                    if keep_up_to_date
+                        && !crate::control::historical::BarSize::from_api_str(&bar_size)
+                            .is_ok_and(|size| size.supports_keep_up_to_date())
+                    {
+                        // What keeps a bar current arrives as five-second
+                        // bars, so a size the fold cannot build out of those is
+                        // refused rather than folded anyway: it relabels each
+                        // five-second bar as the shorter one and hands the
+                        // caller five times the volume under a size nothing
+                        // traded in. The surface refuses these before the
+                        // command is sent; a caller reaching this loop by the
+                        // control channel goes past it, as it does the reading
+                        // of the series name beside this.
+                        let told = format!(
+                            "bars of {bar_size} cannot be kept up to date: what keeps them \
+                             current arrives in five-second bars, and this one cannot be \
+                             built out of those",
+                        );
+                        log::error!("historical req_id={req_id}: {told}");
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::Refusal::VALIDATION,
+                            told, true,
+                        );
+                    } else if self.hmds_conn.is_none() {
+                        // keepUpToDate sends via CCP but bars/end arrive on
+                        // HMDS — both paths need an authed HMDS socket to
+                        // deliver a completion.
                         self.emit_hmds_unavailable(req_id, true);
                     } else if keep_up_to_date
                         && !self.hmds.keep_up_to_date_reqs.contains(&req_id)
@@ -4778,6 +4802,44 @@ mod tests {
         assert!(
             told.is_empty(),
             "the stream's watchers were told their quote had been refused: {told:?}",
+        );
+    }
+
+    /// A bar the fold cannot build is refused, not folded anyway.
+    ///
+    /// What keeps a bar current arrives as five-second bars, so a size that is
+    /// not made of those cannot be kept up to date: folding into it relabels
+    /// each five-second bar as the shorter one and hands the caller five times
+    /// the volume under a size nothing traded in. The surface refuses these
+    /// before the command is sent, and a caller reaching this loop by the
+    /// control channel goes past it.
+    #[test]
+    fn a_bar_that_cannot_be_kept_up_to_date_is_refused_on_the_control_channel() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+
+        tx.send(ControlCommand::FetchHistorical {
+            contract: ContractRef { con_id: 756733, sec_type: "STK".into(), ..Default::default() },
+            req_id: 63,
+            end_date_time: String::new(),
+            duration: "1 D".into(),
+            bar_size: "1 secs".into(),
+            what_to_show: "TRADES".into(),
+            use_rth: true,
+            keep_up_to_date: true,
+            include_expired: false,
+            filters: Default::default(),
+        })
+        .expect("the engine holds the other end");
+        hl.poll_once();
+
+        let told = shared.reference.drain_historical_errors();
+        assert!(
+            told.iter().any(|(_, _, said)| said.contains("cannot be kept up to date")),
+            "each five-second bar is relabelled as a one-second one and handed \
+             back with five times the volume: {told:?}",
         );
     }
 
