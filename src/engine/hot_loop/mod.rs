@@ -1260,28 +1260,26 @@ impl HotLoop {
                             // or as the venue's own definition has it.
                             let (known_sec_type, _) =
                                 self.described_as(con_id, &sec_type, &exchange);
-                            if con_id != 0 && known_sec_type.is_empty() {
-                                // Neither says. A security type invented here
-                                // subscribes to some other kind of instrument
-                                // under this contract's id, and the caller
-                                // reads its prices as this one's — which is
-                                // what a future asked for by id alone used to
-                                // get, as a share.
-                                self.shared.market.push_subscription_failure(
-                                    id,
-                                    format!(
-                                        "contract {con_id} states no security type, here \
-                                         or on the venue's own definition of it, and a \
-                                         subscription states one: name it on the contract",
-                                    ),
-                                );
-                                continue;
-                            }
-                            if con_id == 0 {
+                            if con_id == 0 || known_sec_type.is_empty() {
                                 // The venue answers a subscription only when it
                                 // is named by contract id, and says nothing at
                                 // all — no tick and no refusal — to one named
                                 // by symbol. Ask it to name the contract first.
+                                //
+                                // And one named by id alone is asked about for
+                                // the reason beside it: nothing here states what
+                                // the contract is, and the encoder describes
+                                // every such contract as a smart-routed stock,
+                                // which is right for a stock and wrong for a
+                                // future, an option or a currency pair. Refused
+                                // instead, an id was the one thing a caller
+                                // could name a contract by and be turned down
+                                // for, though naming it by id is what the venue
+                                // answers a definition for. The definition says
+                                // what it is and the subscription goes out on
+                                // that; a contract the venue names nothing for
+                                // is given up on where every other unanswered
+                                // lookup is.
                                 self.ccp.resolve_for_subscribe(
                                     crate::engine::hot_loop::ccp::PendingSubscribe {
                                         instrument: id,
@@ -4254,6 +4252,44 @@ mod tests {
         // A contract nothing has looked up carries no description; the
         // encoder answers for it.
         assert_eq!(hl.described_as(1, "", ""), (String::new(), String::new()));
+    }
+
+    /// And a contract named by its id alone is looked up, not turned down.
+    ///
+    /// Nothing on such a request says what the contract is, and the encoder
+    /// describes every one of them as a smart-routed stock. Refused for that,
+    /// an id was the one thing a caller could name a contract by and be told
+    /// no for, though naming it by id is exactly what the venue answers a
+    /// definition for. Asked, the definition states the type and the
+    /// subscription goes out on what the venue said it was.
+    #[test]
+    fn a_subscription_by_id_alone_asks_the_venue_what_the_contract_is() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+
+        // An id and nothing beside it: no security type stated here, and no
+        // definition cached for the engine to read one off.
+        tx.send(ControlCommand::Subscribe {
+            contract: ContractRef { con_id: 893091670, ..Default::default() },
+            mode_9887: 0,
+            regulatory_snapshot: false,
+            reply_tx: None,
+        })
+        .expect("the engine holds the other end");
+        hl.poll_once();
+
+        assert!(
+            shared.market.drain_subscription_failures().is_empty(),
+            "a contract the venue will name was turned down for not naming itself",
+        );
+        assert_eq!(
+            hl.ccp.pending_md_subscribe.len(),
+            1,
+            "and the venue was asked what it is, so the subscription can go out \
+             on the answer rather than on a description invented here",
+        );
     }
 
     /// The calendar's connection is watched like the other three.
