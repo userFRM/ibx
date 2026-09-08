@@ -54,3 +54,6 @@ target/gates/
 .pytest_cache/
 .venv/
 .claude/worktrees/
+
+# Scratch build directories: a parallel job with its own CARGO_TARGET_DIR.
+target-*/
