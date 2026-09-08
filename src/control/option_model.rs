@@ -137,7 +137,14 @@ pub fn price(terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividend
             };
         }
     }
-    Some(value[0])
+    // A terminal node that overflowed carries the overflow down to the root.
+    // The step ratio is checked above and being finite there does not make it
+    // finite raised to the number of steps: the highest node is the ratio to
+    // that power, so a volatility stated per cent where a fraction was meant
+    // reaches it. What comes back is not a price, and a caller reading it as
+    // one has no way to tell — it is refused here for the reason a volatility
+    // that will not converge is refused.
+    value[0].is_finite().then_some(value[0])
 }
 
 fn exercise_value(terms: OptionTerms, underlying: f64) -> f64 {
@@ -284,6 +291,26 @@ mod tests {
     fn the_tree_agrees_with_the_closed_form() {
         let price = price(call(100.0, 1.0), 100.0, 0.2, 0.05, 0.0).expect("it prices");
         assert!((price - 10.4506).abs() < 0.05, "the tree says {price}");
+    }
+
+    /// A volatility the tree overflows on is refused, not answered.
+    ///
+    /// The step ratio is checked for being a number and the highest node is
+    /// that ratio raised to the number of steps, which need not be one. A
+    /// caller stating a volatility per cent where a fraction was meant reaches
+    /// it, and what came back was an infinity handed on as a price.
+    #[test]
+    fn a_volatility_the_tree_overflows_on_is_refused() {
+        // Finite as a step ratio, and not finite raised to the tree's depth.
+        let ratio = (80.0f64 * (1.0f64 / super::STEPS as f64).sqrt()).exp();
+        assert!(ratio.is_finite(), "the check above this one passes");
+        assert!(!ratio.powi(super::STEPS as i32).is_finite(), "and the tree still overflows");
+
+        assert_eq!(
+            price(call(100.0, 1.0), 100.0, 80.0, 0.05, 0.0),
+            None,
+            "an infinity was handed back as a price",
+        );
     }
 
     /// An option worth nothing at expiry is worth nothing.
