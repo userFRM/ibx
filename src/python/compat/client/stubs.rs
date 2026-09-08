@@ -580,17 +580,49 @@ impl EClient {
         // normally, so the result alone does not say whether it took.
         //
         // What is read back is the slot the request holds. Not one found under
-        // the contract's conId: a contract stated by description carries none,
-        // and the engine is the first to know which slot it resolved to — so
-        // asked by conId the answer was no however the subscribe went, and
+        // the contract's conId alone: a contract stated by description carries
+        // none, and the engine is the first to know which slot it resolved to
+        // — so asked that way the answer was no however the subscribe went, and
         // every question about a described contract was refused with the watch
-        // it had just opened left running. A request already watching
-        // something is refused a second watch, so a slot it held before this
-        // call is that other contract's and says nothing about this one.
-        let held_before = self.core.holds_mkt_data(req_id);
-        self.req_mkt_data(py, req_id, contract, "", false, false, Vec::new())?;
-        if held_before || !self.core.holds_mkt_data(req_id) {
-            return Ok(false);
+        // it had just opened left running.
+        //
+        // A request already holding a slot is the case to be careful with. It
+        // may be watching this very contract, which is what makes the venue
+        // state a model at all — and it cannot open a second watch, so the
+        // subscribe below would be refused and the question turned down on a
+        // contract that is already being watched. Where the contract names an
+        // id, its slot answers which of the two this is; where it does not,
+        // there is nothing to compare and the caller's own watch is not this
+        // question's to claim.
+        let Ok(shared) = self.shared_state() else { return Ok(false) };
+        let its_own = contract.to_api().con_id;
+        let its_slot = || {
+            (its_own != 0)
+                .then(|| self.core.cached_instrument(&shared, its_own))
+                .flatten()
+        };
+        // The request's own slot, where it already has one, may be this
+        // contract's — which is what makes the venue state a model at all, and
+        // a request already watching something is refused a second watch. Asked
+        // only whether it holds a slot, such a request read as watching some
+        // other contract and the question was turned down on one the venue was
+        // already stating a model for.
+        if !(its_slot().is_some() && its_slot() == self.core.watching(req_id)) {
+            // Asked for even where the slot it holds is another contract's,
+            // because the refusal that answers is the caller's to hear — and an
+            // interrupt raised in their handler for it leaves the call rather
+            // than being swallowed here.
+            self.req_mkt_data(py, req_id, contract, "", false, false, Vec::new())?;
+            let took = if its_own != 0 {
+                its_slot().is_some() && its_slot() == self.core.watching(req_id)
+            } else {
+                // A contract stated by description carries no id to compare, and
+                // the engine is the first to know which slot it resolved to.
+                self.core.holds_mkt_data(req_id)
+            };
+            if !took {
+                return Ok(false);
+            }
         }
         self.pending_option_calcs.lock().unwrap().insert(
             req_id,
