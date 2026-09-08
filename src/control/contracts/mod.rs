@@ -806,17 +806,44 @@ static READ_FROM_A_DEFINITION: std::sync::LazyLock<std::collections::HashSet<u32
     std::sync::LazyLock::new(|| {
     let source = include_str!("mod.rs");
     let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    // The parser reads a definition by looking tags up in one map, so every tag
-    // it reads appears as a lookup on that map.
-    for cap in source.split("tags.get(&").skip(1) {
-        let token: String = cap.chars().take_while(|c| *c != ')').collect();
-        let tag = token
-            .trim()
-            .parse::<u32>()
-            .ok()
-            .or_else(|| named_tag(token.trim()));
-        if let Some(tag) = tag {
+    let mut note = |token: &str| {
+        if let Some(tag) = token.trim().parse::<u32>().ok().or_else(|| named_tag(token.trim())) {
             seen.insert(tag);
+        }
+    };
+    // Most tags are looked up in the map built from the message, so they
+    // appear as a lookup on it.
+    for cap in source.split("tags.get(&").skip(1) {
+        note(&cap.chars().take_while(|c| *c != ')').collect::<String>());
+    }
+    // And the rest are walked over the bytes, because a map keeps one value
+    // per tag and these state several: the exchange repeats once per venue the
+    // contract lists on, the alternate identifiers come in pairs, and the
+    // increment ladders state a band at a time. Counted only from the map,
+    // every one of them was reported as a field that arrived and was dropped —
+    // on every definition, since the exchange is on all of them — which buried
+    // the gap this is here to measure, and put fields already parsed into
+    // named slots into the list of what this client could not name.
+    for cap in source.split("b\"").skip(1) {
+        note(&cap.chars().take_while(|c| *c != '=').collect::<String>());
+    }
+    for cap in source.split("strip_prefix(\"").skip(1) {
+        note(&cap.chars().take_while(|c| *c != '=').collect::<String>());
+    }
+    // And an arm of the walk's own match, which names its tag rather than
+    // spelling the number.
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_suffix(" => {").or_else(|| trimmed.strip_suffix(" =>"))
+            && name.starts_with("TAG_")
+        {
+            note(name);
+        }
+        // The arm that also tests the value it carries.
+        if let Some((name, _)) = trimmed.split_once(" if ")
+            && name.starts_with("TAG_")
+        {
+            note(name);
         }
     }
     seen

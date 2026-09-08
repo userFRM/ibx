@@ -1224,6 +1224,35 @@ mod unread_tag_tests {
         assert!(read.len() > 40, "only {} tags reported as read", read.len());
     }
 
+    /// Including the ones the parser walks the bytes for.
+    ///
+    /// A map keeps one value per tag, and these state several — the exchange
+    /// repeats once per venue the contract lists on, the alternate identifiers
+    /// come in pairs, the increment ladders state a band at a time — so they
+    /// are read by walking instead. Counted only from the map, every one was
+    /// reported as a field that arrived and was dropped, on every definition,
+    /// which buried the gap the count exists to measure and put fields already
+    /// parsed into named slots into the list of what this client cannot name.
+    #[test]
+    fn the_tags_read_include_the_ones_walked_rather_than_looked_up() {
+        let read = tags_read_from_a_definition();
+        for walked in [
+            TAG_SECURITY_EXCHANGE,
+            455, 456,
+            TAG_MARKET_RULE_START,
+            TAG_MARKET_RULE_ID,
+            TAG_LOW_EDGE,
+            TAG_INCREMENT,
+            TAG_PRICE_INCREMENT_COUNT,
+            TAG_SIZE_INCREMENT_COUNT,
+        ] {
+            assert!(
+                read.contains(&walked),
+                "{walked} is walked over the bytes and read, and is reported dropped",
+            );
+        }
+    }
+
     /// A tag the venue sends that nothing reads is named, so the gap is
     /// measurable rather than suspected.
     #[test]
