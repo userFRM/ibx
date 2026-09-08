@@ -87,7 +87,7 @@ impl EClient {
             let worth_waiting = why.message == crate::client_core::OPTION_MODEL_UNSTATED;
             if !worth_waiting || !self.watch_for_option_model(
                 py, req_id, contract, true, option_price, under_price,
-            ) {
+            )? {
                 report_reason(self, req_id, &why);
             }
         }
@@ -123,7 +123,7 @@ impl EClient {
             let worth_waiting = why.message == crate::client_core::OPTION_MODEL_UNSTATED;
             if !worth_waiting || !self.watch_for_option_model(
                 py, req_id, contract, false, volatility, under_price,
-            ) {
+            )? {
                 report_reason(self, req_id, &why);
             }
         }
@@ -575,20 +575,18 @@ impl EClient {
     fn watch_for_option_model(
         &self, py: Python<'_>, req_id: i64, contract: &Contract,
         wants_volatility: bool, option_price: f64, under_price: f64,
-    ) -> bool {
+    ) -> PyResult<bool> {
         let api = contract.to_api();
-        let Ok(shared) = self.shared_state() else { return false };
+        let Ok(shared) = self.shared_state() else { return Ok(false) };
         // A subscription this client opens rather than the caller. Refusals
         // are reported by the subscribe itself and leave nothing watching,
         // which is what is read back here rather than the call's own result:
         // this surface answers a refusal on the error callback and returns
         // normally, so the result alone does not say whether it took.
         if !self.watching_contract(&shared, api.con_id) {
-            let opened = self.req_mkt_data(
-                py, req_id, contract, "", false, false, Vec::new(),
-            );
-            if opened.is_err() || !self.watching_contract(&shared, api.con_id) {
-                return false;
+            self.req_mkt_data(py, req_id, contract, "", false, false, Vec::new())?;
+            if !self.watching_contract(&shared, api.con_id) {
+                return Ok(false);
             }
         }
         self.pending_option_calcs.lock().unwrap().insert(
@@ -601,7 +599,7 @@ impl EClient {
                 answered: false,
             },
         );
-        true
+        Ok(true)
     }
 
     /// Drop a kept question, and the watch it opened if it was the last on it.

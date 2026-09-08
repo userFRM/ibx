@@ -769,6 +769,26 @@ impl Order {
     }
     #[setter(softDollarTier)]
     fn set_soft_dollar_tier(&mut self, v: TierField) { self.soft_dollar_tier = v; }
+
+    fn __traverse__(&self, visit: pyo3::PyVisit<'_>) -> Result<(), pyo3::PyTraverseError> {
+        self.algo_params.traverse(&visit)?;
+        self.conditions.traverse(&visit)?;
+        self.order_combo_legs.traverse(&visit)?;
+        self.order_misc_options.traverse(&visit)?;
+        self.smart_combo_routing_params.traverse(&visit)?;
+        visit.call(self.soft_dollar_tier.0.get())
+    }
+
+    fn __clear__(&mut self) {
+        // Release the fields, leaving lists and tiers held by other objects
+        // unchanged, just as assigning a new field does.
+        self.algo_params = ListField::new();
+        self.conditions = ListField::new();
+        self.order_combo_legs = ListField::new();
+        self.order_misc_options = ListField::new();
+        self.smart_combo_routing_params = ListField::new();
+        self.soft_dollar_tier = TierField::new();
+    }
 }
 
 impl Order {
@@ -1760,6 +1780,45 @@ order.softDollarTier.val = '45.5'
                 ("Tier A", "45.5"),
                 "the arrangement the builder reads",
             );
+        });
+    }
+
+    #[test]
+    fn order_value_cycles_are_collected_without_changing_shared_lists() {
+        Python::initialize();
+        Python::attach(|py| {
+            let g = PyDict::new(py);
+            g.set_item("collect_weakref", wrap_pyfunction!(crate::python::collect_weakref, py).unwrap()).unwrap();
+            g.set_item("Order", py.get_type::<Order>()).unwrap();
+            py.run(c"
+import gc, weakref
+class Tag:
+    pass
+for field in ['algoParams', 'conditions', 'orderComboLegs', 'orderMiscOptions', 'smartComboRoutingParams']:
+    order = Order()
+    tag = Tag()
+    tag.owner = order
+    items = getattr(order, field)
+    items.append(tag)
+    assert getattr(order, field) is items
+    ref = weakref.ref(tag)
+    del order, tag, items
+    collect_weakref(ref)
+    assert ref() is None, field
+order = Order()
+assert gc.get_referents(order) == []
+tier = order.softDollarTier
+assert any(item is tier for item in gc.get_referents(order))
+", Some(&g), None).unwrap();
+            let mut order = Order::default();
+            let list = order.algo_params.bound(py);
+            list.append(7).unwrap();
+            let tier = order.soft_dollar_tier.bound(py).unwrap();
+            tier.borrow_mut().name = "Tier A".into();
+            order.__clear__();
+            assert_eq!(list.len(), 1, "clearing the owner leaves the shared list alone");
+            assert_eq!(tier.borrow().name, "Tier A");
+            assert!(order.soft_dollar_tier.0.get().is_none());
         });
     }
 }

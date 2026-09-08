@@ -45,6 +45,11 @@ impl ListField {
         }
         Ok(Self(OnceLock::from(list.unbind())))
     }
+
+    /// Visit only a list already held; collection does not initialise fields.
+    pub(crate) fn traverse(&self, visit: &pyo3::PyVisit<'_>) -> Result<(), pyo3::PyTraverseError> {
+        visit.call(self.0.get())
+    }
 }
 
 impl std::fmt::Debug for ListField {
@@ -405,6 +410,16 @@ impl Contract {
     #[setter(deltaNeutralContract)]
     fn set_delta_neutral_alias(&mut self, v: Option<Py<PyAny>>) {
         self.delta_neutral_contract = v;
+    }
+
+    fn __traverse__(&self, visit: pyo3::PyVisit<'_>) -> Result<(), pyo3::PyTraverseError> {
+        self.combo_legs.traverse(&visit)?;
+        visit.call(&self.delta_neutral_contract)
+    }
+
+    fn __clear__(&mut self) {
+        self.combo_legs = ListField::new();
+        self.delta_neutral_contract = None;
     }
 }
 
@@ -863,6 +878,19 @@ impl ContractDetails {
         format!("ContractDetails(symbol='{}', longName='{}')",
             self.contract.borrow(py).symbol, self.long_name)
     }
+
+    fn __traverse__(&self, visit: pyo3::PyVisit<'_>) -> Result<(), pyo3::PyTraverseError> {
+        visit.call(&self.contract)?;
+        self.sec_id_list.traverse(&visit)
+    }
+
+    fn __clear__(&mut self, py: Python<'_>) -> PyResult<()> {
+        // Release this reference without clearing a contract somebody else
+        // may share. The field continues to hold a Contract.
+        self.contract = Py::new(py, Contract::default())?;
+        self.sec_id_list = ListField::new();
+        Ok(())
+    }
 }
 
 impl Clone for ContractDetails {
@@ -1283,6 +1311,17 @@ impl ContractDescription {
         format!("ContractDescription(conId={}, symbol='{}', secType='{}', currency='{}')",
             c.con_id, c.symbol, c.sec_type, c.currency)
     }
+
+    fn __traverse__(&self, visit: pyo3::PyVisit<'_>) -> Result<(), pyo3::PyTraverseError> {
+        visit.call(&self.contract)?;
+        self.derivative_sec_types.traverse(&visit)
+    }
+
+    fn __clear__(&mut self, py: Python<'_>) -> PyResult<()> {
+        self.contract = Py::new(py, Contract::default())?;
+        self.derivative_sec_types = ListField::new();
+        Ok(())
+    }
 }
 
 impl Clone for ContractDescription {
@@ -1535,6 +1574,57 @@ contract.comboLegs.append(leg2)
                 [(43645865, 1, false), (9408, 1, true)],
                 "both legs, as appended, on the request",
             );
+        });
+    }
+
+    #[test]
+    fn contract_value_cycles_are_collected_without_changing_shared_lists() {
+        Python::initialize();
+        Python::attach(|py| {
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("collect_weakref", wrap_pyfunction!(crate::python::collect_weakref, py).unwrap()).unwrap();
+            g.set_item("Contract", py.get_type::<Contract>()).unwrap();
+            g.set_item("ContractDetails", py.get_type::<ContractDetails>()).unwrap();
+            g.set_item("ContractDescription", py.get_type::<ContractDescription>()).unwrap();
+            py.run(c"
+import gc, weakref
+class Tag:
+    pass
+for cls, field in [(Contract, 'comboLegs'), (ContractDetails, 'secIdList'),
+                   (ContractDescription, 'derivativeSecTypes')]:
+    value = cls()
+    tag = Tag()
+    tag.owner = value
+    items = getattr(value, field)
+    items.append(tag)
+    assert getattr(value, field) is items
+    ref = weakref.ref(tag)
+    del value, tag, items
+    collect_weakref(ref)
+    assert ref() is None, (cls, field)
+for cls in [Contract, ContractDetails, ContractDescription]:
+    value = cls()
+    tag = Tag()
+    tag.owner = value
+    contract = value if cls is Contract else value.contract
+    contract.deltaNeutralContract = tag
+    ref = weakref.ref(tag)
+    del value, tag, contract
+    collect_weakref(ref)
+    assert ref() is None, cls
+", Some(&g), None).unwrap();
+            let mut contract = Contract::default();
+            let list = contract.combo_legs.bound(py);
+            list.append(7).unwrap();
+            contract.__clear__();
+            assert_eq!(list.len(), 1, "clearing the owner leaves the shared list alone");
+            assert!(contract.combo_legs.0.get().is_none());
+            let mut details = ContractDetails::new_default(py);
+            let old = details.contract.clone_ref(py);
+            old.bind(py).borrow_mut().con_id = 7;
+            details.__clear__(py).unwrap();
+            assert!(!details.contract.is(&old));
+            assert_eq!(old.borrow(py).con_id, 7, "clearing the owner leaves the shared contract alone");
         });
     }
 }

@@ -57,6 +57,9 @@ pub struct EClient {
     /// (typically `self` in the `App(EWrapper, EClient)` pattern) until the
     /// cyclic collector clears it, which is how that pattern's cycle is broken.
     pub(crate) wrapper: RwLock<Option<Py<PyAny>>>,
+    /// The callable belongs to this client so the collector sees its bound
+    /// application. Reconnect credentials hold only a weak reference to it.
+    code_provider: Mutex<Option<Arc<Py<PyAny>>>>,
     /// Set by connect(), cleared by disconnect.
     pub(crate) shared: Mutex<Option<Arc<SharedState>>>,
     /// Set by connect(), cleared by disconnect.
@@ -290,22 +293,29 @@ fn client_id_under_either_spelling(client_id: i32, reference_spelling: Option<i3
     }
 }
 
-/// Adapt a Python callable to the second-factor [`CodeProvider`] the login gate
-/// calls. The gate runs it on a thread of its own, so it takes the GIL itself;
-/// `connect` has released it for the whole login. A raising callback becomes an
-/// error the gate reports, not a panic.
-fn code_provider_from_py(cb: Py<PyAny>) -> CodeProvider {
-    Arc::new(move |challenge: IbKeyChallenge| {
-        Python::attach(|py| {
-            let factor = match challenge.factor {
-                SecondFactor::IbKeyChallengeResponse => "ibkey",
-                SecondFactor::AuthenticatorCode => "authenticator",
-            };
-            cb.call1(py, (factor, challenge.display_id, challenge.avth_url))
-                .and_then(|code| code.extract::<String>(py))
-                .map_err(|e| std::io::Error::other(e.to_string()))
-        })
-    })
+impl EClient {
+    /// Keep the callable where the collector can see it. The login gate runs
+    /// the adapter on its own thread, taking the GIL only to call Python.
+    fn code_provider_from_py(&self, cb: Option<Py<PyAny>>) -> Option<CodeProvider> {
+        let cb = cb.map(Arc::new);
+        let weak = cb.as_ref().map(Arc::downgrade);
+        let previous = std::mem::replace(&mut *self.code_provider.lock().unwrap(), cb);
+        drop(previous);
+        weak.map(|weak| Arc::new(move |challenge: IbKeyChallenge| {
+            Python::attach(|py| {
+                let cb = weak.upgrade().ok_or_else(|| std::io::Error::other(
+                    "Authentication provider is no longer available",
+                ))?.clone_ref(py);
+                let factor = match challenge.factor {
+                    SecondFactor::IbKeyChallengeResponse => "ibkey",
+                    SecondFactor::AuthenticatorCode => "authenticator",
+                };
+                cb.call1(py, (factor, challenge.display_id, challenge.avth_url))
+                    .and_then(|code| code.extract::<String>(py))
+                    .map_err(|e| std::io::Error::other(e.to_string()))
+            })
+        }) as CodeProvider)
+    }
 }
 
 #[pymethods]
@@ -324,6 +334,7 @@ impl EClient {
             auth_host: Mutex::new(None),
             logged_in_at: Mutex::new(None),
             wrapper: RwLock::new(None),
+            code_provider: Mutex::new(None),
             shared: Mutex::new(None),
             control_tx: Mutex::new(None),
             next_order_id: AtomicU64::new(0),
@@ -368,8 +379,8 @@ impl EClient {
         Ok(())
     }
 
-    /// Show the cyclic collector the wrapper, which is commonly the object
-    /// this client is embedded in.
+    /// Show the cyclic collector the wrapper and authentication provider,
+    /// which commonly refer back to the application holding this client.
     ///
     /// Non-blocking: a collection must never wait on a lock a callback can be
     /// holding. A slot found held is skipped for this pass, which only keeps
@@ -378,16 +389,23 @@ impl EClient {
         if let Ok(slot) = self.wrapper.try_read() {
             visit.call(&*slot)?;
         }
+        if let Ok(slot) = self.code_provider.try_lock()
+            && let Some(provider) = slot.as_ref()
+        {
+            visit.call(&**provider)?;
+        }
         Ok(())
     }
 
-    /// Release the wrapper, which is what breaks the cycle when this client is
-    /// its own. Every callback after this says there is no wrapper.
+    /// Release the wrapper and authentication callable, breaking their cycles
+    /// through the application. Later calls say the callback is unavailable.
     fn __clear__(&self) {
         // Bound first so the guard is gone before the wrapper is dropped: its
         // drop can run the wrapper's own teardown, which can reach back here.
         let wrapper = self.wrapper.write().unwrap().take();
+        let provider = self.code_provider.lock().unwrap().take();
         drop(wrapper);
+        drop(provider);
     }
 
     /// Connect to IB and start the engine.
@@ -486,7 +504,7 @@ impl EClient {
         // session is open and the refusal is not yet in force.
         self.core.set_readonly(readonly);
 
-        let code_provider = code_provider.map(code_provider_from_py);
+        let code_provider = self.code_provider_from_py(code_provider);
 
         let config = GatewayConfig {
             settings: std::sync::Arc::new(
@@ -524,6 +542,9 @@ impl EClient {
         // session. The session that did open is closed here instead, which is
         // what the caller asked for.
         if self.disconnects.load(Ordering::Acquire) != disconnects_before {
+            // disconnect() already gave back this claim; the flag may now
+            // belong to a newer connection.
+            claim.kept = true;
             // Dropped rather than installed, which closes every socket it
             // opened. Detached because those closes talk to the venue.
             py.detach(move || drop(result));
@@ -675,6 +696,8 @@ impl EClient {
         // logon sees this one on the way out however the two interleave.
         self.disconnects.fetch_add(1, Ordering::AcqRel);
         self.stop_engine(py);
+        let provider = self.code_provider.lock().unwrap().take();
+        drop(provider);
         self.connected.store(false, Ordering::Release);
         if had_a_session {
             self.session_ended.store(true, Ordering::Release);
@@ -1390,6 +1413,12 @@ impl EClient {
             .map_err(|e| PyRuntimeError::new_err(format!("Engine stopped: {e}")))
     }
 
+    /// A callback can replace the session. Its old pass ends before reading
+    /// more data or routing from the session the callback installed.
+    fn is_current_session(&self, shared: &Arc<SharedState>) -> bool {
+        self.shared.lock().unwrap().as_ref().is_some_and(|held| Arc::ptr_eq(held, shared))
+    }
+
     /// Clone the shared state Arc, or return "Not connected".
     pub(crate) fn shared_state(&self) -> PyResult<Arc<SharedState>> {
         self.shared.lock().unwrap().clone()
@@ -1473,7 +1502,11 @@ impl EClient {
     /// pass, because nothing can carry on through one — what is left stays
     /// queued for the pass after it.
     pub(crate) fn hand_over_what_is_waiting(&self, py: Python<'_>) -> PyResult<()> {
-        loop {
+        let shared = self.shared.lock().unwrap().clone();
+        // Answers requested by a callback wait for the next pass, so a caller
+        // asking again cannot keep engine events behind this phase forever.
+        let waiting = self.waiting_answers.lock().unwrap().len();
+        for _ in 0..waiting {
             // Taken out before it is handed over: the callback is the caller's
             // code and may issue another request, which queues behind what is
             // left rather than being lost or handed over twice.
@@ -1481,7 +1514,11 @@ impl EClient {
                 return Ok(());
             };
             self.notify(py, name, args.bind(py).clone())?;
+            if shared.as_ref().is_some_and(|shared| !self.is_current_session(shared)) {
+                return Ok(());
+            }
         }
+        Ok(())
     }
 
     /// Tell the caller something, and do not let what it raises decide the
@@ -1679,7 +1716,8 @@ mod tests {
                 .eval(c"lambda factor, display_id, avth_url: f'{factor}/{display_id}/{avth_url}'", None, None)
                 .unwrap()
                 .unbind();
-            let provider = code_provider_from_py(echo);
+            let client = client_with(py, recording_wrapper(py));
+            let provider = client.code_provider_from_py(Some(echo)).unwrap();
 
             let code = provider(IbKeyChallenge {
                 factor: SecondFactor::AuthenticatorCode,
@@ -1699,7 +1737,7 @@ mod tests {
             // Escaping as a panic instead would leave the gate reporting only
             // that the provider died.
             let boom = py.eval(c"lambda *a: (_ for _ in ()).throw(ValueError('no code'))", None, None).unwrap().unbind();
-            let err = code_provider_from_py(boom)(IbKeyChallenge::default()).unwrap_err();
+            let err = client.code_provider_from_py(Some(boom)).unwrap()(IbKeyChallenge::default()).unwrap_err();
             assert!(err.to_string().contains("no code"), "got {err}");
         });
     }
@@ -1743,7 +1781,7 @@ mod tests {
             // Held by nothing but itself now. Only the collector can free it.
             drop(client);
             assert!(heard.lock().unwrap().is_empty());
-            py.import("gc").unwrap().call_method0("collect").unwrap();
+            crate::python::collect_until(py, || Ok(exited.load(Ordering::Acquire))).unwrap();
 
             let heard = heard.lock().unwrap();
             assert!(
@@ -2741,6 +2779,270 @@ w = W()",
             shared.market.push_news_bulletin(bulletin(2, "published after"));
             client.borrow(py).dispatch_once(py, &shared).unwrap();
             assert_eq!(heard(), 1, "the subscription answered nothing");
+        });
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn a_callback_replacing_the_session_ends_the_old_dispatch_pass() {
+        #[pyfunction]
+        fn answer_subscriptions(client: &EClient) {
+            let rx = client._test_control_rx.lock().unwrap().take().unwrap();
+            *client._thread.lock().unwrap() = Some(thread::spawn(move || {
+                while let Ok(cmd) = rx.recv() {
+                    match cmd {
+                        ControlCommand::Subscribe { reply_tx: Some(reply), .. } => {
+                            reply.send(Ok(0)).unwrap();
+                        }
+                        ControlCommand::Shutdown => break,
+                        _ => {}
+                    }
+                }
+            }));
+        }
+        Python::initialize();
+        Python::attach(|py| {
+            for boundary in ["managedAccounts", "tickReqParams"] {
+                let (client, rx, _shared, w) = wired_client(py);
+                *client.get()._test_control_rx.lock().unwrap() = Some(rx);
+                answer_subscriptions(client.get());
+                let g = pyo3::types::PyDict::new(py);
+                g.set_item("client", &client).unwrap();
+                g.set_item("w", &w).unwrap();
+                g.set_item("Contract", py.get_type::<Contract>()).unwrap();
+                g.set_item("boundary", boundary).unwrap();
+                g.set_item("answer_subscriptions", wrap_pyfunction!(answer_subscriptions, py).unwrap()).unwrap();
+                py.run(c"
+client._test_set_instrument_count(1)
+a = Contract()
+a.conId, a.symbol, a.secType, a.exchange = 100, 'AAA', 'STK', 'SMART'
+client.req_mkt_data(1, a)
+client._test_push_quote(0, bid=123)
+def replace_session(*args):
+    client.disconnect()
+    client._test_connect()
+    answer_subscriptions(client)
+    client._test_set_instrument_count(1)
+    b = Contract()
+    b.conId, b.symbol, b.secType, b.exchange = 200, 'BBB', 'STK', 'SMART'
+    client.req_mkt_data(9, b)
+    client.req_managed_accts()
+setattr(w, boundary, replace_session)
+", Some(&g), None).unwrap();
+                if boundary == "managedAccounts" {
+                    client.call_method0(py, "req_managed_accts").unwrap();
+                } else {
+                    client.get().shared_state().unwrap().market.push_tick_req_params_for(1, 0.01);
+                }
+                client.call_method0(py, "poll").unwrap();
+                assert_eq!(client.get().core.watching(9), Some(0), "the callback installs the new subscription");
+                assert_eq!(client.get().waiting_answers.lock().unwrap().len(), 1,
+                    "the new session's answer waits for its own pass");
+                let prices: Vec<(i64, f64)> = py.eval(
+                    c"[(c[1], c[3]) for c in w.calls if c[0] in ('tickPrice', 'tick_price')]",
+                    Some(&g), None,
+                ).unwrap().extract().unwrap();
+                assert!(prices.is_empty(), "the old session delivered prices after {boundary}: {prices:?}");
+                w.bind(py).delattr(boundary).unwrap();
+                client.call_method1(py, "_test_push_quote", (0, 456.0)).unwrap();
+                client.call_method0(py, "poll").unwrap();
+                let prices: Vec<(i64, f64)> = py.eval(
+                    c"[(c[1], c[3]) for c in w.calls if c[0] in ('tickPrice', 'tick_price')]",
+                    Some(&g), None,
+                ).unwrap().extract().unwrap();
+                assert!(prices.contains(&(9, 456.0)), "the next pass delivers the new session's quote");
+            }
+        });
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn an_abandoned_connect_leaves_the_new_connections_claim_alone() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = Py::new(py, client_with(py, recording_wrapper(py))).unwrap();
+            let listener = std::net::TcpListener::bind(("127.0.0.1", crate::config::AUTH_PORT)).unwrap();
+            let reconnecting = client.clone_ref(py);
+            let server = thread::spawn(move || {
+                let (socket, _) = listener.accept().unwrap();
+                Python::attach(|py| {
+                    reconnecting.call_method0(py, "disconnect").unwrap();
+                    reconnecting.call_method0(py, "_test_connect").unwrap();
+                });
+                // End the pending TLS login only after the new session stands.
+                drop(socket);
+            });
+            let kwargs = pyo3::types::PyDict::new(py);
+            kwargs.set_item("host", "127.0.0.1").unwrap();
+            kwargs.set_item("settings", [("hardware_id", "0123456789abcdef")].into_iter().collect::<HashMap<_, _>>()).unwrap();
+            let err = client.call_method(py, "connect", (), Some(&kwargs)).unwrap_err();
+            py.detach(|| server.join().unwrap());
+            assert!(err.to_string().contains("Connection abandoned"), "got {err}");
+            assert!(client.get().is_connected(), "the abandoned login cleared the new session's claim");
+            client.get().session_ended.store(true, Ordering::Release);
+            client.call_method0(py, "run").expect("the new session is admitted to run");
+        });
+    }
+
+    #[test]
+    fn reentrant_local_answers_wait_for_the_next_dispatch_pass() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("client", &client).unwrap();
+            g.set_item("w", &w).unwrap();
+            py.run(c"
+answers = []
+def managed(accounts):
+    answers.append(accounts)
+    if len(answers) < 4:
+        client.req_managed_accts()
+w.managedAccounts = managed
+client.req_managed_accts()
+", Some(&g), None).unwrap();
+            shared.market.push_tick_req_params_for(7, 0.01);
+            for expected in 1..=4 {
+                client.call_method0(py, "poll").unwrap();
+                assert_eq!(g.get_item("answers").unwrap().unwrap().len().unwrap(), expected,
+                    "a callback's request is answered on the next pass");
+                assert_eq!(client.get().waiting_answers.lock().unwrap().len(), usize::from(expected < 4));
+                assert_eq!(w.getattr(py, "calls").unwrap().bind(py).len().unwrap(), 1,
+                    "the engine event behind the local answer is delivered on the first pass");
+            }
+        });
+    }
+
+    #[test]
+    fn a_completed_preview_is_taken_before_its_callback_runs() {
+        Python::initialize();
+        Python::attach(|py| {
+            for interrupt in [false, true] {
+                let (client, rx, shared, w) = wired_client(py);
+                shared.market.set_instrument_count(1);
+                shared.orders.set_replay_done();
+                client.get().core.con_id_to_instrument.lock().unwrap().insert(756733, 0);
+                client.get().core.track_order(
+                    42,
+                    ApiContract { con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(), exchange: "SMART".into(), ..Default::default() },
+                    ApiOrder { order_id: 42, action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(), lmt_price: 10.0, what_if: true, ..Default::default() },
+                    0,
+                );
+                shared.orders.push_what_if(WhatIfResponse { order_id: 42, ..Default::default() });
+                let g = pyo3::types::PyDict::new(py);
+                g.set_item("client", &client).unwrap();
+                g.set_item("w", &w).unwrap();
+                g.set_item("interrupt", interrupt).unwrap();
+                py.run(c"
+received = []
+def preview(order_id, contract, order, state):
+    received.append((order_id, contract.conId, order.whatIf))
+    if interrupt:
+        raise KeyboardInterrupt()
+    order.whatIf = False
+    client.place_order(order_id, contract, order)
+w.openOrder = preview
+", Some(&g), None).unwrap();
+                let result = client.call_method0(py, "poll");
+                let received: Vec<(i64, i64, bool)> = g.get_item("received").unwrap().unwrap().extract().unwrap();
+                assert_eq!(received, [(42, 756733, true)], "the callback is built from the completed preview");
+                if interrupt {
+                    assert!(result.unwrap_err().is_instance_of::<pyo3::exceptions::PyKeyboardInterrupt>(py));
+                    assert!(client.get().core.tracked_order(42).is_none(), "an interrupt leaves no completed preview tracked");
+                } else {
+                    result.unwrap();
+                    assert!(matches!(rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::SubmitEx { order_id: 42, .. }))),
+                        "placing the preview's number must submit a new order");
+                    assert!(!client.get().core.tracked_order(42).unwrap().what_if,
+                        "the new placement remains tracked after the callback");
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn a_bound_authentication_provider_is_collected_and_its_engine_stopped() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, _shared, _w) = wired_client(py);
+            let app = py.eval(c"type('App', (), {'code': lambda self, *args: '123456'})()", None, None).unwrap();
+            app.setattr("client", &client).unwrap();
+            let weak_app = py.import("weakref").unwrap().getattr("ref").unwrap().call1((&app,)).unwrap();
+            let provider = client.get().code_provider_from_py(Some(app.getattr("code").unwrap().unbind())).unwrap();
+            assert_eq!(provider(IbKeyChallenge::default()).unwrap(), "123456");
+            let reconnect_provider = provider.clone();
+            let heard = Arc::new(Mutex::new(Vec::new()));
+            let heard_here = heard.clone();
+            *client.get()._thread.lock().unwrap() = Some(thread::spawn(move || {
+                while let Ok(cmd) = rx.recv() {
+                    let stop = matches!(cmd, ControlCommand::Shutdown);
+                    heard_here.lock().unwrap().push(cmd);
+                    if stop { break; }
+                }
+                drop(reconnect_provider);
+            }));
+            drop(app);
+            drop(client);
+            crate::python::collect_weakref(py, &weak_app).unwrap();
+            assert!(weak_app.call0().unwrap().is_none(), "the bound provider kept its application and client alive");
+            assert!(matches!(heard.lock().unwrap()[..], [ControlCommand::Logout, ControlCommand::Shutdown]),
+                "collecting the client stops its engine");
+            assert!(provider(IbKeyChallenge::default()).unwrap_err().to_string().contains("no longer available"));
+        });
+    }
+
+    #[test]
+    fn option_calculations_propagate_interrupts_from_opening_the_model_watch() {
+        Python::initialize();
+        Python::attach(|py| {
+            for method in ["calculate_implied_volatility", "calculate_option_price"] {
+                for exception in ["KeyboardInterrupt", "SystemExit"] {
+                    let (client, rx, shared, w) = wired_client(py);
+                    shared.market.set_instrument_count(1);
+                    let engine = thread::spawn(move || {
+                        while let Ok(cmd) = rx.recv() {
+                            if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
+                                reply.send(Ok(0)).unwrap();
+                                return rx;
+                            }
+                        }
+                        panic!("the stock subscription must reach the engine");
+                    });
+                    client.get().req_mkt_data(py, 7, &Contract {
+                        con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+                        exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+                    }, "", false, false, Vec::new()).unwrap();
+                    let rx = py.detach(|| engine.join().unwrap());
+                    assert_eq!(client.get().core.watching(7), Some(0));
+                    let option = Py::new(py, Contract {
+                        con_id: 100, symbol: "SPY".into(), sec_type: "OPT".into(),
+                        exchange: "SMART".into(), currency: "USD".into(),
+                        last_trade_date_or_contract_month: "20261218".into(), strike: 100.0,
+                        right: "C".into(), multiplier: "100".into(), ..Default::default()
+                    }).unwrap();
+                    let g = pyo3::types::PyDict::new(py);
+                    g.set_item("w", &w).unwrap();
+                    g.set_item("exception", exception).unwrap();
+                    py.run(c"
+import builtins
+errors = []
+def error(*args):
+    errors.append(args)
+    raise getattr(builtins, exception)('stop option calculation')
+w.error = error
+", Some(&g), None).unwrap();
+                    let err = client.call_method1(py, method, (7, &option, 1.0, 100.0))
+                        .expect_err("the model subscription's interrupt must leave the calculation");
+                    assert_eq!(err.get_type(py).name().unwrap(), exception);
+                    let codes: Vec<i32> = py.eval(c"[e[2] for e in errors]", Some(&g), None).unwrap().extract().unwrap();
+                    assert_eq!(codes, [crate::error_codes::DUPLICATE_TICKER_ID]);
+                    assert!(shared.reference.drain_historical_errors_for_dispatch(|_| false).is_empty(),
+                        "the interrupt must not queue another refusal");
+                    assert!(client.get().pending_option_calcs.lock().unwrap().is_empty());
+                    assert_eq!(client.get().core.watching(7), Some(0));
+                    assert!(rx.try_recv().is_err());
+                }
+            }
         });
     }
 }

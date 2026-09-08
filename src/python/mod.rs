@@ -131,3 +131,25 @@ mod settings_from_tests {
         assert!(on.reconnect_on_socket_err, "and on when it says so");
     }
 }
+
+/// A collection can release the GIL while an engine is joined. Python skips
+/// another collection until that pass finishes, so its completion is what
+/// these checks wait for.
+#[cfg(test)]
+pub(crate) fn collect_until(py: Python<'_>, collected: impl Fn() -> PyResult<bool>) -> PyResult<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        py.import("gc")?.call_method0("collect")?;
+        if collected()? { return Ok(()); }
+        if std::time::Instant::now() >= deadline {
+            return Err(pyo3::exceptions::PyAssertionError::new_err("Python cycle was not collected"));
+        }
+        py.detach(|| std::thread::sleep(std::time::Duration::from_millis(1)));
+    }
+}
+
+#[cfg(test)]
+#[pyfunction]
+pub(crate) fn collect_weakref(py: Python<'_>, reference: &Bound<'_, PyAny>) -> PyResult<()> {
+    collect_until(py, || Ok(reference.call0()?.is_none()))
+}
