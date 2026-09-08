@@ -3404,7 +3404,7 @@ fn a_session_held_for_hours_phase_live() {
         if !connected_before && connected { restores += 1; println!("  lap {laps}: and it is back"); }
         connected_before = connected;
 
-        if laps % 15 == 0 {
+        if laps.is_multiple_of(15) {
             println!(
                 "  {} laps, {} losses, {} restores, {} refusals, connected={}",
                 laps, losses, restores, refusals, connected,
