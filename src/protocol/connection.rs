@@ -837,7 +837,7 @@ impl Connection {
 /// Compute total length of a length-prefixed, trailer-free message whose
 /// tag-8 header is 4 bytes: `8=O\x01`, `8=1\x01`, or `8=X\x01`, each followed
 /// by `9=<body_len>\x01 ...`.
-pub(super) fn binary_msg_length(data: &[u8]) -> Option<usize> {
+pub(crate) fn binary_msg_length(data: &[u8]) -> Option<usize> {
     let (soh_pos, body_len) = stated_body_length(data)?;
     // The length is whatever the peer wrote, so a total that does not fit is
     // a length no frame can have rather than something to add anyway: added
@@ -848,7 +848,7 @@ pub(super) fn binary_msg_length(data: &[u8]) -> Option<usize> {
 
 /// Compute total length of a `8=FIX.4.1\x01 9=<body_len>\x01 ...` message.
 /// Includes the 7-byte checksum trailer `10=XXX\x01`.
-pub(super) fn fix_msg_length(data: &[u8]) -> Option<usize> {
+pub(crate) fn fix_msg_length(data: &[u8]) -> Option<usize> {
     let (soh_pos, body_len) = stated_body_length(data)?;
     // header up to and including SOH after tag 9, + body + "10=XXX\x01" (7 bytes)
     soh_pos.checked_add(8)?.checked_add(body_len)

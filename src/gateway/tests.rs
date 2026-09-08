@@ -1260,6 +1260,36 @@ mod routing_response_tests {
         assert_eq!(got, frame);
     }
 
+    /// The farm's own traffic arriving first does not end the wait.
+    ///
+    /// A compressed heartbeat is a complete frame and is not the answer. Ended
+    /// on it, the reply arrived afterwards on the connection's own reads — and
+    /// the loop that takes a routing table out of a frame runs only over what
+    /// this returned, so the table stayed empty for the session on a reply the
+    /// venue had sent.
+    #[test]
+    fn a_heartbeat_before_the_reply_does_not_end_the_wait() {
+        let heartbeat = crate::protocol::fixcomp::fixcomp_build(
+            &crate::protocol::fix::fix_build(&[(35, "1"), (112, "probe")], 1),
+        );
+        let reply = b"8=O\x019=5\x01hello".to_vec();
+
+        let mut wire = RoutingReader {
+            script: vec![Ok(heartbeat.clone()), Ok(reply.clone()), Ok(Vec::new())],
+        };
+        let got = super::super::read_routing_response(
+            &mut wire,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .expect("the reply arrives behind the heartbeat");
+
+        assert!(
+            got.windows(reply.len()).any(|w| w == reply.as_slice()),
+            "the wait ended on the farm's own traffic, so the reply reached \
+             nothing that reads a routing table: {got:?}",
+        );
+    }
+
     /// The deadline stands for an answer that is not coming, and a peer that
     /// keeps sending is still not answering.
     ///

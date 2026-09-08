@@ -617,6 +617,43 @@ pub fn parse_farm_route(route: &str) -> Option<(String, String, Option<u16>)> {
     Some((host, farm, port))
 }
 
+/// Whether the routing reply itself is complete in `buf`.
+///
+/// Asked instead of "is anything complete", because the farm sends its own
+/// traffic while the routing reply is being waited for. A compressed heartbeat
+/// arriving first is a complete frame and is not the answer: the wait ended on
+/// it, the reply arrived on the next read into the connection's own buffer,
+/// and the only place that reads a routing table out of a frame is the loop
+/// that runs over what this returned. The table stayed empty for the session
+/// on a reply the venue had sent.
+///
+/// Frames before it are walked over rather than waited on, and anything this
+/// framing does not recognise stops the walk — there is no telling where the
+/// next frame starts once that happens.
+pub(super) fn holds_a_routing_reply(buf: &[u8]) -> bool {
+    let mut cursor = 0usize;
+    while cursor < buf.len() {
+        let rest = &buf[cursor..];
+        let length = if rest.starts_with(b"8=O\x01") {
+            match crate::protocol::connection::binary_msg_length(rest) {
+                Some(total) if total <= rest.len() => return true,
+                _ => return false,
+            }
+        } else if rest.starts_with(b"8=FIXCOMP\x01") {
+            fixcomp::fixcomp_length(rest)
+        } else if rest.starts_with(b"8=FIX.4.1\x01") {
+            crate::protocol::connection::fix_msg_length(rest)
+        } else {
+            return false;
+        };
+        match length {
+            Some(total) if total <= rest.len() && total > 0 => cursor += total,
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Returns true if `buf` contains at least one complete `8=O` (binary) or
 /// `8=FIXCOMP` frame. Used to terminate read drains as soon as the expected
 /// response is fully buffered.

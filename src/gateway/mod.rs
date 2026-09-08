@@ -1468,7 +1468,15 @@ fn read_routing_response<R: Read>(
             }
             Ok(n) => {
                 crate::protocol::connection::hold_what_was_read(&mut resp_buf, &tmp[..n])?;
-                if has_complete_response_frame(&resp_buf) {
+                // The reply itself, not merely something complete. The farm
+                // sends its own traffic while this is waited for, and a
+                // compressed heartbeat arriving first ended the wait on a frame
+                // that is not the answer — the reply then arrived on the
+                // connection's own reads, where nothing takes a routing table
+                // out of it. A peer that has gone quiet is still answered by
+                // the arm below, so a farm that sends no routing reply at all
+                // waits no longer than it did.
+                if holds_a_routing_reply(&resp_buf) {
                     return Ok(resp_buf);
                 }
             }
