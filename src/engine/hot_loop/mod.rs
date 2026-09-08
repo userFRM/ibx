@@ -2584,23 +2584,29 @@ impl HotLoop {
         if self.reconnect_halted.is_some() {
             return;
         }
-        if self.pending_farm_reconnect.is_none() && self.pending_ccp_reconnect.is_none() {
-            return;
+        // Each transport spends its own recovery clock: the trading budget for
+        // the trading connection, the farm's for the farm. Measured against the
+        // trading budget, a farm-only recovery was ended by a deadline the farm
+        // had not reached — or, with the trading clock never started, bounded
+        // by no deadline at all.
+        //
+        // And each is read whatever the other is doing. Read as one or the
+        // other, a farm attempt running beside a trading one was not measured
+        // at all: the trading attempt answered for both, and one waiting on a
+        // person waits to its own timeout, so the farm's limit went unread for
+        // as long as that lasted and a farm connection landing well past it was
+        // installed as though it had arrived in time. The farm is asked first,
+        // because the trading connection running out ends the session.
+        if self.pending_farm_reconnect.is_some()
+            && self.farm_budget.out_of_time(&self.reconnect_cfg, now)
+        {
+            self.report_recovery_exhausted("farm");
         }
-        // Each transport spends its own recovery clock: the trading budget
-        // for the trading connection, the farm's for the farm. Measured
-        // against the trading budget, a farm-only recovery was ended by a
-        // deadline the farm had not reached — or, with the trading clock
-        // never started, bounded by no deadline at all.
-        let (which, budget) = if self.pending_ccp_reconnect.is_some() {
-            ("ccp", &self.budget)
-        } else {
-            ("farm", &self.farm_budget)
-        };
-        if !budget.out_of_time(&self.reconnect_cfg, now) {
-            return;
+        if self.pending_ccp_reconnect.is_some()
+            && self.budget.out_of_time(&self.reconnect_cfg, now)
+        {
+            self.report_recovery_exhausted("ccp");
         }
-        self.report_recovery_exhausted(which);
     }
 
     /// Say once that recovery has stopped, so a caller waiting on a connection
@@ -5653,6 +5659,50 @@ mod tests {
         // The trading connection running out is what ends it.
         hl.report_recovery_exhausted("ccp");
         assert!(shared.reference.session_over().is_some(), "the trading connection's budget is");
+    }
+
+    /// The farm's own clock is read whatever the trading connection is doing.
+    ///
+    /// The two budgets are separate and start at different moments, and this
+    /// read took one or the other: with a trading attempt in flight the farm's
+    /// limit was not read at all. A trading handshake that waits on a person
+    /// waits to its own timeout, so the farm went on dialling long past what
+    /// the caller allowed it, and a farm connection landing after that was
+    /// installed as though it had arrived in time.
+    #[test]
+    fn a_farm_out_of_time_is_given_up_though_a_trading_attempt_is_in_flight() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        hl.set_reconnect_config(
+            crate::reliability::ReconnectConfig::default()
+                .with_max_elapsed(Duration::from_secs(30)),
+        );
+
+        // Both transports are recovering. The senders are held so the receivers
+        // read as attempts still in flight rather than as workers that ended.
+        let (farm_tx, farm_rx) = std::sync::mpsc::channel();
+        let (ccp_tx, ccp_rx) = std::sync::mpsc::channel();
+        hl.pending_farm_reconnect = Some(farm_rx);
+        hl.pending_ccp_reconnect = Some(ccp_rx);
+
+        let now = Instant::now();
+        // The farm has been at it past what the caller allowed; the trading
+        // connection started later and is still inside its own limit.
+        hl.farm_budget.record_attempt(now - Duration::from_secs(60));
+        hl.budget.record_attempt(now - Duration::from_secs(5));
+
+        hl.abandon_recovery_past_its_deadline(now);
+
+        assert!(
+            hl.farm_halted.is_some(),
+            "the farm outran its own clock and went on dialling because the \
+             trading connection was still inside its",
+        );
+        assert!(
+            shared.reference.session_over().is_none(),
+            "and the farm running out is not the session running out",
+        );
+        drop((farm_tx, ccp_tx));
     }
 
     /// And the loop says it, rather than only a test calling by hand.
