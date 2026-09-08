@@ -1799,7 +1799,20 @@ impl HotLoop {
                 }
                 ControlCommand::FetchHistoricalTicks { contract, req_id, start_date_time, end_date_time, number_of_ticks, what_to_show, use_rth, include_expired, .. } => {
                     let ContractRef { con_id, sec_type, exchange, .. } = contract;
-                    if self.hmds_conn.is_none() {
+                    // The engine-side reading of the name, for a caller that
+                    // reached this loop by the control channel rather than
+                    // through a surface. The builder falls back to trades on a
+                    // name it does not know — and the file it lives in says
+                    // why that is wrong: a misspelled one asks for a different
+                    // series than the caller named, and what comes back reads
+                    // as what was asked for. The bar batch beside this keeps
+                    // the same backstop for the same reason.
+                    if let Err(e) = crate::control::historical::tick_data_type(&what_to_show) {
+                        log::error!("historical ticks req_id={req_id}: {e}");
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::Refusal::VALIDATION, e, false,
+                        );
+                    } else if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else {
                         self.hmds.send_historical_ticks_request(req_id, con_id, &sec_type, &exchange, &start_date_time, &end_date_time, number_of_ticks, &what_to_show, use_rth, include_expired, &mut self.hmds_conn, &mut self.hb);
@@ -1807,7 +1820,21 @@ impl HotLoop {
                 }
                 ControlCommand::SubscribeRealTimeBar { contract, req_id, what_to_show, use_rth, .. } => {
                     let ContractRef { con_id, symbol, sec_type, exchange, .. } = contract;
-                    if self.hmds_conn.is_none() {
+                    // Ahead of the transport, because a request naming a series
+                    // this client cannot express is malformed whether or not
+                    // there is a connection to send it on — and the reason it
+                    // is refused is the caller's to hear either way. As on the
+                    // ticks above: the builder falls back to trades on a name
+                    // it does not know, and a caller reaching this loop by the
+                    // control channel is refused nowhere else.
+                    if let Err(e) =
+                        crate::control::historical::BarDataType::from_api_str(&what_to_show)
+                    {
+                        log::error!("live bars req_id={req_id}: {e}");
+                        push_hmds_refusal(
+                            &self.shared, req_id, crate::error_codes::Refusal::VALIDATION, e, false,
+                        );
+                    } else if self.hmds_conn.is_none() {
                         self.emit_hmds_unavailable(req_id, false);
                     } else if self.hmds.rtbar_subs.iter().any(|(_, rid, ..)| *rid == req_id) {
                         // As a second scan, tick stream or bar query under a
@@ -4752,6 +4779,54 @@ mod tests {
             told.is_empty(),
             "the stream's watchers were told their quote had been refused: {told:?}",
         );
+    }
+
+    /// A series named by something this client does not know is refused, not
+    /// answered with trades.
+    ///
+    /// The builders fall back to trades on a name they do not know, and the
+    /// file they live in says why that is wrong: a misspelled name asks for a
+    /// different series than the caller named, and what comes back reads as
+    /// what was asked for. The surfaces refuse it before the command is sent
+    /// — and a caller reaching this loop by the control channel goes past
+    /// them, which is what the backstop on the bar batch beside these exists
+    /// for. These two had none.
+    #[test]
+    fn a_series_this_client_does_not_know_is_refused_on_the_control_channel() {
+        for command in [
+            ControlCommand::FetchHistoricalTicks {
+                contract: ContractRef { con_id: 756733, sec_type: "STK".into(), ..Default::default() },
+                req_id: 61,
+                start_date_time: String::new(),
+                end_date_time: String::new(),
+                number_of_ticks: 10,
+                what_to_show: "NOT_A_SERIES".into(),
+                use_rth: true,
+                include_expired: false,
+                filters: Default::default(),
+            },
+            ControlCommand::SubscribeRealTimeBar {
+                contract: ContractRef { con_id: 756733, sec_type: "STK".into(), ..Default::default() },
+                req_id: 62,
+                what_to_show: "NOT_A_SERIES".into(),
+                use_rth: true,
+                filters: Default::default(),
+            },
+        ] {
+            let shared = Arc::new(SharedState::new());
+            let mut hl = HotLoop::new(shared.clone(), None, None);
+            let (tx, rx) = std::sync::mpsc::sync_channel(4);
+            hl.set_control_rx(rx);
+            tx.send(command).expect("the engine holds the other end");
+            hl.poll_once();
+
+            let told = shared.reference.drain_historical_errors();
+            assert!(
+                told.iter().any(|(_, _, said)| said.contains("Unsupported what_to_show")),
+                "a series this client does not know was asked for as trades, and \
+                 what came back read as what the caller wanted: {told:?}",
+            );
+        }
     }
 
     /// A caller that stopped waiting is sent no subscription.
