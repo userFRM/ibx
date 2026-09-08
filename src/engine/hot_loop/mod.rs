@@ -2439,10 +2439,22 @@ impl HotLoop {
         // This session's logon is now the newer one. Left at the first, every
         // later reconnect would find its own previous logon listed as a
         // competing session and give the account up to itself.
-        if let Some(stamped) = conn.logged_in_at.clone()
-            && let Some(auth) = self.reconnect_auth.as_mut()
-        {
-            auth.logged_in_at = stamped;
+        //
+        // Which is what an unstamped reconnect did. A reconnect is allowed to
+        // carry no stamp, and kept only where one arrived, this stayed at the
+        // first connect's while the venue recorded the session later. The next
+        // reconnect is then told of this client's own logon, not yet reaped,
+        // under a time later than the one held here — reads it as another
+        // client, gives the account up and reports a competing login, sending
+        // whoever owns the account after a competitor that does not exist. The
+        // local clock stands in, as it already does on the first connect,
+        // where the venue states nothing. What the venue itself said is
+        // reported above and stays the venue's alone.
+        if let Some(auth) = self.reconnect_auth.as_mut() {
+            auth.logged_in_at = conn
+                .logged_in_at
+                .clone()
+                .unwrap_or_else(|| chrono_free_timestamp().to_string());
         }
         // Where this attempt landed. A reconnect can be redirected, and a
         // session that does not remember it dials the door again every time
@@ -6211,6 +6223,59 @@ mod tests {
             due.saturating_duration_since(Instant::now()) <= Duration::from_secs(82),
             "and the ladder stays capped rather than drifting out to nothing",
         );
+    }
+
+    /// A reconnect the venue stamped nothing on still moves the logon time on.
+    ///
+    /// A reconnect is allowed to carry no stamp. Kept only where one arrived,
+    /// the time held stayed at the first connect's while the venue recorded
+    /// this session later — so the next reconnect, told of this client's own
+    /// logon not yet reaped, read a time later than the one it held, called it
+    /// another client, gave the account up and reported a competing login
+    /// against a competitor that does not exist.
+    #[test]
+    fn a_reconnect_the_venue_stamped_nothing_on_still_moves_the_logon_on() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.set_reconnect_auth(crate::gateway::ReconnectAuth {
+            account_id: String::new(),
+            trading_port: None,
+            hmds_port: None,
+            secdef_port: None,
+            logged_in_at: "20260101-00:00:00".into(),
+            alternate_hosts: Vec::new(),
+            settings: Default::default(),
+            host: "gw.example".into(),
+            username: "u".into(),
+            password: zeroize::Zeroizing::new(String::new()),
+            paper: true,
+            code_provider: None,
+            ib_key_timeout_secs: crate::auth::session::IB_KEY_DEFAULT_TIMEOUT_SECS,
+            ib_key_token_sub_type: crate::auth::session::IB_KEY_DEFAULT_TOKEN_SUB_TYPE.into(),
+            session_key: Default::default(),
+            session_token: Default::default(),
+            server_session_id: String::new(),
+            hw_info: String::new(),
+            encoded: String::new(),
+            hmds_host: "hmds.example".into(),
+            hmds_farm: "hfarm".into(),
+            trading_host: "trade.example".into(),
+            trading_farm: "tfarm".into(),
+            secdef_host: String::new(),
+            secdef_farm: String::new(),
+        });
+
+        // A connection the venue answered without stamping.
+        let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+        assert!(conn.logged_in_at.is_none(), "the venue stamped nothing on it");
+        hl.reconnect_ccp(conn);
+
+        let held = &hl.reconnect_auth.as_ref().expect("the session reconnects").logged_in_at;
+        assert_ne!(
+            held, "20260101-00:00:00",
+            "the logon this session is compared against is the one it opened with, \
+             so its own later logon reads as somebody else's",
+        );
+        assert!(!held.is_empty(), "and an empty one gives the account up to everybody");
     }
 
     /// The limits the caller set bound a farm the session can live without,
