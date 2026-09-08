@@ -15,6 +15,14 @@ use crate::config::*;
 use crate::protocol::ns::{self, *};
 use crate::protocol::xyz;
 
+/// The message id the venue states an SRP verdict under.
+///
+/// The exchange runs on odd ids out and even ids back: 1 asks for the
+/// parameters and 2 answers, 3 offers the public value and 4 answers, 5 sends
+/// the client's proof and 6 carries the verdict. An id outside that set
+/// belongs to something else the venue is saying.
+const SRP_AUTH_RESULT: u32 = 6;
+
 /// Result of authentication.
 ///
 /// `session_token` is the SRP-derived shared secret K as a `BigUint`. For wire-byte
@@ -28,14 +36,6 @@ use crate::protocol::xyz;
 /// `token_type` is one of `"st"`, `"tst"`, or `"zenith"` and corresponds verbatim to
 /// the
 /// `stoken_type` value used by SSO authenticators in the upstream Java auth flow.
-/// The message id the venue states an SRP verdict under.
-///
-/// The exchange runs on odd ids out and even ids back: 1 asks for the
-/// parameters and 2 answers, 3 offers the public value and 4 answers, 5 sends
-/// the client's proof and 6 carries the verdict. An id outside that set
-/// belongs to something else the venue is saying.
-const SRP_AUTH_RESULT: u32 = 6;
-
 pub struct AuthResult {
     /// SRP shared secret K. Use [`session_token_bytes`](Self::session_token_bytes) for
     /// the

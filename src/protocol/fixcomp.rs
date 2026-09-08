@@ -276,7 +276,12 @@ fn checksum_end(chunk: &[u8]) -> Option<usize> {
                     .position(|&b| b == SOH)
                     .map(|p| rt + 4 + p)?;
                 let rdl: usize = std::str::from_utf8(&chunk[rt + 4..after95]).ok()?.parse().ok()?;
-                let tag96 = find_tag(&chunk[after95..], b"96=").map(|p| after95 + p)?;
+                // The payload follows tag 95 immediately. Searching beyond
+                // it can borrow a later message's block and swallow its reply.
+                let tag96 = after95 + 1;
+                if !chunk.get(tag96..).is_some_and(|rest| rest.starts_with(b"96=")) {
+                    return None;
+                }
                 // The length is the sender's, and it is read before the bytes
                 // it counts have been seen. One that runs past the end is what
                 // a message cut inside a block looks like, so it is given up
@@ -415,19 +420,31 @@ mod tests {
     #[test]
     fn a_raw_data_length_past_the_end_drops_the_frame() {
         let mut msg = Vec::new();
-        msg.extend_from_slice(b"8=FIX.4.2\x019=40\x0135=A\x0195=99999\x0196=AB\x0110=000\x01");
+        msg.extend_from_slice(b"8=FIX.4.2\x0135=A\x0195=99999\x0196=AB\x0110=000\x01");
         let (messages, leftover) = split_messages(&msg);
         assert!(messages.is_empty(), "a frame that cannot be read is not a message");
         assert_eq!(leftover, msg.len(), "and every byte of it is still unconsumed");
 
         // The same shape with a length the bytes do satisfy is still read.
-        // Its tag 9 states the body it actually carries: a message ends where
-        // its length says, so one whose header overstates it is a message
-        // still arriving and is held rather than framed.
         let mut whole = Vec::new();
-        whole.extend_from_slice(b"8=FIX.4.2\x019=16\x0135=A\x0195=2\x0196=AB\x0110=000\x01");
+        whole.extend_from_slice(b"8=FIX.4.2\x0135=A\x0195=2\x0196=AB\x0110=000\x01");
         let (messages, _) = split_messages(&whole);
         assert_eq!(messages.len(), 1, "a length the frame satisfies is followed");
+    }
+
+    /// A missing payload tag cannot be supplied by another field or message.
+    #[test]
+    fn a_raw_data_tag_must_follow_its_length() {
+        for misplaced in [
+            b"58=96=AB\x0110=000\x01".as_slice(),
+            b"10=000\x018=FIX.4.2\x0135=B\x0195=2\x0196=AB\x0110=000\x01",
+        ] {
+            let mut batch = b"8=FIX.4.2\x0135=B\x0195=2\x01".to_vec();
+            batch.extend_from_slice(misplaced);
+            let (messages, unread) = split_messages(&batch);
+            assert!(messages.is_empty(), "a displaced block is not a message: {messages:?}");
+            assert_eq!(unread, batch.len(), "no later message supplies the missing tag");
+        }
     }
 
     /// A message that loses its checksum does not take the next one with it.

@@ -890,7 +890,7 @@ fn poll_pnl_single_change_detection_suppresses_duplicate() {
 fn a_delayed_subscription_numbers_its_ticks_as_delayed() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    core.mdt_by_req.lock().unwrap().insert(11, MDT_DELAYED);
+    core.mdt_by_instrument.lock().unwrap().insert(0, MDT_DELAYED);
     shared.market.push_quote(0, &Quote {
         bid: 100 * crate::types::PRICE_SCALE, ask: 101 * crate::types::PRICE_SCALE,
         last: 100 * crate::types::PRICE_SCALE + crate::types::PRICE_SCALE / 2,
@@ -2952,4 +2952,108 @@ fn an_answer_this_side_worked_out_is_not_dropped_with_a_slot() {
         !left.iter().any(|c| c.answers.is_none()),
         "and the model the venue published for the slot did go with it: {left:?}",
     );
+}
+
+/// A follower receives the feed already subscribed, including after promotion.
+#[test]
+fn followers_keep_the_subscriptions_market_data_type() {
+    for con_id in [756733, 0] {
+        let core = ClientCore::new();
+        let shared = SharedState::new();
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let engine = std::thread::spawn(move || {
+            while let Ok(cmd) = rx.recv() {
+                if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
+                    reply.send(Ok(0)).unwrap();
+                }
+            }
+        });
+        let subscribe = |req_id| core.register_mkt_data(
+            &shared, &tx, req_id, con_id, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+            false, false, "", core.subscription_mode(),
+        ).unwrap();
+
+        core.set_market_data_type(MDT_DELAYED);
+        subscribe(1);
+        core.set_market_data_type(MDT_REALTIME);
+        subscribe(2);
+        assert_eq!(core.check_mdt_needed(1, true), Some(MDT_DELAYED));
+        assert_eq!(core.check_mdt_needed(2, true), Some(MDT_DELAYED), "follower, conId {con_id}");
+        for holder in [1, 2] {
+            shared.market.push_quote(0, &Quote {
+                bid: (100 + holder) * crate::types::PRICE_SCALE,
+                ..Default::default()
+            });
+            assert_eq!(core.req_id_for_instrument(0), holder);
+            let polled = core.poll_instrument_ticks(&shared, 0, holder);
+            assert!(polled.delayed);
+            assert_eq!(polled.ticks[0].tick_type, 66);
+            let (withdraw, _) = core.unregister_mkt_data(&shared, holder);
+            assert_eq!(withdraw, (holder == 2).then_some(0));
+        }
+        subscribe(3);
+        assert_eq!(core.check_mdt_needed(3, true), Some(MDT_REALTIME), "a new subscription has its own mode");
+        drop(tx);
+        engine.join().unwrap();
+    }
+}
+
+/// Resolved contracts inherit the feed at their destination slot.
+#[test]
+fn moved_watchers_report_the_destination_subscriptions_type() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    let engine = std::thread::spawn(move || {
+        while let Ok(cmd) = rx.recv() {
+            if let ControlCommand::Subscribe { contract, reply_tx: Some(reply), .. } = cmd {
+                reply.send(Ok(contract.con_id as InstrumentId)).unwrap();
+            }
+        }
+    });
+    for (req_id, con_id, mode) in [(10, 1, 0), (20, 2, 1)] {
+        core.register_mkt_data(
+            &shared, &tx, req_id, con_id, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+            false, false, "", mode,
+        ).unwrap();
+    }
+    assert_eq!(core.check_mdt_needed(20, true), Some(MDT_DELAYED));
+    core.move_watchers(&shared, 2, 1);
+    assert_eq!(core.watching(20), Some(1));
+    assert_eq!(core.check_mdt_needed(20, true), Some(MDT_REALTIME));
+
+    core.set_market_data_type(MDT_DELAYED);
+    core.move_watchers(&shared, 1, 3);
+    for req_id in [10, 20] {
+        assert_eq!(core.watching(req_id), Some(3));
+        assert_eq!(core.check_mdt_needed(req_id, true), Some(MDT_REALTIME), "the feed moves with its slot");
+    }
+    drop(tx);
+    engine.join().unwrap();
+}
+
+/// A model on a reused slot belongs to its new contract.
+#[test]
+fn an_option_solve_forgets_a_released_contracts_slot() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let option = ApiContract {
+        con_id: 101, sec_type: "OPT".into(), strike: 100.0, right: "C".into(),
+        ..Default::default()
+    };
+    let publish = || shared.market.push_option_computation(crate::types::OptionComputation {
+        instrument: 3, implied_vol: 0.2, opt_price: 5.0, und_price: 100.0,
+        cal_days: 30.0, ..Default::default()
+    });
+    let solve = |terms, model| crate::control::option_model::option_price(terms, model, 0.2, 100.0);
+    core.cache_instrument(option.con_id, 3);
+    publish();
+    assert!(core.solve_option(&shared, &option, None, solve).unwrap().is_finite());
+
+    shared.market.note_released_slot(3);
+    core.cache_instrument(202, 3);
+    publish();
+    let why = core.solve_option(&shared, &option, None, solve)
+        .expect_err("another contract's model cannot answer this option");
+    assert_eq!(why.message, OPTION_MODEL_UNSTATED);
 }

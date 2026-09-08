@@ -780,6 +780,14 @@ impl HotLoop {
             return;
         }
         self.pinned_by_position.retain(|id| *id != instrument);
+        // Releasing a slot purges the move that tells its watchers where the
+        // contract went. Keep it until they have read that move.
+        if self.shared.market.a_move_is_pending_from(instrument) {
+            if !self.slots_awaiting_their_move.contains(&instrument) {
+                self.slots_awaiting_their_move.push(instrument);
+            }
+            return;
+        }
         if self.context.market.unregister(instrument).is_some() {
             // Said, so the surfaces stop naming a slot this contract no longer
             // holds. They cache the slot a contract was given, and the slot
@@ -2810,17 +2818,7 @@ impl HotLoop {
             return;
         }
         if !self.farm_budget.may_retry(&self.reconnect_cfg, Instant::now()) {
-            // Not while the trading connection is still dialling on an attempt
-            // this budget allowed. The count says how many more may start, not
-            // how long the one running may take, and giving up here takes that
-            // one back — so with a single attempt permitted the connection that
-            // spent it was cancelled by the scheduler beside it, and a recovery
-            // that would have landed on its only try never got it. Only the
-            // elapsed limit ends an attempt in flight; this is said once the
-            // last of them has resolved.
-            if self.pending_ccp_reconnect.is_none() {
-                self.report_recovery_exhausted("farm");
-            }
+            self.report_recovery_exhausted("farm");
             return;
         }
         // Given back before the delay below is read off it, and only by a
@@ -2865,11 +2863,7 @@ impl HotLoop {
             return;
         }
         if !self.budget.may_retry(&self.reconnect_cfg, Instant::now()) {
-            // Not while the quote feed is still dialling on an attempt this
-            // budget allowed: see the farm's own scheduler.
-            if self.pending_farm_reconnect.is_none() {
-                self.report_recovery_exhausted("ccp");
-            }
+            self.report_recovery_exhausted("ccp");
             return;
         }
         // Given back before the delay below is read off it, and only by a
@@ -4826,6 +4820,32 @@ mod tests {
         );
     }
 
+    /// Every reclamation path leaves an unread move intact. Once the caller
+    /// drains it, the deferred sweep gives the otherwise unused slot back.
+    #[test]
+    fn a_slot_with_an_unread_move_survives_reclamation() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let destination = hl.context.register_instrument(756733);
+        let source = hl.context.register_instrument(0);
+        shared.market.push_subscription_move(source, destination);
+        hl.context.insert_order(crate::types::Order::new(
+            7, source, crate::types::Side::Buy, crate::types::QTY_SCALE,
+            PRICE_SCALE, b'2', b'0', 0,
+        ));
+        hl.context.remove_order(7);
+        hl.reclaim_slots_no_order_holds();
+        hl.try_reclaim_instrument(source);
+
+        assert_eq!(hl.context.market.con_id(source), Some(0), "the source still holds its slot");
+        assert_eq!(hl.slots_awaiting_their_move, vec![source], "queued once for release after the move");
+        assert_eq!(shared.market.drain_subscription_moves(), vec![(source, destination)]);
+        hl.give_back_slots_their_move_has_left();
+        assert!(hl.slots_awaiting_their_move.is_empty());
+        assert!(hl.context.market.con_id(source).is_none());
+        assert_eq!(hl.context.register_instrument(265598), source, "the slot is reusable after the move");
+    }
+
     /// A request answered by what is already up, and only where it can be.
     ///
     /// The chargeable snapshot is not a subscription anybody shares. It is a
@@ -5426,17 +5446,69 @@ mod tests {
         );
     }
 
-    /// The attempt limit says how many attempts may start, not how long the
-    /// one running may take: the scheduler beside an attempt does not take
-    /// back the last one the caller allowed.
-    ///
-    /// Both connections recover side by side off one budget. With a single
-    /// attempt permitted, whichever became due first spent it and started
-    /// dialling — and the other then found the budget spent, gave recovery up,
-    /// and the cancellation that carries reached the attempt still in flight.
-    /// A recovery that would have landed on its only try never got it.
+    /// Each transport spends its own attempts. One still dialling leaves the
+    /// other's unspent budget available, even when the limit is one.
     #[test]
     fn the_scheduler_beside_an_attempt_does_not_take_back_the_last_one_allowed() {
+        for farm_dialling in [true, false] {
+            let shared = Arc::new(SharedState::new());
+            let mut hl = HotLoop::new(shared.clone(), None, None);
+            hl.set_reconnect_config(
+                crate::reliability::ReconnectConfig::default().with_max_attempts(1),
+            );
+            hl.farm.disconnected = true;
+            hl.ccp.disconnected = true;
+            let (_worker, rx) = std::sync::mpsc::sync_channel(1);
+            if farm_dialling {
+                hl.farm_budget.record_attempt(Instant::now());
+                hl.pending_farm_reconnect = Some(rx);
+                hl.maybe_spawn_ccp_reconnect();
+                assert!(hl.ccp_next_attempt_at.is_some(), "trading still has its attempt");
+            } else {
+                hl.budget.record_attempt(Instant::now());
+                hl.pending_ccp_reconnect = Some(rx);
+                hl.maybe_spawn_farm_reconnect();
+                assert!(hl.farm_next_attempt_at.is_some(), "the farm still has its attempt");
+            }
+            assert!(!hl.reconnect_cancel.load(Ordering::Relaxed));
+            assert!(hl.reconnect_halted.is_none());
+            assert!(hl.farm_halted.is_none());
+            assert!(shared.reference.session_over().is_none());
+        }
+    }
+
+    /// Trading has spent its last attempt. A farm dial spends a separate
+    /// budget and cannot restore the trading connection that orders need.
+    #[test]
+    fn exhausted_trading_recovery_ends_the_session_while_the_farm_dials() {
+        let shared = Arc::new(SharedState::new());
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let mut hl = HotLoop::new(shared.clone(), Some(EventSink::new(tx, Default::default())), None);
+        hl.set_reconnect_config(
+            crate::reliability::ReconnectConfig::default().with_max_attempts(1),
+        );
+        hl.farm.disconnected = true;
+        hl.ccp.disconnected = true;
+        hl.budget.record_attempt(Instant::now());
+        hl.farm_budget.record_attempt(Instant::now());
+        let (_worker, farm_rx) = std::sync::mpsc::sync_channel(1);
+        hl.pending_farm_reconnect = Some(farm_rx);
+
+        hl.maybe_spawn_ccp_reconnect();
+
+        assert_eq!(hl.reconnect_halted, Some(retry::DisconnectReason::RecoveryExhausted));
+        assert!(shared.reference.session_over().is_some());
+        assert!(shared.reference.trading_over().is_some());
+        assert!(hl.reconnect_cancel.load(Ordering::Relaxed));
+        assert!(hl.pending_farm_reconnect.is_none());
+        assert!(matches!(rx.try_recv(), Ok(Event::Disconnected)));
+        hl.maybe_spawn_ccp_reconnect();
+        assert!(rx.try_recv().is_err(), "the end is announced once");
+    }
+
+    /// The farm's exhaustion is reported while trading uses its own attempt.
+    #[test]
+    fn exhausted_farm_recovery_is_reported_while_trading_dials() {
         let shared = Arc::new(SharedState::new());
         let mut hl = HotLoop::new(shared.clone(), None, None);
         hl.set_reconnect_config(
@@ -5444,55 +5516,19 @@ mod tests {
         );
         hl.farm.disconnected = true;
         hl.ccp.disconnected = true;
-
-        // The quote feed became due first, spent the one attempt the caller
-        // allowed, and is dialling on it.
-        hl.budget.record_attempt(Instant::now());
-        let (_worker, farm_rx) = std::sync::mpsc::sync_channel(1);
-        hl.pending_farm_reconnect = Some(farm_rx);
-
-        hl.maybe_spawn_ccp_reconnect();
-
-        assert!(
-            !hl.reconnect_cancel.load(Ordering::Relaxed),
-            "the scheduler beside it took back the only attempt the caller allowed",
-        );
-        assert!(
-            hl.reconnect_halted.is_none(),
-            "and gave recovery up while it was still being carried out",
-        );
-        assert!(
-            shared.reference.session_over().is_none(),
-            "and told every caller the session was over while it was still being rebuilt",
-        );
-
-        // Once nothing is left dialling there is nothing to wait for, and the
-        // count that was spent is said.
-        hl.pending_farm_reconnect = None;
-        hl.maybe_spawn_ccp_reconnect();
-        assert!(
-            hl.reconnect_halted.is_some(),
-            "recovery is given up once the last attempt the caller allowed has resolved",
-        );
-
-        // And the same the other way round, because either scheduler can be
-        // the one that finds the budget spent.
-        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
-        hl.set_reconnect_config(
-            crate::reliability::ReconnectConfig::default().with_max_attempts(1),
-        );
-        hl.farm.disconnected = true;
-        hl.ccp.disconnected = true;
+        hl.farm_budget.record_attempt(Instant::now());
         hl.budget.record_attempt(Instant::now());
         let (_worker, ccp_rx) = std::sync::mpsc::sync_channel(1);
         hl.pending_ccp_reconnect = Some(ccp_rx);
 
         hl.maybe_spawn_farm_reconnect();
 
-        assert!(
-            !hl.reconnect_cancel.load(Ordering::Relaxed),
-            "the quote feed's scheduler took back the trading connection's only attempt",
-        );
+        assert_eq!(hl.farm_halted, Some(retry::DisconnectReason::RecoveryExhausted));
+        assert!(shared.market.market_data_over().is_some());
+        assert!(shared.reference.session_over().is_none());
+        assert!(hl.reconnect_halted.is_none());
+        assert!(hl.pending_ccp_reconnect.is_some());
+        assert!(!hl.reconnect_cancel.load(Ordering::Relaxed));
     }
 
     /// An answer that ends recovery ends the trading connection with it,

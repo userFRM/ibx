@@ -61,7 +61,7 @@ pub(crate) struct HmdsState {
     /// client asked under. The withdrawal by name is accepted and does
     /// nothing, so each is withdrawn again by number when its acknowledgement
     /// states one.
-    pub(crate) tbt_withdrawn_unnumbered: std::collections::HashSet<String>,
+    pub(crate) tbt_withdrawn_unnumbered: std::collections::HashMap<String, (InstrumentId, TbtType)>,
     /// Streams already spoken about, so each is spoken about once.
     pub(crate) tbt_reported: std::collections::HashSet<u64>,
     pub(crate) next_hmds_query_id: u32,
@@ -337,7 +337,7 @@ impl HmdsState {
             next_tbt_req_id: 1,
             tbt_subscriptions: Vec::new(),
             tbt_withdrawn: std::collections::HashSet::new(),
-            tbt_withdrawn_unnumbered: std::collections::HashSet::new(),
+            tbt_withdrawn_unnumbered: std::collections::HashMap::new(),
             tbt_reported: std::collections::HashSet::new(),
             next_hmds_query_id: 1000,
             disconnected: false,
@@ -673,7 +673,7 @@ impl HmdsState {
                         // name did nothing, so it is withdrawn by the number
                         // stated now, and its ticks are known for what they
                         // are.
-                        if self.tbt_withdrawn_unnumbered.remove(&ack.query_id) {
+                        if let Some((instrument, kind)) = self.tbt_withdrawn_unnumbered.remove(&ack.query_id) {
                             // The rule the withdrawal below keeps, which this
                             // branch did not: two callers on one contract and
                             // kind are served under one number, so a cancel
@@ -683,7 +683,11 @@ impl HmdsState {
                             // and that caller was left subscribed in every
                             // table, silent for the rest of the session, and
                             // told nothing.
-                            if self.tbt_subscriptions.iter().any(|sub| sub.venue_id == ack.venue_id) {
+                            // A sibling awaiting its acknowledgement still
+                            // asks for this contract and wire kind.
+                            if self.tbt_subscriptions.iter().any(|sub| sub.venue_id == ack.venue_id
+                                || (sub.instrument == instrument && Self::tbt_wire_kind(sub.kind) == Self::tbt_wire_kind(kind)))
+                            {
                                 log::info!(
                                     "TBT stream {} is still read by another caller; the                                      withdrawal that was waiting for its number leaves it running",
                                     ack.venue_id,
@@ -1681,6 +1685,26 @@ fn build_tbt_query(
     )
 }
 
+    fn tbt_wire_kind(tbt_type: TbtType) -> &'static str {
+        // KNOWN TO DIVERGE. The vendor build states these apart — `Last`,
+        // `AllLast` and `BidAsk` are three distinct values it writes — and
+        // both trade streams are asked for here under one of them, with the
+        // other made afterwards by dropping the prints the venue marks as not
+        // reported to the tape. That rule is this client's reading of what
+        // belongs on a tape, not the venue's.
+        //
+        // The note this replaced said the venue acknowledges the other name
+        // and sends nothing. That may still be so — the vendor's own query
+        // carries fields this one omits, any of which could be why — but it
+        // was not re-checked, and a contract thin enough to trade nothing in
+        // twenty seconds cannot check it. Settle it on a liquid name in a
+        // session, by asking for `Last` and seeing whether trades arrive.
+        match tbt_type {
+            TbtType::AllLast | TbtType::Last => "AllLast",
+            TbtType::BidAsk => "BidAsk",
+        }
+    }
+
     pub(crate) fn send_tbt_subscribe(
         &mut self,
         // What the caller numbered this request, which every record it
@@ -1701,23 +1725,7 @@ fn build_tbt_query(
     ) {
         let req_id = self.next_tbt_req_id;
         self.next_tbt_req_id += 1;
-        // KNOWN TO DIVERGE. The vendor build states these apart — `Last`,
-        // `AllLast` and `BidAsk` are three distinct values it writes — and
-        // both trade streams are asked for here under one of them, with the
-        // other made afterwards by dropping the prints the venue marks as not
-        // reported to the tape. That rule is this client's reading of what
-        // belongs on a tape, not the venue's.
-        //
-        // The note this replaced said the venue acknowledges the other name
-        // and sends nothing. That may still be so — the vendor's own query
-        // carries fields this one omits, any of which could be why — but it
-        // was not re-checked, and a contract thin enough to trade nothing in
-        // twenty seconds cannot check it. Settle it on a liquid name in a
-        // session, by asking for `Last` and seeing whether trades arrive.
-        let tbt_type_str = match tbt_type {
-            TbtType::AllLast | TbtType::Last => "AllLast",
-            TbtType::BidAsk => "BidAsk",
-        };
+        let tbt_type_str = Self::tbt_wire_kind(tbt_type);
         // The contract says what it is. A US stock routed BEST was assumed for
         // every subscription, so an FX pair or a future asked for ticks under a
         // description that was not its own.
@@ -1780,8 +1788,11 @@ fn build_tbt_query(
         // Two callers' streams on one contract and kind are served under one
         // number, so the withdrawal goes out when the last of them leaves;
         // sent by the first, it stopped the stream the other was still
-        // reading.
-        if gone.venue_id != 0 && self.tbt_subscriptions.iter().any(|sub| sub.venue_id == gone.venue_id) {
+        // reading. A sibling still waiting for its number holds the same
+        // stream by the contract and kind it asked for.
+        if gone.venue_id != 0 && self.tbt_subscriptions.iter().any(|sub| sub.venue_id == gone.venue_id
+            || (sub.instrument == gone.instrument && Self::tbt_wire_kind(sub.kind) == Self::tbt_wire_kind(gone.kind)))
+        {
             log::info!(
                 "TBT stream {} is still read by another caller; left running for it",
                 gone.venue_id,
@@ -1805,7 +1816,7 @@ fn build_tbt_query(
         let ticker_id = if gone.venue_id != 0 {
             gone.venue_id.to_string()
         } else {
-            self.tbt_withdrawn_unnumbered.insert(gone.query_id.clone());
+            self.tbt_withdrawn_unnumbered.insert(gone.query_id.clone(), (gone.instrument, gone.kind));
             gone.query_id
         };
         log::info!("Withdrawing TBT stream: instrument={instrument} ticker_id={ticker_id}");

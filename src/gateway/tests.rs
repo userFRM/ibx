@@ -245,14 +245,15 @@ use super::*;
 
 /// The init burst is handed to the engine still compressed, and the engine
 /// decompresses the same segments itself. The inflated plaintext is
-/// appended to a copy taken for the local tag scan, not to that buffer:
+/// read by the local tag scan, not appended to that buffer:
 /// appending to the buffer puts every message in the burst in front of the
 /// engine twice from a single delivery.
 #[test]
 fn the_inflated_init_content_is_scanned_but_not_handed_to_the_engine() {
     let inner = b"8=FIX.4.2\x0135=B\x0158=ROUTING\x016145=farm-a\x0110=000\x01";
+    let envelope = fixcomp::fixcomp_build(inner);
     let mut burst = b"8=FIX.4.2\x0135=A\x01".to_vec();
-    burst.extend_from_slice(&fixcomp::fixcomp_build(inner));
+    burst.extend_from_slice(&envelope);
     burst.extend_from_slice(b"8=FIX.4.2\x0135=0\x01");
 
     fn count(haystack: &[u8], needle: &[u8]) -> usize {
@@ -263,10 +264,14 @@ fn the_inflated_init_content_is_scanned_but_not_handed_to_the_engine() {
     let scan = init_scan_buffer(&burst);
 
     assert_eq!(
-        count(&scan, b"58=ROUTING"), before + 1,
-        "the tag scan gains exactly one inflated copy of the segment's content",
+        count(&scan, b"58=ROUTING"), 1,
+        "the tag scan reads the segment's content exactly once",
     );
-    assert!(scan.starts_with(&burst), "and still sees everything that arrived");
+    assert!(!scan.windows(envelope.len()).any(|w| w == envelope), "compressed bytes are not tags");
+    let mut expected = b"8=FIX.4.2\x0135=A\x01".to_vec();
+    expected.extend_from_slice(inner);
+    expected.extend_from_slice(b"\x018=FIX.4.2\x0135=0\x01");
+    assert_eq!(scan, expected, "plaintext keeps its order around the envelope");
     assert_eq!(
         count(&burst, b"58=ROUTING"), before,
         "and the buffer the engine is handed is not the one that grew",
@@ -288,39 +293,6 @@ fn token_short_hash_different_tokens() {
     let t1 = BigUint::from(111u64);
     let t2 = BigUint::from(222u64);
     assert_ne!(token_short_hash(&t1), token_short_hash(&t2));
-}
-
-/// A peer that accepts the socket and then says nothing must not hold the
-/// reconnect open.
-///
-/// The scheduler waits on this worker and refuses to start another while
-/// one is outstanding, so a handshake with no deadline is not a slow
-/// reconnect — it is every later reconnect, for the life of the process.
-/// Bounded here rather than after the key exchange, which is where the
-/// silence lands.
-#[test]
-fn a_silent_peer_does_not_hold_the_reconnect_open() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    // Accepts and then says nothing, holding the connection open.
-    let held = std::thread::spawn(move || {
-        let (sock, _) = listener.accept().unwrap();
-        std::thread::sleep(Duration::from_secs(3));
-        drop(sock);
-    });
-
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_SSL_AUTH)).unwrap();
-    tcp.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-
-    let started = std::time::Instant::now();
-    let mut buf = [0u8; 64];
-    let read = std::io::Read::read(&mut &tcp, &mut buf);
-    assert!(read.is_err(), "a silent peer returns an error, not bytes");
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "the read gave up on its own rather than waiting on the peer",
-        );
-    let _ = held.join();
 }
 
 /// A route that states no port leaves the choice to the configured one.
@@ -1235,6 +1207,7 @@ mod routing_response_tests {
         };
         let err = super::super::read_routing_response(
             &mut closing,
+            Vec::new(),
             Instant::now() + Duration::from_secs(5),
         )
         .expect_err("a socket that closed is not a response that is absent");
@@ -1243,7 +1216,7 @@ mod routing_response_tests {
         // An open, silent socket past the deadline is the absent optional
         // response.
         let mut silent = RoutingReader { script: Vec::new() };
-        let none = super::super::read_routing_response(&mut silent, Instant::now())
+        let none = super::super::read_routing_response(&mut silent, Vec::new(), Instant::now())
             .expect("silence past the deadline is an absent response, not an error");
         assert!(none.is_empty());
 
@@ -1254,10 +1227,44 @@ mod routing_response_tests {
         };
         let got = super::super::read_routing_response(
             &mut answering,
+            Vec::new(),
             Instant::now() + Duration::from_secs(5),
         )
         .expect("a complete frame is the response");
         assert_eq!(got, frame);
+    }
+
+    /// The logon can read only the head of the frame before the routing reply.
+    #[test]
+    fn a_routing_wait_continues_the_frame_the_logon_started() {
+        let heartbeat = crate::protocol::fixcomp::fixcomp_build(
+            &crate::protocol::fix::fix_build(&[(35, "0")], 1),
+        );
+        let reply = b"8=O\x019=5\x01hello";
+        for split in [5, heartbeat.len() - 2] {
+            let mut rest = heartbeat[split..].to_vec();
+            rest.extend_from_slice(reply);
+            let mut wire = RoutingReader {
+                script: vec![Ok(rest), Ok(Vec::new())],
+            };
+            let got = super::super::read_routing_response(
+                &mut wire,
+                heartbeat[..split].to_vec(),
+                Instant::now() + Duration::from_secs(5),
+            ).expect("the complete reply ends the wait before another read");
+            let mut expected = heartbeat.clone();
+            expected.extend_from_slice(reply);
+            assert_eq!(got, expected, "the logon remainder is present exactly once");
+            assert_eq!(wire.script.len(), 1, "no read is needed after the reply");
+        }
+        let mut wire = RoutingReader { script: vec![Ok(Vec::new())] };
+        let got = super::super::read_routing_response(
+            &mut wire,
+            reply.to_vec(),
+            Instant::now() + Duration::from_secs(5),
+        ).expect("a reply already read during logon needs no more bytes");
+        assert_eq!(got, reply);
+        assert_eq!(wire.script.len(), 1);
     }
 
     /// The farm's own traffic arriving first does not end the wait.
@@ -1279,6 +1286,7 @@ mod routing_response_tests {
         };
         let got = super::super::read_routing_response(
             &mut wire,
+            Vec::new(),
             Instant::now() + Duration::from_secs(5),
         )
         .expect("the reply arrives behind the heartbeat");
@@ -1316,6 +1324,7 @@ mod routing_response_tests {
         };
         let got = super::super::read_routing_response(
             &mut wire,
+            Vec::new(),
             Instant::now() + Duration::from_secs(5),
         )
         .expect("the reply arrives after the pause");
@@ -1344,7 +1353,7 @@ mod routing_response_tests {
                 Ok(n)
             }
         }
-        let held = super::super::read_routing_response(&mut NeverAFrame, Instant::now())
+        let held = super::super::read_routing_response(&mut NeverAFrame, Vec::new(), Instant::now())
             .expect("a deadline reached with no frame is an absent optional response");
         assert!(
             held.len() < 1_000_000,

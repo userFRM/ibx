@@ -7840,3 +7840,96 @@ fn an_order_recovered_on_a_held_contract_takes_the_holding() {
          the account holds it and a withdrawal of everything never names it",
     );
 }
+
+/// The account can state a holding before a fill gives its contract a slot.
+/// Later fills change that slot without restoring the older account row.
+#[test]
+fn an_untracked_fill_starts_from_the_holding_the_account_stated() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    shared.portfolio.set_position_info(PositionInfo {
+        con_id: 756733, position: 100.0, ..Default::default()
+    });
+    for (exec_id, quantity, expected) in [("E1", "100", 0.0), ("E2", "25", -25.0)] {
+        let fill = untracked_fill(&[
+            (6008, "756733"), (55, "SPY"), (54, "2"), (32, quantity), (17, exec_id),
+        ]);
+        ccp.handle_exec_report(&fill, b"", &mut context, &shared, &None, "");
+        let instrument = context.market.instrument_by_con_id(756733).unwrap();
+        assert_eq!(context.position(instrument), expected, "{exec_id}: the engine's holding");
+        assert_eq!(shared.portfolio.position(instrument), expected, "{exec_id}: the caller's holding");
+        assert_eq!(shared.orders.drain_fills().len(), 1, "each execution is booked once");
+    }
+}
+
+/// Both fields have places in the report's record, so neither is unread.
+#[test]
+fn price_management_and_ev_multiplier_are_read_execution_fields() {
+    for frame in [b"8339=1\x019997=kept\x01".as_slice(), b"6859=50\x019997=kept\x01".as_slice()] {
+        assert_eq!(executions::unnamed_execution_fields(frame), vec![(9997, "kept".into())]);
+    }
+}
+
+/// A name on tag 320 attributes the refusal even when it is not a number.
+#[test]
+fn a_refusal_with_a_nonnumeric_name_leaves_unrelated_requests_waiting() {
+    for chain in [true, false] {
+        for name in ["ibxfan-5-1", "SchedSub.9", ""] {
+            let (mut ccp, mut context, shared) = u186_test_state();
+            if chain {
+                ccp.pending_option_params.push((701, "SPY".into(), 756733, Instant::now() + OPTION_CHAIN_TIMEOUT));
+                if name.starts_with("ibxfan") {
+                    ccp.pending_fanout.push(PendingFanout {
+                        api_req_id: 5, fanout_req_ids: vec![name.into()], answered: Vec::new(),
+                        deadline: Instant::now() + SECDEF_TIMEOUT,
+                    });
+                }
+            } else {
+                ccp.pending_secdef.push((701, false, Instant::now() + SECDEF_TIMEOUT));
+            }
+            let refused = fix::fix_build(&[(35, "3"), (320, name), (58, "Invalid request")], 1);
+            ccp.process_ccp_message(&refused, &mut None, &mut context, &shared,
+                &None, &mut HeartbeatState::new(), "DU1");
+            assert_eq!(ccp.pending_option_params.len() + ccp.pending_secdef.len(), 1,
+                "chain={chain}, name={name:?}: the waiting request was not refused");
+            assert!(shared.reference.drain_historical_errors().is_empty());
+            assert!(shared.reference.drain_contract_details_end().is_empty());
+        }
+    }
+}
+
+/// The report supplies the side where it names one, and the tracked order
+/// supplies it otherwise. Without either, no action is stated.
+#[test]
+fn an_execution_action_comes_from_the_report_or_the_tracked_order() {
+    for (side, action) in [(Side::Buy, "BUY"), (Side::Sell, "SELL"), (Side::ShortSell, "SSHORT")] {
+        for stated in [None, Some("?"), Some("1"), Some("2"), Some("5")] {
+            let mut ccp = CcpState::new();
+            let mut context = Context::new();
+            let shared = SharedState::new();
+            let instrument = context.register_instrument(756733);
+            context.insert_order(crate::types::Order::new(
+                42, instrument, side, 10 * QTY_SCALE, 100 * PRICE_SCALE, b'2', b'1', 0,
+            ));
+            let mut report = exec_report_frame(&[(150, "0"), (39, "0")]);
+            report.remove(&54);
+            report.remove(&40);
+            report.remove(&59);
+            if let Some(stated) = stated { report.insert(54, stated.into()); }
+            ccp.handle_exec_report(&report, b"", &mut context, &shared, &None, "");
+            let order = shared.orders.get_order_info(42).unwrap().order;
+            let expected = match stated { Some("1") => "BUY", Some("2") => "SELL", Some("5") => "SSHORT", _ => action };
+            assert_eq!(order.action, expected);
+            assert_eq!(order.tif, "GTC");
+            assert_eq!(order.order_type, "LMT");
+        }
+    }
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let mut report = exec_report_frame(&[(150, "0"), (39, "0")]);
+    report.remove(&54);
+    ccp.handle_exec_report(&report, b"", &mut context, &shared, &None, "");
+    assert!(shared.orders.get_order_info(42).unwrap().order.action.is_empty());
+}

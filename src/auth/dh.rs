@@ -8,7 +8,6 @@ use crate::auth::crypto::{aes_cbc_decrypt, aes_cbc_encrypt, hmac_sha1, strip_lea
 use crate::auth::srp::SRP_N_STR;
 use crate::protocol::ns::NS_MAGIC;
 
-/// DH uses the same prime as SRP.
 fn dh_n() -> BigUint {
     SRP_N_STR.parse().unwrap()
 }

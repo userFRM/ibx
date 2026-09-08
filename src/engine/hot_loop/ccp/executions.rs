@@ -27,10 +27,6 @@ const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
 /// message about an order that is still live.
 const ORDER_REJECTED_ERROR_CODE: i32 = 201;
 
-/// Whether the venue manages the order's price (tag 8339). Independent of the
-/// algo strategy on tag 847.
-const TAG_USE_PRICE_MGMT_ALGO: u32 = 8339;
-
 /// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a
 /// stable i64 permId.
 /// Uses FNV-1a hash of the first 3 dot-segments (the stable prefix) so that permId
@@ -44,6 +40,7 @@ const TAG_USE_PRICE_MGMT_ALGO: u32 = 8339;
 /// reporting that the fill could not be placed.
 pub(crate) fn untracked_fill_target(
     context: &mut Context,
+    shared: &SharedState,
     parsed: &std::collections::HashMap<u32, String>,
 ) -> Option<(InstrumentId, Side)> {
     // A replayed execution restates history rather than reporting something
@@ -73,10 +70,18 @@ pub(crate) fn untracked_fill_target(
     };
     // Fallible: a full instrument table must not abort the engine on an
     // inbound message.
+    let is_new_slot = context.market.con_id(
+        context.market.instrument_by_con_id(con_id).unwrap_or(0),
+    ) != Some(con_id);
     let Some(instrument) = context.try_register_instrument(con_id) else {
         log::warn!("Untracked fill for conId {con_id}: instrument table full, position not updated");
         return None;
     };
+    // The fill changes what the account already holds. A new slot takes that
+    // holding first; an existing slot already includes any fills since it.
+    crate::engine::hot_loop::take_what_the_account_already_holds(
+        context, shared, con_id, instrument, is_new_slot,
+    );
     if let Some(symbol) = parsed.get(&55) {
         context.set_symbol(instrument, symbol.clone());
     }
@@ -416,7 +421,7 @@ impl CcpState {
         // reconciled against.
         let target = match context.order(clord_id).copied() {
             Some(order) => Some((order.instrument, order.side, Some(order.filled))),
-            None => untracked_fill_target(context, parsed).map(|(i, s)| (i, s, None)),
+            None => untracked_fill_target(context, shared, parsed).map(|(i, s)| (i, s, None)),
         };
         if let Some((instrument, side, already_filled)) = target {
             let booked = if is_resend {
@@ -1549,19 +1554,15 @@ impl CcpState {
                 }
             };
 
-            let (fb_action, fb_tif, fb_ord_type) = if let Some(ctx_order) = context.order(clord_id) {
-                let a = match ctx_order.side {
-                    crate::types::Side::Buy => "BUY",
-                    crate::types::Side::Sell | crate::types::Side::ShortSell => "SELL",
-                };
+            let (fb_tif, fb_ord_type) = if let Some(ctx_order) = context.order(clord_id) {
                 let t = decode_tif(ctx_order.tif);
                 let o = crate::types::ord_type_api_name(
                     crate::types::ord_type_fix_str(ctx_order.ord_type),
                     crate::types::ord_type_instruction(ctx_order.ord_type),
                 );
-                (a, t, o)
+                (t, o)
             } else {
-                ("", "", "")
+                ("", "")
             };
 
             // Derive 3 order-dependent fields from FIX tags
@@ -1575,8 +1576,7 @@ impl CcpState {
             let algo_strategy = parsed.get(&847).cloned().unwrap_or_default();
             // Tag 8339 is its own field, not derived from the algo strategy on
             // tag 847; a report that does not carry it states nothing about it.
-            let use_price_mgmt_algo = parsed
-                .get(&TAG_USE_PRICE_MGMT_ALGO)
+            let use_price_mgmt_algo = parsed.get(&8339)
                 .map(|v| i32::from(v == "1" || v.eq_ignore_ascii_case("true")));
             let trail_stop_price: f64 = parsed.get(&6117)
                 .and_then(|s| s.parse().ok())
@@ -1591,7 +1591,7 @@ impl CcpState {
                 conditions: decode_conditions(raw),
                 conditions_cancel_order: parsed.get(&6128).map(|v| v == "1").unwrap_or(false),
                 conditions_ignore_rth: parsed.get(&6151).map(|v| v == "1").unwrap_or(false),
-                action: if action.is_empty() { fb_action.to_string() } else { action.to_string() },
+                action: action.to_string(),
                 total_quantity: total_qty,
                 order_type: if order_type_str.is_empty() { fb_ord_type.to_string() } else { order_type_str.to_string() },
                 lmt_price: limit_price,
@@ -1732,8 +1732,7 @@ impl CcpState {
                 // states as text — so it parsed to nothing and every fill
                 // carried a multiplier of zero. A contract whose value follows
                 // something other than its own price is then valued at nothing.
-                ev_multiplier: parsed
-                    .get(&crate::control::contracts::TAG_EV_MULTIPLIER)
+                ev_multiplier: parsed.get(&6859)
                     .and_then(|s| s.trim().parse().ok())
                     .unwrap_or(0.0),
                 // The price on this report may yet be revised.

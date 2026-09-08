@@ -2318,3 +2318,43 @@ fn a_given_up_number_is_refused_on_the_ticker_setup_too() {
         );
     }
 }
+
+/// A snapshot and a stream can share the record, but only the stream's
+/// selector describes the TOP entry when it is withdrawn.
+#[test]
+fn a_stream_beside_snapshots_is_withdrawn_with_its_own_selector() {
+    for mode in [1, 2, 3] {
+        let mut farm = FarmState::new();
+        let mut hb = HeartbeatState::new();
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).unwrap();
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", 0, 0, true, &mut conn, &mut hb,
+        );
+        assert!(!farm.holds_a_stream(0), "the snapshot leaves room for a stream");
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", 0, mode, false, &mut conn, &mut hb,
+        );
+        let asked = drain_inner(&mut peer).into_iter().find(|msg| {
+            fix::fix_parse(msg).get(&264).is_some_and(|v| v == "1")
+        }).expect("the TOP entry went out");
+        let asked = fix::fix_parse(&asked);
+        assert_eq!(asked.get(&9887), Some(&mode.to_string()));
+        let stream_req_id = asked.get(&262).unwrap();
+        // A later snapshot asks under a different mode, which must not change
+        // how the already running stream is withdrawn.
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", 0, 4 - mode, true, &mut conn, &mut hb,
+        );
+        drain_inner(&mut peer);
+        farm.send_mktdata_unsubscribe(0, &mut conn, &mut hb);
+        let withdrawn = drain_inner(&mut peer).into_iter().find(|msg| {
+            let tags = fix::fix_parse(msg);
+            tags.get(&263).is_some_and(|v| v == "2") && tags.get(&262) == Some(stream_req_id)
+        }).expect("the same request is withdrawn");
+        let withdrawn = fix::fix_parse(&withdrawn);
+        assert_eq!(withdrawn.get(&264).map(String::as_str), Some("1"));
+        assert_eq!(withdrawn.get(&9887), Some(&mode.to_string()), "the TOP withdrawal keeps its selector");
+    }
+}

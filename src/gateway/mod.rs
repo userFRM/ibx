@@ -529,13 +529,14 @@ pub fn connect_farm(
     let final_sign_iv = new_sign_iv;
     log::info!("{farm_id} sent routing request (6556={channel_id})");
 
-    // Read routing response. Frame-based termination: poll with a short
-    // timeout, return as soon as one complete frame is held buffered. The
+    // Read routing response. Poll with a short timeout and return as soon as
+    // the complete routing reply is buffered. The
     // deadline remains as the worst-case fallback for an answer that is not
     // coming.
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
     let resp_buf = read_routing_response(
         &mut stream,
+        logon_remaining,
         std::time::Instant::now() + Duration::from_secs(5),
     )?;
     log::info!("{} routing response: {} bytes", farm_id, resp_buf.len());
@@ -546,11 +547,7 @@ pub fn connect_farm(
     conn.heartbeat_secs = stated_heartbeat;
     conn.seq = 1; // routing request was seq=1; next send_fix will be seq=2
 
-    // Inject logon remaining bytes + routing response into connection buffer.
-    // Python processes logon remaining before routing, but both need read_iv chaining.
-    if !logon_remaining.is_empty() {
-        conn.inject_buf(&logon_remaining);
-    }
+    // The logon remainder and routing response stay in wire order for IV chaining.
     if !resp_buf.is_empty() {
         conn.inject_buf(&resp_buf);
     }
@@ -909,13 +906,8 @@ fn reconnect_ccp_attempt(
         return Err(cancelled_by_the_client("CCP reconnect"));
     }
     log::info!("CCP reconnect to {}:{} (attempt {})", host, AUTH_PORT, depth + 1);
-    // When the venue says this logon happened, filled in from its answer
-    // below. Empty until then, and empty is the careful reading: every session
-    // the venue names counts as another client, so the reconnect gives the
-    // account up rather than taking it from somebody who may hold it fairly.
-    let mut logged_in_at = String::new();
-    // The venue's own stamp, kept apart from the local fallback a silent
-    // logon gets: the connection carries only what the venue stated.
+    // The connection carries the venue's own stamp, absent if the
+    // acknowledgement states none.
     let mut venue_stamp: Option<String> = None;
 
     // TLS + DH key exchange
@@ -1147,13 +1139,6 @@ fn reconnect_ccp_attempt(
                 // The competing session it names is stamped by that clock too,
                 // and one clock's readings are comparable where two machines'
                 // are not.
-                //
-                // This clock only where the venue states none. Its readings are
-                // the venue's to within the drift between the two, and drift is
-                // a worse risk than the alternative: with no stamp at all every
-                // session the venue names reads as another client, and a
-                // reconnect that meets its own logon still being reaped would
-                // hand the account back rather than finish.
                 // Tag 52 is on every message, so over an envelope this is the
                 // last one's sending time rather than the ACK's. They are the
                 // same clock and this is compared at second granularity, so
@@ -1161,8 +1146,6 @@ fn reconnect_ccp_attempt(
                 // the same last-wins hazard the read above works around, and
                 // the next tag read here may not be as forgiving.
                 venue_stamp = fields.get(&52).cloned();
-                logged_in_at = venue_stamp.clone()
-                    .unwrap_or_else(|| chrono_free_timestamp().to_string());
                 // And what rode in with it. The venue pushes what it holds
                 // the moment the logon is answered, so the envelope carrying
                 // the acknowledgement carries the session's own traffic beside
@@ -1186,11 +1169,7 @@ fn reconnect_ccp_attempt(
     // Five is a budget against a preamble the venue sets the length of, not a
     // statement that the logon was answered. Falling out of it with nothing
     // read leaves the session with no stamp while reporting success.
-    //
-    // Judged on what was read rather than on having seen the message type:
-    // this loop does not inflate a compressed envelope, so tag 35 over one is
-    // read off compressed bytes and names nothing. A stamp is an answer.
-    if !acked && logged_in_at.is_empty() {
+    if !acked {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "CCP logon read past five messages without an ACK",
@@ -1430,7 +1409,7 @@ fn wait_for_data_start(
 
 /// Read the routing table's answer, which is optional.
 ///
-/// The answer ends the read the moment one complete frame is held, and its
+/// The answer ends the read the moment its complete frame is held, and its
 /// absence ends it at the deadline: the venue owes no routing response, and
 /// an idle timeout on a still-open socket is the only thing that may stand
 /// for one that is not coming. A socket that closes while the answer is still
@@ -1438,9 +1417,14 @@ fn wait_for_data_start(
 /// later as a connection that was never open.
 fn read_routing_response<R: Read>(
     reader: &mut R,
+    mut resp_buf: Vec<u8>,
     deadline: std::time::Instant,
 ) -> io::Result<Vec<u8>> {
-    let mut resp_buf = Vec::new();
+    // The logon can leave the head of the next frame. Its continuation alone
+    // has no header, so the walk needs the bytes already read as well.
+    if holds_a_routing_reply(&resp_buf) {
+        return Ok(resp_buf);
+    }
     let mut tmp = [0u8; 8192];
     loop {
         // The deadline stands for an answer that is not coming, and a peer

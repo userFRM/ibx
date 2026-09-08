@@ -12,14 +12,12 @@ fn blank_or_eq(stored: &Option<String>, incoming: &str) -> bool {
     incoming.is_empty() || stored.as_ref().is_none_or(|s| s.eq_ignore_ascii_case(incoming))
 }
 
-/// Pre-allocated quote storage indexed by InstrumentId.
-/// All quotes live in a contiguous array for cache efficiency.
 /// The contract fields an order restates beyond its symbol.
-#[derive(Debug, Clone, PartialEq, Eq)]
 ///
 /// The trading class and local symbol are what tell one contract in a family
 /// from another where the maturity does not: two futures on the same underlying
 /// and month differ by them and by nothing else the order carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderIdentity {
     pub expiry: String,
     pub strike: String,
@@ -27,7 +25,7 @@ pub struct OrderIdentity {
     pub multiplier: String,
     pub trading_class: String,
     pub local_symbol: String,
-    /// What the contract is priced in. `USD` when the key does not say.
+    /// What the contract is priced in. Empty when the key does not say.
     pub currency: String,
 }
 
@@ -42,6 +40,8 @@ pub(crate) struct TradeClock {
     pub offset_secs: u64,
 }
 
+/// Pre-allocated quote storage indexed by InstrumentId.
+/// All quotes live in a contiguous array for cache efficiency.
 pub struct MarketState {
     quotes: Box<[Quote]>,
     /// Per-instrument, alongside the quote it stamps.
@@ -389,26 +389,6 @@ impl MarketState {
         }
     }
 
-    /// Routing tags for an outbound order on this instrument:
-    /// (security type, destination).
-    ///
-    /// The security type is the instrument's real one, in its wire spelling —
-    /// which is what every caller puts on tag 167. The API-facing name and the
-    /// wire name differ for stocks, where the gateway answers `CS` on every
-    /// execution report, so an instrument with no recorded type defaults to
-    /// `CS` rather than to the API's `STK`.
-    ///
-    /// Destination rules: IBKRATS resolves to IDEALPRO for CASH and BEST
-    /// otherwise; CASH without an explicit venue routes to IDEALPRO; any other
-    /// explicit non-SMART exchange is respected; everything else routes BEST —
-    /// the wire form of default routing. The reference encoder structurally
-    /// cannot emit "SMART": it canonicalizes to it internally and translates to
-    /// "BEST" at the encode boundary, and sending "SMART" was
-    /// observed to produce NO ack at all for pre-market opening-auction orders
-    /// while the gateway answers "BEST" in ~130ms.
-    /// The contract identity an order has to restate for anything a symbol does
-    /// not name on its own: expiry, strike, right, multiplier. `None` for a
-    /// stock or a currency pair, which those fields do not distinguish.
     /// State the identity an order has to restate: expiry, strike, right and
     /// multiplier, as the same `|`-separated key a registration carries, and
     /// optionally the trading class and local symbol after them.
@@ -434,10 +414,9 @@ impl MarketState {
 
     /// The currency this contract was registered with, where one was stated.
     ///
-    /// Apart from `order_currency`, which answers dollars when nothing was
-    /// said. A caller that registered a contract by its id alone stated no
-    /// currency, and the venue's definition of that contract knows one —
-    /// so the two are worth telling apart before either is put on an order.
+    /// Absent where the contract stated none; `order_currency` returns an
+    /// empty string in that case. A contract registered by its id alone names
+    /// no currency, so an order that needs one takes it from the definition.
     pub fn order_currency_stated(&self, id: InstrumentId) -> Option<String> {
         let key = self.option_keys.get(id as usize)?.as_deref()?;
         key.split('|').nth(6).filter(|c| !c.is_empty()).map(str::to_string)
@@ -464,7 +443,7 @@ impl MarketState {
 
     /// The security type and destination an order for this instrument states.
     ///
-    /// Both are empty where the contract stated neither. A substituted type
+    /// The security type is empty where the contract stated none. A substituted type
     /// describes a different instrument, and tag 167 carries the contract's own
     /// or nothing.
     pub fn order_routing(&self, id: InstrumentId) -> (String, String) {

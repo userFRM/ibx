@@ -552,7 +552,11 @@ impl Context {
             let cancel_still_owed = prev == OrderStatus::PendingCancel
                 && status == OrderStatus::Rejected
                 && replace_outstanding;
-            if !resumes_working && (cancel_still_owed || prev.is_terminal() || status.rank() < prev.rank()) {
+            // A replayed working report predates the cancel, including a
+            // partial fill whose rank equals PendingCancel's.
+            let replay_leaves_the_cancel = replayed && prev == OrderStatus::PendingCancel
+                && !status.is_terminal();
+            if !resumes_working && (replay_leaves_the_cancel || cancel_still_owed || prev.is_terminal() || status.rank() < prev.rank()) {
                 log::debug!(
                     "Order {order_id} status guard: keeping {prev:?}, dropping stale {status:?}",
                 );

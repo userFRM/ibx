@@ -66,7 +66,6 @@ pub const TAG_IB_COMP_VERSION: u32 = 6143;
 /// bulletin's id has nothing to do with a version, and reading one under the
 /// other's name is how it went unread.
 pub const TAG_BULLETIN_ID: u32 = 6143;
-/// FIX tag 6968: the version.
 /// FIX tag 17: the venue's own name for an execution.
 pub const TAG_EXEC_ID: u32 = 17;
 
@@ -81,6 +80,7 @@ pub const TAG_TRADE_CHARGE: u32 = 6378;
 /// contract's.
 pub const TAG_TRADE_CHARGE_CURRENCY: u32 = 6381;
 
+/// FIX tag 6968: the version.
 pub const TAG_IB_VERSION: u32 = 6968;
 /// FIX tag 8349: the hmac signature.
 pub const TAG_HMAC_SIGNATURE: u32 = 8349;

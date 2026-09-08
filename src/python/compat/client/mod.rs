@@ -2650,6 +2650,51 @@ w = W()",
         });
     }
 
+    /// A withdrawal during registration says the stream is still being taken.
+    #[test]
+    fn a_python_tick_withdrawal_reports_the_registration_in_progress() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, shared, wrapper) = wired_client(py);
+            let (seen_tx, seen_rx) = std::sync::mpsc::sync_channel(1);
+            let (go_tx, go_rx) = std::sync::mpsc::sync_channel(1);
+            let engine = std::thread::spawn(move || {
+                match rx.recv().unwrap() {
+                    ControlCommand::SubscribeTbt { reply_tx: Some(reply), .. } => {
+                        seen_tx.send(()).unwrap();
+                        go_rx.recv().unwrap();
+                        reply.send(Ok(0)).unwrap();
+                    }
+                    other => panic!("expected a tick subscription: {other:?}"),
+                }
+                rx
+            });
+            std::thread::scope(|scope| {
+                let core = &client.get().core;
+                let tx = client.get().control_tx.lock().unwrap().clone().unwrap();
+                let taking = scope.spawn(move || core.register_tbt(
+                    &shared, &tx, 7, 756733, "SPY", "STK", "SMART", TbtType::AllLast, 0, false,
+                ));
+                py.detach(move || seen_rx.recv().unwrap());
+                assert!(!core.is_registering(7), "a tick claim is distinct from a quote claim");
+                client.call_method1(py, "cancel_tick_by_tick_data", (7,)).unwrap();
+                go_tx.send(()).unwrap();
+                assert_eq!(taking.join().unwrap().unwrap(), 0);
+            });
+            let rx = engine.join().unwrap();
+            let heard = wrapper.bind(py).getattr("calls").unwrap()
+                .extract::<Vec<(String, i64, i64, i64, String, String)>>().unwrap();
+            assert_eq!(heard.len(), 1);
+            assert_eq!(heard[0].0, "error");
+            assert_eq!(heard[0].1, 7);
+            assert_eq!(heard[0].3, i64::from(crate::error_codes::NO_SUCH_SUBSCRIPTION));
+            assert!(heard[0].4.contains("still taking its tick stream"), "{heard:?}");
+            assert!(rx.try_recv().is_err(), "registration has not yet supplied a stream to withdraw");
+            client.call_method1(py, "cancel_tick_by_tick_data", (7,)).unwrap();
+            assert!(matches!(rx.try_recv().unwrap(), ControlCommand::UnsubscribeTbt { req_id: 7, instrument: 0 }));
+        });
+    }
+
     /// A subscription states the contract's security type, and a caller that
     /// gave an id alone stated none. Sent as it stands, the engine takes the
     /// request, finds no type for it, and gives it up — so the caller reads no

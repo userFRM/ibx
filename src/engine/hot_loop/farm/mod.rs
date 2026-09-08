@@ -1692,7 +1692,14 @@ impl FarmState {
             entries.push(MdReqEntry { req_id: id, request_type: GREEKS_REQUEST_TYPE, venue: GREEKS_VENUE.to_string() });
         }
         match self.instrument_md_reqs.iter_mut().find(|(id, _)| *id == instrument) {
-            Some((_, record)) => record.entries.extend(entries),
+            Some((_, record)) => {
+                // A snapshot can precede the stream on this contract. The
+                // stream's withdrawal carries the selector it was asked with.
+                if !regulatory_snapshot {
+                    record.mode_9887 = mode_9887;
+                }
+                record.entries.extend(entries);
+            }
             None => {
                 self.instrument_md_reqs.push((instrument, MdReqRecord {
                     con_id,

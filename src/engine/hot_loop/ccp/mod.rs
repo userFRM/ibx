@@ -602,6 +602,9 @@ impl CcpState {
                 let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
                 let ref_tag = parsed.get(&371).map(|s| s.as_str()).unwrap_or("?");
                 let stated = parsed.get(&320).and_then(|s| s.parse::<u32>().ok());
+                // Fan-out and schedule requests carry names rather than
+                // numbers. An unreadable number still names a request.
+                let named_nothing = !parsed.contains_key(&320);
                 log::warn!("SessionReject: reason='{reason}' refTag={ref_tag} request={stated:?}");
                 // A refusal of an option-chain request. The venue rejects one
                 // asked for an underlying it cannot number with "Unknown
@@ -611,7 +614,7 @@ impl CcpState {
                 let refused_chain = stated
                     .and_then(|rid| self.pending_option_params.iter().position(|(pid, ..)| *pid == rid))
                     .or_else(|| {
-                        (stated.is_none()
+                        (named_nothing
                             && self.pending_option_params.len() == 1
                             && self.pending_secdef.is_empty()
                             && self.pending_matching_symbols.is_empty())
@@ -668,7 +671,7 @@ impl CcpState {
                         // which answered a lookup that had not been refused at
                         // all: that caller was handed somebody else's refusal
                         // and its own definitions later had nothing waiting.
-                        (stated.is_none()
+                        (named_nothing
                             && self.pending_secdef.len() == 1
                             && self.pending_fanout.is_empty()
                             && self.pending_matching_symbols.is_empty()

@@ -267,17 +267,27 @@ impl EClient {
         // detached from Python, so a guard spanning it blocks another thread
         // cancelling a different subscription.
         let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
-        self.tbt_kind.lock().unwrap().remove(&req_id);
         let instrument = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id);
         // A caller withdrawing a stream this client does not hold branches on
         // being told so. Said nothing, the withdrawal reads exactly like one
         // that worked.
         let Some(instrument) = instrument else {
+            if self.core.is_registering_tbt(req_id) {
+                return self.report_refusal(py, req_id, Refusal::stated(
+                    NO_SUCH_SUBSCRIPTION,
+                    format!(
+                        "request {req_id} is still taking its tick stream and cannot be \
+                         withdrawn yet: withdraw it once the request it is answering returns",
+                    ),
+                ));
+            }
             return self.report_refusal(py, req_id, Refusal::stated(
                 NO_SUCH_SUBSCRIPTION,
                 format!("no tick stream is held under request {req_id}"),
             ));
         };
+        // A refused withdrawal leaves the stream's callback kind in place.
+        self.tbt_kind.lock().unwrap().remove(&req_id);
         if let Err(why) = Self::send_control(py, &tx, ControlCommand::UnsubscribeTbt { req_id, instrument }) {
             return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
         }

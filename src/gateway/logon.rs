@@ -157,7 +157,6 @@ fn is_the_acknowledgement(message: &[u8]) -> bool {
     }
     body_names_msg_type(message, "U")
         && !message.windows(6).any(|w| w == b"\x016040=")
-        && !message.starts_with(b"6040=")
 }
 
 /// Whether a body states a message of this type at any point in it.
@@ -1160,7 +1159,7 @@ pub fn parse_competing_session(frame: &str) -> Option<CompetingSession> {
 /// The auth-server's logon ACK arrives DEFLATE-compressed inside one or more
 /// `8=FIXCOMP` envelopes. The compressed body is ~30 kB on
 /// the wire but expands to ~48 kB of plaintext carrying the routing tags
-/// 6145/6171/8008, which the tag scan needs to
+/// 6145/6171/8008, which the tag scan reads.
 ///
 /// The inflated plaintext belongs to that scan and nowhere else. The engine is
 /// handed the burst exactly as it arrived and decompresses the same segments
@@ -1169,12 +1168,16 @@ pub fn parse_competing_session(frame: &str) -> Option<CompetingSession> {
 /// once from the appended copy. Takes the burst by reference so the
 /// engine's copy cannot be the one that grows.
 pub(super) fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
-    let mut scan = init_data.to_vec();
+    // Compressed bytes can spell tag 1 by chance. Only plaintext names an
+    // account, so the scan replaces each envelope with its inflated messages.
+    let mut scan = Vec::new();
+    let mut plain_from = 0;
     let mut cursor = 0usize;
     while cursor + 12 < init_data.len() {
         if init_data[cursor..].starts_with(b"8=FIXCOMP\x01")
             && let Some(total_len) = fixcomp::fixcomp_length(&init_data[cursor..]) {
-                let segment = &init_data[cursor..cursor + total_len.min(init_data.len() - cursor)];
+                scan.extend_from_slice(&init_data[plain_from..cursor]);
+                let segment = &init_data[cursor..cursor + total_len];
                 let inflated = fixcomp::fixcomp_decompress(segment).unwrap_or_else(|e| {
                     log::warn!("Init FIXCOMP segment at offset {cursor}: dropping malformed frame: {e}");
                     Vec::new()
@@ -1189,10 +1192,12 @@ pub(super) fn init_scan_buffer(init_data: &[u8]) -> Vec<u8> {
                     scan.push(b'\x01');
                 }
                 cursor += total_len;
+                plain_from = cursor;
                 continue;
             }
         cursor += 1;
     }
+    scan.extend_from_slice(&init_data[plain_from..]);
     scan
 }
 
@@ -1334,6 +1339,31 @@ mod tests {
         assert_eq!(ack.account_id, "DU111111");
         assert_eq!(ack.ccp_token, "a-session-token");
         assert_eq!(ack.trading_route, "cdc1.ibllc.com/usfarm");
+    }
+
+    /// A stored DEFLATE block's length bytes can spell an account tag.
+    #[test]
+    fn compressed_bytes_do_not_name_an_account() {
+        use flate2::{Compression, write::ZlibEncoder};
+
+        let mut inner = b"8=FIX.4.2\x0135=B\x011=DU222222\x0158=".to_vec();
+        inner.resize(0x3d31 - b"\x0110=000\x01".len(), b'x');
+        inner.extend_from_slice(b"\x0110=000\x01");
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::none());
+        encoder.write_all(&inner).unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert_eq!(&compressed[2..5], b"\x011=", "the block header spells tag 1");
+        let mut body = format!("95={}\x0196=", compressed.len()).into_bytes();
+        body.extend_from_slice(&compressed);
+        body.push(b'\x01');
+        let mut burst = format!("8=FIXCOMP\x019={}\x01", body.len()).into_bytes();
+        burst.extend_from_slice(&body);
+        assert_eq!(fixcomp::fixcomp_decompress(&burst).unwrap(), [inner]);
+
+        let mut ack = LogonAck { account_id: "someone".into(), ..Default::default() };
+        ack.scan_init(&burst, "someone");
+        assert_eq!(ack.account_id, "DU222222", "only the inflated message names an account");
+        assert_eq!(ack.accounts, ["DU222222"]);
     }
 
     /// A message inside an envelope is found wherever it sits in it.

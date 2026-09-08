@@ -874,10 +874,9 @@ pub struct ClientCore {
     pub market_data_type: AtomicI32,
     /// Which requests have already been told which feed they are on.
     pub mdt_sent: Mutex<HashSet<i64>>,
-    /// The market-data type each subscription was made under. A request that
-    /// names its own mode is not described by the type set for everything
-    /// else, and that request's callback has to say what it asked for.
-    mdt_by_req: Mutex<HashMap<i64, i32>>,
+    /// The type sent with each instrument's subscription. Every watcher reads
+    /// that feed, even when it asked for another type or takes over as holder.
+    mdt_by_instrument: Mutex<HashMap<InstrumentId, i32>>,
     /// Which requests asked for their bar times as seconds since the epoch.
     ///
     /// The venue states a time in one form and the client formats it for the
@@ -1051,7 +1050,7 @@ impl ClientCore {
             depth_reqs: std::sync::Arc::new(Mutex::new(HashSet::new())),
             market_data_type: AtomicI32::new(1),
             mdt_sent: Mutex::new(HashSet::new()),
-            mdt_by_req: Mutex::new(HashMap::new()),
+            mdt_by_instrument: Mutex::new(HashMap::new()),
             historical_asks: Mutex::new(HashMap::new()),
             held_orders: Mutex::new(Vec::new()),
             hist_initial_complete: Mutex::new(HashSet::new()),
@@ -1422,7 +1421,7 @@ impl ClientCore {
         self.depth_reqs.lock().unwrap().clear();
         self.market_data_type.store(1, Ordering::Relaxed);
         self.mdt_sent.lock().unwrap().clear();
-        self.mdt_by_req.lock().unwrap().clear();
+        self.mdt_by_instrument.lock().unwrap().clear();
         self.historical_asks.lock().unwrap().clear();
         self.hist_initial_complete.lock().unwrap().clear();
         self.news_providers.lock().unwrap().clear();
@@ -1583,6 +1582,12 @@ impl ClientCore {
     pub(crate) fn move_watchers(
         &self, shared: &SharedState, from: InstrumentId, into: InstrumentId,
     ) {
+        {
+            let mut modes = self.mdt_by_instrument.lock().unwrap();
+            if let Some(mode) = modes.remove(&from) {
+                modes.entry(into).or_insert(mode);
+            }
+        }
         let held = self.instrument_to_req.lock().unwrap().remove(&from);
         let following = self.instrument_followers.lock().unwrap().remove(&from).unwrap_or_default();
         for req_id in held.into_iter().chain(following) {
@@ -1596,6 +1601,7 @@ impl ClientCore {
             // matched its quote and heard nothing until it next moved, were
             // never told the increment it was acknowledged with, and where it
             // had been refused were not told that either.
+            self.mdt_sent.lock().unwrap().remove(&req_id);
             self.pay_a_joiner(shared, into, req_id);
         }
         self.last_quotes.lock().unwrap().remove(&from);
@@ -1894,15 +1900,6 @@ impl ClientCore {
             && let Some(instrument) = self.cached_instrument(shared, con_id)
             && self.follows_existing_subscription(instrument, req_id)
         {
-            self.mdt_by_req.lock().unwrap().insert(
-                req_id,
-                match mode_9887 {
-                    1 => MDT_DELAYED,
-                    2 => MDT_FROZEN,
-                    3 => MDT_DELAYED_FROZEN,
-                    _ => self.market_data_type.load(Ordering::Relaxed),
-                },
-            );
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
@@ -1968,15 +1965,6 @@ impl ClientCore {
         // unless it asked for the chargeable snapshot, which is its own
         // request and was already sent above.
         if !regulatory_snapshot && self.follows_existing_subscription(instrument_id, req_id) {
-            self.mdt_by_req.lock().unwrap().insert(
-                req_id,
-                match mode_9887 {
-                    1 => MDT_DELAYED,
-                    2 => MDT_FROZEN,
-                    3 => MDT_DELAYED_FROZEN,
-                    _ => self.market_data_type.load(Ordering::Relaxed),
-                },
-            );
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
@@ -1988,10 +1976,9 @@ impl ClientCore {
         let _ = self.take_or_follow(instrument_id, req_id);
         self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
         self.stamp_registration(req_id);
-        // What this request asked for, so its own callback says so rather than
-        // reporting the type set for everything else.
-        self.mdt_by_req.lock().unwrap().insert(
-            req_id,
+        // A concurrent registration may already hold the subscription. Its
+        // mode still describes the feed everyone on this instrument receives.
+        self.mdt_by_instrument.lock().unwrap().entry(instrument_id).or_insert(
             match mode_9887 {
                 1 => MDT_DELAYED,
                 2 => MDT_FROZEN,
@@ -2163,7 +2150,6 @@ impl ClientCore {
                     }
                     drop(following);
                     self.mdt_sent.lock().unwrap().remove(&req_id);
-                    self.mdt_by_req.lock().unwrap().remove(&req_id);
                     if was_following {
                         return (None, self.release_news(shared, req_id));
                     }
@@ -2176,7 +2162,7 @@ impl ClientCore {
             self.instrument_to_req.lock().unwrap().remove(&instrument);
             self.last_quotes.lock().unwrap().remove(&instrument);
             self.mdt_sent.lock().unwrap().remove(&req_id);
-            self.mdt_by_req.lock().unwrap().remove(&req_id);
+            self.mdt_by_instrument.lock().unwrap().remove(&instrument);
             let stop_news = self.release_news(shared, req_id);
             self.forget_instrument(instrument);
             (Some(instrument), stop_news)
@@ -2544,19 +2530,17 @@ impl ClientCore {
 
     /// Check if the `market_data_type` callback should fire for this req_id.
     /// Returns `Some(type)` on the first call per req_id that has data, `None`
-    /// thereafter. Always reports realtime — the DELIVERED type — rather than
-    /// echoing a type the engine did not transmit, which would confirm a state
-    /// the session is not in.
+    /// thereafter. Every watcher is told the type sent with the subscription
+    /// it follows, because joining it sends no request to change the feed.
     pub fn check_mdt_needed(&self, req_id: i64, has_data: bool) -> Option<i32> {
         if has_data && self.mdt_sent.lock().unwrap().insert(req_id) {
             // The type this subscription was made under, which is the type
             // transmitted with it and therefore the type of the data.
             Some(
-                self.mdt_by_req
-                    .lock()
-                    .unwrap()
-                    .get(&req_id)
-                    .copied()
+                self.watching(req_id)
+                    .and_then(|instrument| {
+                        self.mdt_by_instrument.lock().unwrap().get(&instrument).copied()
+                    })
                     .unwrap_or_else(|| self.market_data_type.load(Ordering::Relaxed)),
             )
         } else {
@@ -3440,11 +3424,11 @@ impl ClientCore {
         // Single lock acquisition for both read and write of last_quotes.
         let mut map = self.last_quotes.lock().unwrap();
         let last = map.get(&iid).copied().unwrap_or([0i64; 16]);
-        // Numbered as the feed this request was made under: a delayed feed
+        // Numbered as the feed this instrument is subscribed to: a delayed feed
         // goes out under the delayed numbers, which is what the caller was
         // told to expect on `market_data_type`.
         let delayed = matches!(
-            self.mdt_by_req.lock().unwrap().get(&req_id),
+            self.mdt_by_instrument.lock().unwrap().get(&iid),
             Some(&MDT_DELAYED) | Some(&MDT_DELAYED_FROZEN)
         );
         let numbered = |tick_type: i32| if delayed { as_delayed(tick_type) } else { tick_type };
@@ -5229,13 +5213,9 @@ impl ClientCore {
             crate::control::option_model::VenueModel,
         ) -> Option<f64>,
     ) -> Result<f64, crate::error_codes::Refusal> {
-        // Read out and let go of before anything else is taken. Held across
-        // the fall-back below it, this takes the contract map and then the
-        // request map, while a withdrawal that gives back the last watcher
-        // takes them the other way round — and two threads each holding the
-        // one the other wants do not finish.
-        let by_its_own_id =
-            self.con_id_to_instrument.lock().unwrap().get(&contract.con_id).copied();
+        // Forget released slots before reading the model: another contract
+        // can now hold the slot this contract used to name.
+        let by_its_own_id = self.cached_instrument(shared, contract.con_id);
         let instrument = by_its_own_id
             .or_else(|| watched_under.and_then(|req_id| self.watching(req_id)))
             .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;

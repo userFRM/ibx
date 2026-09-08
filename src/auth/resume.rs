@@ -13,7 +13,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::auth::crypto::{aes_cbc_decrypt, aes_cbc_encrypt};
 
@@ -96,18 +96,6 @@ impl ResumableSession {
         let paper = *cur.first()? != 0;
         Some(Self { token, server_session_id, hw_info, encoded, username, paper })
     }
-}
-
-/// Where a session is kept when the caller does not name a path.
-///
-/// Under the user's state directory, so it is per-user by construction and
-/// never lands somewhere world-readable like a temp directory.
-pub fn default_path() -> PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("ibx").join("session")
 }
 
 /// The key a session is sealed with.

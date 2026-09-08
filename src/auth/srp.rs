@@ -5,14 +5,11 @@ use sha1::{Digest, Sha1};
 
 use crate::auth::crypto::strip_leading_zeros;
 
-/// 2048-bit SRP prime.
+/// The 1024-bit prime used by the DH channel.
 pub const SRP_N_STR: &str = "167609434410335061345139523764350090260135525329813904557420930309800865859473551531551523800013916573891864789934747039010546328480848979516637673776605610374669426214776197828492691384519453218253702788022233205683635831626913357154941914129985489522629902540768368409482248290641036967659389658897350067939";
-/// The generator the key exchange uses.
-pub const SRP_G: u32 = 2;
-/// The multiplier it uses.
+/// The SRP multiplier.
 pub const SRP_K: u32 = 3;
 
-/// Parse the SRP prime.
 /// The group this venue states, and the only one a logon proceeds on.
 ///
 /// A peer names the modulus and generator before it has proved anything, and
@@ -34,10 +31,6 @@ pub const SRP_VENUE_G: u32 = 2;
 /// The venue's own modulus, parsed.
 pub fn srp_venue_n() -> BigUint {
     BigUint::parse_bytes(SRP_VENUE_N_STR.as_bytes(), 16).expect("the venue's modulus is hex")
-}
-
-pub fn srp_n() -> BigUint {
-    SRP_N_STR.parse().unwrap()
 }
 
 /// x = SHA1(strip(salt) || SHA1(username:password))
@@ -175,10 +168,9 @@ mod tests {
     }
 
     #[test]
-    fn srp_n_parses() {
-        let n = srp_n();
-        assert!(n.bits() >= 1024);
-        assert!(n > BigUint::from(1u32));
+    fn dh_prime_parses() {
+        let n: BigUint = SRP_N_STR.parse().unwrap();
+        assert_eq!(n.bits(), 1024);
     }
 
     #[test]
@@ -253,8 +245,8 @@ mod tests {
 
     #[test]
     fn srp_compute_m1_produces_20_byte_sha1() {
-        let n = srp_n();
-        let g = BigUint::from(SRP_G);
+        let n = srp_venue_n();
+        let g = BigUint::from(SRP_VENUE_G);
         let salt = BigUint::from(12345u64);
         let a_pub = BigUint::from(99999u64);
         let b_pub = BigUint::from(88888u64);
@@ -267,18 +259,6 @@ mod tests {
             m1_bytes.len() <= 20,
             "M1 should be at most 20 bytes (SHA-1 output), got {}",
             m1_bytes.len()
-        );
-    }
-
-    #[test]
-    fn srp_n_is_1024_bit_prime() {
-        let n = srp_n();
-        // The constant says 2048-bit but the test requirement says 1024-bit.
-        // Verify the actual bit length — it should be at least 1024 bits.
-        assert!(
-            n.bits() >= 1024,
-            "SRP N should be at least 1024-bit, got {} bits",
-            n.bits()
         );
     }
 
@@ -305,8 +285,8 @@ mod tests {
 
     #[test]
     fn srp_wrong_password_different_m1() {
-        let n = srp_n();
-        let g = BigUint::from(SRP_G);
+        let n = srp_venue_n();
+        let g = BigUint::from(SRP_VENUE_G);
         let salt = BigUint::from(0xABCDEFu64);
         let a_pub = BigUint::from(12345u64);
         let b_pub = BigUint::from(67890u64);
@@ -352,8 +332,8 @@ mod tests {
 
     #[test]
     fn srp_b_pub_zero_no_panic() {
-        let n = srp_n();
-        let g = BigUint::from(SRP_G);
+        let n = srp_venue_n();
+        let g = BigUint::from(SRP_VENUE_G);
         let k = BigUint::from(SRP_K);
         let a_priv = BigUint::from(42u32);
         let u = BigUint::from(7u32);
@@ -394,8 +374,8 @@ mod tests {
 
     #[test]
     fn srp_large_public_keys_no_panic() {
-        let n = srp_n();
-        let g = BigUint::from(SRP_G);
+        let n = srp_venue_n();
+        let g = BigUint::from(SRP_VENUE_G);
         let k = BigUint::from(SRP_K);
         let a_pub = &n - BigUint::from(1u32);
         let b_pub = &n - BigUint::from(2u32);

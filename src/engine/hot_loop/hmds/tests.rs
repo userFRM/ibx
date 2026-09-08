@@ -1189,6 +1189,74 @@ mod withdrawing_one_stream_tests {
         assert_eq!(hmds.tbt_subscriptions.len(), 1, "the other caller's stream stands");
     }
 
+    fn withdrawal_while_a_sibling_is_unnumbered(deferred: bool) {
+        for (gone_kind, kept_kind, kept_instrument, shares) in [
+            (TbtType::Last, TbtType::Last, 7, true),
+            (TbtType::Last, TbtType::AllLast, 7, true),
+            (TbtType::AllLast, TbtType::Last, 7, true),
+            (TbtType::BidAsk, TbtType::BidAsk, 7, true),
+            (TbtType::Last, TbtType::BidAsk, 7, false),
+            (TbtType::Last, TbtType::Last, 8, false),
+        ] {
+            let mut hmds = HmdsState::new();
+            let shared = crate::bridge::SharedState::new();
+            let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+            peer.set_read_timeout(Some(std::time::Duration::from_millis(100))).unwrap();
+            let mut conn = Some(conn);
+            let mut hb = HeartbeatState::new();
+            let mut gone = stream(1, 7, gone_kind);
+            gone.venue_id = if deferred { 0 } else { 41 };
+            hmds.tbt_subscriptions.push(gone);
+            let mut kept = stream(2, kept_instrument, kept_kind);
+            kept.venue_id = 0;
+            hmds.tbt_subscriptions.push(kept);
+
+            hmds.send_tbt_unsubscribe(1, 7, &mut conn, &mut hb);
+            if deferred {
+                let by_name = super::read_frame(&mut peer);
+                assert!(String::from_utf8_lossy(&by_name).contains("ticker:tbt_1"));
+                let ack = b"35=W\x016118=<ResultSetTickerId><id>tbt_1</id><rtTickerId>41</rtTickerId>\
+                    <minTick>0.01</minTick><sizeMinTick>1</sizeMinTick></ResultSetTickerId>\x01";
+                hmds.process_hmds_message(ack, &mut conn, &shared, &None, &mut hb);
+                assert!(hmds.tbt_withdrawn_unnumbered.is_empty());
+            }
+            let withdrawal = super::read_frame(&mut peer);
+            if shares {
+                assert!(withdrawal.is_empty(), "the sibling is still waiting for the shared number");
+                assert!(!hmds.tbt_withdrawn.contains(&41));
+            } else {
+                assert!(String::from_utf8_lossy(&withdrawal).contains("ticker:41"),
+                    "another contract or wire kind does not hold this stream");
+                assert!(hmds.tbt_withdrawn.contains(&41));
+            }
+
+            let number = if shares { 41 } else { 42 };
+            let ack = format!("35=W\x016118=<ResultSetTickerId><id>tbt_2</id><rtTickerId>{number}</rtTickerId>\
+                <minTick>0.01</minTick><sizeMinTick>1</sizeMinTick></ResultSetTickerId>\x01");
+            hmds.process_hmds_message(ack.as_bytes(), &mut conn, &shared, &None, &mut hb);
+            assert_eq!(hmds.tbt_subscriptions[0].venue_id, number);
+            hmds.send_tbt_unsubscribe(2, kept_instrument, &mut conn, &mut hb);
+            let final_withdrawal = super::read_frame(&mut peer);
+            assert!(String::from_utf8_lossy(&final_withdrawal).contains(&format!("ticker:{number}")),
+                "the last caller's withdrawal reaches the venue");
+            assert!(hmds.tbt_subscriptions.is_empty());
+        }
+    }
+
+    /// The venue has not numbered the second caller's query yet, but it is
+    /// already asking for the same stream that the first caller leaves.
+    #[test]
+    fn a_numbered_withdrawal_keeps_an_unnumbered_siblings_stream() {
+        withdrawal_while_a_sibling_is_unnumbered(false);
+    }
+
+    /// The first acknowledgement can arrive after its caller leaves and
+    /// before the second caller is numbered. That stream is still wanted.
+    #[test]
+    fn a_deferred_withdrawal_keeps_an_unnumbered_siblings_stream() {
+        withdrawal_while_a_sibling_is_unnumbered(true);
+    }
+
     /// A stream withdrawn before the venue has numbered it is withdrawn by
     /// that number when the acknowledgement arrives. Withdrawn by name alone,
     /// the form the venue accepts and does nothing with, its number was never
@@ -1966,7 +2034,7 @@ fn a_withdrawal_waiting_for_its_number_leaves_a_shared_stream_running() {
         min_tick: 0, size_tick: 0.0, running: Default::default(),
     });
     // And one that left before its own acknowledgement arrived.
-    hmds.tbt_withdrawn_unnumbered.insert("tbt_gone".to_string());
+    hmds.tbt_withdrawn_unnumbered.insert("tbt_gone".to_string(), (0, TbtType::Last));
 
     let ack = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ResultSetTickerId>\
         <id>tbt_gone</id><rtTickerId>55</rtTickerId><minTick>0.01</minTick>\

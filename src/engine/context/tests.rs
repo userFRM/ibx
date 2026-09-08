@@ -292,7 +292,7 @@ fn a_replay_does_not_undo_a_cancel_in_flight() {
     submitted_order(&mut ctx, 1);
     assert!(ctx.update_order_status(1, OrderStatus::PendingCancel, false));
 
-    for replayed in [OrderStatus::PreSubmitted, OrderStatus::Submitted] {
+    for replayed in [OrderStatus::PreSubmitted, OrderStatus::Submitted, OrderStatus::PartiallyFilled] {
         assert!(
             !ctx.update_order_status(1, replayed, true),
             "{replayed:?} restating history must leave the cancel standing",
