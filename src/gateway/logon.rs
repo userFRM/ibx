@@ -130,6 +130,18 @@ pub(super) fn what_rode_in_beside_the_ack(messages: &[Vec<u8>]) -> Vec<u8> {
     beside
 }
 
+/// Whether the acknowledgement is among these messages, wherever it sits.
+///
+/// Asked of each message rather than of the joined body, because the type that
+/// answers a logon is the type the session's own account traffic arrives under
+/// and the two are told apart by what the venue states beside them. A body
+/// holding nothing but holdings names that type as surely as an answered logon
+/// does, so a body scanned for the type alone reports a logon the venue never
+/// acknowledged.
+pub(super) fn the_ack_is_among(messages: &[Vec<u8>]) -> bool {
+    messages.iter().any(|message| is_the_acknowledgement(message))
+}
+
 /// Whether this message is the one the logon was waiting for.
 ///
 /// The logon is answered by a `35=A`, or by the server-configuration message
@@ -327,7 +339,21 @@ impl LogonAck {
             // anything at all read as that other thing: the loop went back for
             // an answer it was already holding, and where the venue was
             // waiting for the opening requests it waited until the deadline.
-            if messages.iter().any(|m| is_the_acknowledgement(m)) {
+            if the_ack_is_among(&messages) {
+                // And what rode in with it. The venue pushes what it holds the
+                // moment the logon is answered, so the envelope carrying the
+                // acknowledgement carries the session's own traffic beside it —
+                // an execution report among it. Read for the acknowledgement
+                // and then dropped with the envelope, that report reached
+                // nothing: a fill nobody was ever told about. Ahead of what the
+                // read took past the frame, because that is the order they
+                // arrived in.
+                let mut beside = what_rode_in_beside_the_ack(&messages);
+                if !beside.is_empty() {
+                    log::info!("{} bytes rode in with the logon ACK", beside.len());
+                    beside.extend_from_slice(carry);
+                    *carry = beside;
+                }
                 acked = true;
                 break;
             }
@@ -1622,6 +1648,65 @@ mod tests {
         assert_eq!(
             msgs.iter().map(|m| m[&34].clone()).collect::<Vec<_>>(),
             ["000102", "000103", "000104", "000105", "000106"],
+        );
+    }
+
+    /// A fill riding in with the first logon's acknowledgement is handed on.
+    ///
+    /// The venue pushes what it holds the moment a logon is answered, so one
+    /// envelope carries the acknowledgement and the session's own traffic
+    /// beside it. This read acts on the acknowledgement and then goes on from
+    /// what the read took past the frame, so anything else inside the envelope
+    /// reached nothing: the reconnect salvaged those bytes and the first logon
+    /// did not, and a fill that landed on the opening envelope was stated to
+    /// nobody.
+    #[test]
+    fn what_rode_in_with_the_first_logon_ack_is_handed_on() {
+        let ack = fix_build(&[(35, "A"), (1, "DU111111"), (6386, "session-token")], 1);
+        let fill = fix_build(&[(35, "8"), (17, "exec-1"), (32, "100")], 2);
+        let mut body = ack.clone();
+        body.extend_from_slice(&fill);
+        let mut wire = Answer(
+            [crate::protocol::fixcomp::fixcomp_build(&body)].into_iter().collect(),
+        );
+
+        let mut carry = Vec::new();
+        let read = LogonAck::read(&mut wire, &mut carry, a_minute_from_now())
+            .expect("the logon is answered");
+
+        assert_eq!(read.account_id, "DU111111", "the acknowledgement was read");
+        assert!(
+            carry.windows(fill.len()).any(|w| w == fill.as_slice()),
+            "the report was dropped with the envelope the acknowledgement arrived in",
+        );
+    }
+
+    /// A burst of nothing but holdings is not an answered logon.
+    ///
+    /// The type that answers a logon is the type the account's own traffic
+    /// arrives under, and the two are told apart by the kind the venue states
+    /// beside them. Asked of the joined body, a burst of holdings names that
+    /// type as surely as an acknowledgement does, and a session opened on it
+    /// sends its opening requests and is handed back as established on a logon
+    /// the venue never answered.
+    #[test]
+    fn a_burst_of_holdings_is_not_an_answered_logon() {
+        let holding = fix_build(
+            &[(35, "U"), (6040, "75"), (6008, "756733"), (6041, "100")], 1,
+        );
+        let config = fix_build(&[(35, "U"), (58, "server config")], 2);
+
+        assert!(
+            !the_ack_is_among(std::slice::from_ref(&holding)),
+            "the account's own traffic answered for the logon",
+        );
+        assert!(
+            body_names_msg_type(&holding, "U"),
+            "though the type it arrives under is the one the logon is answered by",
+        );
+        assert!(
+            the_ack_is_among(&[holding, config]),
+            "and the message that does answer it is still found beside them",
         );
     }
 }

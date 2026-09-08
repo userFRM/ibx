@@ -1106,22 +1106,26 @@ fn reconnect_ccp_attempt(
         let response = logon::joined_body(&messages);
         let fields = fix_parse(&response);
         let msg_type = fields.get(&35).map(|s| s.as_str()).unwrap_or("");
-        // The ACK is looked for in the body rather than taken from the parse.
-        // An answer arriving as one envelope holds several messages and the
-        // parse keeps the last value for tag 35, so an ACK followed by the
+        // The ACK is looked for among the messages rather than taken from the
+        // parse. An answer arriving as one envelope holds several messages and
+        // the parse keeps the last value for tag 35, so an ACK followed by the
         // session's own init data reads as init data — and this loop acts on
         // nothing but the ACK, so it would read a full answer as no answer.
+        //
+        // Asked of each message, because the type that answers a logon is the
+        // type the account's own traffic arrives under. Asked of the joined
+        // body instead, a first burst of nothing but holdings named that type
+        // and this loop opened the session on it: the opening requests went
+        // out and the connection was handed back as established, on a logon
+        // the venue had not answered.
         //
         // The refusal below is deliberately not tested the same way, and the
         // two are not worth making symmetric. A refusal is acted on when the
         // answer ended on one, because a reject riding along in an envelope
         // beside good init data belongs to some earlier message and is not
         // this logon being turned down — scanning the body for it would abort
-        // healthy reconnects. The looser test is right for the ACK because the
-        // ACK is known not to be last; the stricter one is right for the
-        // refusal because it is.
-        let names_ack = body_names_msg_type(&response, "A")
-            || body_names_msg_type(&response, "U");
+        // healthy reconnects.
+        let names_ack = logon::the_ack_is_among(&messages);
         match msg_type {
             "3" | "5" => {
                 let reason = fields.get(&58).map(|s| s.as_str()).unwrap_or("unknown");
