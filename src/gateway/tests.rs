@@ -1452,3 +1452,58 @@ fn an_acknowledgement_is_found_when_it_is_not_the_last_message() {
          its deadline: {:?}", read.err(),
     );
 }
+
+/// A peer that accepts the socket and then shakes no hands does not hold the
+/// attempt for longer than the attempt has.
+///
+/// The socket's own timeouts bound a read, and a handshake is many reads: a
+/// peer answering each one just inside its timeout makes progress by every
+/// measure the socket can take and still never finishes, while the blocking
+/// handshake stays inside the library where no deadline of ours can reach it.
+/// On the reconnect path this worker is what the scheduler waits on and what a
+/// shutdown joins, so a peer choosing never to finish holds both.
+#[test]
+fn a_handshake_that_will_not_finish_ends_when_the_attempt_does() {
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a socket to listen on");
+    let addr = listener.local_addr().expect("its address");
+    // Accepts, then holds the connection open saying nothing at all.
+    let held = std::thread::spawn(move || {
+        let (peer, _) = listener.accept().expect("the client connects");
+        std::thread::sleep(Duration::from_secs(3));
+        drop(peer);
+    });
+
+    let tcp = TcpStream::connect(addr).expect("the client reaches it");
+    // As the callers set it: long enough that a silent peer is not answered by
+    // the socket inside this test's own deadline.
+    tcp.set_read_timeout(Some(Duration::from_secs(30))).expect("a read timeout");
+    tcp.set_write_timeout(Some(Duration::from_secs(30))).expect("a write timeout");
+
+    let connector = native_tls::TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .expect("a connector");
+
+    let started = Instant::now();
+    let err = super::shake_hands_by(
+        &connector,
+        "localhost",
+        tcp,
+        Instant::now() + Duration::from_millis(600),
+    )
+    .expect_err("a handshake that never completes is given up on");
+
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::TimedOut,
+        "the handshake ended for some reason other than the attempt running out: {err}",
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the handshake was held by the peer rather than by this attempt's own clock",
+    );
+    let _ = held.join();
+}

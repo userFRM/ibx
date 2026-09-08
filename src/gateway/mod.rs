@@ -937,9 +937,9 @@ fn reconnect_ccp_attempt(
     let connector = TlsConnector::builder()
         .build()
         .map_err(|e| io::Error::other(e.to_string()))?;
-    let mut tls = connector
-        .connect(host, tcp)
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    let mut tls = shake_hands_by(
+        &connector, host, tcp, std::time::Instant::now() + Duration::from_secs(TIMEOUT_SSL_AUTH),
+    )?;
 
     let mut channel = SecureChannel::new();
     let dh_msg = channel.build_secure_connect(NS_VERSION, NS_VERSION);
@@ -1487,6 +1487,58 @@ fn read_routing_response<R: Read>(
     }
 }
 
+/// Shake hands under one deadline for the whole of it.
+///
+/// The socket's own timeouts bound a read, not a handshake, and the handshake
+/// is many reads. A peer that answers each one just inside its timeout makes
+/// progress by every measure the socket can take and still never finishes: the
+/// blocking handshake stays inside the library, no timeout it was given ever
+/// fires, and the wait runs to whatever the peer chooses. On the reconnect path
+/// this worker is what the scheduler waits on and what a shutdown joins, so one
+/// such peer holds both for as long as it likes.
+///
+/// Driven here instead, the handshake is resumed until it completes or until
+/// the deadline the caller set for the whole attempt, whichever comes first.
+/// The socket goes back to blocking before it is handed on, so everything after
+/// this reads the way the rest of the session expects.
+fn shake_hands_by(
+    connector: &TlsConnector,
+    host: &str,
+    tcp: TcpStream,
+    deadline: std::time::Instant,
+) -> io::Result<native_tls::TlsStream<TcpStream>> {
+    fn settle(
+        tls: native_tls::TlsStream<TcpStream>,
+    ) -> io::Result<native_tls::TlsStream<TcpStream>> {
+        tls.get_ref().set_nonblocking(false)?;
+        Ok(tls)
+    }
+
+    tcp.set_nonblocking(true)?;
+    let mut waiting = match connector.connect(host, tcp) {
+        Ok(tls) => return settle(tls),
+        Err(native_tls::HandshakeError::WouldBlock(mid)) => mid,
+        Err(e) => return Err(io::Error::other(e.to_string())),
+    };
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the TLS handshake did not complete within the time this attempt has",
+            ));
+        }
+        // The socket answers WouldBlock the moment it has nothing, so this
+        // would spin on the processor otherwise. Short enough that it costs a
+        // handshake nothing anybody would measure.
+        std::thread::sleep(Duration::from_millis(20));
+        waiting = match waiting.handshake() {
+            Ok(tls) => return settle(tls),
+            Err(native_tls::HandshakeError::WouldBlock(mid)) => mid,
+            Err(e) => return Err(io::Error::other(e.to_string())),
+        };
+    }
+}
+
 /// Dial the auth server and agree a key with it.
 ///
 /// Returns the stream and the channel every message after this is encrypted
@@ -1526,9 +1578,9 @@ fn dial_auth_server(
         .danger_accept_invalid_certs(config.accept_invalid_certs)
         .build()
         .map_err(|e| io::Error::other(e.to_string()))?;
-    let mut tls = connector
-        .connect(host, tcp)
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    let mut tls = shake_hands_by(
+        &connector, host, tcp, std::time::Instant::now() + Duration::from_secs(TIMEOUT_SSL_AUTH),
+    )?;
 
     // Key exchange
     let mut channel = SecureChannel::new();
