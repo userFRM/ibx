@@ -29,6 +29,29 @@ const RECV_BUF_SIZE: usize = 32768;
 /// that overhead and whatever else one read held when the bound was passed.
 pub(crate) const MAX_BUFFERED: usize = fixcomp::MAX_INFLATED as usize + 1024 * 1024;
 
+/// Hold what a read took, or give the connection up rather than hold it.
+///
+/// The same bound [`Connection::read`] keeps, for the loops that assemble a
+/// message by hand instead of framing one. Those run while the session is
+/// being established, which is before the peer has proved anything, and a
+/// length it chose is not a length this side has to find room for: past the
+/// bound what is arriving is not a message on its way but a demand for
+/// memory, and a deadline does not answer it — the bytes arrive as fast as
+/// the sender can write them and the wait ends long after the memory is gone.
+pub(crate) fn hold_what_was_read(buf: &mut Vec<u8>, read: &[u8]) -> io::Result<()> {
+    if buf.len() + read.len() > MAX_BUFFERED {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "a peer sent more than {MAX_BUFFERED} bytes without completing a \
+                 message; refusing to buffer it",
+            ),
+        ));
+    }
+    buf.extend_from_slice(read);
+    Ok(())
+}
+
 /// What a compressed frame starts with, and the longest header this framing
 /// recognises. A read that stops inside it leaves fewer bytes than the marker,
 /// so the buffer holds them until the rest arrives.
@@ -1983,5 +2006,27 @@ mod wedge_tests {
             "the header that arrived across two reads was dropped with the \
              frame in front of it: {frames:?}",
         );
+    }
+
+    /// A peer that never completes a message is given up on at the bound.
+    ///
+    /// The establishment loops assemble a message by hand rather than framing
+    /// one, and they run before the peer has proved anything. A deadline does
+    /// not answer a sender writing as fast as the socket takes it: the bytes
+    /// arrive at the speed of the link and the memory is gone long before the
+    /// clock is. Held to the same bound the framed reads keep, what is
+    /// arriving past it is refused rather than stored.
+    #[test]
+    fn a_read_that_would_pass_the_bound_is_refused_rather_than_held() {
+        // Room for exactly one more byte, and that byte is taken.
+        let mut buf = vec![0u8; MAX_BUFFERED - 1];
+        hold_what_was_read(&mut buf, &[1u8]).expect("what fits is held");
+        assert_eq!(buf.len(), MAX_BUFFERED);
+
+        // The next one does not fit, and is not held.
+        let err = hold_what_was_read(&mut buf, &[1u8])
+            .expect_err("a peer past the bound is given up on");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{err}");
+        assert_eq!(buf.len(), MAX_BUFFERED, "and nothing of it was kept");
     }
 }

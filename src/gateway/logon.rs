@@ -869,7 +869,7 @@ pub fn farm_logon_exchange(
                     "farm connection closed during logon",
                 ));
             }
-            buf.extend_from_slice(&tmp[..n]);
+            crate::protocol::connection::hold_what_was_read(&mut buf, &tmp[..n])?;
         };
 
         // FIX.4.1 message

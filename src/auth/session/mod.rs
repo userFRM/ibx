@@ -717,7 +717,7 @@ fn recv_8eq1(stream: &mut TcpStream, carry: &mut Vec<u8>) -> io::Result<Vec<u8>>
                 "farm connection closed during auth",
             ));
         }
-        carry.extend_from_slice(&tmp[..n]);
+        crate::protocol::connection::hold_what_was_read(carry, &tmp[..n])?;
     }
 }
 
@@ -969,7 +969,7 @@ impl GateReader {
                 if self.buf.is_empty() {
                     self.sent_when_frame_began = sent;
                 }
-                self.buf.extend_from_slice(&tmp[..n]);
+                crate::protocol::connection::hold_what_was_read(&mut self.buf, &tmp[..n])?;
                 Ok(self.take()?.map(|m| (m, self.sent_when_frame_began)))
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock

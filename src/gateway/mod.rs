@@ -752,7 +752,7 @@ fn drain_init_burst<R: Read>(
             }
             Ok(n) => {
                 quiet = 0;
-                data.extend_from_slice(&tmp[..n]);
+                crate::protocol::connection::hold_what_was_read(&mut data, &tmp[..n])?;
             }
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock
@@ -1467,7 +1467,7 @@ fn read_routing_response<R: Read>(
                 ));
             }
             Ok(n) => {
-                resp_buf.extend_from_slice(&tmp[..n]);
+                crate::protocol::connection::hold_what_was_read(&mut resp_buf, &tmp[..n])?;
                 if has_complete_response_frame(&resp_buf) {
                     return Ok(resp_buf);
                 }
