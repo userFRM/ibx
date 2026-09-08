@@ -9804,3 +9804,57 @@ fn an_exercise_does_not_take_the_number_of_a_working_order() {
         "and nothing went out under it",
     );
 }
+
+/// A contract stated by description is answered once its model is stated.
+///
+/// There is no id to look the model up by, and nothing is ever kept under
+/// nought — one entry there would point every conId-less contract at the first
+/// one's slot. The watch this client opens to obtain the model resolves the
+/// contract and records the slot under the request that opened it, and that is
+/// where it has to be found. Looked for by the contract's own id, the lookup
+/// could not succeed however long it waited — and the refusal it gave is the
+/// one that means "not yet", so the question was kept, re-solved on every
+/// pass, and its caller told neither an answer nor a reason for the life of
+/// the session.
+#[test]
+fn a_contract_named_by_description_is_answered_once_its_model_is_stated() {
+    let (client, _rx, shared) = test_client();
+    let iid: InstrumentId = 0;
+    // The watch resolved the contract and holds it under the caller's number.
+    client.core.req_to_instrument.lock().unwrap().insert(9, iid);
+    shared.market.set_instrument_count(1);
+    // And the venue has since stated its model for that slot.
+    shared.market.push_option_computation(crate::types::OptionComputation {
+        instrument: iid,
+        implied_vol: 0.2,
+        opt_price: 5.0,
+        und_price: 100.0,
+        pv_dividend: 0.0,
+        ..Default::default()
+    });
+
+    let described = Contract {
+        con_id: 0,
+        symbol: "SPY".into(),
+        sec_type: "OPT".into(),
+        exchange: "SMART".into(),
+        currency: "USD".into(),
+        last_trade_date_or_contract_month: "20260320".into(),
+        strike: 100.0,
+        right: "C".into(),
+        ..Default::default()
+    };
+    let kept = crate::api::client::PendingOptionCalc {
+        contract: described,
+        wants_volatility: true,
+        option_price: 5.0,
+        under_price: 100.0,
+        answered: false,
+    };
+
+    assert!(
+        client.solve_and_push_volatility(9, &kept),
+        "the question is kept and re-solved for ever, with its caller told \
+         neither an answer nor a reason",
+    );
+}

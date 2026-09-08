@@ -232,6 +232,16 @@ fn solve(low: f64, high: f64, f: impl Fn(f64) -> Option<f64>) -> Option<f64> {
     let (mut low, mut high) = (low, high);
     let at_low = f(low)?;
     let at_high = f(high)?;
+    // A bound that does not come out as a number is not a bound. Left to be
+    // compared, every test against it is false — the one just below, which
+    // refuses an answer that is not between the bounds, included — so the
+    // search ran its whole length narrowing towards the edge it started from
+    // and handed that edge back as though it had settled there. A price that
+    // is not a number reached here and left as the smallest volatility this
+    // solves for, stated as the answer to a question that has none.
+    if !at_low.is_finite() || !at_high.is_finite() {
+        return None;
+    }
     if at_low.signum() == at_high.signum() {
         // The answer is not between the bounds, so there is none to give.
         return None;
@@ -239,6 +249,11 @@ fn solve(low: f64, high: f64, f: impl Fn(f64) -> Option<f64>) -> Option<f64> {
     for _ in 0..100 {
         let middle = 0.5 * (low + high);
         let here = f(middle)?;
+        // As above: a step that does not come out as a number cannot say
+        // which side of it the answer is on.
+        if !here.is_finite() {
+            return None;
+        }
         if here.abs() < 1e-9 {
             return Some(middle);
         }
@@ -370,5 +385,34 @@ mod tests {
         assert!(price(call(100.0, 1.0), 100.0, 0.0, 0.05, 0.0).is_none());
         assert!(price(call(100.0, 1.0), 1.0, 0.2, 0.05, 5.0).is_none());
         assert!(price(call(100.0, 1.0), f64::NAN, 0.2, 0.05, 0.0).is_none());
+    }
+
+    /// A price that is not a number has no volatility, and is told so.
+    ///
+    /// Left to be compared, every test against it is false — including the one
+    /// that refuses an answer lying outside the bounds — so the search ran its
+    /// whole length narrowing towards the edge it started from and handed that
+    /// edge back as though it had settled there. The caller was given the
+    /// smallest volatility this solves for, stated as the answer to a question
+    /// that has none.
+    #[test]
+    fn a_price_that_is_not_a_number_has_no_volatility() {
+        let terms = OptionTerms {
+            strike: 100.0, years_to_expiry: 0.25, is_call: true, on_a_future: false,
+        };
+        let model = VenueModel {
+            volatility: 0.2,
+            option_price: 5.0,
+            underlying_price: 100.0,
+            present_value_of_dividends: 0.0,
+            rate: 0.02,
+        };
+        for price in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                implied_volatility(terms, model, price, 100.0),
+                None,
+                "a price of {price} was answered with a volatility",
+            );
+        }
     }
 }

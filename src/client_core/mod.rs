@@ -5194,6 +5194,19 @@ impl ClientCore {
         &self,
         shared: &SharedState,
         contract: &crate::types::model::Contract,
+        // The request the model is being watched for, where one is. A contract
+        // stated by description carries no id, so there is nothing to look its
+        // model up by — and nothing is ever kept under nought, because one
+        // entry there would point every conId-less contract at the first one's
+        // slot. The watch opened to obtain the model resolves the contract and
+        // records the slot under the request that opened it, so that is where
+        // it is found.
+        //
+        // Without it the lookup could not succeed however long it waited, and
+        // the refusal it gave is the one refusal here that means "not yet":
+        // the question was kept, re-solved on every pass, and its caller told
+        // neither an answer nor a reason for the life of the session.
+        watched_under: Option<i64>,
         solve: impl Fn(
             crate::control::option_model::OptionTerms,
             crate::control::option_model::VenueModel,
@@ -5201,6 +5214,7 @@ impl ClientCore {
     ) -> Result<f64, crate::error_codes::Refusal> {
         let instrument = self
             .con_id_to_instrument.lock().unwrap().get(&contract.con_id).copied()
+            .or_else(|| watched_under.and_then(|req_id| self.watching(req_id)))
             .ok_or_else(|| OPTION_MODEL_UNSTATED.to_string())?;
         let stated = shared
             .market

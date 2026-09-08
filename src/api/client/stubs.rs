@@ -144,7 +144,7 @@ impl EClient {
         &self, req_id: i64, contract: &super::Contract,
         option_price: f64, under_price: f64,
     ) {
-        match self.solve_option(contract, |terms, model| {
+        match self.solve_option(contract, Some(req_id), |terms, model| {
             crate::control::option_model::implied_volatility(
                 terms, model, option_price, under_price,
             )
@@ -178,7 +178,7 @@ impl EClient {
         &self, req_id: i64, contract: &super::Contract,
         volatility: f64, under_price: f64,
     ) {
-        match self.solve_option(contract, |terms, model| {
+        match self.solve_option(contract, Some(req_id), |terms, model| {
             crate::control::option_model::option_price(terms, model, volatility, under_price)
         }) {
             Ok(price) => self.shared.market.push_option_computation(
@@ -205,7 +205,7 @@ impl EClient {
         &self, req_id: i64, calc: &super::PendingOptionCalc,
     ) -> bool {
         let (opt, und) = (calc.option_price, calc.under_price);
-        match self.solve_option(&calc.contract, |terms, model| {
+        match self.solve_option(&calc.contract, Some(req_id), |terms, model| {
             crate::control::option_model::implied_volatility(terms, model, opt, und)
         }) {
             Ok(volatility) => {
@@ -239,7 +239,7 @@ impl EClient {
         &self, req_id: i64, calc: &super::PendingOptionCalc,
     ) -> bool {
         let (vol, und) = (calc.option_price, calc.under_price);
-        match self.solve_option(&calc.contract, |terms, model| {
+        match self.solve_option(&calc.contract, Some(req_id), |terms, model| {
             crate::control::option_model::option_price(terms, model, vol, und)
         }) {
             Ok(price) => {
@@ -300,12 +300,13 @@ impl EClient {
     fn solve_option(
         &self,
         contract: &super::Contract,
+        watched_under: Option<i64>,
         solve: impl Fn(
             crate::control::option_model::OptionTerms,
             crate::control::option_model::VenueModel,
         ) -> Option<f64>,
     ) -> Result<f64, Refusal> {
-        self.core.solve_option(&self.shared, contract, solve)
+        self.core.solve_option(&self.shared, contract, watched_under, solve)
     }
 
     /// Withdraw a question that was waiting on the venue to state a model.

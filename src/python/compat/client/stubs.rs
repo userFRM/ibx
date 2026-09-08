@@ -658,7 +658,7 @@ impl EClient {
         let Ok(shared) = self.shared_state() else { return false };
         let (given, und) = (calc.option_price, calc.under_price);
         let wants_volatility = calc.wants_volatility;
-        let solved = self.core.solve_option(&shared, &calc.contract, |terms, model| {
+        let solved = self.core.solve_option(&shared, &calc.contract, Some(req_id), |terms, model| {
             if wants_volatility {
                 crate::control::option_model::implied_volatility(terms, model, given, und)
             } else {
@@ -706,14 +706,13 @@ impl EClient {
         ) -> Option<f64>,
         into_computation: impl Fn(f64) -> crate::types::OptionComputation,
     ) -> Result<(), Refusal> {
-        let _ = req_id;
         // The refusal is carried whole. Flattened to its text the code went
         // with it, and every one of them reached a caller as the same number —
         // which is the one thing a caller written against the reference client
         // branches on.
         let shared = self.shared_state()
             .map_err(|_| Refusal::not_connected("not connected"))?;
-        let answer = self.core.solve_option(&shared, &contract.to_api(), solve)?;
+        let answer = self.core.solve_option(&shared, &contract.to_api(), Some(req_id), solve)?;
         shared.market.push_option_computation(into_computation(answer));
         Ok(())
     }
