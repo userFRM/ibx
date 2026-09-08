@@ -1025,7 +1025,17 @@ fn reconnect_ccp_attempt(
         let (token_type, token_sub_type) = parse_auth_start_token(&auth_text);
         // ponytail: a SOFT token issued here is not written back to `auth`,
         // which the reconnect thread only holds by reference — the next
-        // reconnect runs SRP again rather than the cheaper token path.
+        // reconnect offers the token it already had.
+        //
+        // What that costs depends on whether the venue keeps the old token
+        // valid once it has issued another, which is its answer to give and
+        // has not been captured. If it does, this is the cheaper path lost and
+        // nothing more. If it does not, the next reconnect is refused at the
+        // challenge and the walk over the other hosts is refused with it —
+        // they answer for the same account, and the mode is the venue's
+        // choice, so every one of them asks for the same stale token. Writing
+        // it back needs the key to reach the caller, which means carrying it
+        // out with the connection rather than holding `auth` by reference.
         post_auth_unread = run_second_factor(&mut tls, SecondFactor {
             paper: auth.paper,
             username: &auth.username,
