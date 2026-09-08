@@ -2447,3 +2447,33 @@ fn a_scan_batch_with_an_unreadable_row_is_said_not_dropped() {
     assert!(shared.market.unread_wire().iter().any(|(k, _)| *k == "scanner"), "and the batch is recorded as unread");
     assert!(hmds.scanner_batches.is_empty(), "and nothing half-read is handed on");
 }
+
+/// A refusal naming the continued spelling of a query reaches that query.
+///
+/// The venue does not always echo the bare name it was given — the reply to a
+/// news query comes back under `<name>-headlines;;…` — and every path that
+/// reads data from a reply matches on that. The refusal path matched the name
+/// exactly, so a refusal spelled the same way reached nothing: the request was
+/// never told why, its record stood until the connection went, and the caller
+/// waited out its deadline instead of hearing the reason the venue gave.
+#[test]
+fn a_refusal_naming_a_continued_query_name_still_reaches_it() {
+    let mut hmds = HmdsState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn: Option<Connection> = None;
+    hmds.pending_ticks.push(("tk_4".to_string(), 77, "TRADES".to_string()));
+
+    hmds.process_hmds_message(
+        &make_query_error_msg("tk_4-headlines;;more", "no permission"),
+        &mut conn, &shared, &None, &mut hb,
+    );
+
+    assert!(
+        hmds.pending_ticks.is_empty(),
+        "the refusal reached nothing, so the request waits for a reply that has \
+         already arrived",
+    );
+    let told = shared.reference.drain_historical_errors();
+    assert!(told.iter().any(|(r, ..)| *r == 77), "and the caller is told why: {told:?}");
+}

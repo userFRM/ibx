@@ -918,8 +918,15 @@ impl HmdsState {
                         // own bar query and to the corporate-actions query that
                         // folds it, and to nothing else.
                         let mut refused_a_held_query = false;
+                        // Matched the way every path that reads data from a
+                        // reply matches: the venue does not always echo the
+                        // bare name it was given, and a refusal naming the
+                        // continued spelling matched nothing here — the
+                        // request was never told why, its record stayed until
+                        // the connection went, and the caller waited out its
+                        // deadline instead of hearing the reason.
                         if let Some(qid) = &query_id {
-                            if let Some(pos) = self.pending_historical.iter().position(|(q, _)| q == qid) {
+                            if let Some(pos) = self.pending_historical.iter().position(|(q, _)| states(qid, q)) {
                                 let (_, req_id) = self.pending_historical.remove(pos);
                                 // The reconnect list is what gets asked for
                                 // again, so a query the server rejected has to
@@ -943,7 +950,7 @@ impl HmdsState {
                                 released_req_id = Some(req_id);
                                 from_historical = true;
                                 refused_a_held_query = true;
-                            } else if let Some(pos) = self.rtbar_subs.iter().position(|(q, ..)| q == qid) {
+                            } else if let Some(pos) = self.rtbar_subs.iter().position(|(q, ..)| states(qid, q)) {
                                 // A rejected bar query is matched on the query
                                 // id, which is the one identifier that is
                                 // unique across request kinds. Its reconnect
@@ -963,13 +970,13 @@ impl HmdsState {
                                     }
                                 }
                                 released_req_id = Some(req_id);
-                            } else if let Some(pos) = self.pending_head_ts.iter().position(|(q, _)| q == qid) {
+                            } else if let Some(pos) = self.pending_head_ts.iter().position(|(q, _)| states(qid, q)) {
                                 let (_, req_id) = self.pending_head_ts.remove(pos);
                                 released_req_id = Some(req_id);
-                            } else if let Some(pos) = self.pending_histogram.iter().position(|(q, _)| q == qid) {
+                            } else if let Some(pos) = self.pending_histogram.iter().position(|(q, _)| states(qid, q)) {
                                 let (_, req_id) = self.pending_histogram.remove(pos);
                                 released_req_id = Some(req_id);
-                            } else if let Some(pos) = self.pending_adjustments.iter().position(|(q, _, _)| q == qid) {
+                            } else if let Some(pos) = self.pending_adjustments.iter().position(|(q, _, _)| states(qid, q)) {
                                 let (asked, req_id, _) = self.pending_adjustments.remove(pos);
                                 released_req_id = Some(req_id);
                                 // The fold fails on a refusal of the query it
@@ -981,13 +988,13 @@ impl HmdsState {
                                 // caller with an end and no bars.
                                 refused_a_held_query = self.held.iter()
                                     .any(|a| a.actions_query.as_deref() == Some(asked.as_str()));
-                            } else if let Some(pos) = self.pending_ticks.iter().position(|(q, _, _)| q == qid) {
+                            } else if let Some(pos) = self.pending_ticks.iter().position(|(q, _, _)| states(qid, q)) {
                                 let (_, req_id, _) = self.pending_ticks.remove(pos);
                                 released_req_id = Some(req_id);
-                            } else if let Some(pos) = self.pending_schedule.iter().position(|(q, _, _)| q == qid) {
+                            } else if let Some(pos) = self.pending_schedule.iter().position(|(q, _, _)| states(qid, q)) {
                                 let (_, req_id, _) = self.pending_schedule.remove(pos);
                                 released_req_id = Some(req_id);
-                            } else if let Some(pos) = self.pending_scanner.iter().position(|(q, _)| q == qid) {
+                            } else if let Some(pos) = self.pending_scanner.iter().position(|(q, _)| states(qid, q)) {
                                 let (_, req_id) = self.pending_scanner.remove(pos);
                                 released_req_id = Some(req_id);
                             } else if let Some(pos) =
