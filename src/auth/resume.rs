@@ -165,7 +165,9 @@ pub fn save(path: &Path, password: &str, session: &ResumableSession) -> io::Resu
     let mut body = salt.to_vec();
     body.extend_from_slice(&aes_cbc_encrypt(&key, iv, &session.encode()));
 
-    let tmp = path.with_extension("tmp");
+    // Each write already has its own random salt. Sharing a temporary path
+    // lets another save replace the record before this one renames it.
+    let tmp = path.with_extension(format!("{}.tmp", hex::encode(salt)));
     write_private(&tmp, &body)?;
     // Replacing by rename, so a reader never sees a half-written session.
     fs::rename(&tmp, path)
@@ -176,15 +178,17 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let mut f =
-        fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
     f.write_all(bytes)
 }
 
 #[cfg(not(unix))]
 fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
     // No mode to set at creation here; the containing directory is the
     // protection, as it is for every other per-user file on this platform.
-    fs::write(path, bytes)
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    f.write_all(bytes)
 }
 
 /// Read the session for this account, or nothing.
@@ -285,4 +289,68 @@ mod tests {
         assert_eq!(mode, 0o600, "a credential is not left readable by anyone else");
         clear(&path);
     }
+
+    /// A file beside the destinations may belong to a save still in progress.
+    /// Each writer keeps its own record until it replaces its destination.
+    #[test]
+    fn concurrent_session_saves_keep_their_own_records() {
+        let dir = std::env::temp_dir().join(format!(
+            "ibx-resume-concurrent-{}-{:x}", std::process::id(), rand::random::<u64>(),
+        ));
+        let paper_path = dir.join("session.paper");
+        let live_path = dir.join("session.live");
+        let pending_path = dir.join("session.tmp");
+        let paper = sample();
+        let live = ResumableSession {
+            token: vec![0x12, 0x34],
+            server_session_id: "another-session".into(),
+            paper: false,
+            ..sample()
+        };
+        save(&pending_path, "pw", &paper).unwrap();
+        let pending = fs::read(&pending_path).unwrap();
+        let ready = std::sync::Barrier::new(2);
+        let (paper_saved, live_saved) = std::thread::scope(|scope| {
+            let paper_save = scope.spawn(|| {
+                ready.wait();
+                save(&paper_path, "pw", &paper)
+            });
+            let live_save = scope.spawn(|| {
+                ready.wait();
+                save(&live_path, "pw", &live)
+            });
+            (paper_save.join().unwrap(), live_save.join().unwrap())
+        });
+        let read_paper = load(&paper_path, "someone", "pw", true);
+        let read_live = load(&live_path, "someone", "pw", false);
+        let still_pending = fs::read(&pending_path).ok();
+        let files = fs::read_dir(&dir).unwrap().count();
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert!(paper_saved.is_ok(), "paper save: {paper_saved:?}");
+        assert!(live_saved.is_ok(), "live save: {live_saved:?}");
+        assert_eq!(read_paper, Some(paper));
+        assert_eq!(read_live, Some(live));
+        assert_eq!(still_pending, Some(pending), "another write's record stays in place");
+        assert_eq!(files, 3, "the completed saves leave only their destinations");
+    }
+
+    /// Exclusive creation refuses a name another writer already owns without
+    /// truncating its record or inheriting its permissions.
+    #[test]
+    fn a_private_write_never_replaces_an_existing_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "ibx-resume-exclusive-{}-{:x}", std::process::id(), rand::random::<u64>(),
+        ));
+        let path = dir.join("session");
+        save(&path, "pw", &sample()).unwrap();
+        let record = fs::read(&path).unwrap();
+        let written = write_private(&path, &record);
+        let after = fs::read(&path).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(written.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(after, record);
+    }
+
 }

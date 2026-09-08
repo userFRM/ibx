@@ -232,7 +232,11 @@ pub(crate) const MAX_INFLATED: u64 = 64 * 1024 * 1024;
 const MAX_HEADER_SCAN: usize = 128;
 
 fn find_tag(data: &[u8], needle: &[u8]) -> Option<usize> {
-    data.windows(needle.len()).position(|w| w == needle)
+    data.windows(needle.len()).position(|w| {
+        #[cfg(test)]
+        tests::SCAN_COMPARISONS.set(tests::SCAN_COMPARISONS.get() + 1);
+        w == needle
+    })
 }
 
 /// How many bytes of a frame a diagnostic dumps, as hex.
@@ -306,72 +310,62 @@ fn split_messages(buf: &[u8]) -> (Vec<Vec<u8>>, usize) {
     while pos < buf.len() {
         let remaining = &buf[pos..];
 
-        let fix_start = find_tag(remaining, b"8=FIX.");
-        let o_start = find_tag(remaining, b"8=O\x01");
+        // The first recognised header ends the search. Looking for each kind
+        // separately scans the rest of an ordinary FIX batch for every message.
+        let Some(start) = (0..remaining.len()).find(|&i| {
+            #[cfg(test)]
+            tests::SCAN_COMPARISONS.set(tests::SCAN_COMPARISONS.get() + 1);
+            remaining[i..].starts_with(b"8=FIX.") || remaining[i..].starts_with(b"8=O\x01")
+        }) else { break };
+        let chunk = &remaining[start..];
 
-        match (fix_start, o_start) {
-            (None, None) => break,
-            (fix_s, o_s) => {
-                // Pick whichever comes first
-                let o_first = match (o_s, fix_s) {
-                    (Some(_), None) => true,
-                    (Some(o), Some(f)) if o < f => true,
-                    _ => false,
-                };
-
-                if o_first {
-                    let o = o_s.unwrap();
-                    let chunk = &remaining[o..];
-                    // The reader the transport frames this header with, asked
-                    // again rather than written again. Written again here, it
-                    // looked for the first `9=` past the header instead of at
-                    // it and took a length out of whatever tag carried those
-                    // two characters.
-                    match super::connection::binary_msg_length(chunk) {
-                        // Still arriving, so what is here is the caller's to
-                        // keep until the rest of it lands.
-                        Some(total) if total > chunk.len() => break,
-                        Some(total) => {
-                            messages.push(chunk[..total].to_vec());
-                            pos += o + total;
-                        }
-                        // Not a header this can frame, and no later byte makes
-                        // it one. Stepped over rather than given up on.
-                        None => pos += o + 1,
-                    }
-                } else {
-                    let f = fix_start.unwrap();
-                    let chunk = &remaining[f..];
-                    let total = match super::connection::fix_msg_length(chunk) {
-                        Some(total) if total > chunk.len() => break,
-                        Some(total)
-                            if super::connection::trailer_is_where_the_length_says(
-                                chunk, total,
-                            ) =>
-                        {
-                            Some(total)
-                        }
-                        // States a length and does not end where it says. No
-                        // later byte reconciles those two, so it is stepped
-                        // over the way an unreadable one is.
-                        Some(_) => None,
-                        // States no length at all, which some of these do.
-                        None => match checksum_end(chunk) {
-                            Some(end) => Some(end),
-                            None => break,
-                        },
-                    };
-                    match total {
-                        Some(total) => {
-                            messages.push(chunk[..total].to_vec());
-                            pos += f + total;
-                        }
-                        // Given up on instead of stepped over, a fragment at
-                        // the front hid every message behind it — and the
-                        // opening burst of a session begins with one.
-                        None => pos += f + 1,
-                    }
+        if chunk.starts_with(b"8=O\x01") {
+            // The reader the transport frames this header with, asked
+            // again rather than written again. Written again here, it
+            // looked for the first `9=` past the header instead of at
+            // it and took a length out of whatever tag carried those
+            // two characters.
+            match super::connection::binary_msg_length(chunk) {
+                // Still arriving, so what is here is the caller's to
+                // keep until the rest of it lands.
+                Some(total) if total > chunk.len() => break,
+                Some(total) => {
+                    messages.push(chunk[..total].to_vec());
+                    pos += start + total;
                 }
+                // Not a header this can frame, and no later byte makes
+                // it one. Stepped over rather than given up on.
+                None => pos += start + 1,
+            }
+        } else {
+            let total = match super::connection::fix_msg_length(chunk) {
+                Some(total) if total > chunk.len() => break,
+                Some(total)
+                    if super::connection::trailer_is_where_the_length_says(
+                        chunk, total,
+                    ) =>
+                {
+                    Some(total)
+                }
+                // States a length and does not end where it says. No
+                // later byte reconciles those two, so it is stepped
+                // over the way an unreadable one is.
+                Some(_) => None,
+                // States no length at all, which some of these do.
+                None => match checksum_end(chunk) {
+                    Some(end) => Some(end),
+                    None => break,
+                },
+            };
+            match total {
+                Some(total) => {
+                    messages.push(chunk[..total].to_vec());
+                    pos += start + total;
+                }
+                // Given up on instead of stepped over, a fragment at
+                // the front hid every message behind it — and the
+                // opening burst of a session begins with one.
+                None => pos += start + 1,
             }
         }
     }
@@ -706,4 +700,26 @@ mod tests {
         // Decompressed data should equal the original inner FIX message
         assert_eq!(decompressed, inner);
     }
+
+    thread_local! {
+        pub(super) static SCAN_COMPARISONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// A batch of ordinary messages has no binary header to find. The search
+    /// ends at each message's own header without visiting the messages behind it.
+    #[test]
+    fn an_ordinary_batch_scans_each_header_once() {
+        let messages: Vec<_> = (1..=256)
+            .map(|seq| fix_build(&[(35, "8"), (58, "filled")], seq))
+            .collect();
+        let batch = messages.concat();
+        SCAN_COMPARISONS.set(0);
+        let (read, unread) = split_messages(&batch);
+        let comparisons = SCAN_COMPARISONS.get();
+        assert_eq!(read, messages);
+        assert_eq!(unread, 0);
+        assert!(comparisons <= batch.len(),
+            "{comparisons} comparisons revisit a batch of {} bytes", batch.len());
+    }
+
 }
