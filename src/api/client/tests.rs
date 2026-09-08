@@ -9744,3 +9744,63 @@ fn the_market_data_type_is_stated_before_the_first_thing_delivered() {
     );
     assert!(w.calls.contains(&"tick_string"), "and the time was delivered: {:?}", w.calls);
 }
+
+/// A number past what an order can be carried under is refused, and the
+/// allocator survives it.
+///
+/// The reader of the venue's reports stops at that number, so an order placed
+/// past it goes to the venue and every report about it — the acknowledgement,
+/// the fills, the withdrawal — fails to parse back to a number: the order is
+/// live and invisible here. The mark the placement spends is set whatever
+/// happens to the order, so one such call also left the allocator counting
+/// from past the end, and every later request for a number was answered with
+/// none for the rest of the session.
+#[test]
+fn an_order_number_past_the_end_is_refused_and_leaves_the_allocator_whole() {
+    let (client, _rx, _shared) = test_client();
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "MKT".into(),
+        tif: "DAY".into(), transmit: true, ..Default::default()
+    };
+
+    let refused = client.place_order(i64::MAX, &spy(), &order);
+    assert!(refused.is_err(), "an order number past the end was taken");
+
+    assert!(
+        client.next_order_id.load(std::sync::atomic::Ordering::Acquire)
+            <= crate::bridge::MAX_ORDER_ID,
+        "the allocator now counts from past the end, so every later request for \
+         a number is answered with none for the rest of the session",
+    );
+}
+
+/// An exercise takes an order's number, so it is under an order's rules.
+///
+/// It goes to the venue as an order and states a number on the wire. Taken as
+/// given, a number that is also a working order's overwrote this side's record
+/// of that order with the exercise's terms, and the venue refused the exercise
+/// as a repeat of a number it was already working — while the caller was told
+/// the exercise had gone. The repo's own surfaces feed request numbers that
+/// start at one.
+#[test]
+fn an_exercise_does_not_take_the_number_of_a_working_order() {
+    let (client, rx, _shared) = test_client();
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 1.0, tif: "GTC".into(), transmit: true, ..Default::default()
+    };
+    client.place_order(11, &spy(), &order).expect("placed and sent");
+    while rx.try_recv().is_ok() {}
+
+    let refused = client.exercise_options(
+        11, &spy(), 1, 1, "", true, crate::client_core::ExerciseStates::default(),
+    );
+    assert!(
+        refused.is_err(),
+        "the exercise took the number of an order the venue is working",
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "and nothing went out under it",
+    );
+}

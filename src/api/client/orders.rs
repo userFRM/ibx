@@ -170,6 +170,25 @@ impl EClient {
                  ask for one with next_order_id()",
             )));
         };
+        // And within the range this client can carry one in, which is where
+        // the reader of the venue's reports stops. Past it, the order goes to
+        // the venue and every report about it — the acknowledgement, the
+        // fills, the withdrawal — fails to parse back to a number, so the
+        // order is live and invisible here. The mark below is spent whatever
+        // happens to the placement, so one such call also left the allocator
+        // counting from past the end and every later request for a number
+        // answered with none, for the rest of the session.
+        if oid > crate::bridge::MAX_ORDER_ID {
+            return Err(Refusal::validation(format!(
+                "place_order: order_id {order_id} is past the highest this client can \
+                 carry an order under ({}); ask for one with next_order_id()",
+                crate::bridge::MAX_ORDER_ID,
+            )));
+        }
+        // Said once, as the paths that hand out numbers say it: a program
+        // numbering its orders and its requests out of one counter has a
+        // number here that a request cannot carry.
+        crate::bridge::say_if_past_a_request_id(oid);
 
         // The number this call is spending, so the allocator does not hand it
         // out again. It counts from the highest the venue has named, and the
@@ -392,7 +411,36 @@ impl EClient {
         ClientCore::validate_order_contract(contract.con_id, &contract.sec_type, &identity)?;
 
         let oid = if req_id > 0 {
-            req_id as u64
+            let oid = req_id as u64;
+            // An exercise goes to the venue as an order and takes an order's
+            // number on the wire, so the number a caller states here is under
+            // the same rules a placement's is. Taken as given, a number that
+            // is also a working order's overwrote this side's record of that
+            // order with the exercise's terms, and the venue refused the
+            // exercise as a repeat of a number it was already working — the
+            // caller was told the exercise had gone.
+            if oid > crate::bridge::MAX_ORDER_ID {
+                return Err(Refusal::validation(format!(
+                    "exercise_options: {req_id} is past the highest number this client \
+                     can carry an order under ({}); pass 0 to be given one",
+                    crate::bridge::MAX_ORDER_ID,
+                )));
+            }
+            if self.core.is_working_at_the_venue(oid, Some(&self.shared)) {
+                return Err(Refusal::stated(
+                    DUPLICATE_ORDER_ID,
+                    format!(
+                        "{req_id} is the number of an order the venue is working: an \
+                         exercise takes an order's number, so pass 0 to be given one",
+                    ),
+                ));
+            }
+            // Spent, as a placement spends it: the allocator counts from the
+            // highest the venue has named and has not named this one, so
+            // without this it hands the same number out again while the venue
+            // works the exercise under it.
+            self.next_order_id.fetch_max(oid + 1, Ordering::AcqRel);
+            oid
         } else {
             // Written down, as on `place_order` above.
             self.reserve_order_ids(1)? as u64
