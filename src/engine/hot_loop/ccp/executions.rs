@@ -1903,7 +1903,16 @@ impl CcpState {
                     stated_order_id(base)
                 })
         });
-        let reason = parsed.get(&58).map(|s| s.as_str()).unwrap_or("Cancel rejected");
+        // An empty tag is as good as an absent one. Kept as the empty string,
+        // it travelled as the completed status a refusal is told apart by —
+        // and an order whose status reads "Inactive" with nothing beside it is
+        // one the venue is merely holding, so a refused order this side had
+        // already retired and filed as finished came back out of the working
+        // list.
+        let reason = parsed.get(&58)
+            .map(|s| s.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Cancel rejected");
         let reject_type: u8 = parsed.get(&434).and_then(|s| s.parse().ok()).unwrap_or(1);
         let reason_code: i32 = parsed.get(&102).and_then(|s| s.parse().ok()).unwrap_or(-1);
         log::warn!("CancelReject: origClOrd={orig_clord:?} type={reject_type} code={reason_code} reason={reason}");

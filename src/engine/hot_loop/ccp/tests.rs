@@ -7576,3 +7576,44 @@ fn an_acceptance_does_not_spend_a_fallback_a_later_revision_needs() {
          would need it for is still outstanding",
     );
 }
+
+/// A refusal that states no words is still a refusal.
+///
+/// The reason travels as the completed status a refusal is told apart by: an
+/// order whose status reads "Inactive" with nothing beside it is one the venue
+/// is merely holding and can take up again. The venue sends the tag empty as
+/// readily as it leaves it out, and only the second was defaulted — so an
+/// order this side had retired and filed as finished came back out of the
+/// working list, and every caller asking what it had on was told the order was
+/// live.
+#[test]
+fn a_refusal_that_states_no_words_still_ends_the_order() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    tracked_for_cancel(&mut context);
+    shared.orders.push_order_info(42, RichOrderInfo {
+        contract: api::Contract::default(),
+        order: api::Order::default(),
+        order_state: api::OrderState::default(),
+        last_exec: api::Execution::default(),
+    });
+
+    let mut frame = std::collections::HashMap::new();
+    frame.insert(41u32, "C42".to_string());
+    frame.insert(434u32, "1".to_string());
+    frame.insert(102u32, "0".to_string());
+    frame.insert(39u32, "8".to_string());
+    // Stated, and empty.
+    frame.insert(58u32, String::new());
+    ccp.handle_cancel_reject(&frame, &mut context, &shared, &None);
+
+    let row = shared.orders.get_order_info(42).expect("the row is kept to report from");
+    assert!(
+        !crate::types::order_status::is_open_or_reactivatable(
+            &row.order_state.status, &row.order_state.completed_status,
+        ),
+        "an order the venue refused reads as one it is holding: {:?}/{:?}",
+        row.order_state.status, row.order_state.completed_status,
+    );
+}

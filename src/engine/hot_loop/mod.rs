@@ -513,8 +513,9 @@ impl HotLoop {
                 };
                 // What is already up, and only where this request can be
                 // answered by it. A snapshot is neither followed nor followable
-                // — it is a request of its own, and it is billed — so a
-                // snapshot skipped for a live stream was never sent and the
+                // — it is a request of its own, asked for under an action of
+                // its own — so a snapshot skipped for a live stream was never
+                // sent and the
                 // caller heard the end of it off ticks it did not ask for,
                 // while a stream skipped for a snapshot in flight was dropped
                 // when the snapshot completed and withdrew.
@@ -549,12 +550,20 @@ impl HotLoop {
                 // no later moment when it does: it was accepted, dropped, and
                 // never answered.
                 if p.regulatory_snapshot && self.farm.disconnected {
-                    self.shared.market.push_subscription_failure(
-                        instrument,
-                        "the quote feed was down when this snapshot was asked for, so \
-                         it was never sent: ask for it again once the feed is back"
-                            .to_string(),
-                    );
+                    // Not where a stream is held on the contract. What is
+                    // recorded here is about the contract and reaches everyone
+                    // watching it, and the stream was neither refused nor
+                    // given up — it is kept precisely so the reconnect brings
+                    // it back. Told their quote had been refused, its watchers
+                    // withdraw it.
+                    if !self.farm.holds_a_stream(instrument) {
+                        self.shared.market.push_subscription_failure(
+                            instrument,
+                            "the quote feed was down when this snapshot was asked for, \
+                             so it was never sent: ask for it again once the feed is back"
+                                .to_string(),
+                        );
+                    }
                     continue;
                 }
                 let (sec_type, exchange) =
@@ -1266,14 +1275,18 @@ impl HotLoop {
                             } else if regulatory_snapshot && self.farm.disconnected {
                                 // As on the resolved path: a snapshot is not
                                 // recorded for replay, so one with no
-                                // transport to carry it is simply lost.
-                                self.shared.market.push_subscription_failure(
-                                    id,
-                                    "the quote feed was down when this snapshot was \
-                                     asked for, so it was never sent: ask for it again \
-                                     once the feed is back"
-                                        .to_string(),
-                                );
+                                // transport to carry it is simply lost — and
+                                // said only where no stream on the contract
+                                // would hear it as its own refusal.
+                                if !self.farm.holds_a_stream(id) {
+                                    self.shared.market.push_subscription_failure(
+                                        id,
+                                        "the quote feed was down when this snapshot was \
+                                         asked for, so it was never sent: ask for it \
+                                         again once the feed is back"
+                                            .to_string(),
+                                    );
+                                }
                             } else {
                                 let (sec_type, exchange) =
                                     self.described_as(con_id, &sec_type, &exchange);
@@ -4551,13 +4564,13 @@ mod tests {
     /// A request answered by what is already up, and only where it can be.
     ///
     /// The chargeable snapshot is not a subscription anybody shares. It is a
-    /// request of its own, it is billed, and it is withdrawn as soon as it
-    /// completes. Read as one, both directions were dropped: a stream skipped
+    /// request of its own, asked for under an action of its own, and it is
+    /// withdrawn as soon as it completes. Read as one, both directions were dropped: a stream skipped
     /// because a snapshot held the slot went out never, and the snapshot's own
     /// withdrawal then took the record it had been pointed at; a snapshot
-    /// skipped because a stream held the slot was never sent, never billed and
-    /// never refused for want of the entitlement, and the caller heard the end
-    /// of it off ticks it did not ask for.
+    /// skipped because a stream held the slot was never sent and never refused
+    /// for want of the entitlement, and the caller heard the end of it off
+    /// ticks it did not ask for.
     #[test]
     fn a_snapshot_and_a_stream_are_each_sent_over_the_other() {
         fn a_pending(
@@ -4623,7 +4636,7 @@ mod tests {
         assert!(
             entries > 1,
             "the snapshot was answered with somebody else's stream, so nothing \
-             was sent and nothing was billed",
+             went to the venue at all",
         );
     }
 
@@ -4667,6 +4680,48 @@ mod tests {
             !told.is_empty(),
             "the snapshot was accepted, never sent, and never recorded for \
              replay — so nothing was ever going to answer it",
+        );
+    }
+
+    /// A snapshot lost to an outage is not reported as the contract's refusal.
+    ///
+    /// What is recorded here is about the contract and reaches everyone
+    /// watching it. A stream held on the same contract was neither refused nor
+    /// given up — it is kept precisely so the reconnect brings it back — and
+    /// its watchers, told their quote had been refused, withdraw it.
+    #[test]
+    fn a_snapshot_lost_to_an_outage_does_not_refuse_the_stream_beside_it() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        let instrument = hl.context.market.register(756733);
+        // A stream on the contract, sent the way the engine sends one, and
+        // kept across the outage for the replay.
+        hl.farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "",
+            instrument, 0, false, &mut hl.farm_conn, &mut hl.hb,
+        );
+        hl.farm.handle_disconnect_for_test();
+
+        tx.send(ControlCommand::Subscribe {
+            contract: ContractRef {
+                con_id: 756733,
+                sec_type: "STK".into(),
+                exchange: "SMART".into(),
+                ..Default::default()
+            },
+            mode_9887: 0,
+            regulatory_snapshot: true,
+            reply_tx: None,
+        })
+        .expect("the engine holds the other end");
+        hl.poll_once();
+
+        let told = shared.market.drain_subscription_failures();
+        assert!(
+            told.is_empty(),
+            "the stream's watchers were told their quote had been refused: {told:?}",
         );
     }
 
