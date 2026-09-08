@@ -44,11 +44,22 @@ use crate::api::client::EClientConfig;
 /// that thread is not stopped by the caller giving up on it. A `timeout`
 /// around one of these, or a `select!` that takes another branch, drops the
 /// future and detaches the work: it goes on, reaches the venue, and its answer
-/// is thrown away. Where that answer was the only handle to what the call did
-/// — the number a subscription is withdrawn under, the order a placement put
-/// on the market — what it did is live afterwards and cannot be reached. A
-/// call that starts something at the venue is one to let finish; each already
-/// answers within a deadline of the session's own.
+/// is thrown away.
+///
+/// What that costs depends on whether anything but the answer held on to it. A
+/// placement is remembered under its own number before it returns, so an order
+/// whose answer was dropped is still found through
+/// [`trades`](crate::api::session::Client::trades),
+/// [`open_trades`](crate::api::session::Client::open_trades) and
+/// [`trade`](crate::api::session::Client::trade) — what was lost is the answer,
+/// not the order. A subscription is not: the number
+/// [`watch`](crate::api::session::Client::watch) returns is the only handle to
+/// it, and dropped, the stream runs until the session ends with nothing able to
+/// withdraw it.
+///
+/// So a call that starts something at the venue is one to let finish. Bounding
+/// it is what the session's own deadlines are for — every question here already
+/// answers within one — rather than a timeout wrapped around the waiting.
 #[derive(Clone)]
 pub struct AsyncClient {
     inner: Client,
@@ -59,10 +70,14 @@ pub struct AsyncClient {
 /// The thread is not stopped by the caller giving up on it. A `timeout` around
 /// one of these, or a `select!` that takes another branch, drops the future
 /// and detaches the work — it goes on, reaches the venue, and its answer is
-/// thrown away. Where that answer was the only handle to what the call did,
-/// what it did is now unnamed: the number a subscription is withdrawn under,
-/// or the order a placement put on the market. Both are live afterwards and
-/// neither can be reached.
+/// thrown away.
+///
+/// Whether that leaves anything unreachable depends on what else held it. A
+/// placement is remembered under its own number before it returns, so the order
+/// survives its dropped answer and is read back with the session's own
+/// bookkeeping. A subscription is not held anywhere else: the number returned
+/// is the only handle, and without it the stream runs to the end of the
+/// session.
 ///
 /// So a call here that starts something at the venue is one to let finish.
 /// Bounding it is what the session's own deadlines are for — every question
