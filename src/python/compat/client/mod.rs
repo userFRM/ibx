@@ -2696,6 +2696,13 @@ assert [(c[1], c[2]) for c in w.calls if c[0] in ('tickOptionComputation', 'tick
         Python::initialize();
         Python::attach(|py| {
             let (client, rx, shared, wrapper) = wired_client(py);
+            // The handshake below holds the reply while the withdrawal is
+            // tried, and registration waits on that reply. Tests default the
+            // wait to a millisecond, which the handshake cannot finish inside:
+            // it would time out, drop the reply's receiver, and both threads
+            // panic on the send and the join. Wide enough that the wait is the
+            // window under test, not a race the test loses.
+            client.get().core.set_registration_timeout(std::time::Duration::from_secs(5));
             let (seen_tx, seen_rx) = std::sync::mpsc::sync_channel(1);
             let (go_tx, go_rx) = std::sync::mpsc::sync_channel(1);
             let engine = std::thread::spawn(move || {
