@@ -358,9 +358,14 @@ impl EClient {
         // here took a slot, reached a sender with no connection to write it to,
         // and said nothing — and a book that never arrives is what a market
         // with nothing to say looks like.
-        if let Some(why) = self.shared.lock().unwrap().as_ref()
-            .and_then(|s| s.market.market_data_over())
-        {
+        // Read out from under the lock before anything is refused. The refusal
+        // below reaches the caller's own error handler, and a handler that
+        // disconnects takes this same lock on its way out — held across the
+        // call, the two are one thread waiting on a lock it is already holding,
+        // with the interpreter stopped behind it.
+        let feed_is_over = self.shared.lock().unwrap().as_ref()
+            .and_then(|s| s.market.market_data_over());
+        if let Some(why) = feed_is_over {
             return self.report_refusal(
                 py, req_id,
                 Refusal::not_connected(format!(
