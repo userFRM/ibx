@@ -3321,3 +3321,20 @@ fn what_kinds_of_action_the_venue_states_live() {
     );
     println!("\n=== done ===");
 }
+
+/// Whether a replace still names the venue a directed order is working on,
+/// after a subscription on the same contract has moved the slot's routing.
+///
+/// Run: cargo test --test ib_paper_compat directed_venue_replace_phase_live -- --ignored --nocapture
+#[test]
+#[ignore = "opens a session of its own, which the account allows one of; run it with --ignored"]
+fn directed_venue_replace_phase_live() {
+    start_logging();
+    let config = match get_config() { Some(c) => c, None => return };
+    let ibx::gateway::Session { gateway: mut gw, market_data: farm_conn, trading: ccp_conn, historical: hmds_conn, .. } = Gateway::connect(&config).expect("connect");
+    let conns = Conns { farm: farm_conn, ccp: ccp_conn, hmds: hmds_conn,
+        account_id: gw.account_id.clone() };
+    let conns = orders::phase_replace_keeps_the_directed_venue(conns);
+    let conns = ensure_ccp_alive(conns, &mut gw, &config);
+    let _ = connection::phase_graceful_shutdown(conns);
+}

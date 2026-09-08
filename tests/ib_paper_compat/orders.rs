@@ -2868,3 +2868,102 @@ pub(super) fn phase_replace_a_bracket_child(conns: Conns) -> Conns {
     println!("  PASS\n");
     conns
 }
+
+/// A replace names the venue the order is working on, not the one the contract
+/// is watched on now.
+///
+/// The destination is restated on every replace, and it was read from the slot
+/// the order sits in — which a subscription on the same contract writes too. A
+/// caller directing an order to one venue and then watching that contract on
+/// another had the routing moved under the resting order. This places a
+/// directed order, moves the slot's routing the way a subscribe would, and
+/// replaces it: the venue is holding the order at the venue it was sent to, so
+/// a replace naming somewhere else is one it has to answer.
+pub(super) fn phase_replace_keeps_the_directed_venue(conns: Conns) -> Conns {
+    phase!("--- Phase 208: a replace keeps the venue the order was directed to ---");
+
+    let account_id = conns.account_id;
+    let shared = Arc::new(SharedState::new());
+    let (event_tx, event_rx) = std::sync::mpsc::sync_channel(4096);
+    let (mut hot_loop, control_tx) = HotLoop::with_connections(
+        shared.clone(), Some(ibx::engine::hot_loop::EventSink::new(event_tx, Default::default())),
+        account_id.clone(), conns.farm, conns.ccp, conns.hmds, None,
+    );
+    let inst_id = hot_loop.context_mut().register_instrument(756733);
+    hot_loop.context_mut().set_symbol(inst_id, "SPY".to_string());
+    // Directed: the caller named the venue rather than letting it be routed.
+    hot_loop.context_mut().set_routing(inst_id, "STK", "ARCA");
+
+    // Far below the market so it rests rather than filling.
+    let placed_at = 100 * ibx::types::PRICE_SCALE;
+    let replaced_at = 101 * ibx::types::PRICE_SCALE;
+    let order_id = next_order_id();
+    control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx {
+        order_id, instrument: inst_id, con_id: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE,
+        kind: OrderKind::Limit { price: placed_at },
+        tif: b'0', attrs: OrderAttrs::default(),
+    })).unwrap();
+    let join = run_hot_loop(hot_loop);
+
+    let deadline = Instant::now() + Duration::from_secs(70);
+    let mut working = false;
+    let mut replace_sent = false;
+    let mut refused_after: Option<String> = None;
+
+    while Instant::now() < deadline {
+        if let Ok(Event::OrderUpdate(update)) = event_rx.recv_timeout(Duration::from_millis(100)) {
+            if update.order_id != order_id { continue; }
+            match update.status {
+                OrderStatus::Submitted | OrderStatus::PreSubmitted if !working => {
+                    working = true;
+                    println!("  placed and working, directed to ARCA");
+                    // What a subscription on the same contract does to the slot.
+                    control_tx.send(ControlCommand::Subscribe {
+                        contract: ContractRef {
+                            con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+                            exchange: "SMART".into(), ..Default::default()
+                        },
+                        mode_9887: 0, regulatory_snapshot: false, reply_tx: None,
+                    }).unwrap();
+                    std::thread::sleep(Duration::from_secs(2));
+                    control_tx.send(ControlCommand::Order(OrderRequest::Modify {
+                        order_id, price: replaced_at, qty: ibx::types::QTY_SCALE,
+                        outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                    })).unwrap();
+                    replace_sent = true;
+                }
+                OrderStatus::Rejected | OrderStatus::Inactive if replace_sent => {
+                    refused_after = Some(format!("{:?}", update.status));
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if replace_sent && refused_after.is_none() {
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    let refusals = shared.orders.drain_order_inactive();
+    for row in &refusals {
+        println!("  refusal: {} {} {}", row.0, row.1, row.2);
+    }
+    println!("  replace answered: {}", refused_after.as_deref().unwrap_or("nothing refused it"));
+
+    // Withdraw it, whatever happened, so nothing is left resting.
+    control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
+    std::thread::sleep(Duration::from_secs(2));
+    let conns = shutdown_and_reclaim(&control_tx, join, account_id);
+
+    if !working {
+        no_market(&shared, "the directed order never reached working");
+        return conns;
+    }
+    assert!(
+        refusals.is_empty() && refused_after.is_none(),
+        "the venue answered the replace with a refusal — the order rests at the venue it \
+         was directed to, so a replace that names another is one it can refuse: {refusals:?}",
+    );
+    println!("  PASS (a replace after the slot moved was accepted on the directed order)\n");
+    conns
+}
