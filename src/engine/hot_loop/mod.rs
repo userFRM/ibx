@@ -1992,9 +1992,27 @@ impl HotLoop {
                     // What a maintenance window does, on demand. The recovery
                     // that follows is the engine's own: nothing here helps it
                     // along, which is the point.
+                    //
+                    // Taken away the way the venue takes them, through the
+                    // paths every other drop goes through. Only the flags were
+                    // set before, so both sockets stayed installed while the
+                    // pollers ignored them and the heartbeat passed them over:
+                    // held open, never written to, and given up only when a
+                    // reconnect replaced them. And none of the bookkeeping a
+                    // drop does ran — orders were not marked uncertain, so one
+                    // that completed at the venue during the window was absent
+                    // from the recovery's own reckoning and stood in the book
+                    // as working for the rest of the session; the account went
+                    // on answering from a book the download had not restated;
+                    // and the lookups waiting on the connection waited out
+                    // their deadlines rather than ending with it.
                     log::warn!("both transports taken away on request");
-                    self.force_farm_disconnect();
-                    self.force_ccp_disconnect();
+                    self.ccp.handle_disconnect(
+                        &mut self.ccp_conn, &mut self.context, &self.shared, &self.event_tx,
+                    );
+                    self.farm.handle_disconnect(
+                        &mut self.farm_conn, &mut self.context, &self.event_tx, &self.shared,
+                    );
                 }
                 ControlCommand::Shutdown => {
                     // Read here, so a worker sees it while the rest of this
@@ -5659,6 +5677,40 @@ mod tests {
         // The trading connection running out is what ends it.
         hl.report_recovery_exhausted("ccp");
         assert!(shared.reference.session_over().is_some(), "the trading connection's budget is");
+    }
+
+    /// A disconnect the caller asks for is the one the venue would have given.
+    ///
+    /// Only the flags were set. Both sockets stayed installed while the pollers
+    /// ignored them and the heartbeat passed them over — held open and never
+    /// written to until a reconnect replaced them — and none of the bookkeeping
+    /// a drop does ran, so an order that completed at the venue during the
+    /// window was absent from the recovery's reckoning and stood in the book as
+    /// working for the rest of the session.
+    #[test]
+    fn a_disconnect_the_caller_asks_for_gives_the_sockets_up() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+
+        let (ccp, _ccp_peer) = crate::protocol::connection::Connection::for_test();
+        let (farm, _farm_peer) = crate::protocol::connection::Connection::for_test();
+        hl.ccp_conn = Some(ccp);
+        hl.farm_conn = Some(farm);
+
+        tx.send(ControlCommand::ForceDisconnect).expect("the engine holds the other end");
+        hl.poll_once();
+
+        assert!(hl.ccp.disconnected && hl.farm.disconnected, "both are said to be down");
+        assert!(
+            hl.ccp_conn.is_none(),
+            "the trading socket was left installed on a connection said to be gone",
+        );
+        assert!(
+            hl.farm_conn.is_none(),
+            "the quote socket was left installed on a connection said to be gone",
+        );
     }
 
     /// The farm's own clock is read whatever the trading connection is doing.
