@@ -75,7 +75,13 @@ jobs:
     needs: credentials
     if: needs.credentials.outputs.present == 'yes'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The two suites below run one after the other, each holding the account's
+    # only session for its whole length, and the account is emptied after them.
+    # Capped at forty-five this ran out partway through the second and reported
+    # a cancellation, which reads as a suite that failed rather than one that
+    # was not allowed to finish. Ninety is what the note at the top of this
+    # file already says the run holds the session for.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
