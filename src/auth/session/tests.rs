@@ -801,8 +801,9 @@ struct VerdictAfterCodeReady {
 }
 impl io::Read for VerdictAfterCodeReady {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // The provider is ready while the venue's verdict is still arriving,
-        // so both can be available to the gate on the same pass.
+        // Hand over the verdict only once the code is sitting in the
+        // channel, so the gate reads it and then sends in the same
+        // pass. That is the ordering the snapshot exists for.
         while !self.ready.load(Ordering::SeqCst) {
             std::thread::yield_now();
         }
@@ -940,25 +941,6 @@ fn security_code_gate_reports_a_rejection_as_a_rejection_not_a_timeout() {
 }
 
 #[test]
-fn security_code_gate_reports_a_774_rejection_before_a_code_is_sent() {
-    // A refusal can arrive while the operator is still reading the code.
-    // Silence after it must not turn that refusal into a timeout.
-    for chunk in [usize::MAX, 1] {
-        let mut stream = RepliesAfterWrite::chunked(Vec::new(), chunk);
-        stream.preface = security_code_result(&["", "", "", "FAILED"]);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
-        let err = do_security_code_2fa(
-            &mut stream,
-            deadline,
-            Some(&code_provider_that_never_answers()), None)
-        .unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "got {err}");
-        assert!(err.to_string().contains("security code rejected (FAILED)"), "got {err}");
-        assert!(stream.written.is_empty(), "nothing should have been sent");
-    }
-}
-
-#[test]
 fn security_code_gate_reports_a_rejection_delivered_as_auth_finish() {
     // The same rejection can arrive on 771 instead of 774.
     let mut stream = RepliesAfterWrite::new(frame_xyz(&xyz::xyz_build(
@@ -987,21 +969,27 @@ fn security_code_gate_never_puts_the_code_in_an_error_message() {
 }
 
 #[test]
-fn security_code_gate_accepts_passed_before_a_code_is_sent() {
+fn security_code_gate_does_not_accept_passed_before_a_code_is_sent() {
+    // An unsolicited PASSED must not stand in for the exchange.
     let mut stream = ScriptedStream::new(frame_xyz(&xyz::xyz_build(
         xyz::XYZ_MSG_TOKEN_AUTH, 5, "", &["PASSED"],
     )));
-    let outcome = do_security_code_2fa(
+    let err = do_security_code_2fa(
         &mut stream,
         far_future_deadline(),
         Some(&code_provider_that_never_answers()), None)
-    .expect("the venue's PASSED must be accepted before a code is sent");
-    assert!(matches!(outcome, IbKeyOutcome::Approved { .. }));
-    assert!(stream.written.is_empty(), "nothing should have been sent");
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
+    assert!(err.to_string().contains("before a code was sent"), "got {err}");
 }
 
 #[test]
-fn security_code_gate_accepts_a_verdict_whose_read_began_before_the_code() {
+fn security_code_gate_ignores_a_verdict_whose_read_began_before_the_code() {
+    // Sharper than the whole-frame case: the verdict's header is read, the
+    // provider returns mid-frame, the code goes out, and the frame
+    // completes on the next read. The verdict still predates the code, so
+    // a guard that checks the flag at match time rather than at read time
+    // would accept it.
     let ready = Arc::new(AtomicBool::new(false));
     let signal = ready.clone();
     let provider: CodeProvider = Arc::new(move |_| {
@@ -1014,14 +1002,17 @@ fn security_code_gate_accepts_a_verdict_whose_read_began_before_the_code() {
         ready,
         written: Vec::new(),
     };
-    let outcome = do_security_code_2fa(&mut stream, far_future_deadline(), Some(&provider), None)
-        .expect("the venue's PASSED must be accepted before a code is sent");
-    assert!(matches!(outcome, IbKeyOutcome::Approved { .. }));
-    assert!(stream.written.is_empty(), "nothing should have been sent");
+    // The verdict predates the code even though the code is sent first.
+    let err = do_security_code_2fa(&mut stream, far_future_deadline(), Some(&provider), None)
+        .expect_err("a verdict read before the code was sent must not approve the login");
+    assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
 }
 
+/// The same straddle as above, on the 774 result arm — which is the arm a
+/// live login actually completes through. Pinning only the AUTH_FINISH arm
+/// left this one dark for exactly the bug class it exists to prevent.
 #[test]
-fn security_code_gate_reports_a_774_rejection_whose_read_began_before_the_code() {
+fn security_code_gate_ignores_a_774_verdict_whose_read_began_before_the_code() {
     let ready = Arc::new(AtomicBool::new(false));
     let signal = ready.clone();
     let provider: CodeProvider = Arc::new(move |_| {
@@ -1029,21 +1020,24 @@ fn security_code_gate_reports_a_774_rejection_whose_read_began_before_the_code()
         Ok("123456".to_string())
     });
     let mut stream = VerdictAfterCodeReady {
-        incoming: security_code_result(&["", "", "", "FAILED"]),
+        incoming: security_code_result(&["", "", "", "PASSED"]),
         pos: 0,
         ready,
         written: Vec::new(),
     };
     let err = do_security_code_2fa(&mut stream, far_future_deadline(), Some(&provider), None)
-        .expect_err("the venue's FAILED must reject the login before a code is sent");
-    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
-    assert!(err.to_string().contains("security code rejected (FAILED)"), "got {err}");
-    assert!(stream.written.is_empty(), "nothing should have been sent");
+        .expect_err("a 774 verdict read before the code was sent must not approve the login");
+    assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
 }
 
-/// A keepalive coalesced with the verdict still needs its own answer.
+/// The server coalesces its keepalive with an unsolicited verdict, so both
+/// are readable before anything is written. The gate finishes the probe,
+/// sends the code on that same pass, and only then starts reading a verdict
+/// that was already waiting — so recording the flag when the frame's first
+/// byte is read still credits it to the code, as long as the send lands on
+/// a frame boundary.
 #[test]
-fn security_code_gate_accepts_a_verdict_after_a_keepalive_before_the_code() {
+fn security_code_gate_ignores_a_verdict_already_readable_when_the_code_went_out() {
     let ready = Arc::new(AtomicBool::new(false));
     let signal = ready.clone();
     let provider: CodeProvider = Arc::new(move |_| {
@@ -1054,18 +1048,20 @@ fn security_code_gate_accepts_a_verdict_after_a_keepalive_before_the_code() {
     incoming.extend_from_slice(&security_code_result(&["", "", "", "PASSED"]));
     let mut stream = VerdictAfterCodeReady { incoming, pos: 0, ready, written: Vec::new() };
 
-    let outcome = do_security_code_2fa(&mut stream, far_future_deadline(), Some(&provider), None)
-        .expect("the venue's PASSED must be accepted before a code is sent");
-    assert!(matches!(outcome, IbKeyOutcome::Approved { .. }));
+    let err = do_security_code_2fa(&mut stream, far_future_deadline(), Some(&provider), None)
+        .expect_err("a verdict already readable when the code went out must not approve the login");
+    assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
+    // Without the probe answered, the verdict never crossed a frame
+    // boundary and the test would pass on the ordering it is not about.
     let heartbeat = ns_build_heart_beat(NS_VERSION, "20260730-01:02:03");
-    assert_eq!(
-        stream.written, heartbeat,
-        "the gate must answer the probe before accepting the verdict",
+    assert!(
+        stream.written.windows(heartbeat.len()).any(|w| w == heartbeat),
+        "the gate must have consumed the probe ahead of the verdict",
     );
 }
 
 #[test]
-fn security_code_gate_surfaces_an_unexpected_774_code_before_a_code_is_sent() {
+fn security_code_gate_ignores_an_unexpected_774_code_before_a_code_is_sent() {
     let mut stream = ScriptedStream::new(frame_xyz(&xyz::xyz_build(
         xyz::XYZ_MSG_SECURITY_CODE, 4, "", &["whatever"],
         )));
@@ -1074,8 +1070,7 @@ fn security_code_gate_surfaces_an_unexpected_774_code_before_a_code_is_sent() {
         far_future_deadline(),
         Some(&code_provider_that_never_answers()), None)
     .unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
-    assert!(err.to_string().contains("code 4"), "got {err}");
+    assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
     assert!(stream.written.is_empty(), "nothing should have been sent");
 }
 
@@ -1248,14 +1243,17 @@ fn security_code_gate_trims_the_code_it_sends() {
 }
 
 #[test]
-fn security_code_gate_accepts_a_774_verdict_before_a_code_is_sent() {
+fn security_code_gate_does_not_accept_a_774_verdict_before_a_code_is_sent() {
+    // Approving without ever sending a code is the mute failure this gate
+    // exists to prevent.
     let mut stream = ScriptedStream::new(security_code_result(&["", "", "", "PASSED"]));
-    let outcome = do_security_code_2fa(
+    let err = do_security_code_2fa(
         &mut stream,
         far_future_deadline(),
         Some(&code_provider_that_never_answers()), None)
-    .expect("the venue's PASSED must be accepted before a code is sent");
-    assert!(matches!(outcome, IbKeyOutcome::Approved { .. }));
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
+    assert!(err.to_string().contains("before a code was sent"), "got {err}");
     assert!(stream.written.is_empty(), "nothing should have been sent");
 }
 
