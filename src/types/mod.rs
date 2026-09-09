@@ -92,15 +92,19 @@ pub fn qty_to_f64(qty: Qty) -> f64 {
     qty as f64 / QTY_SCALE as f64
 }
 
-/// The largest quantity the fixed-point form holds.
+/// The largest quantity an order may state.
 ///
-/// Where `Qty` runs out, not where the conversion stops being exact:
-/// [`qty_from_f64`] scales the whole part in integer arithmetic, so every
-/// quantity below this converts exactly. Some ninety-two thousand million
-/// units — above any size a venue takes, which is the point. Bounded at the
-/// double's limit instead, an ordinary cash order stated in currency units
-/// was refused here and sent by the gateway.
-pub const MAX_QTY_SHARES: f64 = (Qty::MAX / QTY_SCALE) as f64;
+/// The venue's own bound, which it refuses past rather than works: the size it
+/// reads an order under is checked against this on the way in and the order is
+/// answered as too large. Stated here so a caller is told before the request
+/// goes, in the same terms they would have been told after.
+///
+/// Well inside what the fixed-point form holds — `Qty` reaches some
+/// ninety-two thousand million at this scale — so every accepted quantity
+/// converts exactly. Bounded instead at where a double stops multiplying
+/// exactly, at a fortieth of this, an ordinary cash order stated in currency
+/// units was refused here and taken by the venue.
+pub const MAX_QTY_SHARES: f64 = 999_999_999.0;
 
 /// Convert a decimal price into the fixed-point form `Price` holds.
 ///

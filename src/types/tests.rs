@@ -580,10 +580,11 @@ fn qty_from_f64_is_exact_up_to_the_bound() {
     // puts three tenths one hundred-millionth low.
     assert_eq!(qty_from_f64(0.3), 3 * QTY_SCALE / 10);
 
-    // The bound is where `Qty` runs out, not where a double stops multiplying
-    // exactly: the whole part is scaled in integer arithmetic, so the round
-    // trip is lossless everywhere it is accepted.
+    // The bound is the venue's own, well inside what `Qty` holds: the whole
+    // part is scaled in integer arithmetic, so the round trip is lossless
+    // everywhere it is accepted.
     let largest = MAX_QTY_SHARES;
+    assert_eq!(largest, 999_999_999.0, "the size the venue refuses past");
     assert_eq!(qty_to_f64(qty_from_f64(largest)), largest, "exact at the bound");
     assert_eq!(qty_to_f64(qty_from_f64(1234.5678)), 1234.5678, "and below it");
 
