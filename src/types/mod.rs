@@ -92,15 +92,15 @@ pub fn qty_to_f64(qty: Qty) -> f64 {
     qty as f64 / QTY_SCALE as f64
 }
 
-/// The largest share count whose fixed-point form is exact.
+/// The largest quantity the fixed-point form holds.
 ///
-/// The conversion multiplies by `QTY_SCALE` in floating point, and a product
-/// past the 53 bits an `f64` carries loses its low digits. Callers bound the
-/// quantity by this so every quantity that is accepted converts exactly,
-/// rather than one near the top of the range converting to a size nobody
-/// asked for. It is some ninety million shares, which is orders of magnitude
-/// above any single order.
-pub const MAX_EXACT_QTY_SHARES: f64 = (1u64 << 53) as f64 / QTY_SCALE as f64;
+/// Where `Qty` runs out, not where the conversion stops being exact:
+/// [`qty_from_f64`] scales the whole part in integer arithmetic, so every
+/// quantity below this converts exactly. Some ninety-two thousand million
+/// units — above any size a venue takes, which is the point. Bounded at the
+/// double's limit instead, an ordinary cash order stated in currency units
+/// was refused here and sent by the gateway.
+pub const MAX_QTY_SHARES: f64 = (Qty::MAX / QTY_SCALE) as f64;
 
 /// Convert a decimal price into the fixed-point form `Price` holds.
 ///
@@ -128,13 +128,27 @@ pub fn price_from_f64(price: f64) -> Price {
 /// The inverse of [`qty_to_f64`], and the one place the multiplication lives.
 /// Rounded rather than truncated: a caller asking for a fraction of a share
 /// stated it as a decimal, and truncation places an order for none of it.
-/// Exact for any quantity up to [`MAX_EXACT_QTY_SHARES`].
+///
+/// The whole part is scaled in integer arithmetic and only the fraction goes
+/// through the double. Multiplied together instead, the product passes the 53
+/// bits a double carries at some ninety million units and the low digits go —
+/// so every quantity above that had either to be refused or to go out as a
+/// size nobody asked for. A cash order is stated in currency units, where a
+/// hundred million is an ordinary size rather than a corner case.
 #[inline]
 pub fn qty_from_f64(shares: f64) -> Qty {
     if !shares.is_finite() {
         return 0;
     }
-    (shares * QTY_SCALE as f64).round() as Qty
+    // Always below one, so this product is nowhere near the double's limit.
+    let whole = shares.trunc();
+    let frac = ((shares - whole) * QTY_SCALE as f64).round();
+    if whole.abs() > MAX_QTY_SHARES {
+        return if shares < 0.0 { Qty::MIN } else { Qty::MAX };
+    }
+    (whole as Qty)
+        .saturating_mul(QTY_SCALE)
+        .saturating_add(frac as Qty)
 }
 
 /// Convert a counted size into the `QTY_SCALE` fixed-point form, where the

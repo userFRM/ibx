@@ -568,7 +568,7 @@ fn a_stated_price_converts_to_the_price_that_was_stated() {
 /// every quantity the order path accepts.
 #[test]
 fn qty_from_f64_is_exact_up_to_the_bound() {
-    use super::{qty_from_f64, qty_to_f64, MAX_EXACT_QTY_SHARES, QTY_SCALE};
+    use super::{qty_from_f64, qty_to_f64, MAX_QTY_SHARES, QTY_SCALE};
 
     assert_eq!(qty_from_f64(0.5), QTY_SCALE / 2, "half a share");
     assert_eq!(qty_from_f64(100.0), 100 * QTY_SCALE, "a whole one");
@@ -580,11 +580,30 @@ fn qty_from_f64_is_exact_up_to_the_bound() {
     // puts three tenths one hundred-millionth low.
     assert_eq!(qty_from_f64(0.3), 3 * QTY_SCALE / 10);
 
-    // The bound is where the product still fits the 53 bits an f64 carries,
-    // so the round trip is lossless everywhere it is accepted.
-    let largest = MAX_EXACT_QTY_SHARES;
+    // The bound is where `Qty` runs out, not where a double stops multiplying
+    // exactly: the whole part is scaled in integer arithmetic, so the round
+    // trip is lossless everywhere it is accepted.
+    let largest = MAX_QTY_SHARES;
     assert_eq!(qty_to_f64(qty_from_f64(largest)), largest, "exact at the bound");
     assert_eq!(qty_to_f64(qty_from_f64(1234.5678)), 1234.5678, "and below it");
+
+    // A cash order states its size in currency units, where a hundred million
+    // is an ordinary size. Multiplied whole, this passed the 53 bits a double
+    // carries and came back as something else.
+    assert_eq!(qty_from_f64(100_000_000.0), 100_000_000 * QTY_SCALE, "a currency amount");
+    assert_eq!(qty_to_f64(qty_from_f64(100_000_000.0)), 100_000_000.0);
+    assert_eq!(qty_from_f64(-100_000_000.0), -100_000_000 * QTY_SCALE, "and its other side");
+    assert_eq!(
+        qty_to_f64(qty_from_f64(250_000_000.25)), 250_000_000.25,
+        "with its fraction still on it",
+    );
+    // And exact to the finest the scale holds at that magnitude. Multiplied
+    // whole this lands a hundred-millionth out, which is the loss the old
+    // bound existed to prevent by refusing the order instead.
+    assert_eq!(
+        qty_from_f64(100_000_000.00000001), 100_000_000 * QTY_SCALE + 1,
+        "the last digit survives a magnitude the double cannot hold whole",
+    );
 }
 
 mod counted_size_tests {

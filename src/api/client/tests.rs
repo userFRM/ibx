@@ -793,9 +793,12 @@ fn the_quantity_boundaries_are_exact() {
         client.place_order(9601, &spy(), &order)
     };
 
-    let largest = crate::types::MAX_EXACT_QTY_SHARES;
+    let largest = crate::types::MAX_QTY_SHARES;
     assert!(place(largest).is_ok(), "the largest carryable quantity still places");
-    assert!(place(largest + 1.0).is_err(), "one past it does not");
+    assert!(place(largest * 2.0).is_err(), "past it does not");
+    // A cash order states its size in currency units. Bounded at the double's
+    // own limit this was refused here and sent by the gateway.
+    assert!(place(100_000_000.0).is_ok(), "an ordinary currency amount places");
     assert!(place(-1.0).is_ok(), "a negative goes to the venue, which answers it");
     assert!(place(0.0).is_ok(), "and so does a zero");
     assert!(place(1.25).is_ok(), "a fraction is carried, not refused");

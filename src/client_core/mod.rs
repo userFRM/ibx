@@ -4213,7 +4213,7 @@ impl ClientCore {
         if !order.total_quantity.is_finite() {
             return Err("total_quantity must be a finite number".to_string().into());
         }
-        if order.total_quantity > crate::types::MAX_EXACT_QTY_SHARES {
+        if order.total_quantity.abs() > crate::types::MAX_QTY_SHARES {
             return Err(format!("total_quantity {} is too large", order.total_quantity).into());
         }
         // Zero and negative go out as they were given. Both encode exactly —
