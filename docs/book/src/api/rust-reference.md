@@ -1873,7 +1873,7 @@ pub fn req_news_providers(&self, wrapper: &mut impl Wrapper)
 
 #### `req_current_time`
 
-The venue's clock, as `reqCurrentTime` reports it. Every message the venue sends is stamped with the time it sent it, and the last one is held; the logon itself is stamped, so a session holds one from the moment it is up. A caller asking for the server's time is asking how far apart the two clocks are, which this machine's own clock cannot answer — where no stamp is held the request is reported on `error` rather than answered with it.
+The venue's clock, as `reqCurrentTime` reports it. The venue is never asked. There is no request for this on the wire, so the answer is worked out here: this machine's clock, shifted by what the venue has stated about its own — on the logon it stamps, and in the clock it pushes afterwards. A session that has been told nothing is shifted by nothing and answers this machine's clock, which is what a caller who asks before the venue has said anything gets. This is a question that always has an answer, and never a refusal.
 
 ```rust
 pub fn req_current_time(&self, wrapper: &mut impl Wrapper)
@@ -1887,7 +1887,7 @@ pub fn req_current_time(&self, wrapper: &mut impl Wrapper)
 
 #### `req_current_time_in_millis`
 
-The venue's clock in milliseconds, as `reqCurrentTimeInMillis` reports it. The same clock `req_current_time` reports and read the same way — the venue's own last stamp, reported on `error` where none is held rather than answered with this machine's. What differs is the precision kept: asking in seconds throws away a fraction where the stamp carries one. Every stamp a session has seen from this venue carried no fraction, and each lands on a whole second. So this call reads the precision the stamp states and no more; whether the venue ever states a finer one is not something a session here has answered.
+The venue's clock in milliseconds, as `reqCurrentTimeInMillis` reports it. The same clock `req_current_time` reports and worked out the same way. What differs is the precision kept: asking in seconds throws away the fraction this one keeps.
 
 ```rust
 pub fn req_current_time_in_millis(&self, wrapper: &mut impl Wrapper)

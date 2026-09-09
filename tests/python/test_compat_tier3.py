@@ -119,7 +119,9 @@ def test_a_rule_never_seen_is_refused_in_the_slots_a_refusal_goes_in():
     c._test_connect()
     c.req_market_rule(26)
     (req_id, error_time, code, message), = heard
-    assert (req_id, code) == (26, 321), heard
+    # Reported the way the venue reports it: against no request in particular,
+    # under the code it uses for a rule it does not know.
+    assert (req_id, code) == (-1, 322), heard
     assert "market rule 26" in message
     assert error_time > 1_700_000_000_000, f"a clock reading in milliseconds, got {error_time}"
 

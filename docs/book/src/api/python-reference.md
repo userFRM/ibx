@@ -465,7 +465,7 @@ def qualify_contracts(contracts)
 
 #### `req_pnl`
 
-Request P&L updates for the account.  `model_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name.
+Request P&L updates for the account.  `model_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no model portfolio to name. Another account is refused rather than answered with this account's profit.
 
 ```python
 def req_pnl(req_id, account, model_code="")
@@ -495,7 +495,7 @@ def cancel_pnl(req_id)
 
 #### `req_pnl_single`
 
-Request P&L for a single position.  `account` and `model_code` are taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no second account or model portfolio to name; a caller naming another account is told so, as `req_pnl` tells it.
+Request P&L for a single position.  `model_code` is taken and not applied. One session holds one account here, and the venue states its figures for that account without being asked which, so there is no model portfolio to name; another account is refused here as `req_pnl` refuses it, and for the reason given there.
 
 ```python
 def req_pnl_single(req_id, account, model_code, con_id)
@@ -1550,7 +1550,7 @@ def cancel_news_bulletins()
 
 #### `req_current_time`
 
-Ask the venue for its own clock. Answered on `current_time`.  Before a session exists there is no venue clock to report, so this is answered the way the reference client answers every request made before connecting: on `error`, under the number it reports that by. The local clock is not a substitute, since the caller asks this to measure the difference between the two.
+Ask for the venue's own clock. Answered on `current_time`.  Before a session exists this is reported on `error`, the way every request made before connecting is: an answer waits for a dispatch pass, and with no session there is nothing to make one.
 
 ```python
 def req_current_time()
@@ -1560,7 +1560,7 @@ def req_current_time()
 
 #### `req_current_time_in_millis`
 
-Ask the venue for its own clock in milliseconds. Answered on `current_time_in_millis`.  The same clock `req_current_time` reports and read the same way. What differs is the precision kept: the venue sometimes stamps a fraction of a second, and asking in seconds throws it away. A stamp with no fraction lands on a whole second, which is the precision the venue stated rather than a rounding of something finer.  Before a session exists this is reported on `error`, as `req_current_time` is: an answer waits for a dispatch pass, and with no session there is nothing to make one.
+Ask for the venue's own clock in milliseconds. Answered on `current_time_in_millis`.  The same clock `req_current_time` reports and worked out the same way. What differs is the precision kept: asking in seconds throws away the fraction this one keeps.  Before a session exists this is reported on `error`, as `req_current_time` is.
 
 ```python
 def req_current_time_in_millis()

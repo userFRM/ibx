@@ -2700,14 +2700,13 @@ fn an_order_held_back_reaches_neither_the_venue_nor_a_refusal() {
     assert!(rx.try_recv().is_ok(), "the order the caller asked to send");
 }
 
-// ── FA allocation must be rejected, not silently dropped ──
+// ── An account this session does not hold must be refused, not dropped ──
 
-/// No encoder reads an FA field, so an accepted one fills the whole size on
-/// the connected account instead of spreading it across the advisor group.
-/// The algo case is the ordering proof: `validate_order` returns Ok early for
-/// an algo order, so a guard placed after that check lets FA+Adaptive through.
-/// Naming your own connected account is the ordinary single-account pattern and
-/// must keep working: the guard rejects a mismatch, not the presence of a value.
+/// No encoder reads the account field, so an accepted one fills the whole size
+/// on the connected account while the open-order snapshot echoes the caller's
+/// value back and confirms the wrong one. Naming your own connected account is
+/// the ordinary single-account pattern and must keep working: the guard rejects
+/// a mismatch, not the presence of a value.
 #[test]
 fn place_order_accepts_the_connected_account_by_name() {
     let (client, rx, _shared) = test_client();
@@ -2720,18 +2719,11 @@ fn place_order_accepts_the_connected_account_by_name() {
 }
 
 #[test]
-fn place_order_fa_allocation_is_rejected() {
+fn place_order_an_account_this_session_does_not_hold_is_rejected() {
+    // The allocation fields that used to sit beside this one now reach the
+    // wire, so the reason to refuse them is gone: an order stating a group, a
+    // method or a percentage carries them to the venue.
     let cases: Vec<OrderCase> = vec![
-        ("fa_group", |o| o.fa_group = "AllAccounts".into()),
-        ("fa_method", |o| o.fa_method = "EqualQuantity".into()),
-        ("fa_percentage", |o| o.fa_percentage = "50".into()),
-        ("fa_group with an algo", |o| {
-            o.fa_group = "AllAccounts".into();
-            o.algo_strategy = "Adaptive".into();
-        }),
-        // Same class, and sharper: no encoder reads this either, so the order
-        // fills on the connected account while the open-order snapshot echoes
-        // the caller's value back and confirms the wrong one.
         ("account", |o| o.account = "U9999999".into()),
     ];
     for (name, set) in cases {
@@ -7630,12 +7622,15 @@ fn a_local_option_calculation_answers_the_request_that_asked() {
     assert_eq!(heard.0, vec![asked], "the answer names the call that asked for it");
 }
 
-/// `reqCurrentTime` asks for the venue's clock, not this machine's.
+/// `reqCurrentTime` answers the venue's clock, and always answers.
 ///
-/// A caller asks it to learn how far apart the two are, and the local clock is
-/// the one number that cannot tell them. The venue stamps every message it
-/// sends; the last stamp is the answer, and where no stamp is held the
-/// request is refused rather than answered with this machine's clock.
+/// A caller asks it to learn how far apart the two clocks are. The answer is
+/// this machine's clock shifted onto the venue's, by however much the venue
+/// has said they differ — so it keeps running between messages instead of
+/// standing still at the last stamp, and before the venue has said anything
+/// the shift is nothing and the answer is this machine's own. There is no
+/// state in which the question is refused: a session that is connected can
+/// always be told the time.
 #[test]
 fn the_current_time_is_the_venues_own() {
     #[derive(Default)]
@@ -7650,21 +7645,21 @@ fn the_current_time_is_the_venues_own() {
     let (client, _rx, shared) = test_client();
     let mut heard = Heard::default();
 
-    // Before the venue has stamped anything, the question is refused rather
-    // than answered with this machine's clock.
+    // Before the venue has said anything, the question is still answered —
+    // with this machine's clock, which is what no shift means.
     client.req_current_time(&mut heard);
-    assert!(heard.times.is_empty(), "no time is handed back");
-    assert_eq!(heard.errors.len(), 1);
-    assert_eq!(heard.errors[0].0, 504);
+    assert_eq!(heard.times.len(), 1, "a connected session is told the time");
+    assert!(heard.errors.is_empty(), "and is not refused for it");
 
-    // Once it has stamped, its own stamp is what a caller is told.
+    // Once the venue states its clock, the answer lands on that clock.
     shared.market.note_venue_time("20260815-12:00:00");
     client.req_current_time(&mut heard);
-    assert_eq!(
-        heard.times[0], 1_786_795_200,
-        "the venue's stamp, read back to seconds",
+    let stated = heard.times[1];
+    assert!(
+        (stated - 1_786_795_200).abs() < 5,
+        "the answer sits on the venue's clock, got {stated}",
     );
-    assert_eq!(heard.errors.len(), 1, "and nothing new is refused");
+    assert!(heard.errors.is_empty(), "and nothing was refused");
 }
 
 /// Asking in milliseconds keeps the fraction asking in seconds throws away.
@@ -10180,24 +10175,23 @@ fn previewing_by_description_keeps_the_hedge_the_caller_stated() {
 }
 
 /// A withdrawal arriving while the number is still taking its tick stream is
-/// told so, not told there is nothing there.
+/// taken, and the registration takes the stream back down.
 ///
 /// The record a withdrawal reads is written when the farm names the contract,
 /// and a registration waits on that. In between there is nothing to find, so
-/// the withdrawal read as a number holding no stream — and that is the one
-/// answer a caller acts on by stopping. It stopped, the registration finished
-/// behind it, and it held a live stream it believed was gone. The quote
-/// withdrawal says which of the two it is looking at; this one said the wrong
-/// one.
+/// the withdrawal read as a number holding no stream — and refusing it for
+/// that is a refusal the venue never makes: the caller was told its withdrawal
+/// had not happened, the registration finished behind it, and it held a live
+/// stream it believed was gone.
 #[test]
-fn a_tick_withdrawal_during_registration_is_not_told_there_is_nothing_there() {
+fn a_tick_withdrawal_during_registration_takes_the_stream_back_down() {
     let (client, rx, _shared) = test_client();
     // Wide enough that the withdrawal lands inside the wait. A session states
     // five seconds and the tests here a millisecond, which would close the
     // window this is about before anything could arrive in it.
     client.core.set_registration_timeout(std::time::Duration::from_secs(5));
 
-    // The engine holds its answer back until the withdrawal has been tried,
+    // The engine holds its answer back until the withdrawal has been made,
     // which is the window under test.
     let (seen_tx, seen_rx) = std::sync::mpsc::sync_channel::<()>(1);
     let (go_tx, go_rx) = std::sync::mpsc::sync_channel::<()>(1);
@@ -10207,33 +10201,96 @@ fn a_tick_withdrawal_during_registration_is_not_told_there_is_nothing_there() {
                 let _ = seen_tx.send(());
                 let _ = go_rx.recv();
                 let _ = reply.try_send(Ok(0));
-                return;
+                break;
             }
         }
+        rx
     });
 
     let taking = &client;
-    let refused = std::thread::scope(|scope| {
-        scope.spawn(move || {
-            let _ = taking.req_tick_by_tick_data(7, &spy(), "AllLast", 0, false);
-        });
+    let withdrawal = std::thread::scope(|scope| {
+        let asking = scope.spawn(move || taking.req_tick_by_tick_data(7, &spy(), "AllLast", 0, false));
         seen_rx.recv().expect("the stream reached the engine");
         assert!(
             client.core.tbt_to_instrument.lock().unwrap().get(&7).is_none(),
             "nothing is recorded for it yet, which is the window",
         );
-        let refused = client.cancel_tick_by_tick_data(7);
+        let withdrawal = client.cancel_tick_by_tick_data(7);
         let _ = go_tx.send(());
-        refused
+        asking.join().unwrap().expect("the request itself was not refused");
+        withdrawal
     });
-    let _ = engine.join();
+    let rx = engine.join().expect("the engine thread ran");
+    let sent: Vec<_> = rx.try_iter().collect();
 
-    let why = refused.expect_err("the stream is not held yet, so it cannot be withdrawn");
-    assert_eq!(why.code, 300, "under the number a withdrawal of nothing is refused under: {why}");
+    withdrawal.expect("a withdrawal that arrived early was refused, which the venue never does");
     assert!(
-        why.message.contains("still taking its tick stream"),
-        "a withdrawal in the registration window was told the number holds \
-         nothing, and the stream that finished behind it runs with nothing \
-         able to stop it: {why}",
+        client.core.tbt_to_instrument.lock().unwrap().get(&7).is_none(),
+        "the registration published a stream under a number whose caller had \
+         already been told it was withdrawn",
+    );
+    assert!(
+        client.tbt_kinds.lock().unwrap().get(&7).is_none(),
+        "a kind was left recorded for a stream that is gone",
+    );
+    assert!(
+        sent.iter().any(|c| matches!(
+            c, ControlCommand::UnsubscribeTbt { req_id: 7, instrument: 0 },
+        )),
+        "the stream it opened was never taken back down: {sent:?}",
+    );
+}
+
+/// The same for a quote subscription: a withdrawal in the registration window
+/// is taken, and what the registration opened is taken back down.
+///
+/// The number is answered and left holding nothing, rather than refused and
+/// left holding a live subscription — which is the state a caller cannot act
+/// on, because the answer it was given says there is nothing to act on.
+#[test]
+fn a_quote_withdrawal_during_registration_takes_the_subscription_back_down() {
+    let (client, rx, _shared) = test_client();
+    client.core.set_registration_timeout(std::time::Duration::from_secs(5));
+
+    let (seen_tx, seen_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let (go_tx, go_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let engine = std::thread::spawn(move || {
+        while let Ok(cmd) = rx.recv() {
+            if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
+                let _ = seen_tx.send(());
+                let _ = go_rx.recv();
+                let _ = reply.try_send(Ok(0));
+                break;
+            }
+        }
+        rx
+    });
+
+    let taking = &client;
+    let withdrawal = std::thread::scope(|scope| {
+        let asking = scope.spawn(move || taking.req_mkt_data(9, &spy(), "", false, false));
+        seen_rx.recv().expect("the subscription reached the engine");
+        assert!(
+            !client.core.holds_mkt_data(9),
+            "nothing is recorded for it yet, which is the window",
+        );
+        let withdrawal = client.cancel_mkt_data(9);
+        let _ = go_tx.send(());
+        asking.join().unwrap().expect("the request itself was not refused");
+        withdrawal
+    });
+    let rx = engine.join().expect("the engine thread ran");
+    let sent: Vec<_> = rx.try_iter().collect();
+
+    withdrawal.expect("a withdrawal that arrived early was refused, which the venue never does");
+    assert!(
+        !client.core.holds_mkt_data(9),
+        "the registration published a subscription under a number whose caller \
+         had already been told it was withdrawn",
+    );
+    assert_eq!(client.core.watching(9), None, "a mapping was written for it all the same");
+    assert!(
+        sent.iter().any(|c| matches!(c, ControlCommand::Unsubscribe { instrument: 0 })),
+        "the subscription it opened was never taken back down: {sent:?}",
     );
 }

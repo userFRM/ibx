@@ -38,46 +38,26 @@ impl EClient {
 
     /// The venue's clock, as `reqCurrentTime` reports it.
     ///
-    /// Every message the venue sends is stamped with the time it sent it, and
-    /// the last one is held; the logon itself is stamped, so a session holds
-    /// one from the moment it is up. A caller asking for the server's time is
-    /// asking how far apart the two clocks are, which this machine's own
-    /// clock cannot answer — where no stamp is held the request is reported
-    /// on `error` rather than answered with it.
+    /// The venue is never asked. There is no request for this on the wire, so
+    /// the answer is worked out here: this machine's clock, shifted by what
+    /// the venue has stated about its own — on the logon it stamps, and in the
+    /// clock it pushes afterwards. A session that has been told nothing is
+    /// shifted by nothing and answers this machine's clock, which is what a
+    /// caller who asks before the venue has said anything gets. This is a
+    /// question that always has an answer, and never a refusal.
     pub fn req_current_time(&self, wrapper: &mut impl Wrapper) {
         if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
-        let stated = self.shared.market.venue_time()
-            .as_deref()
-            .and_then(crate::protocol::datetime::ib_datetime_to_unix);
-        let Some(now) = stated else {
-            return wrapper.error(-1, Refusal::NOT_CONNECTED as i64,
-                "the venue has stamped no message yet, so its clock cannot be stated", "");
-        };
-        wrapper.current_time(now);
+        wrapper.current_time(self.shared.market.venue_time_millis().div_euclid(1_000));
     }
 
     /// The venue's clock in milliseconds, as `reqCurrentTimeInMillis` reports it.
     ///
     /// The same clock [`req_current_time`](Self::req_current_time) reports and
-    /// read the same way — the venue's own last stamp, reported on `error`
-    /// where none is held rather than answered with this machine's. What
-    /// differs is the precision kept: asking in seconds throws away a fraction
-    /// where the stamp carries one.
-    ///
-    /// Every stamp a session has seen from this venue carried no fraction, and
-    /// each lands on a whole second. So this call reads the precision the
-    /// stamp states and no more; whether the venue ever states a finer one is
-    /// not something a session here has answered.
+    /// worked out the same way. What differs is the precision kept: asking in
+    /// seconds throws away the fraction this one keeps.
     pub fn req_current_time_in_millis(&self, wrapper: &mut impl Wrapper) {
         if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
-        let stated = self.shared.market.venue_time()
-            .as_deref()
-            .and_then(crate::protocol::datetime::ib_datetime_to_unix_millis);
-        let Some(now) = stated else {
-            return wrapper.error(-1, Refusal::NOT_CONNECTED as i64,
-                "the venue has stamped no message yet, so its clock cannot be stated", "");
-        };
-        wrapper.current_time_in_millis(now);
+        wrapper.current_time_in_millis(self.shared.market.venue_time_millis());
     }
 
     // ── FA (Financial Advisor) ──
@@ -456,6 +436,78 @@ fn advisor_partition(fa_data_type: i32) -> Option<&'static str> {
 
 
 
+
+#[cfg(test)]
+mod server_clock_tests {
+    use crate::api::client::tests::test_client;
+    use crate::api::Wrapper;
+
+    #[derive(Default)]
+    struct Heard { seconds: Vec<i64>, millis: Vec<i64>, errors: Vec<i64> }
+    impl Wrapper for Heard {
+        fn current_time(&mut self, t: i64) { self.seconds.push(t); }
+        fn current_time_in_millis(&mut self, t: i64) { self.millis.push(t); }
+        fn error(&mut self, _req_id: i64, code: i64, _msg: &str, _: &str) {
+            self.errors.push(code);
+        }
+    }
+
+    fn local_millis() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    }
+
+    /// A session that has heard nothing from the venue about its clock still
+    /// answers, from this machine's.
+    ///
+    /// The venue is never asked what time it is, so there is nothing this
+    /// question waits on and nothing to refuse over. Refused, a caller on a
+    /// live session was handed a failure for a call that cannot fail — and one
+    /// carrying the code that means there is no session at all.
+    #[test]
+    fn a_clock_the_venue_has_not_stated_is_answered_not_refused() {
+        let (client, _rx, _shared) = test_client();
+        let mut heard = Heard::default();
+
+        client.req_current_time(&mut heard);
+        client.req_current_time_in_millis(&mut heard);
+
+        assert!(heard.errors.is_empty(), "nothing is refused: {:?}", heard.errors);
+        assert!(
+            (heard.seconds[0] - local_millis().div_euclid(1_000)).abs() <= 1,
+            "this machine's clock, unshifted",
+        );
+        assert!((heard.millis[0] - local_millis()).abs() < 1_000, "and the same in milliseconds");
+    }
+
+    /// What the venue has stated shifts the answer, and the answer goes on
+    /// running while the venue says nothing more.
+    ///
+    /// Answered with the stamp on the last message that happened to arrive,
+    /// it stood still on a quiet connection: two readings a moment apart named
+    /// the same instant, so a caller measuring the difference between the
+    /// clocks watched it grow by exactly the time it had waited.
+    #[test]
+    fn a_stated_clock_shifts_the_answer_and_keeps_running() {
+        let (client, _rx, shared) = test_client();
+        let mut heard = Heard::default();
+
+        shared.market.note_venue_time("20260815-12:00:00");
+        client.req_current_time(&mut heard);
+        client.req_current_time_in_millis(&mut heard);
+        assert!(
+            (heard.millis[0] - 1_786_795_200_000).abs() < 2_000,
+            "the venue's clock, days from this machine's: {:?}", heard.millis,
+        );
+        assert_eq!(heard.seconds[0], heard.millis[0].div_euclid(1_000), "the same clock");
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        client.req_current_time_in_millis(&mut heard);
+        assert!(heard.millis[1] > heard.millis[0], "and it ran on unasked");
+    }
+}
 
 #[cfg(test)]
 mod advisor_partition_tests {

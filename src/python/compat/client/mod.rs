@@ -2821,9 +2821,10 @@ assert [(c[1], c[2]) for c in w.calls if c[0] in ('tickOptionComputation', 'tick
         });
     }
 
-    /// A withdrawal during registration says the stream is still being taken.
+    /// A withdrawal during registration is taken, and the registration takes
+    /// the stream back down rather than publishing it.
     #[test]
-    fn a_python_tick_withdrawal_reports_the_registration_in_progress() {
+    fn a_python_tick_withdrawal_during_registration_takes_the_stream_back_down() {
         Python::initialize();
         Python::attach(|py| {
             let (client, rx, shared, wrapper) = wired_client(py);
@@ -2854,22 +2855,34 @@ assert [(c[1], c[2]) for c in w.calls if c[0] in ('tickOptionComputation', 'tick
                     &shared, &tx, 7, 756733, "SPY", "STK", "SMART", TbtType::AllLast, 0, false,
                 ));
                 py.detach(move || seen_rx.recv().unwrap());
-                assert!(!core.is_registering(7), "a tick claim is distinct from a quote claim");
+                assert!(
+                    !core.withdraw_while_registering(7),
+                    "a tick claim is distinct from a quote claim",
+                );
                 client.call_method1(py, "cancel_tick_by_tick_data", (7,)).unwrap();
                 go_tx.send(()).unwrap();
-                assert_eq!(taking.join().unwrap().unwrap(), 0);
+                assert_eq!(
+                    taking.join().unwrap().unwrap(), None,
+                    "the stream was published under a number whose caller had \
+                     already been told it was withdrawn",
+                );
             });
             let rx = engine.join().unwrap();
             let heard = wrapper.bind(py).getattr("calls").unwrap()
                 .extract::<Vec<(String, i64, i64, i64, String, String)>>().unwrap();
-            assert_eq!(heard.len(), 1);
-            assert_eq!(heard[0].0, "error");
-            assert_eq!(heard[0].1, 7);
-            assert_eq!(heard[0].3, i64::from(crate::error_codes::NO_SUCH_SUBSCRIPTION));
-            assert!(heard[0].4.contains("still taking its tick stream"), "{heard:?}");
-            assert!(rx.try_recv().is_err(), "registration has not yet supplied a stream to withdraw");
-            client.call_method1(py, "cancel_tick_by_tick_data", (7,)).unwrap();
-            assert!(matches!(rx.try_recv().unwrap(), ControlCommand::UnsubscribeTbt { req_id: 7, instrument: 0 }));
+            assert!(
+                heard.is_empty(),
+                "the withdrawal was refused for arriving early, which the venue \
+                 never does: {heard:?}",
+            );
+            assert!(
+                client.get().core.tbt_to_instrument.lock().unwrap().get(&7).is_none(),
+                "a record was left behind for a stream the caller withdrew",
+            );
+            assert!(
+                matches!(rx.try_recv().unwrap(), ControlCommand::UnsubscribeTbt { req_id: 7, instrument: 0 }),
+                "the stream the registration opened was never taken back down",
+            );
         });
     }
 

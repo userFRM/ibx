@@ -1,7 +1,7 @@
 //! What is quoted, and what the venue has said about it.
 
 use super::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Mutex;
 use crate::types::*;
 
@@ -20,6 +20,13 @@ pub const NEWS_BULLETIN_LIMIT: usize = 1000;
 /// Bounded, a caller that stopped reading loses the oldest of what it was not
 /// reading, which is the lesser of the two.
 pub const STREAM_BACKLOG_LIMIT: usize = 100_000;
+
+/// This machine's clock, in unix milliseconds.
+fn local_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as i64)
+}
 
 /// Push onto a stream that nobody may be draining, oldest out first.
 pub(super) fn push_bounded<T>(queue: &Mutex<Vec<T>>, item: T, limit: usize, what: &str) {
@@ -119,13 +126,16 @@ pub struct MarketDataState {
     subscription_moves: Mutex<Vec<(crate::types::InstrumentId, crate::types::InstrumentId)>>,
     /// What the venue has said went wrong, in its own words.
     venue_errors: Mutex<Vec<String>>,
-    /// The venue's clock, from the last message it sent.
+    /// How far the venue's clock runs from this machine's, in milliseconds.
     ///
-    /// Every message it sends is stamped with the time it sent it. Reporting
-    /// this machine's clock instead would answer the question a caller asked —
-    /// how far apart this machine and the venue are — with the one number
-    /// that cannot tell them.
-    venue_time: Mutex<Option<String>>,
+    /// Nothing here ever asks the venue what time it is — this wire carries no
+    /// such request. A caller asking for the venue's clock is answered from
+    /// this machine's, shifted by this: what the venue has stated about its
+    /// own, on the logon it stamps and in the clock it pushes unasked
+    /// afterwards. Zero until it states one, so a session that has heard
+    /// nothing answers this machine's clock unshifted — the two are not known
+    /// to differ, and an answer is owed either way.
+    clock_skew_millis: AtomicI64,
     /// Messages the venue sent that nothing here reads, named once each:
     /// which connection, and what it was. Empty is the claim that this client
     /// reads everything this venue sends it, and the only way to check it.
@@ -158,7 +168,7 @@ impl MarketDataState {
             tick_req_params_direct: Mutex::new(Vec::new()),
             subscription_moves: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
-            venue_time: Mutex::new(None),
+            clock_skew_millis: AtomicI64::new(0),
             unread_wire: Mutex::new(Vec::new()),
         }
     }
@@ -362,27 +372,31 @@ impl MarketDataState {
         }
     }
 
-    /// Record the time the venue stamped on a message.
-    pub fn note_venue_time(&self, stamped: &str) {
-        *self.venue_time.lock().unwrap() = Some(stamped.to_string());
-    }
-
-    /// Record the clock a connection opened on, clearing it where the
-    /// connection stated none.
+    /// Learn the venue's clock from a time it stated in its own stamp form.
     ///
-    /// Put in place of whatever the last connection left, rather than merged
-    /// with it. The stamp belongs to the connection that carried it, and a
-    /// reconnect the venue stamped nothing on has stated no time at all — kept
-    /// from the connection before it, a caller asking the venue's clock is
-    /// answered from one that no longer exists. The first stamped message on
-    /// the new connection fills it in again.
-    pub fn note_connection_time(&self, stamped: Option<&str>) {
-        *self.venue_time.lock().unwrap() = stamped.map(str::to_string);
+    /// A stamp nothing can read leaves the skew where it was: the last thing
+    /// the venue said about its clock is a better answer than no answer.
+    pub fn note_venue_time(&self, stamped: &str) {
+        if let Some(millis) = crate::protocol::datetime::ib_datetime_to_unix_millis(stamped) {
+            self.note_venue_millis(millis);
+        }
     }
 
-    /// The venue's clock as of its last message, if it has sent one.
-    pub fn venue_time(&self) -> Option<String> {
-        self.venue_time.lock().unwrap().clone()
+    /// The same, where the venue states its clock as a number of its own
+    /// rather than as a stamp on something else.
+    pub fn note_venue_millis(&self, venue_millis: i64) {
+        self.clock_skew_millis.store(venue_millis - local_millis(), Ordering::Relaxed);
+    }
+
+    /// What the venue's clock reads now: this machine's, shifted by what the
+    /// venue has stated about the difference.
+    ///
+    /// Read rather than remembered, so the answer keeps moving on a connection
+    /// that has gone quiet. Held as the last stamp seen, it stood still for as
+    /// long as the venue said nothing, and a caller reading it twice a minute
+    /// apart was told the same instant twice.
+    pub fn venue_time_millis(&self) -> i64 {
+        local_millis() + self.clock_skew_millis.load(Ordering::Relaxed)
     }
 
     /// Take every venue errors waiting, leaving none.
@@ -966,5 +980,61 @@ mod option_model_tests {
         let stated = market.option_model(0).expect("the venue's statement stands");
         assert_eq!(stated.implied_vol, 0.25, "the venue's volatility, not the answer's");
         assert!(stated.price_based_vol, "and what it says about the model it used");
+    }
+}
+
+#[cfg(test)]
+mod venue_clock_tests {
+    use super::{MarketDataState, local_millis};
+
+    /// A session that has been told nothing about the venue's clock still
+    /// answers, with this machine's.
+    ///
+    /// The question is never put to the venue, so there is nothing to wait
+    /// for and nothing to refuse over. Refused, a caller on a connected
+    /// session was handed a failure for a call that cannot fail.
+    #[test]
+    fn an_unstated_clock_answers_this_machines_own() {
+        let market = MarketDataState::new();
+        assert!(
+            (market.venue_time_millis() - local_millis()).abs() < 1_000,
+            "no skew is no shift, not no answer",
+        );
+    }
+
+    /// What the venue states shifts the answer to the venue's clock.
+    #[test]
+    fn a_stated_clock_shifts_the_answer_onto_it() {
+        let market = MarketDataState::new();
+        market.note_venue_time("20260815-12:00:00");
+        assert!(
+            (market.venue_time_millis() - 1_786_795_200_000).abs() < 2_000,
+            "the venue's clock, from a stamp days away from this machine's",
+        );
+
+        // And stated as a number of its own, which is how the venue pushes it.
+        market.note_venue_millis(1_786_795_200_000 + 86_400_000);
+        assert!(
+            (market.venue_time_millis() - (1_786_795_200_000 + 86_400_000)).abs() < 2_000,
+            "the later statement is the one in force",
+        );
+    }
+
+    /// The answer keeps moving while the venue says nothing.
+    ///
+    /// Held as the stamp on the last message seen, it stood still on a quiet
+    /// connection: two readings a moment apart named the same instant, and a
+    /// caller measuring the difference between the clocks watched it drift by
+    /// exactly the time it had been waiting.
+    #[test]
+    fn the_answer_advances_on_a_quiet_connection() {
+        let market = MarketDataState::new();
+        market.note_venue_time("20260815-12:00:00");
+        let first = market.venue_time_millis();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(
+            market.venue_time_millis() > first,
+            "the clock ran on though the venue stated nothing further",
+        );
     }
 }

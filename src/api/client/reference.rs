@@ -6,8 +6,9 @@ use crate::error_codes::Refusal;
 use super::{wire_req_id, wire_text, Contract, EClient, TagValue};
 use crate::client_core::ClientCore;
 
-/// What this client reports when a market rule has not been seen.
-const MARKET_RULE_NOT_KNOWN: i64 = 321;
+/// What this client reports when a market rule has not been seen: the number
+/// the venue reports a miss under.
+const MARKET_RULE_NOT_KNOWN: i64 = 322;
 
 /// Narrow a contract id to the width the requests below carry it in.
 ///
@@ -227,8 +228,11 @@ impl EClient {
             Some(rule) => wrapper.market_rule(market_rule_id as i64, &rule.price_increments.iter()
                 .map(|pi| crate::types::model::PriceIncrement { low_edge: pi.low_edge, increment: pi.increment })
                 .collect::<Vec<_>>()),
+            // Against the id the venue reports a miss against, -1: the rule's
+            // number is not a request number, nothing was ever sent under it,
+            // and a caller branching on the pair reads both halves.
             None => wrapper.error(
-                market_rule_id as i64,
+                -1,
                 MARKET_RULE_NOT_KNOWN,
                 &format!(
                     "market rule {market_rule_id} has not been seen on this session. Rules \
@@ -496,5 +500,27 @@ impl EClient {
             duration: duration.into(),
             use_rth,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::api::wrapper::tests::RecordingWrapper;
+
+    /// A rule this session has not been told about is reported the way the
+    /// venue reports one: against -1, under 322. The rule's number is not a
+    /// request number, and a caller keying off the pair branches on both halves.
+    #[test]
+    fn an_unseen_market_rule_is_reported_against_minus_one_under_322() {
+        let (client, _rx, _shared) = super::super::tests::test_client();
+        let mut wrapper = RecordingWrapper::default();
+
+        client.req_market_rule(26, &mut wrapper);
+
+        assert_eq!(wrapper.events.len(), 1, "the miss is answered, once");
+        assert!(
+            wrapper.events[0].starts_with("error:-1:322:market rule 26 "),
+            "reported against -1 under 322: {}", wrapper.events[0],
+        );
     }
 }

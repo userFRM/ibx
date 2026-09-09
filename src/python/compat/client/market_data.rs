@@ -142,6 +142,22 @@ impl EClient {
     /// Cancel market data.
     pub fn cancel_mkt_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
+        // A number still taking its subscription on another thread has no
+        // record here yet. Refused for that, the caller was told its
+        // withdrawal had not happened and was left holding the subscription
+        // anyway — the venue withdraws one that arrives early rather than
+        // refusing it. Recorded against the registration, which reads it
+        // before it publishes what it opened and takes it back down instead.
+        // This surface registers with the interpreter lock released, which
+        // makes a cancel from a timer thread an ordinary thing to write.
+        //
+        // Asked before the record below, not after: a registration finishing
+        // between the two is seen by one of them either way, where asked the
+        // other way round it could fall between both and be refused for a
+        // subscription that is up.
+        if self.core.withdraw_while_registering(req_id) {
+            return Ok(());
+        }
         // A caller withdrawing a subscription this client does not hold
         // branches on being told so. Said nothing, the withdrawal reads
         // exactly like one that worked. Reported here rather than in the body
@@ -149,22 +165,6 @@ impl EClient {
         // for -- a snapshot that has ended, the watch behind an option
         // calculation -- and those must stay silent.
         if !self.core.holds_mkt_data(req_id) {
-            // Said as what it is. A number still taking its subscription on
-            // another thread has no record here yet, and answering that as
-            // "nothing is being watched" is the one answer a caller acts on by
-            // stopping — so it stopped, the registration finished behind it,
-            // and it held a live stream it believed was gone. This surface
-            // registers with the interpreter lock released, which makes a
-            // cancel from a timer thread an ordinary thing to write.
-            if self.core.is_registering(req_id) {
-                return self.report_refusal(py, req_id, Refusal::stated(
-                    NO_SUCH_SUBSCRIPTION,
-                    format!(
-                        "request {req_id} is still taking its subscription and cannot be \
-                         withdrawn yet: withdraw it once the request it is answering returns",
-                    ),
-                ));
-            }
             return self.report_refusal(py, req_id, Refusal::stated(
                 NO_SUCH_SUBSCRIPTION,
                 format!("no contract is being watched under request {req_id}"),
@@ -242,16 +242,20 @@ impl EClient {
         let con_id = contract.con_id;
         let symbol = contract.symbol.clone();
         let (sec_type, exchange) = (contract.sec_type.clone(), contract.exchange.clone());
-        if let Err(why) = py.detach(|| self.core.register_tbt(
+        let opened = match py.detach(|| self.core.register_tbt(
             &shared, &tx, req_id, con_id, &symbol, &sec_type, &exchange, tbt_type,
             number_of_ticks.max(0) as u32, ignore_size,
         )) {
-            return self.report_refusal(py, req_id, why);
-        }
+            Ok(opened) => opened,
+            Err(why) => return self.report_refusal(py, req_id, why),
+        };
         // The kind this request asked for, kept so the callback can state it.
         // The record does not carry it, and every print was labelled as an
-        // exchange print whichever stream it came from.
-        if let TbtType::AllLast | TbtType::Last = tbt_type {
+        // exchange print whichever stream it came from. Kept only where there
+        // is still a stream: one withdrawn while the registration was away has
+        // already been taken back down, and a kind left behind for it outlives
+        // the stream it describes.
+        if opened.is_some() && let TbtType::AllLast | TbtType::Last = tbt_type {
             let kind = if matches!(tbt_type, TbtType::AllLast) { 2 } else { 1 };
             self.tbt_kind.lock().unwrap().insert(req_id, kind);
         }
@@ -261,26 +265,25 @@ impl EClient {
 
     /// Cancel tick-by-tick data.
     fn cancel_tick_by_tick_data(&self, py: Python<'_>, req_id: i64) -> PyResult<()> {
+        let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
+        // A number still taking its stream on another thread has no record
+        // here yet, and is withdrawn the way the quote subscription above is:
+        // recorded against the registration, which takes the stream back down
+        // when it reads it. Asked before the record below for the reason given
+        // there.
+        if self.core.withdraw_while_registering_tbt(req_id) {
+            return Ok(());
+        }
         // Only what this request took out. Removing the contract's quote
         // mapping here took the quotes away from whoever was watching them.
         // Removed before the send, not across it: the send is bounded and runs
         // detached from Python, so a guard spanning it blocks another thread
         // cancelling a different subscription.
-        let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
         let instrument = self.core.tbt_to_instrument.lock().unwrap().remove(&req_id);
         // A caller withdrawing a stream this client does not hold branches on
         // being told so. Said nothing, the withdrawal reads exactly like one
         // that worked.
         let Some(instrument) = instrument else {
-            if self.core.is_registering_tbt(req_id) {
-                return self.report_refusal(py, req_id, Refusal::stated(
-                    NO_SUCH_SUBSCRIPTION,
-                    format!(
-                        "request {req_id} is still taking its tick stream and cannot be \
-                         withdrawn yet: withdraw it once the request it is answering returns",
-                    ),
-                ));
-            }
             return self.report_refusal(py, req_id, Refusal::stated(
                 NO_SUCH_SUBSCRIPTION,
                 format!("no tick stream is held under request {req_id}"),

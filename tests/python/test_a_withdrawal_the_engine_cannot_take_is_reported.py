@@ -101,11 +101,13 @@ def test_a_slot_taken_for_a_request_that_never_went_goes_back():
     )
 
     w, c = _session()
-    c.reqPnL(12, "DU1", "")
+    # The session's own account: naming another is refused before the send is
+    # ever attempted, and it is the send failing that this is about.
+    c.reqPnL(12, "T", "")
     assert w.seen and w.seen[-1][1] == 504, w.seen
     w.seen.clear()
     # And the one P&L slot is free for the next number to take.
-    c.reqPnL(13, "DU1", "")
+    c.reqPnL(13, "T", "")
     assert w.seen and w.seen[-1][1] == 504, (
         f"a retry is refused as not connected, not as a duplicate: {w.seen}"
     )

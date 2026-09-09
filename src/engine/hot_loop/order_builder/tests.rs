@@ -3675,6 +3675,82 @@ fn a_refused_replace_puts_the_shape_back_with_the_terms() {
     );
 }
 
+/// An advisor's allocation rides the order and its replacement.
+///
+/// The group (6160), the method (6159) and the share (6164) are stated on the
+/// order in the account block both encoders share, so a replace carries the
+/// same allocation the placement did. Refused by name at the call and written
+/// by nothing, an order asking to be spread across a group could not be placed
+/// at all — while the reports coming back named all three tags.
+///
+/// A share the caller left empty is left off: the venue omits a blank value,
+/// and a blank tag is a statement no other client makes.
+#[test]
+fn an_advisor_allocation_rides_the_order_and_its_replacement() {
+    use std::io::Read;
+    use crate::types::{OrderKind as K, PRICE_SCALE as P};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let mut buf = [0u8; 8192];
+    let mut send = |context: &mut Context, req: crate::types::OrderRequest| {
+        context.pending_orders.push(req);
+        drain_and_send_orders(&mut conn, context, "DU1", &mut hb, false, &shared, false, &None);
+        let n = peer.read(&mut buf).unwrap();
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    };
+    let allocation = |percentage: &str| crate::types::OrderAttrs {
+        fa_group: "AllAccounts".to_string(),
+        fa_method: "EqualQuantity".to_string(),
+        fa_percentage: percentage.to_string(),
+        ..Default::default()
+    };
+    let spread = |msg: &str| -> Vec<(u32, String)> {
+        msg.split('\u{1}')
+            .filter_map(|f| f.split_once('='))
+            .filter(|(t, _)| matches!(*t, "6160" | "6159" | "6164"))
+            .map(|(t, v)| (t.parse().unwrap(), v.to_string()))
+            .collect()
+    };
+
+    let placed = send(&mut context, crate::types::OrderRequest::SubmitEx {
+        con_id: 0, order_id: 31, instrument, side: Side::Buy, qty: crate::types::QTY_SCALE,
+        kind: K::Limit { price: 100 * P }, tif: b'0', attrs: allocation("50"),
+    });
+    assert_eq!(
+        spread(&placed),
+        vec![
+            (6160, "AllAccounts".to_string()),
+            (6159, "EqualQuantity".to_string()),
+            (6164, "50".to_string()),
+        ],
+        "the placement states the allocation, in that order: {placed}",
+    );
+
+    let moved = send(&mut context, crate::types::OrderRequest::Modify {
+        order_id: 31, price: 101 * P, qty: crate::types::QTY_SCALE, outside_rth: false,
+        ord_type: 0, tif: 0, stop_price: 0,
+    });
+    assert_eq!(spread(&moved), spread(&placed), "and the replacement restates it: {moved}");
+
+    // The method needs no share, and a share the caller did not state is not
+    // sent as an empty one.
+    let mut fields: Vec<(u32, String)> = Vec::new();
+    push_order_attrs(
+        &mut fields, &allocation(""), &K::Limit { price: 100 * P }, Side::Buy, String::new(),
+    );
+    assert!(
+        !fields.iter().any(|(t, _)| *t == 6164),
+        "a blank share is left off, not written blank: {fields:?}",
+    );
+}
+
 
 /// A preview is the order it asks about, and nothing less.
 ///

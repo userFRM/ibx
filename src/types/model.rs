@@ -379,20 +379,17 @@ pub struct Order {
     pub exempt_code: i32,
     /// Who at the firm is operating the order.
     pub ext_operator: String,
-    /// Which advisor group the order is allocated across.
+    /// Which advisor group the order is allocated across, on tag 6160.
     ///
-    /// **Not carried by this protocol.** No tag in the protocol carries it. It
-    /// arrives on a report the venue sends back, which is not the same
-    /// as an order carrying it out. Accepted and retained, so an order
-    /// built against another client reads back what it set.
+    /// It rides the order itself, in the section a replace restates, so the
+    /// allocation follows an order that is moved. The reports coming back name
+    /// the same three tags, and this client read them there while sending none
+    /// of them: an order that asked to be spread across a group filled whole on
+    /// the connected account.
     pub fa_group: String,
-    /// How it is divided among them.
-    ///
-    /// **Not carried by this protocol.** See `fa_group`.
+    /// How it is divided among them, on tag 6159.
     pub fa_method: String,
-    /// What share each takes, where the method is a percentage.
-    ///
-    /// **Not carried by this protocol.** See `fa_group`.
+    /// What share each takes, where the method is a percentage, on tag 6164.
     pub fa_percentage: String,
     /// How much has filled, as the venue states it back.
     ///
@@ -973,6 +970,9 @@ impl Order {
             ext_operator: self.ext_operator.clone(),
             customer_account: self.customer_account.clone(),
             professional_customer: self.professional_customer,
+            fa_group: self.fa_group.clone(),
+            fa_method: self.fa_method.clone(),
+            fa_percentage: self.fa_percentage.clone(),
             ref_futures_con_id: self.ref_futures_con_id,
             mifid2_decision_maker: self.mifid2_decision_maker.clone(),
             mifid2_decision_algo: self.mifid2_decision_algo.clone(),
@@ -1152,6 +1152,9 @@ impl Order {
             || !self.ext_operator.is_empty()
             || !self.customer_account.is_empty()
             || self.professional_customer
+            || !self.fa_group.is_empty()
+            || !self.fa_method.is_empty()
+            || !self.fa_percentage.is_empty()
             || self.ref_futures_con_id > 0
             || !self.mifid2_decision_maker.is_empty()
             || !self.mifid2_decision_algo.is_empty()
@@ -2125,6 +2128,9 @@ mod tests {
             ("ext_operator", |o| o.ext_operator = "OP1".into()),
             ("customer_account", |o| o.customer_account = "CUST".into()),
             ("professional_customer", |o| o.professional_customer = true),
+            ("fa_group", |o| o.fa_group = "AllAccounts".into()),
+            ("fa_method", |o| o.fa_method = "EqualQuantity".into()),
+            ("fa_percentage", |o| o.fa_percentage = "50".into()),
             ("ref_futures_con_id", |o| o.ref_futures_con_id = 12345),
             ("mifid2_decision_maker", |o| o.mifid2_decision_maker = "DM".into()),
             ("mifid2_decision_algo", |o| o.mifid2_decision_algo = "DA".into()),
@@ -2163,6 +2169,7 @@ mod tests {
             manual_order_indicator: _, route_marketable_to_bbo: _, imbalance_only: _,
             allow_pre_open: _, ignore_open_auction: _, is_oms_container: _,
             ext_operator: _, customer_account: _, professional_customer: _,
+            fa_group: _, fa_method: _, fa_percentage: _,
             ref_futures_con_id: _, mifid2_decision_maker: _, mifid2_decision_algo: _,
             mifid2_execution_trader: _, mifid2_execution_algo: _,
             mid_offset_at_whole: _, mid_offset_at_half: _,

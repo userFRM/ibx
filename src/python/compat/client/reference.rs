@@ -514,10 +514,17 @@ impl EClient {
         // Answered, not logged. A caller waiting on a callback that will never
         // come cannot tell that apart from a slow venue, and the other client
         // here has answered this all along.
+        //
+        // Under the number and against the id the reference client reports a
+        // miss under: 322, against -1. The rule's number is not a request
+        // number — nothing was ever sent under it — and this is not a
+        // malformed request, so neither the id nor the validation code the
+        // refusals above carry is the one a caller branching on the pair
+        // reads there.
         self.report_refusal(
             py,
-            market_rule_id as i64,
-            crate::error_codes::Refusal::validation(format!(
+            -1,
+            crate::error_codes::Refusal::stated(322, format!(
                 "market rule {market_rule_id} has not been seen on this session. Rules \
                  arrive with the details of a contract that uses them, so ask for such a \
                  contract first"
@@ -854,6 +861,37 @@ mod tests {
                 .req_matching_symbols(py, 1, "AAPL\x011=999")
                 .expect_err("a pattern cannot carry the byte that separates fields");
             assert!(err.to_string().contains("separates fields"), "{err}");
+        });
+    }
+
+    /// A rule this session has not been told about is reported against -1
+    /// under 322, the way the reference client reports one. The rule's number is
+    /// not a request number, and a caller keying off the pair branches on
+    /// both halves.
+    #[test]
+    fn an_unseen_market_rule_is_reported_against_minus_one_under_322() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+            let wrapper = py.eval(
+                c"__import__('builtins').type('W', (), {'__init__': lambda s: setattr(s, 'calls', []), '__getattr__': lambda s, n: (lambda *a: s.calls.append((n, a)))})()",
+                None, None,
+            ).unwrap().unbind();
+            client.__init__(wrapper.clone_ref(py)).unwrap();
+            let (tx, _rx) = std::sync::mpsc::sync_channel(16);
+            *client.control_tx.lock().unwrap() = Some(tx);
+
+            client.req_market_rule(py, 26).unwrap();
+
+            let calls = wrapper.getattr(py, "calls").unwrap();
+            let calls = calls.bind(py).cast::<pyo3::types::PyList>().unwrap();
+            assert_eq!(calls.len(), 1, "the miss is answered, once");
+            let (name, args): (String, Vec<Py<PyAny>>) = calls.get_item(0).unwrap().extract().unwrap();
+            assert_eq!(name, "error");
+            assert_eq!(args[0].extract::<i64>(py).unwrap(), -1,
+                "the rule's number is not the number this is reported against");
+            assert_eq!(args[2].extract::<i32>(py).unwrap(), 322);
+            assert!(args[3].extract::<String>(py).unwrap().contains("market rule 26"));
         });
     }
 }

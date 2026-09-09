@@ -109,24 +109,24 @@ impl EClient {
         // chose was never held, and releasing one that was not held does
         // nothing.
         self.shared.reference.forget_ours(crate::bridge::RecordKind::Answer, req_id);
+        // A number still taking its subscription on another thread has no
+        // record here yet. Refused for that, the caller was told its
+        // withdrawal had not happened and was left holding the subscription
+        // anyway — the venue withdraws one that arrives early rather than
+        // refusing it. Recorded against the registration, which reads it
+        // before it publishes what it opened and takes it back down instead.
+        //
+        // Asked before the record below, not after: a registration finishing
+        // between the two is seen by one of them either way, where asked the
+        // other way round it could fall between both and be refused for a
+        // subscription that is up.
+        if self.core.withdraw_while_registering(req_id) {
+            return Ok(());
+        }
         // A caller withdrawing a subscription this client does not hold
         // branches on being told so. Said nothing, the withdrawal reads
         // exactly like one that worked.
         if !self.core.holds_mkt_data(req_id) {
-            // Said as what it is. A number still taking its subscription on
-            // another thread has no record here yet, and answering that as
-            // "nothing is being watched" is the one answer a caller acts on by
-            // stopping — so it stopped, the registration finished behind it,
-            // and it held a live stream it believed was gone.
-            if self.core.is_registering(req_id) {
-                return Err(Refusal::stated(
-                    NO_SUCH_SUBSCRIPTION,
-                    format!(
-                        "request {req_id} is still taking its subscription and cannot be \
-                         withdrawn yet: withdraw it once the request it is answering returns",
-                    ),
-                ));
-            }
             return Err(Refusal::stated(
                 NO_SUCH_SUBSCRIPTION,
                 format!("no contract is being watched under request {req_id}"),
@@ -185,7 +185,7 @@ impl EClient {
             contract
         };
 
-        self.core
+        let opened = self.core
             .register_tbt(
                 &self.shared,
                 &self.control_tx,
@@ -197,17 +197,31 @@ impl EClient {
                 kind,
                 number_of_ticks.max(0) as u32,
                 ignore_size,
-            )
-            .map(|_| ())?;
+            )?;
         // Which stream the callback names when these trades arrive: 1 = Last,
         // 2 = AllLast. The trade record does not carry it; the subscription does.
-        self.tbt_kinds.lock().unwrap().insert(req_id, kind);
+        // Named only where there is still a stream: one withdrawn while the
+        // registration was away has already been taken back down, and a kind
+        // left behind for it outlives the stream it describes.
+        if opened.is_some() {
+            self.tbt_kinds.lock().unwrap().insert(req_id, kind);
+        }
         Ok(())
     }
 
 
     /// Cancel tick-by-tick data. Matches `cancelTickByTickData` in C++.
     pub fn cancel_tick_by_tick_data(&self, req_id: i64) -> Result<(), Refusal> {
+        // A number still taking its stream on another thread has no record
+        // here yet, and is withdrawn the way the quote subscription above is:
+        // recorded against the registration, which takes the stream back down
+        // when it reads it. The stream is asked for on the historical farm and
+        // the record is written when the farm names the contract, so the gap
+        // is as long as that takes. Asked before the record below for the
+        // reason given there.
+        if self.core.withdraw_while_registering_tbt(req_id) {
+            return Ok(());
+        }
         // Taken out before the send rather than across it. The guard in an
         // `if let` scrutinee lives to the end of the body, and the send is
         // bounded — it waits when the engine's queue is full, which is
@@ -219,23 +233,6 @@ impl EClient {
         // being told so. Said nothing, the withdrawal reads exactly like one
         // that worked.
         let Some(instrument) = instrument else {
-            // Said as what it is, as the quote withdrawal above says it. A
-            // number still taking its stream on another thread has no record
-            // here yet, and answering that as "no stream is held" is the one
-            // answer a caller acts on by stopping — so it stopped, the
-            // registration finished behind it, and it held a live stream it
-            // believed was gone. The stream is asked for on the historical
-            // farm and the record is written when the farm names the contract,
-            // so the gap is as long as that takes.
-            if self.core.is_registering_tbt(req_id) {
-                return Err(Refusal::stated(
-                    NO_SUCH_SUBSCRIPTION,
-                    format!(
-                        "request {req_id} is still taking its tick stream and cannot be \
-                         withdrawn yet: withdraw it once the request it is answering returns",
-                    ),
-                ));
-            }
             return Err(Refusal::stated(
                 NO_SUCH_SUBSCRIPTION,
                 format!("no tick stream is held under request {req_id}"),

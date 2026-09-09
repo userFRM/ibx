@@ -3015,58 +3015,77 @@ fn a_registration_that_fails_withdraws_the_headlines_it_asked_for() {
 }
 
 /// A withdrawal arriving while the number is still taking its subscription is
-/// told so, not told there is nothing there.
+/// taken, and the registration takes back down what it opened.
 ///
 /// The record a withdrawal reads is written when the engine's answer comes
 /// back, and a registration waits on that. In between there is nothing to
-/// find, so the withdrawal read as a number watching nothing — and that is the
-/// one answer a caller acts on by stopping. It stopped, the registration
-/// finished behind it, and it held a live stream it believed was gone. Told
-/// what is actually true it can ask again, which works.
+/// find, so the withdrawal read as a number watching nothing — and refusing it
+/// for that is a refusal the venue never makes: the caller was told its
+/// withdrawal had not happened, the registration finished behind it, and it
+/// held a live subscription it believed was gone. Recorded against the
+/// registration instead, which re-reads it before it publishes anything.
 #[test]
-fn a_withdrawal_during_registration_is_not_told_there_is_nothing_there() {
+fn a_withdrawal_during_registration_takes_down_what_it_opened() {
     let core = ClientCore::new();
     let shared = SharedState::new();
     let (tx, rx) = std::sync::mpsc::sync_channel(64);
     shared.market.set_instrument_count(4);
+    // Wide enough that the withdrawal lands inside the wait. The tests here
+    // default to a millisecond, which would close the window this is about
+    // before the handshake below could finish inside it.
+    core.set_registration_timeout(std::time::Duration::from_secs(5));
 
-    // The engine holds the answer back until the withdrawal has been tried,
+    // The engine holds the answer back until the withdrawal has been made,
     // which is the window under test.
     let (seen_tx, seen_rx) = std::sync::mpsc::sync_channel::<()>(1);
     let (go_tx, go_rx) = std::sync::mpsc::sync_channel::<()>(1);
     let engine = std::thread::spawn(move || {
+        let mut sent = Vec::new();
         while let Ok(cmd) = rx.recv() {
-            if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
+            if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = &cmd {
                 let _ = seen_tx.send(());
                 let _ = go_rx.recv();
                 let _ = reply.try_send(Ok(0));
-                return;
             }
+            sent.push(cmd);
         }
+        sent
     });
 
     let core_ref = &core;
     let shared_ref = &shared;
+    let tx_ref = &tx;
     std::thread::scope(|scope| {
-        scope.spawn(move || {
-            let _ = core_ref.register_mkt_data(
-                shared_ref, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
-                false, false, "", 0,
-            );
-        });
+        let taking = scope.spawn(move || core_ref.register_mkt_data(
+            shared_ref, tx_ref, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+            false, false, "", 0,
+        ));
         seen_rx.recv().expect("the registration reached the engine");
         assert!(
             !core_ref.holds_mkt_data(2),
             "nothing is recorded for it yet, which is the window",
         );
         assert!(
-            core_ref.is_registering(2),
-            "a withdrawal here would be told the number is watching nothing, and \
-             a caller that believes it holds a live stream",
+            core_ref.withdraw_while_registering(2),
+            "the withdrawal was refused for arriving early, which the venue \
+             never does — and the subscription behind it went on living",
         );
         let _ = go_tx.send(());
+        taking.join().unwrap().expect("the registration itself was not refused");
     });
-    let _ = engine.join();
+    drop(tx);
+    let sent = engine.join().expect("the engine thread ran");
+
+    assert!(
+        !core_ref.holds_mkt_data(2),
+        "the registration published a subscription under a number whose caller \
+         had already been told it was withdrawn",
+    );
+    assert_eq!(core_ref.watching(2), None, "a mapping was written for it all the same");
+    assert!(
+        sent.iter().any(|c| matches!(c, ControlCommand::Unsubscribe { instrument: 0 })),
+        "the subscription it opened was never taken back down: {sent:?}",
+    );
 }
 
 /// An answer worked out here survives a slot going back to the table.

@@ -536,6 +536,16 @@ pub struct OrderAttrs {
     pub customer_account: String,
     /// Whether that customer is a professional.
     pub professional_customer: bool,
+    /// How an advisor's order is split across the accounts it is placed for:
+    /// which group (tag 6160), by what method (6159) and at what share (6164).
+    /// Empty is the caller naming none, and an empty one is left off rather
+    /// than written blank — the venue's field writer omits a blank value, so a
+    /// blank sent here would be a tag the venue never sees from anyone else.
+    pub fa_group: String,
+    /// How the group's size is divided.
+    pub fa_method: String,
+    /// The share each takes, where the method is a percentage.
+    pub fa_percentage: String,
     /// The future a spread prices against, on tag 6564.
     pub ref_futures_con_id: i32,
     /// Who decided the trade and who executed it, for European transaction
@@ -735,6 +745,9 @@ impl Default for OrderAttrs {
             ext_operator: String::new(),
             customer_account: String::new(),
             professional_customer: false,
+            fa_group: String::new(),
+            fa_method: String::new(),
+            fa_percentage: String::new(),
             ref_futures_con_id: 0,
             mifid2_decision_maker: String::new(),
             mifid2_decision_algo: String::new(),

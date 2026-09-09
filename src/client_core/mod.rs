@@ -702,15 +702,38 @@ pub struct HistoricalAsk {
 /// Given back when this drops, which is every way out of the call that took it
 /// — the refusals before the engine is asked, the wait timing out, the `?` on
 /// a send. A release written at each of those instead is a release somebody
-/// adds a path around later.
+/// adds a path around later. The one path that gives it back itself is the
+/// success below, which has to read a withdrawal under the same acquisition.
 struct Registering<'a> {
     held: &'a Mutex<std::collections::HashSet<(u8, i64)>>,
+    withdrawn: &'a Mutex<std::collections::HashSet<(u8, i64)>>,
     key: (u8, i64),
+}
+
+impl Registering<'_> {
+    /// Give the number back, and say whether a withdrawal arrived while it was
+    /// held.
+    ///
+    /// Both under one acquisition. Given back first, a withdrawal landing in
+    /// between finds the claim gone and the record not yet written, and is
+    /// told there is nothing to withdraw — which is the answer that leaves a
+    /// caller holding a live subscription it believes is gone.
+    fn withdrawn_meanwhile(&self) -> bool {
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        let asked = self.withdrawn.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
+        held.remove(&self.key);
+        asked
+    }
 }
 
 impl Drop for Registering<'_> {
     fn drop(&mut self) {
-        self.held.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        // A registration that never reached the point of reading it leaves no
+        // withdrawal behind for the next one under this number, which would
+        // otherwise take itself down having been asked for nothing of the kind.
+        self.withdrawn.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
+        held.remove(&self.key);
     }
 }
 
@@ -750,6 +773,15 @@ pub struct ClientCore {
     /// the two are refused against their own records, so a claim that did not
     /// say which would refuse a pair the client allows.
     registering: Mutex<std::collections::HashSet<(u8, i64)>>,
+    /// Numbers withdrawn while the registration above was still in flight.
+    ///
+    /// A withdrawal that arrives in that window has no record to act on. The
+    /// venue withdraws it all the same, so it is written down here and the
+    /// registration reads it as it gives the number back: what it opened is
+    /// taken down again instead of published, and no record is left behind.
+    /// Keyed as the claim is, because the quotes and the tick stream under one
+    /// number are withdrawn separately.
+    withdrawn_while_registering: Mutex<std::collections::HashSet<(u8, i64)>>,
     /// Which registration a number is currently holding, counted.
     ///
     /// A number outlives the subscriptions made under it: a callback may
@@ -1016,6 +1048,7 @@ impl ClientCore {
             readonly: std::sync::atomic::AtomicBool::new(false),
             req_to_instrument: Mutex::new(HashMap::new()),
             registering: Mutex::new(std::collections::HashSet::new()),
+            withdrawn_while_registering: Mutex::new(std::collections::HashSet::new()),
             registration_epoch: Mutex::new(HashMap::new()),
             epochs: std::sync::atomic::AtomicU64::new(0),
             instrument_to_req: Mutex::new(HashMap::new()),
@@ -1790,7 +1823,7 @@ impl ClientCore {
         // Read and claimed under one lock, so a second caller on this number
         // cannot pass the check while the first is still waiting to be given a
         // slot. Held until this call returns, however it returns.
-        let _claim = {
+        let claim = {
             let watching = self.req_to_instrument.lock().unwrap();
             let mut taking = self.registering.lock().unwrap();
             if watching.contains_key(&req_id) || !taking.insert((TAKING_QUOTES, req_id)) {
@@ -1802,7 +1835,11 @@ impl ClientCore {
                     ),
                 ));
             }
-            Registering { held: &self.registering, key: (TAKING_QUOTES, req_id) }
+            Registering {
+                held: &self.registering,
+                withdrawn: &self.withdrawn_while_registering,
+                key: (TAKING_QUOTES, req_id),
+            }
         };
 
         // A quote feed the engine has given up on serves nothing more this
@@ -1904,7 +1941,7 @@ impl ClientCore {
             // were already up, so it is recorded here as well. Recorded only
             // on the path that also opened the quotes, it was never withdrawn:
             // the caller stopped watching and the headlines kept coming.
-            return Ok(instrument);
+            return self.settle_registration(shared, control_tx, &claim, req_id, instrument);
         }
 
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
@@ -1965,7 +2002,7 @@ impl ClientCore {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
             self.pay_a_joiner(shared, instrument_id, req_id);
-            return Ok(instrument_id);
+            return self.settle_registration(shared, control_tx, &claim, req_id, instrument_id);
         }
         // Somebody may have taken this contract while this request was being
         // registered, in which case this one watches theirs.
@@ -1985,7 +2022,45 @@ impl ClientCore {
         if snapshot {
             self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
         }
-        Ok(instrument_id)
+        self.settle_registration(shared, control_tx, &claim, req_id, instrument_id)
+    }
+
+    /// Publish what a registration opened, or take it back down because it was
+    /// withdrawn while it was away.
+    ///
+    /// The record a withdrawal reads is written when the engine's answer comes
+    /// back, so a withdrawal arriving before that has nothing to act on. It is
+    /// answered all the same — the venue does not refuse one for arriving
+    /// early — and written down against the number instead. This is where that
+    /// is read, as the claim is given back and under the same acquisition, so
+    /// a withdrawal is either early enough to be seen here or late enough to
+    /// find the record it needs.
+    ///
+    /// Taken down through the ordinary withdrawal, because that is the one
+    /// that knows a subscription somebody else is also watching stays up and
+    /// passes to the next of them.
+    fn settle_registration(
+        &self,
+        shared: &SharedState,
+        control_tx: &SyncSender<ControlCommand>,
+        claim: &Registering<'_>,
+        req_id: i64,
+        instrument: InstrumentId,
+    ) -> Result<InstrumentId, Refusal> {
+        if !claim.withdrawn_meanwhile() {
+            return Ok(instrument);
+        }
+        let (subscription, stop_news) = self.unregister_mkt_data(shared, req_id);
+        // Nothing is reported from here. The withdrawal was answered when it
+        // arrived, and a send failing now fails because the engine has gone —
+        // which takes the subscription with it.
+        if let Some(subject) = stop_news {
+            let _ = control_tx.send(ControlCommand::UnsubscribeNews { subject });
+        }
+        if let Some(subscription) = subscription {
+            let _ = control_tx.send(ControlCommand::Unsubscribe { instrument: subscription });
+        }
+        Ok(instrument)
     }
 
     /// Drop this request's claim on the headlines, and say whether that was
@@ -2062,29 +2137,45 @@ impl ClientCore {
         self.req_to_instrument.lock().unwrap().contains_key(&req_id)
     }
 
-    /// Whether a number is in the middle of taking a subscription on another
-    /// thread.
+    /// Withdraw a number that is in the middle of taking a subscription on
+    /// another thread, and say whether there was one to withdraw.
     ///
-    /// A registration waits on the engine, and the record a withdrawal reads
-    /// is written when that answer comes back. Between the two there is
-    /// nothing to find, so a withdrawal arriving in the gap read as a number
-    /// watching nothing — and the subscription then completed and lived. A
-    /// caller taking that answer at face value, which is the reasonable
-    /// reading, holds a stream it asked to stop. The gap is as long as the
-    /// wait, and the surface that releases the interpreter lock across it
-    /// makes a cancel from a timer thread an ordinary thing to write.
-    pub fn is_registering(&self, req_id: i64) -> bool {
-        self.registering.lock().unwrap().contains(&(TAKING_QUOTES, req_id))
+    /// A registration waits on the engine, and the record an ordinary
+    /// withdrawal reads is written when that answer comes back. Between the
+    /// two there is nothing to find, so a withdrawal arriving in the gap read
+    /// as a number watching nothing. Refused for that, the caller was told its
+    /// withdrawal had not happened while the registration finished behind it
+    /// and the subscription lived — no answer the venue gives, and the one
+    /// state the caller cannot act on. Written down instead, and the
+    /// registration takes what it opened back down when it reads it. The gap
+    /// is as long as the wait, and the surface that releases the interpreter
+    /// lock across it makes a cancel from a timer thread an ordinary thing to
+    /// write.
+    pub fn withdraw_while_registering(&self, req_id: i64) -> bool {
+        self.note_withdrawal(TAKING_QUOTES, req_id)
     }
 
-    /// The same question about a tick stream.
+    /// The same for a tick stream.
     ///
     /// The two are claimed under keys of their own, so the quote answer above
     /// says nothing about a number in the middle of taking one of these — and a
     /// withdrawal that asked the wrong one read a stream still being registered
     /// as a stream that was never there.
-    pub fn is_registering_tbt(&self, req_id: i64) -> bool {
-        self.registering.lock().unwrap().contains(&(TAKING_TICKS, req_id))
+    pub fn withdraw_while_registering_tbt(&self, req_id: i64) -> bool {
+        self.note_withdrawal(TAKING_TICKS, req_id)
+    }
+
+    /// Written under the claim's own lock, and only against a claim that is
+    /// still held: the registration reads it as it gives the claim back and
+    /// under the same acquisition, so a withdrawal recorded here is one the
+    /// registration has not yet stopped looking for.
+    fn note_withdrawal(&self, taking: u8, req_id: i64) -> bool {
+        let held = self.registering.lock().unwrap();
+        if !held.contains(&(taking, req_id)) {
+            return false;
+        }
+        self.withdrawn_while_registering.lock().unwrap().insert((taking, req_id));
+        true
     }
 
     /// Which contract's slot a number is watching, if it is watching one.
@@ -2260,6 +2351,11 @@ impl ClientCore {
     }
 
     /// Register a TBT subscription mapping.
+    ///
+    /// Answers with no slot where the stream was withdrawn while this was
+    /// waiting on the engine: it has been taken back down and nothing is
+    /// recorded under the number, so the caller has no stream to name a kind
+    /// for either.
     pub fn register_tbt(
         &self,
         _shared: &SharedState,
@@ -2272,7 +2368,7 @@ impl ClientCore {
         tbt_type: TbtType,
         number_of_ticks: u32,
         ignore_size: bool,
-    ) -> Result<InstrumentId, Refusal> {
+    ) -> Result<Option<InstrumentId>, Refusal> {
         // A number already carrying a tick stream cannot carry a second.
         //
         // The same shape the quote subscription above refuses: two streams
@@ -2294,7 +2390,7 @@ impl ClientCore {
         // for the same reason: the record below cannot be written until the
         // engine names the slot, so two callers on this number both read it as
         // free and both went on.
-        let _claim = {
+        let claim = {
             let carrying = self.tbt_to_instrument.lock().unwrap();
             let mut taking = self.registering.lock().unwrap();
             if carrying.contains_key(&req_id) || !taking.insert((TAKING_TICKS, req_id)) {
@@ -2306,7 +2402,11 @@ impl ClientCore {
                     ),
                 ));
             }
-            Registering { held: &self.registering, key: (TAKING_TICKS, req_id) }
+            Registering {
+                held: &self.registering,
+                withdrawn: &self.withdrawn_while_registering,
+                key: (TAKING_TICKS, req_id),
+            }
         };
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         control_tx.send(ControlCommand::SubscribeTbt {
@@ -2320,8 +2420,22 @@ impl ClientCore {
 
         let instrument_id = self.recv_registration(reply_rx)?;
         self.cache_instrument(con_id, instrument_id);
+        // A withdrawal that arrived while this was away found no record and
+        // was answered anyway, as the venue answers it. Read before the record
+        // is written and under the acquisition that gives the claim back, so
+        // the stream is taken down again rather than published under a number
+        // its caller has already stopped watching. Nothing is reported: the
+        // withdrawal was answered when it arrived, and a send failing now
+        // fails because the engine has gone, which takes the stream with it.
+        if claim.withdrawn_meanwhile() {
+            let _ = control_tx.send(ControlCommand::UnsubscribeTbt {
+                req_id,
+                instrument: instrument_id,
+            });
+            return Ok(None);
+        }
         self.tbt_to_instrument.lock().unwrap().insert(req_id, instrument_id);
-        Ok(instrument_id)
+        Ok(Some(instrument_id))
     }
 
     /// Look up req_id for an instrument.
@@ -4294,17 +4408,6 @@ impl ClientCore {
             delta_neutral_open_close, delta_neutral_settling_firm,
             delta_neutral_short_sale, delta_neutral_short_sale_slot,
             delta, dont_use_auto_price_for_hedge, model_code, opt_out_smart_routing,
-            fa_group: "FA allocation is not supported: fa_group, fa_method and \
-                       fa_percentage are not carried on the order, so the full \
-                       quantity would fill on the connected account instead of \
-                       being allocated across the advisor group.",
-            fa_method: "FA allocation is not supported: fa_method is not \
-                        carried on the order, so the full quantity would fill \
-                        on the connected account under no method at all.",
-            fa_percentage: "FA allocation is not supported: fa_percentage is \
-                            not carried on the order, so the full quantity \
-                            would fill on the connected account rather than \
-                            the share stated.",
             order_misc_options, origin, override_percentage_constraints,
             parent_perm_id, pt_order_id, pt_order_type, randomize_price,
             scale_init_fill_qty, scale_table, shareholder, sl_order_id,

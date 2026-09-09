@@ -182,74 +182,36 @@ impl EClient {
 
     // ── Server Time ──
     //
-    // The venue's clock, not this machine's. A caller asks for it to find out
-    // how far apart the two are, and answering with the local clock reports
-    // zero skew whatever the truth is — the one answer that cannot be wrong
-    // and cannot be useful.
-    //
-    // Every message the venue sends is stamped with the time it sent it, so
-    // the answer is the stamp on the last one, and the logon itself is
-    // stamped, so a session holds one from the moment it exists. Where none
-    // is held the request is reported on `error`, the way a request made with
-    // no session is, and this machine's clock is not handed back as the
-    // venue's.
-    /// Ask the venue for its own clock. Answered on `current_time`.
+    // The venue is never asked what time it is: nothing on this wire asks it.
+    // The answer is worked out here — this machine's clock, shifted by what
+    // the venue has stated about its own, on the logon it stamps and in the
+    // clock it pushes afterwards. A session that has been told nothing is
+    // shifted by nothing, so it answers this machine's clock, and there is no
+    // state in which this question has no answer.
+    /// Ask for the venue's own clock. Answered on `current_time`.
     ///
-    /// Before a session exists there is no venue clock to report, so this is
-    /// answered the way the reference client answers every request made before
-    /// connecting: on `error`, under the number it reports that by. The local
-    /// clock is not a substitute, since the caller asks this to measure the
-    /// difference between the two.
+    /// Before a session exists this is reported on `error`, the way every
+    /// request made before connecting is: an answer waits for a dispatch pass,
+    /// and with no session there is nothing to make one.
     fn req_current_time(&self, py: Python<'_>) -> PyResult<()> {
         let Some(_connected) = self.tx_or_report(-1)? else { return Ok(()) };
-        let from_venue = self
-            .shared
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|s| s.market.venue_time())
-            .and_then(|stamped| crate::protocol::datetime::ib_datetime_to_unix(&stamped));
-
-        let Some(seconds) = from_venue else {
-            return self.notify(py, "error", (
-                -1_i64, super::raised_now(), super::NOT_CONNECTED_CODE,
-                "the venue has stamped no message yet, so its clock cannot be stated",
-                "",
-            ));
-        };
+        let seconds = self.venue_time_millis().div_euclid(1_000);
         self.deliver(py, "current_time", (seconds,))?;
         Ok(())
     }
 
-    /// Ask the venue for its own clock in milliseconds. Answered on
+    /// Ask for the venue's own clock in milliseconds. Answered on
     /// `current_time_in_millis`.
     ///
-    /// The same clock `req_current_time` reports and read the same way. What
-    /// differs is the precision kept: the venue sometimes stamps a fraction of
-    /// a second, and asking in seconds throws it away. A stamp with no
-    /// fraction lands on a whole second, which is the precision the venue
-    /// stated rather than a rounding of something finer.
+    /// The same clock `req_current_time` reports and worked out the same way.
+    /// What differs is the precision kept: asking in seconds throws away the
+    /// fraction this one keeps.
     ///
     /// Before a session exists this is reported on `error`, as
-    /// `req_current_time` is: an answer waits for a dispatch pass, and with
-    /// no session there is nothing to make one.
+    /// `req_current_time` is.
     fn req_current_time_in_millis(&self, py: Python<'_>) -> PyResult<()> {
         let Some(_connected) = self.tx_or_report(-1)? else { return Ok(()) };
-        let from_venue = self
-            .shared
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|s| s.market.venue_time())
-            .and_then(|stamped| crate::protocol::datetime::ib_datetime_to_unix_millis(&stamped));
-
-        let Some(millis) = from_venue else {
-            return self.notify(py, "error", (
-                -1_i64, super::raised_now(), super::NOT_CONNECTED_CODE,
-                "the venue has stamped no message yet, so its clock cannot be stated",
-                "",
-            ));
-        };
+        let millis = self.venue_time_millis();
         self.deliver(py, "current_time_in_millis", (millis,))?;
         Ok(())
     }
@@ -553,6 +515,24 @@ impl EClient {
             req_id: wire_req_id(req_id)?,
             query: Box::new(query),
         })
+    }
+}
+
+impl EClient {
+    /// The venue's clock in milliseconds: this machine's, shifted by what the
+    /// venue has stated about its own.
+    ///
+    /// The venue is never asked for it, so there is no state in which this
+    /// cannot be answered. A client with nothing behind it has been told
+    /// nothing, and nothing shifted by nothing is this machine's clock, which
+    /// is the answer before the venue has stated anything at all.
+    fn venue_time_millis(&self) -> i64 {
+        match self.shared_state() {
+            Ok(shared) => shared.market.venue_time_millis(),
+            Err(_) => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_millis() as i64),
+        }
     }
 }
 

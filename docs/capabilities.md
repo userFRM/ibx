@@ -16,9 +16,9 @@ Verification runs against a paper account on IBKR production servers, and the or
 | | |
 | --- | --- |
 | Requests | 80. Every one either does what it says or reports why it cannot — none returns success having sent nothing |
-| Order fields | 154. 114 are sent; 33 have no field in the protocol to carry them and the call says so rather than dropping them; 6 are what the venue fills on the way back, which an order does not carry out; 1 is acted on here rather than sent |
+| Order fields | 154. 117 are sent; 30 have no field in the protocol to carry them and the call says so rather than dropping them; 6 are what the venue fills on the way back, which an order does not carry out; 1 is acted on here rather than sent |
 | Rust and Python | the same request produces the same call on both, compared against live responses |
-| Tests | 3,395 offline, and 197 more that live in the suites run against a broker session |
+| Tests | 3,407 offline, and 197 more that live in the suites run against a broker session |
 
 ## API surface
 
@@ -63,7 +63,7 @@ nothing reaches and is counted as one on the limits page.
 
 | Suite | Count | Requires credentials |
 | --- | ---: | :---: |
-| Rust unit and integration | 2,510 | No |
+| Rust unit and integration | 2,522 | No |
 | Rust, live | 9 | Yes |
 | Python | 885 | No |
 | Python, live | 137 | Yes |
@@ -126,7 +126,7 @@ entitlement is answered with.
 | Capability | Status | Verification |
 | --- | :---: | --- |
 | 24 order types | ✅ Supported | `whatIf` preview accepted by the server for each; `tests/ib_paper_compat`. Every type this client places is previewed as itself |
-| Order fields | ✅ Supported | An order has 154 fields. 114 are sent. 33 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. 6 more are what the venue fills on the way back, which an order does not carry out. One is acted on here rather than sent: an order held back is kept until one in its family transmits, which is what the counterpart this replaces does with it. A check on every commit fails if a field starts being dropped |
+| Order fields | ✅ Supported | An order has 154 fields. 117 are sent. 30 have no field in this protocol to carry them, and each says so on itself rather than being quietly ignored. 6 more are what the venue fills on the way back, which an order does not carry out. One is acted on here rather than sent: an order held back is kept until one in its family transmits, which is what the counterpart this replaces does with it. A check on every commit fails if a field starts being dropped |
 | Non-US markets | ✅ Supported | Previews accepted on DE, NL, GB, CH, AU, CA, US equities and FX; JP and HK rejected for lot size, which is the exchange rule and is surfaced to the caller |
 | Modify, cancel, global cancel | ✅ Supported | `scripts/sdk_lifecycle.py` (place → modify → cancel), `tests/ib_paper_compat` Phase 9 / 9b |
 | Brackets, OCA, combos | ✅ Supported | Per-leg pricing; leg order validated by server rejection of the inverted spread; `src/bin/capture_combo.rs` |
@@ -185,7 +185,7 @@ at all (`tests/malformed_input.rs`).
 These are properties of the IBKR protocol, not of this implementation. The
 official gateway behaves the same way.
 
-- **33 order fields are not transmitted.** For each, the protocol either
+- **30 order fields are not transmitted.** For each, the protocol either
   carries no tag at all, or carries one the server rejects by name
   (`algo_id` → *Invalid value in field # 8016*; `scale_init_fill_qty` →
   *Can not contain field # 6486*). Each field retains the caller's value, so an

@@ -1877,6 +1877,20 @@ fn push_order_attrs(
     if !attrs.customer_account.is_empty() {
         fields.push((6207, attrs.customer_account.clone()));
     }
+    // How an advisor's order is split across the accounts it is placed for.
+    // Stated on the order, in this block, so a replace restates it and the
+    // allocation follows the order it belongs to. Each is written only when the
+    // caller named it: the venue leaves a blank value off the message entirely,
+    // so an empty tag here would be a divergence rather than a no-op.
+    if !attrs.fa_group.is_empty() {
+        fields.push((6160, attrs.fa_group.clone()));
+    }
+    if !attrs.fa_method.is_empty() {
+        fields.push((6159, attrs.fa_method.clone()));
+    }
+    if !attrs.fa_percentage.is_empty() {
+        fields.push((6164, attrs.fa_percentage.clone()));
+    }
     if attrs.professional_customer {
         fields.push((6636, "1".to_string()));
     }

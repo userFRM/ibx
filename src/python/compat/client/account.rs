@@ -37,36 +37,38 @@ impl EClient {
     ///
     /// `model_code` is taken and not applied. One session holds one account
     /// here, and the venue states its figures for that account without being
-    /// asked which, so there is no second account or model portfolio to name.
+    /// asked which, so there is no model portfolio to name. Another account is
+    /// refused rather than answered with this account's profit.
     #[pyo3(signature = (req_id, account, model_code=""))]
     fn req_pnl(&self, py: Python<'_>, req_id: i64, account: &str, model_code: &str) -> PyResult<()> {
         // The session before the slot: taken first, a refused request held
         // the one slot there is, and the next request under another number
         // was refused as a duplicate of one that never went.
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
+        // Another account's profit is not something this session can state.
+        // The figures are worked out from one set of midnight seeds against
+        // one book of holdings, and both belong to the account this session
+        // opened under; there is no second pair to answer another account
+        // from. So the request ends here — the venue never reports one
+        // account's profit under a request naming a different one, and
+        // reporting this account's figures under the caller's own request
+        // number is an answer it never gives.
+        //
+        // Refused before the slot for the reason above it: a request that will
+        // not be reported must not hold the one subscription there is.
+        if !account.is_empty() && account != self.account() {
+            let why = format!(
+                "account {account} was named and this session opened under {}, \
+                 whose profit is not what was asked for",
+                self.account(),
+            );
+            log::warn!("{why}");
+            return self.report_refusal(py, req_id, Refusal::validation(why));
+        }
         // Refused while another request holds the subscription, and nothing
         // is asked of the venue for a request that will not be reported.
         if let Err(why) = self.core.subscribe_pnl(req_id) {
             return self.report_refusal(py, req_id, why);
-        }
-        // Always the account this session opened under, whatever was named.
-        //
-        // The figures are worked out from one set of midnight seeds against
-        // one book of holdings, and both belong to this session's account. A
-        // subscription taken out for another account replaced those seeds with
-        // that account's and the next restatement replaced them back, so the
-        // figure reported under this request alternated between two accounts'
-        // realised legs measured against a third thing -- this account's
-        // positions. Named and not applied, with the caller told, as the
-        // holdings answer for another account already is.
-        if !account.is_empty() && account != self.account() {
-            let why = format!(
-                "account {account} was named and the profit that follows is {}'s, which \
-                 is the account this session opened under",
-                self.account(),
-            );
-            log::warn!("{why}");
-            self.report_refusal(py, req_id, Refusal::validation(why.clone()))?;
         }
         let acct = self.account();
         let _ = model_code;
@@ -100,22 +102,21 @@ impl EClient {
 
     /// Request P&L for a single position.
     ///
-    /// `account` and `model_code` are taken and not applied. One session holds
-    /// one account here, and the venue states its figures for that account
-    /// without being asked which, so there is no second account or model
-    /// portfolio to name; a caller naming another account is told so, as
-    /// `req_pnl` tells it.
+    /// `model_code` is taken and not applied. One session holds one account
+    /// here, and the venue states its figures for that account without being
+    /// asked which, so there is no model portfolio to name; another account is
+    /// refused here as `req_pnl` refuses it, and for the reason given there.
     #[pyo3(signature = (req_id, account, model_code, con_id))]
     fn req_pnl_single(&self, py: Python<'_>, req_id: i64, account: &str, model_code: &str, con_id: i64) -> PyResult<()> {
         let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
         if !account.is_empty() && account != self.account() {
             let why = format!(
-                "account {account} was named and the profit that follows is {}'s, which \
-                 is the account this session opened under",
+                "account {account} was named and this session opened under {}, \
+                 whose profit is not what was asked for",
                 self.account(),
             );
             log::warn!("{why}");
-            self.report_refusal(py, req_id, Refusal::validation(why))?;
+            return self.report_refusal(py, req_id, Refusal::validation(why));
         }
         self.core.subscribe_pnl_single(req_id, con_id);
         let _ = model_code;
@@ -508,5 +509,87 @@ impl EClient {
             py.detach(|| std::thread::sleep(std::time::Duration::from_millis(10)));
         }
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A connected client whose engine is a channel the test reads, and a
+    /// wrapper that keeps every callback it is handed.
+    fn wired_client(
+        py: Python<'_>,
+    ) -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Py<PyAny>) {
+        let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+        let ns = pyo3::types::PyDict::new(py);
+        py.run(
+            c"class W:
+    def __init__(self): self.calls = []
+    def __getattr__(self, name):
+        return lambda *args: self.calls.append((name,) + args)
+w = W()",
+            None,
+            Some(&ns),
+        ).unwrap();
+        let wrapper = ns.get_item("w").unwrap().unwrap().unbind();
+        client.__init__(wrapper.clone_ref(py)).unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        *client.shared.lock().unwrap() = Some(Arc::new(SharedState::new()));
+        *client.control_tx.lock().unwrap() = Some(tx);
+        *client.account_id.lock().unwrap() = Some("DU123".into());
+        client.connected.store(true, Ordering::Release);
+        (client, rx, wrapper)
+    }
+
+    /// A profit request naming an account this session did not open under is
+    /// refused and ends there. Answered instead with this account's figures
+    /// under the caller's own request number, a caller authorised on two
+    /// accounts read one account's profit as the other's, with nothing on any
+    /// callback to say so. Nothing is asked of the venue for a request that
+    /// will not be reported, and the one subscription slot stays free for the
+    /// request that comes next.
+    #[test]
+    fn a_profit_request_naming_another_account_is_refused_rather_than_answered() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, wrapper) = wired_client(py);
+
+            client.req_pnl(py, 7, "DU999", "").unwrap();
+            assert!(rx.try_recv().is_err(), "the venue is asked nothing");
+            assert_eq!(
+                *client.core.pnl_req_id.lock().unwrap(), None,
+                "the one slot there is was not taken by a request that was refused",
+            );
+
+            client.req_pnl_single(py, 8, "DU999", "", 265_598).unwrap();
+            assert!(
+                !client.core.pnl_single_reqs.lock().unwrap().contains_key(&8),
+                "nothing is watched under a request that was refused",
+            );
+
+            // Both refusals reach the caller under the number it gave, naming
+            // the account it asked about.
+            let heard = wrapper.bind(py).getattr("calls").unwrap()
+                .extract::<Vec<(String, i64, i64, i64, String, String)>>().unwrap();
+            let refused: Vec<i64> = heard.iter()
+                .filter(|(name, _, _, code, message, _)| {
+                    name == "error"
+                        && *code == crate::error_codes::Refusal::VALIDATION as i64
+                        && message.contains("DU999")
+                })
+                .map(|(_, req_id, ..)| *req_id)
+                .collect();
+            assert_eq!(refused, vec![7, 8], "each refusal is reported once: {heard:?}");
+
+            // And the account this session did open under is still answered,
+            // in the slot the refusal did not take.
+            client.req_pnl(py, 9, "DU123", "").unwrap();
+            assert!(
+                matches!(rx.try_recv(), Ok(ControlCommand::SubscribePnl { req_id: 9, .. })),
+                "the session's own account is asked for as before",
+            );
+        });
     }
 }

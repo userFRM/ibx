@@ -401,9 +401,9 @@ impl HotLoop {
         // to the one this client proposed.
         hot_loop.set_ccp_heartbeat_interval(gateway.heartbeat_interval);
         hot_loop.farm_conn = Some(farm_conn);
-        // The venue stamps the logon answer with its own clock. Seeded from
-        // it, so a caller asking the venue's time before any other message
-        // has arrived is answered from the venue and not from this machine.
+        // The venue stamps the logon answer with its own clock. How far that
+        // is from this machine's is learned here, and a caller asking what
+        // time the venue says it is reads this machine's clock shifted by it.
         if let Some(stamped) = &ccp_conn.logged_in_at {
             hot_loop.shared.market.note_venue_time(stamped);
         }
@@ -519,8 +519,9 @@ impl HotLoop {
         hl.set_control_rx(rx);
         hl.set_account_id(account_id);
         hl.farm_conn = Some(farm_conn);
-        // As `for_session`: seeded from the logon stamp, and the bound that
-        // naming is waited on starts when the connection is taken.
+        // As `for_session`: the difference between the clocks is learned from
+        // the logon stamp, and the bound that naming is waited on starts when
+        // the connection is taken.
         if let Some(stamped) = &ccp_conn.logged_in_at {
             hl.shared.market.note_venue_time(stamped);
         }
@@ -2528,13 +2529,14 @@ impl HotLoop {
         // previous one in place holds the session to an interval neither end
         // of it agreed.
         self.hb.set_ccp_interval(conn.heartbeat_secs.unwrap_or(crate::config::CCP_HEARTBEAT));
-        // The clock this connection opened on, and nothing where it opened on
-        // none. The venue stamps the answer to a logon, but a reconnect is
-        // allowed to carry no stamp — and the one the connection before it
-        // carried went with that connection. Left in place, a caller asking
-        // what time the venue says it is reads a dead connection's answer for
-        // as long as this one stays quiet.
-        self.shared.market.note_connection_time(conn.logged_in_at.as_deref());
+        // The clock this connection opened on, where it stated one. A
+        // reconnect is allowed to carry no stamp, and one that carries none
+        // has said nothing about the venue's clock — so the difference already
+        // learned stands, which is a far better answer than none, and the two
+        // machines have not moved apart in the seconds a reconnect takes.
+        if let Some(stamped) = conn.logged_in_at.as_deref() {
+            self.shared.market.note_venue_time(stamped);
+        }
         // This session's logon is now the newer one. Left at the first, every
         // later reconnect would find its own previous logon listed as a
         // competing session and give the account up to itself.
@@ -4196,16 +4198,16 @@ mod tests {
         );
     }
 
-    /// A reconnect that carries no stamp has stated no venue clock.
+    /// A reconnect that carries no stamp leaves the venue's clock where it was.
     ///
-    /// The venue stamps the answer to a logon with its own clock, and that is
-    /// what a caller asking the server time is answered from — but a reconnect
-    /// is allowed to carry no stamp, and the one the connection before it
-    /// carried went with that connection. Kept, both APIs answer "what time
-    /// does the venue say it is" from a connection that no longer exists, and
-    /// go on doing so for as long as the new one stays quiet.
+    /// The venue states its clock on the logon it answers, and a reconnect is
+    /// allowed to carry no stamp. One that carries none has said nothing about
+    /// the clock, and the difference already learned is still the best thing
+    /// known about it — a reconnect takes seconds, and the two machines have
+    /// not drifted apart in them. Dropped instead, a caller who had a good
+    /// answer was handed this machine's raw clock, or none at all.
     #[test]
-    fn a_reconnect_that_states_no_time_drops_the_gone_connections_clock() {
+    fn a_reconnect_that_states_no_time_keeps_the_clock_already_learned() {
         let shared = Arc::new(SharedState::new());
         shared.market.note_venue_time("20260815-12:00:00");
         let mut hl = HotLoop::new(shared.clone(), None, None);
@@ -4214,18 +4216,18 @@ mod tests {
         let (conn, _peer) = crate::protocol::connection::Connection::for_test();
         assert!(conn.logged_in_at.is_none());
         hl.reconnect_ccp(conn);
-        assert_eq!(
-            shared.market.venue_time(), None,
-            "the clock belonged to the connection that went",
+        assert!(
+            (shared.market.venue_time_millis() - 1_786_795_200_000).abs() < 2_000,
+            "the difference the venue stated is still the one in force",
         );
 
-        // One that does carry a stamp states it, and the session's clock is
-        // that connection's from then on.
+        // One that does carry a stamp states the clock anew, and the session
+        // answers from that connection's from then on.
         let (mut conn, _peer_stamped) = crate::protocol::connection::Connection::for_test();
         conn.logged_in_at = Some("20260815-13:30:00".to_string());
         hl.reconnect_ccp(conn);
-        assert_eq!(
-            shared.market.venue_time().as_deref(), Some("20260815-13:30:00"),
+        assert!(
+            (shared.market.venue_time_millis() - 1_786_800_600_000).abs() < 2_000,
             "the new connection's stamp",
         );
     }
@@ -6849,11 +6851,12 @@ mod tests {
         );
     }
 
-    /// A session holds the venue's clock from the stamp on its logon, so a
-    /// caller asking the server time before any other message has arrived is
-    /// answered from the venue and not from this machine.
+    /// A session learns how far the venue's clock is from this machine's from
+    /// the stamp on its logon, so a caller asking the server time before any
+    /// other message has arrived is answered from the venue's clock and not
+    /// from this machine's raw one.
     #[test]
-    fn the_logon_stamp_seeds_the_venues_clock() {
+    fn the_logon_stamp_states_the_venues_clock() {
         let shared = Arc::new(SharedState::new());
         let (farm_conn, _farm_peer) = crate::protocol::connection::Connection::for_test();
         let (mut ccp_conn, _ccp_peer) = crate::protocol::connection::Connection::for_test();
@@ -6861,10 +6864,9 @@ mod tests {
         let (_hl, _tx) = HotLoop::with_connections(
             shared.clone(), None, "DU1".into(), farm_conn, ccp_conn, None, None,
         );
-        assert_eq!(
-            shared.market.venue_time().as_deref(),
-            Some("20260904-09:30:00"),
-            "the clock a caller asks for is seeded from the logon stamp",
+        assert!(
+            (shared.market.venue_time_millis() - 1_788_514_200_000).abs() < 2_000,
+            "the clock a caller asks for is the one the logon stamp states",
         );
     }
 

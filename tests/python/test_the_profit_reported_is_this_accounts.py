@@ -21,7 +21,15 @@ class Errors(ibx.EWrapper):
         self.seen.append((req_id, code, msg))
 
 
-def test_naming_another_account_is_answered_rather_than_taken():
+def test_naming_another_account_is_refused_rather_than_answered():
+    """A request naming an account this session did not open under is refused.
+
+    Answering it with this account's figures under the caller's own request
+    number is the one answer the venue never gives: it reports one account's
+    profit under a request naming that account, or it reports nothing. Told
+    the numbers are someone else's, a caller can act; handed them silently
+    under their own number, they cannot tell.
+    """
     w = Errors()
     c = ibx.EClient(w)
     c._test_connect("DU123")
@@ -29,13 +37,13 @@ def test_naming_another_account_is_answered_rather_than_taken():
     c.reqPnL(9, "DU999", "")
 
     told = [msg for _, _, msg in w.seen if "DU999" in msg]
-    assert told, f"the caller is told which account the profit is: {w.seen}"
-    assert "DU123" in told[0], f"and which account it belongs to: {told[0]}"
+    assert told, f"the caller is told which account was refused: {w.seen}"
+    assert "DU123" in told[0], f"and which one this session holds: {told[0]}"
 
     sent = c._test_take_commands()
-    assert any("DU123" in cmd for cmd in sent), (
-        f"this account is what the venue is asked for: {sent}"
-    )
     assert not any("DU999" in cmd for cmd in sent), (
-        f"and the named one is not: {sent}"
+        f"the named account is not asked for: {sent}"
+    )
+    assert not any("DU123" in cmd for cmd in sent), (
+        f"and neither is this one, under a request that was refused: {sent}"
     )

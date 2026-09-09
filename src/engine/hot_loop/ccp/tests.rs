@@ -4243,7 +4243,7 @@ fn a_message_not_read_on_purpose_is_told_apart_from_one_overlooked() {
     // flags — read off a live session, not on an assumption about it.
     // Both of these arrive on a real session, which is how they came to be
     // named here: the notes had them down as never sent.
-    assert!(super::known_unread("18").is_some(), "the clock every message already carries");
+    assert!(super::known_unread("18").is_none(), "the venue's clock is read, not excused");
     assert!(super::known_unread("93").is_some(), "an answer carrying nothing new");
     assert!(super::known_unread("194").is_some(), "defaults for a user interface");
     assert!(super::known_unread("81").is_none(), "the algorithms are read, not excused");

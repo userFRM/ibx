@@ -162,11 +162,6 @@ fn known_unread(subtype: &str) -> Option<&'static str> {
              not deliver itself. Named in the vendor's own inventory as a dimension response, \
              which is what it would carry on an account that had dimensions",
         ),
-        "18" => Some(
-            "it states the venue's clock. Every message the venue sends carries the time it \
-             sent it, which this client keeps as it arrives, so a message stating the same \
-             clock again adds nothing to answer a caller with",
-        ),
         "194" => Some(
             "it carries the order presets the vendor's own ticket fills its fields from. \
              They are defaults for a user interface, and this client has none: an order \
@@ -574,12 +569,6 @@ impl CcpState {
         account_id: &str,
     ) {
         let parsed = fix::fix_parse(msg);
-        // Every message the venue sends carries the time it sent it. Kept for
-        // any caller asking what the venue's clock says, which is a different
-        // question from what this machine's clock says.
-        if let Some(stamped) = parsed.get(&fix::TAG_SENDING_TIME) {
-            shared.market.note_venue_time(stamped);
-        }
         let msg_type = match parsed.get(&fix::TAG_MSG_TYPE) {
             Some(t) => t.as_str(),
             None => return,
@@ -780,6 +769,17 @@ impl CcpState {
                         "139" => self.handle_option_chain(msg, shared),
                         "102" => self.handle_exchange_list(msg, shared),
                         "107" => self.handle_schedule_reply(msg, shared, event_tx),
+                        "18" => {
+                            // The venue restating its own clock, unasked. It is
+                            // never asked for it — this wire carries no such
+                            // request — so a caller wanting it is answered from
+                            // this machine's clock and the difference the venue
+                            // has stated, of which this is the second and last
+                            // statement, after the one on the logon.
+                            if let Some(seconds) = parsed.get(&6114).and_then(|v| v.parse::<i64>().ok()) {
+                                shared.market.note_venue_millis(seconds * 1_000);
+                            }
+                        }
                         // Something the venue said that nothing here reads.
                         // Dropped in silence it is indistinguishable from the
                         // venue saying nothing, which is how an answer that had
@@ -2995,6 +2995,77 @@ fn adopt_position(context: &mut Context, instrument: InstrumentId, position: f64
     let delta = position - context.position(instrument);
     if delta != 0.0 {
         context.update_position(instrument, delta);
+    }
+}
+
+#[cfg(test)]
+mod venue_clock_tests {
+    use super::*;
+
+    fn local_seconds() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    /// The venue pushes its own clock, and that is what a caller asking for it
+    /// is answered from.
+    ///
+    /// This is one of the two things the venue ever says about its clock, and
+    /// the only one that arrives after the logon. Unread, a session running
+    /// past a correction went on answering from the difference the logon
+    /// stated, however long ago that was.
+    #[test]
+    fn a_pushed_clock_is_what_a_caller_is_answered_from() {
+        let mut ccp = CcpState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+
+        // A day ahead of this machine, so this machine's own clock could not
+        // be mistaken for the answer.
+        let stated = local_seconds() + 86_400;
+        let pushed = fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, "U"), (6040, "18"), (6114, &stated.to_string()),
+        ], 1);
+        ccp.process_ccp_message(
+            &pushed, &mut None, &mut context, &shared, &None,
+            &mut HeartbeatState::new(), "DU1",
+        );
+
+        assert!(
+            (shared.market.venue_time_millis() - stated * 1_000).abs() < 2_000,
+            "the clock the venue pushed, not the one this machine keeps",
+        );
+    }
+
+    /// A stamp on an ordinary message says nothing about the venue's clock.
+    ///
+    /// The venue states its clock twice — on the logon, and in the message
+    /// above — and every other message merely carries the time it was sent.
+    /// Learned from those as well, a caller's answer moved with whatever
+    /// traffic happened to arrive, and stopped moving when it stopped.
+    #[test]
+    fn an_ordinary_message_does_not_move_the_clock() {
+        let mut ccp = CcpState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+
+        // What the venue has stated: this machine's clock, exactly.
+        shared.market.note_venue_millis(local_seconds() * 1_000);
+        let stamped = fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_HEARTBEAT),
+            (fix::TAG_SENDING_TIME, "20260815-12:00:00"),
+        ], 1);
+        ccp.process_ccp_message(
+            &stamped, &mut None, &mut context, &shared, &None,
+            &mut HeartbeatState::new(), "DU1",
+        );
+
+        assert!(
+            (shared.market.venue_time_millis() - local_seconds() * 1_000).abs() < 2_000,
+            "the difference the venue stated still stands",
+        );
     }
 }
 
