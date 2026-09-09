@@ -1703,6 +1703,25 @@ mod hmds_correlation_tests {
         assert_eq!(codes, [(7, 504), (8, 504)], "{told:?}");
     }
 
+    /// A command can reach the engine without passing through a request
+    /// surface. Its unreadable bounds must not become an unbounded query.
+    #[test]
+    fn an_unreadable_news_window_is_refused_before_sending() {
+        let mut hmds = HmdsState::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let mut conn: Option<Connection> = None;
+        for (start, end) in [("unreadable", ""), ("", "unreadable")] {
+            hmds.send_historical_news_request(7, 265598, "BRFG", start, end, 10, &shared, &mut conn, &mut hb);
+            assert!(hmds.pending_news.is_empty());
+            let told = shared.reference.drain_historical_errors();
+            assert_eq!(told.len(), 1, "{told:?}");
+            assert_eq!((told[0].0, told[0].1), (7, crate::error_codes::Refusal::VALIDATION));
+            assert!(told[0].2.contains("YYYYMMDD-HH:MM:SS"), "{told:?}");
+            assert!(told[0].2.contains("YYYYMMDD HH:MM:SS"), "{told:?}");
+        }
+    }
+
     /// A news reply naming nothing pending is noted, not dropped in silence:
     /// a reply after the lists were cleared, a duplicate, or an id this
     /// client cannot read all looked like nothing arriving.

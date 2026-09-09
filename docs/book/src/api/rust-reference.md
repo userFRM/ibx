@@ -1654,7 +1654,7 @@ pub fn cancel_scanner_subscription(&self, req_id: i64) -> Result<(), Refusal>
 
 #### `req_historical_news`
 
-Request historical news headlines. `start_time` and `end_time` are refused rather than taken and dropped: the query this client sends carries no time bounds, and `max_results` is what limits the answer. No more than three hundred are asked for however many are wanted. The reference client caps it there before the request goes out, so a bigger number is one the venue is never asked.
+Request historical news headlines. `start_time` and `end_time` bound the query in UTC: `YYYYMMDD-HH:MM:SS` or `YYYYMMDD HH:MM:SS`, optionally with fractional seconds. Empty bounds are omitted; unreadable ones are refused so the window is not lost. No more than three hundred are asked for however many are wanted. The reference client caps it there before the request goes out, so a bigger number is one the venue is never asked.
 
 ```rust
 pub fn req_historical_news( &self, req_id: i64, con_id: i64, provider_codes: &str, start_time: &str, end_time: &str, max_results: u32, ) -> Result<(), Refusal>

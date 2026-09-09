@@ -299,9 +299,9 @@ impl EClient {
 
     /// Request historical news headlines. Matches `reqHistoricalNews` in C++.
     ///
-    /// `start_time` and `end_time` are refused rather than taken and dropped:
-    /// the query this client sends carries no time bounds, and `max_results` is
-    /// what limits the answer.
+    /// `start_time` and `end_time` bound the query in UTC: `YYYYMMDD-HH:MM:SS`
+    /// or `YYYYMMDD HH:MM:SS`, optionally with fractional seconds. Empty bounds
+    /// are omitted; unreadable ones are refused so the window is not lost.
     ///
     /// No more than three hundred are asked for however many are wanted. The
     /// reference client caps it there before the request goes out, so a bigger

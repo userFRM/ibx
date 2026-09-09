@@ -307,6 +307,10 @@ impl EClient {
 
     /// Request historical news.
     ///
+    /// Bounds are UTC timestamps, `YYYYMMDD-HH:MM:SS` or `YYYYMMDD HH:MM:SS`,
+    /// optionally with fractional seconds. Empty bounds are omitted; unreadable
+    /// ones are refused so the window is not lost.
+    ///
     /// `historical_news_options` is taken and not applied. This protocol's
     /// request carries no free-form option list, so what a caller puts in one
     /// cannot be sent. The reference client's own list is empty on every
