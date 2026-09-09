@@ -322,12 +322,52 @@ fn forced_setter_bypasses_guard() {
 }
 
 #[test]
-fn unchanged_status_reports_no_change() {
+fn unchanged_status_is_accepted() {
     let mut ctx = Context::new();
     submitted_order(&mut ctx, 1);
-    assert!(!ctx.update_order_status(1, OrderStatus::Submitted, false));
+    assert!(ctx.update_order_status(1, OrderStatus::Submitted, false));
     assert!(!ctx.update_order_status(999, OrderStatus::Cancelled, false), "unknown order");
+}
+
+#[test]
+fn repeated_status_reports_are_announced() {
+    use crate::bridge::{Event, SharedState};
+    use crate::engine::hot_loop::{ccp::CcpState, EventSink};
+    use crate::protocol::fix;
+
+    let mut ctx = Context::new();
+    let instrument = ctx.register_instrument(756733);
+    ctx.insert_order(Order::new(
+        7, instrument, Side::Buy, 100 * QTY_SCALE, 150 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let sink = Some(EventSink::new(tx, Default::default()));
+
+    // Separate venue reports can state the same status; each is owed to the caller.
+    for seq in 1..=2 {
+        let frame = fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, fix::MSG_EXEC_REPORT),
+            (11, "7.0"), (150, "0"), (39, "0"), (54, "1"),
+            (6008, "756733"), (38, "100"), (14, "0"), (151, "100"),
+        ], seq);
+        ccp.handle_exec_report(&fix::fix_parse(&frame), &frame, &mut ctx, &shared, &sink, "DU1");
     }
+
+    let updates = shared.orders.drain_order_updates();
+    assert_eq!(updates.len(), 2, "both reports reach the callback queue");
+    for update in updates {
+        assert_eq!(update.order_id, 7);
+        assert_eq!(update.status, OrderStatus::PreSubmitted);
+        assert_eq!(update.remaining_qty, 100.0);
+    }
+    let announced: Vec<_> = rx.try_iter().filter_map(|event| match event {
+        Event::OrderUpdate(update) => Some((update.order_id, update.status)),
+        _ => None,
+    }).collect();
+    assert_eq!(announced, [(7, OrderStatus::PreSubmitted); 2]);
+}
 
 #[test]
 fn remove_order() {

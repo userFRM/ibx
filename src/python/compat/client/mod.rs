@@ -1862,6 +1862,120 @@ w = W()",
         (Py::new(py, client).unwrap(), rx, shared, w)
     }
 
+    #[test]
+    fn an_ordinary_callback_exception_escapes_and_closes_the_session() {
+        Python::initialize();
+        Python::attach(|py| {
+            for method in ["poll", "run"] {
+                for exception in ["ValueError", "RuntimeError"] {
+                    let (client, rx, shared, w) = wired_client(py);
+                    let g = pyo3::types::PyDict::new(py);
+                    g.set_item("client", &client).unwrap();
+                    g.set_item("w", &w).unwrap();
+                    g.set_item("exception", exception).unwrap();
+                    py.run(c"
+import builtins
+failure = getattr(builtins, exception)('callback failed')
+def tick_params(req_id, *args):
+    w.calls.append(('tickReqParams', req_id))
+    if req_id == 7:
+        raise failure
+    client.disconnect()
+w.tickReqParams = tick_params
+", Some(&g), None).unwrap();
+                    shared.market.push_tick_req_params_for(7, 0.01);
+                    shared.market.push_tick_req_params_for(8, 0.02);
+
+                    let err = client.call_method0(py, method).expect_err("the callback raises");
+                    assert!(err.value(py).is(g.get_item("failure").unwrap().unwrap()));
+                    assert!(!client.get().is_connected());
+                    assert!(client.get().shared.lock().unwrap().is_none());
+                    assert!(matches!(rx.try_recv(), Ok(ControlCommand::Logout)));
+                    assert!(matches!(rx.try_recv(), Ok(ControlCommand::Shutdown)));
+                    client.call_method0(py, "poll").unwrap();
+                    py.run(c"
+assert w.calls == [('tickReqParams', 7), ('connectionClosed',)], w.calls
+", Some(&g), None).unwrap();
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn callback_interrupts_still_escape_without_closing_the_session() {
+        Python::initialize();
+        Python::attach(|py| {
+            for method in ["poll", "run"] {
+                for exception in ["KeyboardInterrupt", "SystemExit"] {
+                    let (client, _rx, shared, w) = wired_client(py);
+                    let g = pyo3::types::PyDict::new(py);
+                    g.set_item("w", &w).unwrap();
+                    g.set_item("exception", exception).unwrap();
+                    py.run(c"
+import builtins
+failure = getattr(builtins, exception)('stop callback')
+def tick_params(req_id, *args):
+    w.calls.append(('tickReqParams', req_id))
+    raise failure
+w.tickReqParams = tick_params
+", Some(&g), None).unwrap();
+                    shared.market.push_tick_req_params_for(7, 0.01);
+                    shared.market.push_tick_req_params_for(8, 0.02);
+
+                    let err = client.call_method0(py, method).unwrap_err();
+                    assert!(err.value(py).is(g.get_item("failure").unwrap().unwrap()));
+                    assert!(client.get().is_connected());
+                    py.run(c"
+assert w.calls == [('tickReqParams', 7)], w.calls
+", Some(&g), None).unwrap();
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn option_callbacks_receive_the_reference_decoders_none_values() {
+        Python::initialize();
+        Python::attach(|py| {
+            for answers in [None, Some(7)] {
+                let (client, _rx, shared, w) = wired_client(py);
+                client.get().core.instrument_to_req.lock().unwrap().insert(0, 7);
+                let cases = [
+                    (f64::MAX, [None; 8]),
+                    (f64::NAN, [None; 8]),
+                    (-1.0, [None, Some(-1.0), None, None, Some(-1.0), Some(-1.0), Some(-1.0), None]),
+                    (-2.0, [None, None, Some(-2.0), Some(-2.0), None, None, None, Some(-2.0)]),
+                    (-0.42, [None, Some(-0.42), Some(-0.42), Some(-0.42), Some(-0.42), Some(-0.42), Some(-0.42), Some(-0.42)]),
+                    (0.0, [Some(0.0); 8]),
+                    (1.25, [Some(1.25); 8]),
+                ];
+                for (value, expected) in cases {
+                    shared.market.push_option_computation(OptionComputation {
+                        answers, implied_vol: value, delta: value,
+                        opt_price: value, pv_dividend: value, gamma: value,
+                        vega: value, theta: value, und_price: value,
+                        ..OptionComputation::solved(7)
+                    });
+                    client.get().dispatch_once(py, &shared).unwrap();
+                    let g = pyo3::types::PyDict::new(py);
+                    g.set_item("w", &w).unwrap();
+                    g.set_item("expected", expected.to_vec()).unwrap();
+                    g.set_item("tick_type", if answers.is_some() { 53 } else { 13 }).unwrap();
+                    py.run(c"
+assert len(w.calls) == 1, w.calls
+call = w.calls.pop()
+assert call[:4] == ('tickOptionComputation', 7, tick_type, 0), call
+for value, expected_value in zip(call[4:], expected):
+    if expected_value is None:
+        assert value is None, call
+    else:
+        assert value == expected_value, call
+", Some(&g), None).unwrap();
+                }
+            }
+        });
+    }
+
     /// Queued publications stop naming a request once its watch is withdrawn.
     /// An answer to a calculation still names the question that asked it.
     #[test]

@@ -1365,49 +1365,24 @@ impl OrderAllocation {
     }
 }
 
-/// A margin figure the venue did not state, written the way the reference
-/// client writes one.
-///
-/// These carry numbers as text and a caller reads them with `float`. Left
-/// empty that raises, and the answer the empty figure belonged to never
-/// reaches the caller at all — a preview on a contract the venue states no
-/// margin for was lost whole, not merely missing a field. The reference stack
-/// writes an unstated double as the largest one there is, which a caller's
-/// library already reads back as nothing.
-fn unstated_figure(stated: &str) -> String {
-    if stated.is_empty() {
-        f64::MAX.to_string()
-    } else {
-        stated.to_string()
-    }
-}
-
 impl Default for OrderState {
     /// An order state nobody has filled in yet.
     ///
-    /// The margin and equity figures carry numbers as text, and a caller reads
-    /// them with `float`. Defaulted to the empty string they raise inside the
-    /// callback, and the whole report is lost rather than arriving with a field
-    /// unset — which is what happened to every open order reported through a
-    /// path that states the status and leaves the rest to this.
-    ///
-    /// The three commission figures carry the marker as a number rather than
-    /// as text, which is how every other unstated number on this surface reads.
+    /// The reference client leaves unstated margin strings empty; only the
+    /// numeric fields carry the unset marker.
     fn default() -> Self {
-        let unstated = || f64::MAX.to_string();
         Self {
             status: String::new(),
-            init_margin_before: unstated(),
-            maint_margin_before: unstated(),
-            equity_with_loan_before: unstated(),
-            init_margin_change: unstated(),
-            maint_margin_change: unstated(),
-            equity_with_loan_change: unstated(),
-            init_margin_after: unstated(),
-            maint_margin_after: unstated(),
-            equity_with_loan_after: unstated(),
-            // The same marker the figures above carry, for the same reason:
-            // an order the venue has not priced is not an order that costs
+            init_margin_before: String::new(),
+            maint_margin_before: String::new(),
+            equity_with_loan_before: String::new(),
+            init_margin_change: String::new(),
+            maint_margin_change: String::new(),
+            equity_with_loan_change: String::new(),
+            init_margin_after: String::new(),
+            maint_margin_after: String::new(),
+            equity_with_loan_after: String::new(),
+            // An order the venue has not priced is not an order that costs
             // nothing, and nought says the second where the venue said the
             // first. Every other unstated number on this surface reads this
             // way already.
@@ -1494,15 +1469,15 @@ impl OrderState {
     pub(crate) fn from_api(s: &crate::types::model::OrderState) -> Self {
         Self {
             status: s.status.clone(),
-            init_margin_before: unstated_figure(&s.init_margin_before),
-            maint_margin_before: unstated_figure(&s.maint_margin_before),
-            equity_with_loan_before: unstated_figure(&s.equity_with_loan_before),
-            init_margin_change: unstated_figure(&s.init_margin_change),
-            maint_margin_change: unstated_figure(&s.maint_margin_change),
-            equity_with_loan_change: unstated_figure(&s.equity_with_loan_change),
-            init_margin_after: unstated_figure(&s.init_margin_after),
-            maint_margin_after: unstated_figure(&s.maint_margin_after),
-            equity_with_loan_after: unstated_figure(&s.equity_with_loan_after),
+            init_margin_before: s.init_margin_before.clone(),
+            maint_margin_before: s.maint_margin_before.clone(),
+            equity_with_loan_before: s.equity_with_loan_before.clone(),
+            init_margin_change: s.init_margin_change.clone(),
+            maint_margin_change: s.maint_margin_change.clone(),
+            equity_with_loan_change: s.equity_with_loan_change.clone(),
+            init_margin_after: s.init_margin_after.clone(),
+            maint_margin_after: s.maint_margin_after.clone(),
+            equity_with_loan_after: s.equity_with_loan_after.clone(),
             commission_and_fees: s.commission_and_fees,
             min_commission_and_fees: s.min_commission_and_fees,
             max_commission_and_fees: s.max_commission_and_fees,
@@ -1847,32 +1822,44 @@ assert any(item is tier for item in gc.get_referents(order))
 
 #[cfg(test)]
 mod unstated_figure_tests {
-    use super::unstated_figure;
-
-    /// A margin figure the venue did not state is written as the reference
-    /// client writes one, not left empty.
-    ///
-    /// A caller reads these with `float`. Empty, that raises inside the
-    /// callback and the whole answer is lost — a preview on a contract the
-    /// venue states no margin for reached the caller as nothing at all, rather
-    /// than as a preview missing a field. Seen against a crypto contract,
-    /// which the venue prices without stating margin.
     #[test]
-    fn an_unstated_figure_is_written_the_way_a_caller_can_read_it() {
-        let written = unstated_figure("");
-        assert!(
-            written.parse::<f64>().is_ok(),
-            "a caller reads these with float, and got {written:?}",
-        );
-        assert_eq!(written.parse::<f64>().unwrap(), f64::MAX, "and reads it back as unstated");
+    fn margin_strings_are_kept_as_stated() {
+        for stated in ["", "0", "96525.0100"] {
+            let held = crate::types::model::OrderState {
+                init_margin_before: stated.into(),
+                maint_margin_before: stated.into(),
+                equity_with_loan_before: stated.into(),
+                init_margin_change: stated.into(),
+                maint_margin_change: stated.into(),
+                equity_with_loan_change: stated.into(),
+                init_margin_after: stated.into(),
+                maint_margin_after: stated.into(),
+                equity_with_loan_after: stated.into(),
+                ..Default::default()
+            };
+            let written = super::OrderState::from_api(&held);
+            for figure in [
+                written.init_margin_before, written.maint_margin_before, written.equity_with_loan_before,
+                written.init_margin_change, written.maint_margin_change, written.equity_with_loan_change,
+                written.init_margin_after, written.maint_margin_after, written.equity_with_loan_after,
+            ] {
+                assert_eq!(figure, stated);
+            }
+        }
     }
 
-    /// A figure the venue did state is passed through untouched.
     #[test]
-    fn a_stated_figure_is_left_as_the_venue_wrote_it() {
-        assert_eq!(unstated_figure("96525.01"), "96525.01");
-        assert_eq!(unstated_figure("0"), "0", "nothing is not zero, and zero is not nothing");
+    fn unstated_margin_defaults_are_empty() {
+        let state = super::OrderState::default();
+        for figure in [
+            state.init_margin_before, state.maint_margin_before, state.equity_with_loan_before,
+            state.init_margin_change, state.maint_margin_change, state.equity_with_loan_change,
+            state.init_margin_after, state.maint_margin_after, state.equity_with_loan_after,
+        ] {
+            assert!(figure.is_empty(), "an unstated string carries no number: {figure}");
+        }
     }
+
 }
 
 camel_aliases_copy! {

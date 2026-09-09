@@ -449,25 +449,10 @@ impl CcpState {
                     );
                     return None;
                 };
-                {
-                    // Signed. A bust restates tag 14 downwards, and the
-                    // difference is what the account no longer holds.
-                    let delta = report_cum_qty - already_filled;
-                    let delta = if restates_history { delta } else { delta.max(0) };
-                    if delta != last_shares && delta > 0 {
-                        // The report's own increment is not what this client
-                        // is missing, so the fill that follows carries a
-                        // reconciled quantity at this report's price rather
-                        // than one execution's own terms. The order's total
-                        // and the position are right; the execution record
-                        // is approximate, and says so here.
-                        log::warn!(
-                            "Resent execution for order {clord_id}: booking {delta} to reach CumQty {report_cum_qty} \
-                             (report states {last_shares}) — execution detail is reconciled, not exact",
-                        );
-                    }
-                    delta
-                }
+                // Signed. A bust restates tag 14 downwards, and the
+                // difference is what the account no longer holds.
+                let delta = report_cum_qty - already_filled;
+                if restates_history { delta } else { delta.max(0) }
             } else if !self.record_exec_id(dedup_key) {
                 // A duplicate suppresses the fill and nothing else: the
                 // report still carries a status to apply and terminal
@@ -486,7 +471,7 @@ impl CcpState {
                     order_id: clord_id,
                     side,
                     price: crate::types::price_from_f64(last_px),
-                    qty: booked,
+                    qty: last_shares,
                     remaining: leaves_qty,
                     timestamp_ns: context.now_ns(),
                     cum_qty: order_cum_qty,

@@ -22,15 +22,11 @@ use crate::protocol::fix;
 
 use super::HeartbeatState;
 
-/// How long a calendar request waits before it is given up on.
-const CALENDAR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
 #[derive(Default)]
 pub struct SecDefState {
     /// Calendar requests waiting on an answer: the name this client gave the
-    /// request, which the answer echoes, which of the two it was, and when to
-    /// stop waiting.
-    pending: Vec<(String, u32, bool, Instant)>,
+    /// request, which the answer echoes, and which of the two it was.
+    pending: Vec<(String, u32, bool)>,
     /// Message types this connection has sent that nothing here reads, named
     /// once each. Reported where somebody looks, rather than dropped.
     unread: std::collections::HashSet<String>,
@@ -106,7 +102,7 @@ impl SecDefState {
             return;
         }
         hb.last_secdef_sent = Instant::now();
-        self.pending.push((key, req_id, true, Instant::now() + CALENDAR_TIMEOUT));
+        self.pending.push((key, req_id, true));
         log::info!("Sent calendar metadata request: req_id={req_id}");
     }
 
@@ -169,7 +165,7 @@ impl SecDefState {
             return;
         }
         hb.last_secdef_sent = Instant::now();
-        self.pending.push((key, req_id, false, Instant::now() + CALENDAR_TIMEOUT));
+        self.pending.push((key, req_id, false));
         log::info!("Sent calendar events request: req_id={req_id}");
     }
 
@@ -189,7 +185,7 @@ impl SecDefState {
     /// Put the connection down and tell everyone waiting on it.
     ///
     /// Kept, every later request is sent into a socket that will never answer
-    /// and waits out its own timeout; put down, a caller is told at once that
+    /// and waits indefinitely; put down, a caller is told at once that
     /// this session has no connection for the calendar — and the reconnect,
     /// which declines to build one while a connection is installed, is free to
     /// build another.
@@ -226,7 +222,6 @@ impl SecDefState {
         event_tx: &Option<EventSink>,
         hb: &mut HeartbeatState,
     ) -> Result<(), String> {
-        self.sweep(shared);
         let messages = match conn.as_mut() {
             None => return Ok(()),
             Some(conn) => {
@@ -272,30 +267,6 @@ impl SecDefState {
         Ok(())
     }
 
-    /// Give up on a request the venue never answered.
-    ///
-    /// A caller waiting on an answer that is not coming cannot tell that apart
-    /// from a slow venue, so the wait is bounded and the caller told.
-    fn sweep(&mut self, shared: &SharedState) {
-        let now = Instant::now();
-        let mut expired = Vec::new();
-        self.pending.retain(|(_, req_id, _, deadline)| {
-            if *deadline > now {
-                true
-            } else {
-                expired.push(*req_id);
-                false
-            }
-        });
-        for req_id in expired {
-            shared.reference.push_historical_error(
-                req_id,
-                crate::error_codes::Refusal::NO_ANSWER,
-                "the calendar did not answer".to_string(),
-            );
-        }
-    }
-
     fn handle(
         &mut self,
         msg: &[u8],
@@ -337,7 +308,7 @@ impl SecDefState {
                 let said = parsed.get(&58).cloned().unwrap_or_else(|| "refused".to_string());
                 // A reject carries no request id, so it belongs to whatever is
                 // outstanding. Answering only when exactly one thing was
-                // waiting left every other caller to wait out a timeout for a
+                // waiting left every other caller waiting indefinitely for a
                 // refusal the venue had already given — and the calendar is
                 // asked in twos, the event types and then the events.
                 if self.pending.is_empty() {
@@ -372,7 +343,7 @@ impl SecDefState {
             log::warn!("A calendar answer named '{key}', which nothing here asked for");
             return;
         };
-        let (_, req_id, is_meta, _) = self.pending.remove(at);
+        let (_, req_id, is_meta) = self.pending.remove(at);
         if refused {
             let said = parsed.get(&58).cloned().unwrap_or_else(|| "refused".to_string());
             shared.reference.push_historical_error(req_id, 321, said);
@@ -480,8 +451,8 @@ mod tests {
     }
 
     /// A refusal reaches every caller waiting, not just one. Answering only
-    /// where exactly one request is outstanding leaves the rest to wait out a
-    /// timeout for a refusal the venue has already given.
+    /// where exactly one request is outstanding leaves the rest waiting for a
+    /// refusal the venue has already given.
     #[test]
     fn a_refusal_reaches_everyone_waiting() {
         let shared = SharedState::new();
@@ -515,7 +486,7 @@ mod tests {
 
     /// A connection that has gone is put down rather than kept and written
     /// to. Kept, every later request went into a socket that would never
-    /// answer and waited out its own timeout.
+    /// answer and waited indefinitely.
     #[test]
     fn a_connection_that_went_is_put_down() {
         let shared = SharedState::new();
@@ -537,22 +508,46 @@ mod tests {
         assert!(!told.is_empty(), "the caller was left waiting on a dead socket");
     }
 
-    /// A request the venue never answers is given up on, and the caller told.
-    /// Waiting forever is indistinguishable from a slow venue.
+    /// The venue can answer either calendar query after 45 seconds while the
+    /// connection keeps answering heartbeats; those callers are still waiting.
     #[test]
-    fn a_request_that_is_never_answered_is_given_up_on() {
+    fn calendar_answers_after_45_seconds_reach_the_callers() {
+        let (mut venue, socket) = Connection::for_test();
+        let mut conn = Some(Connection::new_raw(socket).unwrap());
+        let mut hb = HeartbeatState::new();
         let shared = SharedState::new();
         let mut state = SecDefState::new();
-        state.pending.push((
-            "MetaDataRequest7".to_string(),
-            7,
-            true,
-            Instant::now() - std::time::Duration::from_secs(1),
-        ));
-        state.sweep(&shared);
-        let told = shared.reference.drain_historical_errors();
-        assert_eq!(told.len(), 1, "the caller was left waiting");
-        assert_eq!(told[0].1, -1, "silence is not a malformed request");
+        state.send_calendar_meta_data_request(7, &mut conn, &mut hb, &shared);
+        let query = crate::types::CalendarQuery { con_id: Some(265598), ..Default::default() };
+        state.send_calendar_events_request(9, &query, &mut conn, &mut hb, &shared);
+
+        for _ in 0..9 {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            venue.send_fix(&[(fix::TAG_MSG_TYPE, fix::MSG_HEARTBEAT)]).unwrap();
+            state.poll(&mut conn, &shared, &None, &mut hb);
+            assert!(conn.is_some(), "the connection is still answering");
+            let told = shared.reference.drain_historical_errors();
+            assert!(told.is_empty(), "the venue has not refused either query: {told:?}");
+            assert_eq!(state.pending.len(), 2, "both callers are still waiting");
+        }
+
+        let metadata = r#"{"meta_data":{"event_types":[]}}"#;
+        let events = r#"{"events":[]}"#;
+        for (key, json) in [("MetaDataRequest7", metadata), ("CalendarRequest9", events)] {
+            venue.send_fix(&[
+                (fix::TAG_MSG_TYPE, "U"),
+                (6040, cal::CALENDAR_ANSWER),
+                (cal::TAG_CALENDAR_KEY, key),
+                (96, json),
+            ]).unwrap();
+        }
+        for _ in 0..100 {
+            state.poll(&mut conn, &shared, &None, &mut hb);
+            if state.pending.is_empty() { break; }
+        }
+        assert_eq!(shared.reference.drain_calendar_meta_data_for_dispatch(), vec![(7, metadata.to_string())]);
+        assert_eq!(shared.reference.drain_calendar_events_for_dispatch(), vec![(9, events.to_string())]);
+        assert!(shared.reference.drain_historical_errors().is_empty());
         assert!(state.pending.is_empty());
     }
 
@@ -602,7 +597,7 @@ mod tests {
         let (_peer, _) = listener.accept().unwrap();
         let mut conn = Some(Connection::new_raw(sock).unwrap());
 
-        state.pending.push((String::new(), 77, false, Instant::now()));
+        state.pending.push((String::new(), 77, false));
 
         state.give_up(&mut conn, &shared, &None);
 
@@ -610,7 +605,7 @@ mod tests {
         assert!(state.pending.is_empty(), "and nothing is left waiting on it");
         assert!(
             !shared.reference.drain_historical_errors().is_empty(),
-            "the caller is told rather than left to time out",
+            "the caller is told rather than left waiting",
         );
     }
 

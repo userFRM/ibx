@@ -1818,10 +1818,9 @@ fn a_busted_execution_reconciles_rather_than_adds() {
     );
     assert_eq!(context.position(0), 0.0, "and neither does the position");
     let fills = shared.orders.drain_fills();
-    let bust_fill = fills
-        .iter()
-        .find(|f| f.0.qty == -50 * QTY_SCALE)
-        .unwrap_or_else(|| panic!("the caller is told what was taken back: {fills:?}"));
+    assert_eq!(fills.len(), 1);
+    let bust_fill = &fills[0];
+    assert_eq!(bust_fill.0.qty, 50 * QTY_SCALE, "the execution states tag 32 even when the booking is negative");
     // The report states zero, and zero is what the caller reads. Filtering
     // the stated figure on being positive fell back to adding the print to
     // what was already booked, and the caller was told the order had twice
@@ -1836,28 +1835,35 @@ fn a_busted_execution_reconciles_rather_than_adds() {
     );
 }
 
-/// A correction restates an execution that was already booked. Adding its
-/// quantity on top counts the same trade twice; the cumulative figure is
-/// what the order actually holds.
+/// A replay or correction reconciles what the order holds, but the execution
+/// still reports its own quantity on tag 32.
 #[test]
-fn a_corrected_execution_reconciles_to_the_cumulative_figure() {
-    let (mut ccp, mut context, shared) = ord_status_test_state();
-    // The order already holds 50. The correction restates the trade at 60.
-    let first = exec_report_frame(&[
-        (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
-        (17, "exec-1"), (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
-    ]);
-    ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
-    let booked: i64 = shared.orders.drain_fills().iter().map(|f| f.0.qty).sum();
-    assert_eq!(booked, 50 * QTY_SCALE, "the original execution books what it states");
+fn a_reconciled_execution_reports_tag_32_and_books_only_the_delta() {
+    for (exec_type, tag, value) in [("F", 20, "2"), ("G", 20, "0"), ("F", 97, "Y"), ("F", 43, "Y")] {
+        let (mut ccp, mut context, shared) = tracked_order_state();
+        let first = fix::fix_build(&[
+            (35, "8"), (11, "42"), (39, "1"), (150, "F"),
+            (17, "exec-1"), (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
+        ], 1);
+        ccp.process_ccp_message(&first, &mut None, &mut context, &shared,
+            &None, &mut HeartbeatState::new(), "");
+        assert_eq!(shared.orders.drain_fills()[0].0.qty, 50 * QTY_SCALE);
+        assert_eq!(context.order(42).unwrap().filled, 50 * QTY_SCALE);
+        assert_eq!(context.position(0), 50.0);
 
-    let corrected = exec_report_frame(&[
-        (39, "1"), (150, "F"), (100, "ARCA"), (198, "ARCA:1"),
-        (17, "exec-2"), (20, "2"), (32, "60"), (31, "412.25"), (14, "60"), (38, "100"),
-    ]);
-    ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
-    let after: i64 = shared.orders.drain_fills().iter().map(|f| f.0.qty).sum();
-    assert_eq!(after, 10 * QTY_SCALE, "the correction books the difference, not the whole trade again");
+        let restated = fix::fix_build(&[
+            (35, "8"), (11, "42"), (39, "1"), (150, exec_type), (tag, value),
+            (17, "exec-2"), (32, "60"), (31, "412.25"), (14, "60"), (38, "100"),
+        ], 2);
+        ccp.process_ccp_message(&restated, &mut None, &mut context, &shared,
+            &None, &mut HeartbeatState::new(), "");
+        let fills = shared.orders.drain_fills();
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].0.qty, 60 * QTY_SCALE, "the execution reports tag 32, not the booking delta");
+        assert_eq!(fills[0].0.cum_qty, 60 * QTY_SCALE);
+        assert_eq!(context.order(42).unwrap().filled, 60 * QTY_SCALE, "only ten more are booked");
+        assert_eq!(context.position(0), 60.0, "only ten more are held");
+    }
 }
 
 /// A repeated correction states the total before a later fill, which still
@@ -1883,7 +1889,7 @@ fn a_replayed_correction_does_not_erase_a_later_fill() {
             ccp.handle_exec_report(&correction, b"", &mut context, &shared, &None, "");
             let fills = shared.orders.drain_fills();
             assert_eq!(fills.len(), 1, "an unseen correction still reconciles");
-            assert_eq!(fills[0].0.qty, (cumulative - 50) * QTY_SCALE);
+            assert_eq!(fills[0].0.qty, if cumulative == 0 { 50 } else { 60 } * QTY_SCALE);
             assert_eq!(context.order(42).unwrap().filled, cumulative * QTY_SCALE);
             assert_eq!(context.position(0), cumulative as f64);
 

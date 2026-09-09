@@ -983,6 +983,99 @@ fn the_algo_order_types_carry_the_attributes_the_caller_set() {
     }
 }
 
+#[test]
+fn unmodelled_risk_aversion_is_forwarded_and_known_spellings_are_folded() {
+    for strategy in ["ArrivalPx", "ClosePx"] {
+        for (raw, expected) in [
+            ("neutral", "Neutral"), ("getdone", "Get_Done"), ("GET_DONE", "Get_Done"),
+            ("aggressive", "Aggressive"), ("PASSIVE", "Passive"),
+            ("Aggresive", "Aggresive"), ("Future Risk", "Future Risk"), ("", ""),
+            (" passive ", " passive "),
+        ] {
+            let order = ApiOrder {
+                action: "BUY".into(), total_quantity: 100.0,
+                order_type: "LMT".into(), lmt_price: 150.0,
+                algo_strategy: strategy.into(),
+                algo_params: vec![
+                    TagValue { tag: "riskAversion".into(), value: raw.into() },
+                    TagValue { tag: "forceCompletion".into(), value: "1".into() },
+                ],
+                ..Default::default()
+            };
+            ClientCore::validate_order(&order, "DU1").unwrap();
+            let cmd = ClientCore::build_order_request(&order, 7, 0, None).unwrap();
+            let ControlCommand::Order(OrderRequest::SubmitEx { kind: OrderKind::Algo { algo, .. }, .. }) = cmd else {
+                panic!("the caller's algorithm is carried");
+            };
+            match algo {
+                AlgoParams::Named { strategy: name, params } => {
+                    assert_eq!(name, strategy);
+                    assert_eq!(params, ["riskAversion", expected, "forceCompletion", "1"]);
+                }
+                AlgoParams::ArrivalPx { risk_aversion, force_completion, .. }
+                | AlgoParams::ClosePx { risk_aversion, force_completion, .. } => {
+                    assert_eq!(risk_aversion.unwrap().as_str(), expected);
+                    assert_eq!(force_completion, Some(true));
+                }
+                _ => panic!("the strategy stays as stated"),
+            }
+        }
+    }
+}
+
+#[test]
+fn unmodelled_algo_flags_are_forwarded_verbatim() {
+    for (strategy, key) in [
+        ("Vwap", "noTakeLiq"), ("Vwap", "allowPastEndTime"),
+        ("Twap", "allowPastEndTime"), ("ArrivalPx", "allowPastEndTime"),
+        ("ArrivalPx", "forceCompletion"), ("ClosePx", "forceCompletion"),
+        ("DarkIce", "allowPastEndTime"), ("PctVol", "noTakeLiq"),
+    ] {
+        for raw in ["yes", "2", "", " false "] {
+            let mut params = vec![TagValue { tag: key.into(), value: raw.into() }];
+            if strategy == "DarkIce" {
+                params.push(TagValue { tag: "displaySize".into(), value: "200".into() });
+            }
+            if strategy == "ArrivalPx" || strategy == "ClosePx" {
+                params.push(TagValue { tag: "riskAversion".into(), value: "getdone".into() });
+            }
+            if strategy == "Vwap" {
+                let other = if key == "noTakeLiq" { "allowPastEndTime" } else { "noTakeLiq" };
+                params.push(TagValue { tag: other.into(), value: "FALSE".into() });
+            }
+            let order = ApiOrder {
+                action: "BUY".into(), total_quantity: 100.0,
+                order_type: "LMT".into(), lmt_price: 150.0,
+                algo_strategy: strategy.into(), algo_params: params,
+                ..Default::default()
+            };
+            ClientCore::validate_order(&order, "DU1").unwrap();
+            let cmd = ClientCore::build_order_request(&order, 7, 0, None).unwrap();
+            let ControlCommand::Order(OrderRequest::SubmitEx {
+                kind: OrderKind::Algo { algo: AlgoParams::Named { strategy: name, params }, .. }, ..
+            }) = cmd else {
+                panic!("an unmodelled flag travels in the string parameter list");
+            };
+            assert_eq!(name, strategy);
+            assert_eq!(&params[..2], [key, raw]);
+            // One list takes one route. A value this client does not fold sends
+            // the whole list down the text path, so its neighbours travel as
+            // the caller wrote them too rather than half-folded.
+            if strategy == "ArrivalPx" || strategy == "ClosePx" {
+                assert_eq!(&params[2..], ["riskAversion", "getdone"]);
+            } else if strategy == "Vwap" {
+                assert_eq!(params[3], "FALSE");
+            } else if strategy == "DarkIce" {
+                assert_eq!(&params[2..], ["displaySize", "200"]);
+            }
+        }
+    }
+    for (raw, expected) in [("false", false), ("0", false), ("true", true), ("1", true)] {
+        let algo = parse_algo_params("Vwap", &[TagValue { tag: "noTakeLiq".into(), value: raw.into() }]).unwrap();
+        assert!(matches!(algo, AlgoParams::Vwap { no_take_liq: Some(value), .. } if value == expected));
+    }
+}
+
 mod contract_gate_tests {
     use super::super::ClientCore;
 
@@ -1221,13 +1314,13 @@ fn an_account_summary_reports_every_figure_the_venue_stated() {
     assert!(batch.entries.is_empty(), "{:?}", batch.entries.len());
 }
 
-/// One slot serves each of these subscriptions. A second asker under another
+/// One slot serves the P&L subscription. A second asker under another
 /// request is refused rather than handed the slot, which took the updates
 /// away from the first caller without a word to either one. The first
 /// subscription keeps receiving, and asking again under the id that holds the
 /// slot is not a second subscription.
 #[test]
-fn a_second_pnl_or_summary_subscription_is_refused_not_silenced() {
+fn a_second_pnl_subscription_is_refused_not_silenced() {
     let core = ClientCore::new();
     let shared = SharedState::new();
     shared.portfolio.set_account(&crate::types::AccountState::default());
@@ -1252,27 +1345,85 @@ fn a_second_pnl_or_summary_subscription_is_refused_not_silenced() {
         "the first subscription still receives",
     );
 
-    core.subscribe_account_summary(3, "All").unwrap();
-    let second = core.subscribe_account_summary(4, "Cushion");
-    let why = second.expect_err("the summary slot is held too");
-    assert_eq!(why.code, Refusal::VALIDATION);
-    assert!(
-        why.message.contains("request 3"),
-        "the refusal names the holder: {}", why.message,
-    );
-    core.subscribe_account_summary(3, "NetLiquidation").unwrap_or_else(|e| {
-        panic!("asking again under the holder is allowed: {e:?}")
-    });
-    assert!(
-        core.prepare_account_summary(&shared, "DU1").is_some(),
-        "the first subscription still receives",
-    );
-
     // A cancelled subscription frees the slot for another.
     core.unsubscribe_pnl(7);
     core.subscribe_pnl(8).unwrap();
+}
+
+#[test]
+fn two_account_summaries_receive_their_own_requested_values() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.portfolio.note_account_value("NetLiquidation", "75425.51", "USD");
+    shared.portfolio.note_account_value("TotalCashValue", "5000.00", "EUR");
+    shared.portfolio.account_download_is_settled();
+    core.subscribe_account_summary(3, "NetLiquidation").unwrap();
+    core.subscribe_account_summary(4, "TotalCashValue").unwrap();
+    assert!(core.subscribe_account_summary(5, "All").is_err(), "two is the venue's limit");
+
+    for (req_id, tag, value, currency) in [
+        (3, "NetLiquidation", "75425.51", "USD"),
+        (4, "TotalCashValue", "5000.00", "EUR"),
+    ] {
+        let batch = core.prepare_account_summary(&shared, "DU1").expect("both requests receive");
+        assert_eq!(batch.req_id, req_id);
+        assert_eq!(batch.entries.len(), 1);
+        let entry = &batch.entries[0];
+        assert_eq!((entry.tag.as_str(), entry.value.as_str(), entry.currency.as_str()), (tag, value, currency));
+    }
+    assert!(core.prepare_account_summary(&shared, "DU1").is_none());
+    shared.portfolio.note_account_value("TotalCashValue", "5100.00", "EUR");
+    for (when, _) in core.last_account_summary.lock().unwrap().values_mut() {
+        *when -= std::time::Duration::from_secs(180);
+    }
+    let batch = core.prepare_account_summary(&shared, "DU1").expect("the second subscription keeps receiving too");
+    assert_eq!(batch.req_id, 4);
+    assert_eq!(batch.entries[0].value, "5100.00");
+    core.unsubscribe_account_summary(99);
+    assert!(core.subscribe_account_summary(5, "All").is_err(), "the initial batches leave both subscribed");
     core.unsubscribe_account_summary(3);
-    core.subscribe_account_summary(4, "Cushion").unwrap();
+    core.subscribe_account_summary(4, "NetLiquidation").unwrap();
+    let batch = core.prepare_account_summary(&shared, "DU1").unwrap();
+    assert_eq!(batch.req_id, 4, "reusing a request replaces its tags, not the other subscription");
+    assert_eq!(batch.entries[0].tag, "NetLiquidation");
+    core.subscribe_account_summary(5, "All").unwrap();
+    core.reset();
+    assert!(core.prepare_account_summary(&shared, "DU1").is_none());
+    core.subscribe_account_summary(3, "All").unwrap();
+    core.subscribe_account_summary(4, "All").unwrap();
+    assert!(core.prepare_account_summary(&shared, "DU1").is_some(), "reset forgets the last delivery too");
+}
+
+#[test]
+fn an_account_summary_reports_changes_until_cancelled() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    shared.portfolio.note_account_value("TotalCashValue", "5000.00", "EUR");
+    shared.portfolio.note_account_value("TotalCashValue", "1000.00", "USD");
+    shared.portfolio.account_download_is_settled();
+    core.subscribe_account_summary(3, "TotalCashValue").unwrap();
+    assert_eq!(core.prepare_account_summary(&shared, "DU1").unwrap().entries.len(), 2);
+
+    shared.portfolio.note_account_value("TotalCashValue", "5100.00", "EUR");
+    assert!(core.prepare_account_summary(&shared, "DU1").is_none(), "updates wait three minutes");
+    core.last_account_summary.lock().unwrap().get_mut(&3).unwrap().0 -= std::time::Duration::from_secs(180);
+    let batch = core.prepare_account_summary(&shared, "DU1").expect("the subscription still receives");
+    assert_eq!(batch.req_id, 3);
+    assert_eq!(batch.entries.len(), 1, "only the currency whose value changed");
+    assert_eq!(batch.entries[0].value, "5100.00");
+    assert_eq!(batch.entries[0].currency, "EUR");
+
+    core.last_account_summary.lock().unwrap().get_mut(&3).unwrap().0 -= std::time::Duration::from_secs(180);
+    assert!(core.prepare_account_summary(&shared, "DU1").is_none(), "unchanged figures do not repeat");
+    shared.portfolio.note_account_value("TotalCashValue", "5200.00", "EUR");
+    core.last_account_summary.lock().unwrap().get_mut(&3).unwrap().0 -= std::time::Duration::from_secs(180);
+    assert_eq!(core.prepare_account_summary(&shared, "DU1").unwrap().entries[0].value, "5200.00");
+
+    core.unsubscribe_account_summary(3);
+    shared.portfolio.note_account_value("TotalCashValue", "5300.00", "EUR");
+    assert!(core.prepare_account_summary(&shared, "DU1").is_none(), "cancellation ends the updates");
+    core.subscribe_account_summary(3, "TotalCashValue").unwrap();
+    assert_eq!(core.prepare_account_summary(&shared, "DU1").unwrap().entries.len(), 2, "a new subscription gets the full batch");
 }
 
 /// A quote is per unit and a contract may be worth many of them. Valued from
@@ -2311,7 +2462,7 @@ fn no_profit_is_worked_out_from_a_book_the_download_has_not_restated() {
     assert!(core.poll_pnl(&shared).is_some(), "and again once the book is whole");
 }
 
-/// A one-shot summary asked for before the download finished is answered
+/// A summary asked for before the download finished is answered
 /// when the session ends rather than held for ever: parked behind the
 /// download gate, the caller could neither receive its end nor withdraw it
 /// on the ended session.

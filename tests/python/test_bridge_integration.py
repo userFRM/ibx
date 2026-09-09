@@ -609,11 +609,10 @@ class TestReqOpenOrdersOrderState:
         # AttributeError on a dict. Reaching here means state is an OrderState.
         assert state["status"] == "PendingSubmit"
         # A newly tracked order has no margin figures — the venue states those
-        # for a preview. They are carried as text and read with `float`, so
-        # "unstated" is written as the number that means it rather than left
-        # empty: empty raises inside the callback and the whole report is lost,
-        # which is what a caller of their library saw on every open order.
-        assert float(state["init_margin_after"]) == float("1.7976931348623157e+308")
+        # for a preview. The reference client carries these as the strings the
+        # wire stated, so unstated is empty rather than a stand-in number a
+        # caller has to know to recognise.
+        assert state["init_margin_after"] == ""
         # And the commission beside it, which the venue has not stated either.
         assert state["commission_and_fees"] == float("1.7976931348623157e+308")
 
@@ -998,7 +997,13 @@ class TestNotConnected:
 
 
 class TestCallbackException:
-    """Verify that a Python exception in a callback doesn't crash Rust."""
+    """A raising callback leaves dispatch the way the reference client does.
+
+    Its own loop catches only KeyboardInterrupt, SystemExit and a bad message;
+    anything else a handler raises escapes the loop and the session closes in
+    the `finally` beneath it. Swallowed and logged instead, a program whose
+    handler was failing went on being fed events with nothing to say so.
+    """
 
     def test_exception_in_tick_price(self):
         class BadWrapper(EWrapper):
@@ -1012,11 +1017,9 @@ class TestCallbackException:
         c._test_map_instrument(1, 0)
         c._test_push_quote(0, bid=100.0)
 
-        # A callback that throws is the caller's problem, not the loop's: it is
-        # logged and dispatch carries on, so one bad handler does not stop
-        # every other event from being delivered.
-        c._test_dispatch_once()
-        assert c.is_connected() is True
+        with pytest.raises(ValueError, match="boom!"):
+            c._test_dispatch_once()
+        assert c.is_connected() is False
 
     def test_exception_in_order_status(self):
         class BadWrapper(EWrapper):
@@ -1028,9 +1031,10 @@ class TestCallbackException:
         c._test_connect()
         c._test_push_fill(0, order_id=1, side="BUY", price=100.0, qty=10, remaining=0)
 
-        c._test_dispatch_once()
+        with pytest.raises(RuntimeError, match="explode!"):
+            c._test_dispatch_once()
 
-        assert c.is_connected() is True
+        assert c.is_connected() is False
 
 
 class TestEdgeCases:

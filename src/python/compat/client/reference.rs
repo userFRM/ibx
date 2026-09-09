@@ -48,20 +48,6 @@ impl EClient {
         {
             return self.report_refusal(py, req_id, why.into());
         }
-        // The adjusted series folds the raw trades with the contract's own
-        // corporate actions, which are asked for by the venue's id for the
-        // contract. Named by anything else, that ask cannot be made, so a
-        // request that could not be folded is refused rather than answered with
-        // raw trades under an adjusted name — as the waiting call refuses it.
-        if crate::control::historical::what_to_show_is_adjusted(what_to_show)
-            && contract.con_id == 0
-        {
-            return self.report_refusal(py, req_id, crate::error_codes::Refusal::validation(
-                "ADJUSTED_LAST is folded from the contract's corporate actions, which are \
-                 asked for by the venue's id for the contract, and this one does not carry \
-                 it: qualify the contract first and pass what comes back".to_string(),
-            ));
-        }
         // Named by the venue where the caller named it by id alone: a
         // request states the contract's type and its exchange, and both
         // are the venue's to say.
@@ -724,6 +710,43 @@ mod tests {
     fn namespace(py: Python<'_>, fields: &str) -> Py<PyAny> {
         py.eval(&std::ffi::CString::new(format!("__import__('types').SimpleNamespace({fields})")).unwrap(), None, None)
             .unwrap().unbind()
+    }
+
+    #[test]
+    fn a_described_stock_can_request_adjusted_history() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+            let wrapper = py.eval(
+                c"__import__('builtins').type('W', (), {'__init__': lambda s: setattr(s, 'calls', []), '__getattr__': lambda s, n: (lambda *a: s.calls.append((n, a)))})()",
+                None, None,
+            ).unwrap().unbind();
+            client.__init__(wrapper.clone_ref(py)).unwrap();
+            let (tx, rx) = std::sync::mpsc::sync_channel(16);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            *client.shared.lock().unwrap() = Some(std::sync::Arc::new(crate::bridge::SharedState::new()));
+            client.connected.store(true, std::sync::atomic::Ordering::Release);
+            let contract = Contract {
+                symbol: "AAPL".into(), sec_type: "STK".into(), exchange: "SMART".into(),
+                currency: "USD".into(), primary_exchange: "NASDAQ".into(), ..Default::default()
+            };
+
+            client.req_historical_data(
+                py, 7, &contract, "", "1 M", "1 day", "ADJUSTED_LAST", 1, 1, false, Vec::new(),
+            ).unwrap();
+
+            let ControlCommand::FetchHistorical {
+                req_id, contract: sent, what_to_show, filters, ..
+            } = rx.try_recv().expect("the engine resolves the description before asking for bars") else {
+                panic!("the request asks for historical bars");
+            };
+            assert_eq!(req_id, 7);
+            assert_eq!(sent, ContractRef::from(&contract));
+            assert_eq!(sent.con_id, 0);
+            assert_eq!(filters.primary_exchange, "NASDAQ");
+            assert_eq!(what_to_show, "ADJUSTED_LAST");
+            assert!(wrapper.getattr(py, "calls").unwrap().cast_bound::<pyo3::types::PyList>(py).unwrap().is_empty());
+        });
     }
 
     #[test]

@@ -1233,10 +1233,17 @@ fn parse_algo_vwap_rejects_infinite_max_pct_vol() {
 }
 
 #[test]
-fn parse_algo_vwap_rejects_malformed_bool() {
+fn parse_algo_vwap_forwards_a_flag_spelling_it_does_not_fold() {
+    // The venue owns this vocabulary. Refused here, a spelling it takes never
+    // reached it; folded to "unset", the flag was dropped and nothing said so.
     let params = vec![TagValue { tag: "noTakeLiq".into(), value: "yes".into() }];
-    let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.message.contains("noTakeLiq"), "got: {err}");
+    match parse_algo_params("vwap", &params).unwrap() {
+        AlgoParams::Named { strategy, params } => {
+            assert_eq!(strategy, "vwap");
+            assert_eq!(params, ["noTakeLiq", "yes"], "the caller's own text goes out");
+        }
+        other => panic!("the list goes as written, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1250,18 +1257,29 @@ fn parse_algo_vwap_rejects_empty_max_pct_vol() {
 }
 
 #[test]
-fn parse_algo_vwap_rejects_empty_bool() {
+fn parse_algo_vwap_forwards_a_present_but_empty_flag() {
+    // Present-but-empty is not absent: the caller set the tag, so it travels
+    // as they set it and the venue answers for it.
     let params = vec![TagValue { tag: "noTakeLiq".into(), value: "".into() }];
-    let err = parse_algo_params("vwap", &params).unwrap_err();
-    assert!(err.message.contains("noTakeLiq"), "got: {err}");
+    match parse_algo_params("vwap", &params).unwrap() {
+        AlgoParams::Named { params, .. } => assert_eq!(params, ["noTakeLiq", ""]),
+        other => panic!("the list goes as written, got {other:?}"),
+    }
 }
 
 #[test]
-fn parse_algo_arrival_price_rejects_unknown_risk_aversion() {
-    // The issue's own repro: a typo must be refused, not silently sent as Neutral.
+fn parse_algo_arrival_price_forwards_a_risk_level_it_does_not_fold() {
+    // A typo must not be silently sent as Neutral, and must not be silently
+    // dropped either. It travels as the caller wrote it and the venue refuses
+    // it by name, which is the answer they can act on.
     let params = vec![TagValue { tag: "riskAversion".into(), value: "Aggresive".into() }];
-    let err = parse_algo_params("arrivalpx", &params).unwrap_err();
-    assert!(err.message.contains("riskAversion"), "got: {err}");
+    match parse_algo_params("arrivalpx", &params).unwrap() {
+        AlgoParams::Named { strategy, params } => {
+            assert_eq!(strategy, "arrivalpx");
+            assert_eq!(params, ["riskAversion", "Aggresive"]);
+        }
+        other => panic!("the list goes as written, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1274,12 +1292,14 @@ fn parse_algo_arrival_price_states_no_risk_aversion_when_none_was_given() {
 }
 
 #[test]
-fn parse_algo_arrival_price_rejects_empty_risk_aversion() {
-    // Present-but-empty is not the same as absent: a tag the caller never
-    // set is not sent, one they set to nothing is refused.
+fn parse_algo_arrival_price_forwards_a_present_but_empty_risk_aversion() {
+    // Present-but-empty is not the same as absent: a tag the caller never set
+    // is not sent, one they set to nothing goes out as they set it.
     let params = vec![TagValue { tag: "riskAversion".into(), value: "".into() }];
-    let err = parse_algo_params("arrivalpx", &params).unwrap_err();
-    assert!(err.message.contains("riskAversion"), "got: {err}");
+    match parse_algo_params("arrivalpx", &params).unwrap() {
+        AlgoParams::Named { params, .. } => assert_eq!(params, ["riskAversion", ""]),
+        other => panic!("the list goes as written, got {other:?}"),
+    }
 }
 
 #[test]

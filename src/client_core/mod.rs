@@ -261,30 +261,29 @@ pub struct PortfolioUpdateEntry {
     pub realized_pnl: f64,
 }
 
-/// Parse a `riskAversion` tag value (used by ArrivalPx and ClosePx). A tag
-/// the caller never set is not stated; a present value — including an empty
-/// string — that isn't a recognized member is refused rather than sent.
-///
-/// One of the two parameters sent in the venue's spelling rather than the
-/// caller's (the other is a flag, see `get_bool`): the value is folded for
-/// matching, so `getdone` goes as `Get_Done`. The venue names these three in
-/// one spelling and takes no other, so folding the caller's is the lenient
-/// direction: a caller who writes it another way is served rather than refused,
-/// and what reaches the wire is a spelling the venue reads either way.
-fn parse_risk_aversion(raw: Option<&str>) -> Result<Option<RiskAversion>, Refusal> {
-    let raw = match raw {
-        None => return Ok(None),
-        Some(raw) => raw,
-    };
-    match raw.to_lowercase().as_str() {
-        "neutral" => Ok(Some(RiskAversion::Neutral)),
-        "get_done" | "getdone" => Ok(Some(RiskAversion::GetDone)),
-        "aggressive" => Ok(Some(RiskAversion::Aggressive)),
-        "passive" => Ok(Some(RiskAversion::Passive)),
-        _ => Err(Refusal::validation(
-            "Unknown riskAversion '{raw}': expected Get_Done, Aggressive, Neutral or Passive"
-                .replace("{raw}", raw),
-        )),
+/// One summary's last pass: when it ran, and what it stated then, keyed by the
+/// figure and the currency it was stated in.
+type SummaryPass = (std::time::Instant, HashMap<(String, String), String>);
+
+/// Fold the risk levels modelled here to the venue's names. Anything else
+/// travels as text in the parameter list; the venue owns that vocabulary.
+fn parse_risk_aversion(raw: Option<&str>) -> Option<RiskAversion> {
+    match raw?.to_lowercase().as_str() {
+        "neutral" => Some(RiskAversion::Neutral),
+        "get_done" | "getdone" => Some(RiskAversion::GetDone),
+        "aggressive" => Some(RiskAversion::Aggressive),
+        "passive" => Some(RiskAversion::Passive),
+        _ => None,
+    }
+}
+
+/// Fold the flag spellings modelled here to the `1`/`0` the venue is known to
+/// take. Anything else travels as text, for the reason a risk level does.
+fn parse_algo_flag(raw: Option<&str>) -> Option<bool> {
+    match raw?.to_lowercase().as_str() {
+        "0" | "false" => Some(false),
+        "1" | "true" => Some(true),
+        _ => None,
     }
 }
 
@@ -317,10 +316,7 @@ fn algo_param_names(strategy: &str) -> Option<&'static [&'static str]> {
 ///
 /// A key the caller never set is not stated: the venue's own default for it
 /// is not known here, and a value sent in its place — `0`, an empty time,
-/// Neutral — is a claim the caller did not make. A key the caller *did* set —
-/// even to an empty string — is refused if it does not read, rather than
-/// dropped or defaulted: `riskAversion="Aggresive"` would otherwise submit an
-/// algo the caller did not describe, with no error.
+/// Neutral — is a claim the caller did not make.
 ///
 /// A strategy modelled here is re-encoded from the fields it names, and a key
 /// it does not name has no field to be re-encoded into. That is a limit of the
@@ -334,7 +330,8 @@ fn algo_param_names(strategy: &str) -> Option<&'static [&'static str]> {
 /// the text the caller wrote is what reaches the venue, as the reference
 /// client forwards it; the parse here is this client's own check that it
 /// reads. Two kinds are sent in the venue's spelling instead, each said where
-/// it is read: a flag goes as `1`/`0`, and `riskAversion` as the venue names it.
+/// it is read: a known flag goes as `1`/`0`, and a known `riskAversion` as the
+/// venue names it. Other spellings travel as written.
 pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoParams, Refusal> {
     let folded = strategy.to_lowercase();
     // The caller's list as they wrote it: name then value, in their order. The
@@ -347,8 +344,22 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
             .flat_map(|tv| [tv.tag.clone(), tv.value.clone()])
             .collect(),
     };
+    // A value outside the vocabulary folded here takes the route a key outside
+    // the set takes: the list goes as the caller wrote it, and the venue answers
+    // for a spelling it does not know. Folded to "unset" instead, the parameter
+    // was dropped from the order and nothing said so — the caller asked for a
+    // risk level or a flag and the order went without one.
+    let outside_the_vocabulary = |tv: &TagValue| match tv.tag.as_str() {
+        "riskAversion" => parse_risk_aversion(Some(&tv.value)).is_none(),
+        "noTakeLiq" | "allowPastEndTime" | "forceCompletion" => {
+            parse_algo_flag(Some(&tv.value)).is_none()
+        }
+        _ => false,
+    };
     if let Some(known) = algo_param_names(&folded)
-        && params.iter().any(|tv| !known.contains(&tv.tag.as_str()))
+        && params.iter().any(|tv| {
+            !known.contains(&tv.tag.as_str()) || outside_the_vocabulary(tv)
+        })
     {
         return Ok(as_written());
     }
@@ -369,58 +380,35 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         }
         Ok(Some(raw))
     };
-    // A flag is one of two kinds not forwarded as the caller spelled it — the
-    // other is `riskAversion`, folded to the venue's own name in
-    // `parse_risk_aversion` — and both are deliberate. A number is forwarded
-    // because `5` and `5.0` could
-    // be read as different values by something downstream and nothing here can
-    // say they are not. A flag has two values, this reads all four spellings
-    // the reference client's own samples and documentation use, and refuses
-    // anything else — so nothing is guessed at and nothing is silently
-    // reinterpreted. It goes out as `1` or `0`, which is what those samples
-    // write and what this venue is known to take. Forwarding `true` instead
-    // would be trading a spelling that works for one whose acceptance nobody
-    // here has established, on a live order. One the caller never set is not
-    // sent at all.
-    let get_bool = |key: &str| -> Result<Option<bool>, Refusal> {
-        let raw = match get(key) {
-            None => return Ok(None),
-            Some(raw) => raw,
-        };
-        match raw.to_lowercase().as_str() {
-            "0" | "false" => Ok(Some(false)),
-            "1" | "true" => Ok(Some(true)),
-            _ => Err(Refusal::validation(
-                format!("Invalid {key} '{raw}': expected true/false or 1/0"),
-            )),
-        }
-    };
+    // Every flag reaching here is one the fold above recognised: a spelling it
+    // did not took the whole list down the text path.
+    let get_bool = |raw: Option<&str>| parse_algo_flag(raw);
 
-    match folded.as_str() {
+    let algo: Result<AlgoParams, Refusal> = match folded.as_str() {
         "vwap" => Ok(AlgoParams::Vwap {
             max_pct_vol: get_num("maxPctVol")?,
-            no_take_liq: get_bool("noTakeLiq")?,
-            allow_past_end_time: get_bool("allowPastEndTime")?,
+            no_take_liq: get_bool(get("noTakeLiq").as_deref()),
+            allow_past_end_time: get_bool(get("allowPastEndTime").as_deref()),
             start_time: get("startTime"),
             end_time: get("endTime"),
         }),
         "twap" => Ok(AlgoParams::Twap {
-            allow_past_end_time: get_bool("allowPastEndTime")?,
+            allow_past_end_time: get_bool(get("allowPastEndTime").as_deref()),
             start_time: get("startTime"),
             end_time: get("endTime"),
         }),
         "arrivalpx" | "arrival_price" => Ok(AlgoParams::ArrivalPx {
             max_pct_vol: get_num("maxPctVol")?,
-            risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
-            allow_past_end_time: get_bool("allowPastEndTime")?,
-            force_completion: get_bool("forceCompletion")?,
+            risk_aversion: parse_risk_aversion(get("riskAversion").as_deref()),
+            allow_past_end_time: get_bool(get("allowPastEndTime").as_deref()),
+            force_completion: get_bool(get("forceCompletion").as_deref()),
             start_time: get("startTime"),
             end_time: get("endTime"),
         }),
         "closepx" | "close_price" => Ok(AlgoParams::ClosePx {
             max_pct_vol: get_num("maxPctVol")?,
-            risk_aversion: parse_risk_aversion(get("riskAversion").as_deref())?,
-            force_completion: get_bool("forceCompletion")?,
+            risk_aversion: parse_risk_aversion(get("riskAversion").as_deref()),
+            force_completion: get_bool(get("forceCompletion").as_deref()),
             start_time: get("startTime"),
         }),
         "darkice" | "dark_ice" => {
@@ -438,7 +426,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
                 }
             };
             Ok(AlgoParams::DarkIce {
-                allow_past_end_time: get_bool("allowPastEndTime")?,
+                allow_past_end_time: get_bool(get("allowPastEndTime").as_deref()),
                 display_size,
                 start_time: get("startTime"),
                 end_time: get("endTime"),
@@ -446,7 +434,7 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         }
         "pctvol" | "pct_vol" => Ok(AlgoParams::PctVol {
             pct_vol: get_num("pctVol")?,
-            no_take_liq: get_bool("noTakeLiq")?,
+            no_take_liq: get_bool(get("noTakeLiq").as_deref()),
             start_time: get("startTime"),
             end_time: get("endTime"),
         }),
@@ -457,8 +445,9 @@ pub fn parse_algo_params(strategy: &str, params: &[TagValue]) -> Result<AlgoPara
         // offered. Which ones an account may use is the venue's answer, stated
         // at logon and enforced by it, and the reference client does not
         // interpret these either.
-        _ => Ok(as_written()),
-    }
+        _ => return Ok(as_written()),
+    };
+    algo
 }
 
 // ── Order field validation ──
@@ -827,9 +816,13 @@ pub struct ClientCore {
     pub last_pnl_single: Mutex<HashMap<i64, [i64; 5]>>,
 
     // Account summary subscription state (req_id, tags)
-    /// The summary request waiting to be answered, and the tags it
-    /// asked for.
+    /// The first summary subscription and the tags it asked for.
     pub account_summary_req: Mutex<Option<(i64, Vec<String>)>>,
+    /// The venue serves two concurrent summary subscriptions.
+    account_summary_other_req: Mutex<Option<(i64, Vec<String>)>>,
+    /// When each summary last ran and what it stated, so only changed values
+    /// are delivered at the venue's three-minute interval.
+    last_account_summary: Mutex<HashMap<i64, SummaryPass>>,
 
     // News bulletin subscription
     /// Whether broadcast notices were asked for.
@@ -1039,6 +1032,8 @@ impl ClientCore {
             last_pnl: Mutex::new([0; 3]),
             last_pnl_single: Mutex::new(HashMap::new()),
             account_summary_req: Mutex::new(None),
+            account_summary_other_req: Mutex::new(None),
+            last_account_summary: Mutex::new(HashMap::new()),
             bulletin_subscribed: AtomicBool::new(false),
             account_updates_subscribed: AtomicBool::new(false),
             last_stated_account: Mutex::new(HashMap::new()),
@@ -1408,6 +1403,8 @@ impl ClientCore {
         *self.last_pnl.lock().unwrap() = [0; 3];
         self.last_pnl_single.lock().unwrap().clear();
         *self.account_summary_req.lock().unwrap() = None;
+        *self.account_summary_other_req.lock().unwrap() = None;
+        self.last_account_summary.lock().unwrap().clear();
         self.bulletin_subscribed.store(false, Ordering::Relaxed);
         self.account_updates_subscribed.store(false, Ordering::Relaxed);
         self.last_stated_account.lock().unwrap().clear();
@@ -2454,31 +2451,44 @@ impl ClientCore {
 
     /// Ask for the account summary.
     ///
-    /// Refused while another request holds the subscription, for the same
-    /// reason as `subscribe_pnl`: one slot serves it, and a silent handover
-    /// stopped the first asker's updates without a word.
+    /// Both subscriptions stay until cancelled, including after their first
+    /// answers; a third request would exceed the venue's limit.
     pub fn subscribe_account_summary(&self, req_id: i64, tags: &str) -> Result<(), Refusal> {
         let tag_list: Vec<String> = tags.split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
         let mut slot = self.account_summary_req.lock().unwrap();
-        if let Some((held, _)) = *slot && held != req_id {
-            return Err(Refusal::validation(format!(
-                "the account summary is already subscribed under request {held}; \
-                 cancel that one before subscribing under another",
-            )));
-        }
-        *slot = Some((req_id, tag_list));
+        let mut other = self.account_summary_other_req.lock().unwrap();
+        let target = if slot.as_ref().is_some_and(|(id, _)| *id == req_id) {
+            &mut *slot
+        } else if other.as_ref().is_some_and(|(id, _)| *id == req_id) {
+            &mut *other
+        } else if slot.is_none() {
+            &mut *slot
+        } else if other.is_none() {
+            &mut *other
+        } else {
+            return Err(Refusal::validation(
+                "two account summaries are already subscribed; cancel one before subscribing under another",
+            ));
+        };
+        *target = Some((req_id, tag_list));
+        self.last_account_summary.lock().unwrap().remove(&req_id);
         Ok(())
     }
 
     /// Stop the account summary.
     pub fn unsubscribe_account_summary(&self, req_id: i64) {
         let mut req = self.account_summary_req.lock().unwrap();
+        let mut other = self.account_summary_other_req.lock().unwrap();
         if req.as_ref().map(|(r, _)| *r) == Some(req_id) {
             *req = None;
         }
+        if other.as_ref().map(|(r, _)| *r) == Some(req_id) {
+            *other = None;
+        }
+        self.last_account_summary.lock().unwrap().remove(&req_id);
     }
 
     // ── Account updates subscription management ──
@@ -4028,21 +4038,26 @@ impl ClientCore {
         changed
     }
 
-    /// Prepare account summary response (one-shot, consumes the request).
+    /// Prepare the initial summary or the values changed since its last interval.
     pub fn prepare_account_summary(&self, shared: &SharedState, _account_id: &str) -> Option<AccountSummaryBatch> {
         // Wait for gateway account data before delivering summary.
         // As above: on the download being finished. Answered on the first
         // figure, a summary asked for right after connecting -- which is the
         // ordinary idiom -- was handed the few tags parsed so far and its end,
-        // and the request is one-shot, so the tags it actually asked for never
-        // came. A session that has ended lets it through: no download is
+        // before the tags it actually asked for arrived.
+        // A session that has ended lets it through: no download is
         // coming, and parked behind the gate the caller could neither receive
         // its end nor withdraw it on the ended session.
         if !shared.portfolio.account_download_complete() && shared.reference.session_over().is_none() {
             return None;
         }
-        let req = self.account_summary_req.lock().unwrap().take();
-        let (req_id, tags) = req?;
+        let mut req = self.account_summary_req.lock().unwrap();
+        let mut other = self.account_summary_other_req.lock().unwrap();
+        let mut last = self.last_account_summary.lock().unwrap();
+        // A subscription outlives its own first answer, but not its session.
+        // Held past the end, the caller can neither be told it finished nor
+        // withdraw it on a session that is over.
+        let session_over = shared.reference.session_over().is_some();
 
         // What the venue said, in the currency it said it in. Built from this
         // client's typed copy instead, an account held in a currency the venue
@@ -4055,18 +4070,41 @@ impl ClientCore {
         // names instead, "All" matches none of them and returns empty, and any
         // figure absent from that list is dropped with it: accrued cash, SMA,
         // look-ahead margin, per-currency ledger rows.
-        let wants_all = tags.is_empty() || tags.iter().any(|t| t == "All");
-        let entries = stated
-            .iter()
-            .filter(|(key, ..)| wants_all || tags.iter().any(|t| t == key))
-            .map(|(key, value, currency)| AccountSummaryEntry {
-                tag: key.clone(),
-                value: value.clone(),
-                currency: currency.clone(),
-            })
-            .collect();
-
-        Some(AccountSummaryBatch { req_id, entries })
+        let asked: Vec<(i64, Vec<String>)> = req.iter().chain(other.iter()).cloned().collect();
+        for (req_id, tags) in &asked {
+            let initial = !last.contains_key(req_id);
+            let (when, already) = last.entry(*req_id)
+                .or_insert_with(|| (std::time::Instant::now(), HashMap::new()));
+            if !initial && when.elapsed() < std::time::Duration::from_secs(180) {
+                continue;
+            }
+            *when = std::time::Instant::now();
+            let wants_all = tags.is_empty() || tags.iter().any(|t| t == "All");
+            let entries: Vec<_> = stated
+                .iter()
+                .filter(|(key, ..)| wants_all || tags.iter().any(|t| t == key))
+                .filter_map(|(key, value, currency)| {
+                    let previous = already.insert((key.clone(), currency.clone()), value.clone());
+                    if previous.as_ref() == Some(value) {
+                        return None;
+                    }
+                    Some(AccountSummaryEntry {
+                        tag: key.clone(), value: value.clone(), currency: currency.clone(),
+                    })
+                })
+                .collect();
+            if initial || !entries.is_empty() {
+                if session_over {
+                    if req.as_ref().is_some_and(|(id, _)| id == req_id) {
+                        *req = None;
+                    } else if other.as_ref().is_some_and(|(id, _)| id == req_id) {
+                        *other = None;
+                    }
+                }
+                return Some(AccountSummaryBatch { req_id: *req_id, entries });
+            }
+        }
+        None
     }
 
     // ── Order routing ──

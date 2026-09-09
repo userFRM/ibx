@@ -933,20 +933,14 @@ const MAX_GATE_FRAME: usize = 64 * 1024;
 #[derive(Default)]
 struct GateReader {
     buf: Vec<u8>,
-    /// Whether the code was already on the wire when the frame currently being
-    /// assembled began arriving. A frame can span polls, so the loop's own view
-    /// of that is a poll too late.
-    sent_when_frame_began: bool,
 }
 
 impl GateReader {
     /// One non-blocking-ish step: drain what is available, return a message
     /// once a whole frame is buffered. `Ok(None)` means "nothing complete yet".
-    /// Returns the frame and whether the code had been sent when that frame's
-    /// first byte arrived.
-    fn poll<S: Read>(&mut self, stream: &mut S, sent: bool) -> io::Result<Option<(RecvMsg, bool)>> {
+    fn poll<S: Read>(&mut self, stream: &mut S) -> io::Result<Option<RecvMsg>> {
         if let Some(msg) = self.take()? {
-            return Ok(Some((msg, self.sent_when_frame_began)));
+            return Ok(Some(msg));
         }
         // Only ever ask for what the frame in progress still needs. Reading
         // further pulls in bytes belonging to the next frame, and this buffer
@@ -965,11 +959,8 @@ impl GateReader {
         match stream.read(&mut tmp[..want]) {
             Ok(0) => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "server closed the socket")),
             Ok(n) => {
-                if self.buf.is_empty() {
-                    self.sent_when_frame_began = sent;
-                }
                 crate::protocol::connection::hold_what_was_read(&mut self.buf, &tmp[..n])?;
-                Ok(self.take()?.map(|m| (m, self.sent_when_frame_began)))
+                self.take()
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock
                 || e.kind() == io::ErrorKind::TimedOut
@@ -1092,11 +1083,7 @@ pub fn do_security_code_2fa<S: Read + Write>(
             ));
         }
 
-        // A verdict only means anything if the code was already on the wire
-        // when the server began sending it. The reader reports that, because a
-        // frame can span polls and the loop would otherwise judge a verdict by
-        // a send that landed between its header and its body.
-        let recv = match reader.poll(stream, sent) {
+        let recv = match reader.poll(stream) {
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof
                 || e.kind() == io::ErrorKind::ConnectionReset
@@ -1114,11 +1101,7 @@ pub fn do_security_code_2fa<S: Read + Write>(
             Err(e) => return Err(e),
         };
 
-        // The code may only go out while the socket is quiet: no frame came
-        // back and none is half-read. Anything the server had already sent is
-        // then still unread, and the reader would credit it to the code —
-        // sending on a frame boundary is what leaves a waiting verdict looking
-        // like an answer.
+        // A pending verdict can end the gate before the operator's code is needed.
         let quiet = recv.is_none() && reader.buf.is_empty();
 
         if !sent && quiet {
@@ -1159,18 +1142,11 @@ pub fn do_security_code_2fa<S: Read + Write>(
             }
         }
 
-        let Some((recv, sent_before_read)) = recv else { continue };
+        let Some(recv) = recv else { continue };
         match recv {
             RecvMsg::Xyz { msg_id, state, fields, .. }
                 if msg_id == xyz::XYZ_MSG_SECURITY_CODE && state == xyz::SECURITY_CODE_RESULT =>
             {
-                // Nothing concludes the exchange until the code is out — an
-                // approval with no code sent is the mute failure this gate
-                // exists to prevent.
-                if !sent_before_read {
-                    log::debug!("security-code gate: 774 result before a code was sent");
-                    continue;
-                }
                 let status = fields.iter().rev().find(|f| !f.is_empty()).cloned().unwrap_or_default();
                 if status.eq_ignore_ascii_case("PASSED") {
                     log::info!("security-code gate: accepted");
@@ -1192,12 +1168,6 @@ pub fn do_security_code_2fa<S: Read + Write>(
             RecvMsg::Xyz { msg_id, state, fields, .. }
                 if msg_id == xyz::XYZ_MSG_TOKEN_AUTH && (state == 3 || state == 5) =>
             {
-                // Nothing here concludes the exchange until the code is out —
-                // an unsolicited verdict is neither an approval nor a denial.
-                if !sent_before_read {
-                    log::debug!("security-code gate: AUTH_FINISH before a code was sent");
-                    continue;
-                }
                 if fields.iter().any(|f| f.eq_ignore_ascii_case("PASSED")) {
                     log::info!("security-code gate: accepted via AUTH_FINISH");
                     return Ok(IbKeyOutcome::Approved {
@@ -1215,10 +1185,6 @@ pub fn do_security_code_2fa<S: Read + Write>(
                 ));
             }
             RecvMsg::Xyz { msg_id, state, .. } if msg_id == xyz::XYZ_MSG_SECURITY_CODE => {
-                if !sent_before_read {
-                    log::debug!("security-code gate: 774 code {state} before a code was sent");
-                    continue;
-                }
                 return Err(ib_key_err(
                     io::ErrorKind::PermissionDenied,
                     format!("security-code gate: server returned code {state}"),
@@ -1326,7 +1292,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
             ));
         }
 
-        let recv = match reader.poll(stream, code_submitted) {
+        let recv = match reader.poll(stream) {
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof
                 || e.kind() == io::ErrorKind::ConnectionReset
@@ -1357,7 +1323,7 @@ pub fn do_ib_key_2fa<S: Read + Write>(
         // ends the login while the operator is still deciding, and, without a
         // timeout on the socket at all, leaves the deadline unreachable while
         // a server that has stopped talking holds the wait open for ever.
-        let Some((recv, _)) = recv else {
+        let Some(recv) = recv else {
             // The operator's code can arrive in that silence, and reading it
             // only when the venue next spoke left it sitting — on a socket
             // the venue keeps quiet, until this wait's own deadline.

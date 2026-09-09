@@ -2352,11 +2352,26 @@ fn push_order_attrs(
             // caller wrote is what goes. Written back out from a parsed
             // number, `5.0` went as `5` and `1e-05` as `0.00001`. One the
             // caller did not state is not sent; it used to go as `0`.
-            if let AlgoParams::Vwap { max_pct_vol: Some(max_pct_vol), .. }
-            | AlgoParams::ArrivalPx { max_pct_vol: Some(max_pct_vol), .. }
-            | AlgoParams::ClosePx { max_pct_vol: Some(max_pct_vol), .. } = algo
-            {
-                fields.push((849, max_pct_vol.clone()));
+            let max_pct_vol = match algo {
+                AlgoParams::Vwap { max_pct_vol, .. }
+                | AlgoParams::ArrivalPx { max_pct_vol, .. }
+                | AlgoParams::ClosePx { max_pct_vol, .. } => max_pct_vol.clone(),
+                // A list forwarded as the caller wrote it still names one of
+                // these strategies when they asked for one, and the tag stands
+                // where it stood: read only off the modelled fields, a single
+                // value this client does not fold sent the whole list down the
+                // text path and took this tag off the order with it.
+                AlgoParams::Named { strategy, params } if matches!(
+                    strategy.to_lowercase().as_str(),
+                    "vwap" | "arrivalpx" | "arrival_price" | "closepx" | "close_price",
+                ) => params
+                    .as_chunks::<2>().0.iter()
+                    .find(|[key, _]| key == "maxPctVol")
+                    .map(|[_, value]| value.clone()),
+                _ => None,
+            };
+            if let Some(max_pct_vol) = max_pct_vol {
+                fields.push((849, max_pct_vol));
             }
             fields.push((5957, (param_strs.len() / 2).to_string()));
             // Key/value pairs: 5958=key, 5960=value, repeated.

@@ -52,10 +52,10 @@ def test_adjusted_last_is_accepted_on_the_callback_path():
     assert w.errors == [], w.errors
 
 
-def test_adjusted_last_without_the_venue_id_is_refused():
-    """The actions are asked for by the venue's id for the contract. Named by
-    anything else the fold cannot be made, so the request is refused rather
-    than answered with raw trades under an adjusted name."""
+def test_adjusted_last_without_the_venue_id_is_sent():
+    """The reference client forwards the contract description and the data type
+    it was given. A contract stated by description is one the venue can resolve
+    itself, so the request goes and the venue answers it."""
     w, c = _client()
     unqualified = ibx.Contract()
     unqualified.symbol, unqualified.secType = "SPY", "STK"
@@ -64,7 +64,7 @@ def test_adjusted_last_without_the_venue_id_is_refused():
         2, unqualified, end_date_time="", duration_str="1 Y",
         bar_size_setting="1 day", what_to_show="ADJUSTED_LAST", use_rth=1,
     )
-    assert [e for e in w.errors if "venue's id" in e[2]], w.errors
+    assert not [e for e in w.errors if "venue's id" in e[2]], w.errors
 
 
 def test_adjusted_last_kept_up_to_date_is_refused():

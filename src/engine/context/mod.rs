@@ -497,8 +497,8 @@ impl Context {
         self.modify_versions.entry(oid).or_insert(0);
     }
 
-    /// Apply a server-reported status. Returns true when the stored status
-    /// actually changed. Guarded: a stale or reordered frame must
+    /// Apply a server-reported status. Returns true when the report is accepted,
+    /// including repeated statuses. Guarded: a stale or reordered frame must
     /// not regress the lifecycle — terminal states are absorbing, and a
     /// lower-rank status never overwrites a higher one. A rejection does not
     /// displace a pending cancel either: it answers the request that raced
@@ -519,9 +519,6 @@ impl Context {
         let replace_outstanding = self.replace_is_outstanding(order_id);
         if let Some(order) = self.open_orders.get_mut(&order_id) {
             let prev = order.status;
-            if prev == status {
-                return false;
-            }
             // PendingCancel does not supersede the working states. The ranks
             // are a total order and cannot express this on their own, because
             // a partially filled order must still be able to reach

@@ -32,29 +32,24 @@ const ASKED_OPTION_COMPUTATION: i32 = 53;
 
 /// A figure the venue did not state, as the reference client states it.
 ///
-/// This client holds an unstated double as `f64::MAX`, and so does the
-/// reference stack — but only on its own side of the wire. What it sends a
-/// caller is `-1` where a price or a volatility is unstated and `-2` where a
-/// greek is, and the caller's library turns those two numbers back into
-/// nothing. Handed `f64::MAX` instead, that test never fires and the number
-/// goes into the caller's arithmetic.
-fn unstated_as(value: f64, sentinel: f64) -> f64 {
-    if value == f64::MAX || value.is_nan() { sentinel } else { value }
+/// The reference decoder turns the wire's indicators into `None` before
+/// calling the wrapper. This surface calls the wrapper itself, so neither
+/// those indicators nor this client's internal unset double is a number
+/// the caller should receive.
+fn unstated_as(value: f64, sentinel: f64) -> Option<f64> {
+    if value == f64::MAX || value.is_nan() || value == sentinel { None } else { Some(value) }
 }
 
 /// A price, a volatility or a dividend the venue did not state.
-fn or_unstated_price(value: f64) -> f64 { unstated_as(value, -1.0) }
+fn or_unstated_price(value: f64) -> Option<f64> { unstated_as(value, -1.0) }
 
 /// A greek the venue did not state.
-fn or_unstated_greek(value: f64) -> f64 { unstated_as(value, -2.0) }
+fn or_unstated_greek(value: f64) -> Option<f64> { unstated_as(value, -2.0) }
 
-/// Call a Python wrapper method, catching and logging an ordinary exception instead of
-/// propagating it so one bad callback cannot kill the dispatch loop.
-/// `KeyboardInterrupt`,
-/// `SystemExit`, and any other exception deriving from `BaseException` rather than
-/// `Exception` are re-raised so Ctrl-C during a callback still stops `run()` and a
-/// callback-raised `SystemExit` still terminates it, matching ibapi.
 /// Fire a callback on the caller's wrapper.
+///
+/// An ordinary exception escapes after closing the session, as the reference
+/// loop's `finally` does. Interrupts still pass straight back to the caller.
 ///
 /// Routed through the dispatcher that also tries the name the reference client
 /// gives the callback: a wrapper written against that client defines those
@@ -66,7 +61,9 @@ macro_rules! call_wrapper {
             if !e.is_instance_of::<pyo3::exceptions::PyException>($py) {
                 return Err(e);
             }
-            log::error!("Python callback {}() raised: {}", $method, e);
+            $client.disconnect($py)?;
+            $client.tell_the_caller_it_closed($py)?;
+            return Err(e);
         }
         if !$client.is_current_session($shared) {
             return Ok(());
@@ -645,7 +642,7 @@ impl EClient {
             for req_id in to {
                 call_wrapper!(self, py, shared, "tick_option_computation",
                     (req_id, tick_type, 0i32,
-                     or_unstated_price(comp.implied_vol), or_unstated_greek(comp.delta),
+                     or_unstated_price(comp.implied_vol).filter(|v| *v >= 0.0), or_unstated_greek(comp.delta),
                      or_unstated_price(comp.opt_price), or_unstated_price(comp.pv_dividend),
                      or_unstated_greek(comp.gamma), or_unstated_greek(comp.vega),
                      or_unstated_greek(comp.theta), or_unstated_price(comp.und_price)));
@@ -1313,20 +1310,23 @@ impl EClient {
 mod unstated_tests {
     use super::{or_unstated_greek, or_unstated_price};
 
-    /// The reference stack turns `-1` and `-2` back into nothing, and turns
-    /// every other number into itself. A figure this client holds as unstated
-    /// has to arrive as one of those two or the caller reads it as a price.
+    /// The wrapper reads `None` where the reference decoder saw an indicator,
+    /// including figures held as unset doubles on this side of the boundary.
     #[test]
-    fn an_unstated_figure_arrives_as_the_number_that_means_nothing() {
+    fn an_unstated_figure_arrives_as_none() {
         for unstated in [f64::MAX, f64::NAN] {
-            assert_eq!(or_unstated_price(unstated), -1.0);
-            assert_eq!(or_unstated_greek(unstated), -2.0);
+            assert_eq!(or_unstated_price(unstated), None);
+            assert_eq!(or_unstated_greek(unstated), None);
         }
+        assert_eq!(or_unstated_price(-1.0), None);
+        assert_eq!(or_unstated_greek(-2.0), None);
+        assert_eq!(or_unstated_price(-2.0), Some(-2.0));
+        assert_eq!(or_unstated_greek(-1.0), Some(-1.0));
         // Everything else is the venue's own figure and passes through, a
         // negative delta and a zero among them.
         for stated in [0.0, -0.42, 1.0, 775.4] {
-            assert_eq!(or_unstated_price(stated), stated);
-            assert_eq!(or_unstated_greek(stated), stated);
+            assert_eq!(or_unstated_price(stated), Some(stated));
+            assert_eq!(or_unstated_greek(stated), Some(stated));
         }
     }
 
@@ -1336,7 +1336,7 @@ mod unstated_tests {
         let solved = crate::types::OptionComputation::solved(7);
         assert_eq!(solved.answers, Some(7));
         for greek in [solved.delta, solved.gamma, solved.vega, solved.theta, solved.pv_dividend] {
-            assert_eq!(or_unstated_greek(greek), -2.0, "a greek nobody computed reads as one");
+            assert_eq!(or_unstated_greek(greek), None, "a greek nobody computed reads as one");
         }
     }
 }
