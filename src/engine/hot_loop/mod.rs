@@ -1310,6 +1310,10 @@ impl HotLoop {
                                     }))
                             }).count();
                             if !regulatory_snapshot && subscribed >= allowance {
+                                log::warn!(
+                                    "subscription refused: {subscribed} of {allowance} quote \
+                                     lines are in use, which is what the venue allows this session",
+                                );
                                 if let Some(tx) = &reply_tx {
                                     let _ = tx.try_send(Err(crate::error_codes::Refusal::stated(
                                         101, "Max number of tickers has been reached",
