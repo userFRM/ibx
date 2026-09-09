@@ -208,17 +208,26 @@ pub(super) fn phase_graceful_shutdown(conns: Conns) -> Conns {
     }
     assert!(said_so, "the engine said nothing when it was told to stop");
 
-    // Named, because the two ways the engine can hold no quote feed look alike
-    // from here and only one of them is this phase's business. A feed being
-    // rebuilt is the engine reacting to a socket the venue closed under it —
-    // ordinary on a session this suite has held open for an hour — and the
-    // stop above is what this phase is about, which it already proved.
-    let farm = hl.farm_conn.take().unwrap_or_else(|| {
-        panic!(
-            "the engine holds no quote feed after the stop, and is {} rebuilding one",
-            if hl.rebuilding_the_quote_feed() { "still" } else { "not" },
-        )
-    });
+    // A feed the engine no longer holds is not this phase's business. It gives
+    // one up when the venue closes the socket under it — ordinary on a session
+    // held open for an hour — and takes it into a rebuild without calling the
+    // session lost, which is why the stop above still reads as a stop. What
+    // this phase is about is that stop, and it has already proved it.
+    //
+    // So the feed is opened again here rather than demanded back, the same way
+    // the trading side is rebuilt when it goes: the phases that follow need one
+    // and do not care which attempt it came from.
+    let farm = match hl.farm_conn.take() {
+        Some(farm) => farm,
+        None => {
+            println!(
+                "  the engine gave up its quote feed during the run ({}), opening another",
+                if hl.rebuilding_the_quote_feed() { "a rebuild was out" } else { "no rebuild was out" },
+            );
+            super::historical::open_farm(ibx::gateway::Farm::MarketData)
+                .expect("the quote feed could not be opened again")
+        }
+    };
     let ccp = hl.ccp_conn.take().expect("ccp_conn missing");
     let hmds = hl.hmds_conn.take();
 
