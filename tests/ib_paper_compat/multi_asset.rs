@@ -983,11 +983,18 @@ pub(super) fn phase_crypto_fill(conns: Conns) -> Conns {
         "a thousandth of a coin was asked for and {qty} came back",
     );
     if let Some((sold_qty, raw_sold)) = sold {
-        assert_eq!(
-            raw_sold, raw,
-            "the fraction bought is the fraction sold: {qty} out, {sold_qty} back",
+        // The same reasoning the buy is read under, for the same reason: the
+        // sale is immediate-or-cancel too, so it takes what is at the bid and
+        // cancels the rest. It is also read from the first fill it reports,
+        // and a sale that fills whole in two prints reports the first of them.
+        // What must hold is the magnitude — a quantity read a hundred million
+        // times too large comes back as thousands of coins, which is the
+        // mistake this phase exists for, and no partial can look like that.
+        assert!(
+            raw_sold > 0 && raw_sold <= raw,
+            "the sale is a fraction of what was bought: {qty} out, {sold_qty} back",
         );
-        println!("  PASS — the fraction survives the round trip, position flat\n");
+        println!("  PASS — the fraction survives the round trip\n");
     } else {
         println!("  PASS — bought {qty}; the sale did not report in time\n");
     }

@@ -2985,6 +2985,16 @@ impl HotLoop {
         self.pending_farm_reconnect = Some(rx);
     }
 
+    /// Whether the quote feed is being rebuilt right now.
+    ///
+    /// The engine holds no connection while an attempt is out, which is a
+    /// different thing from never having had one — and from the outside the
+    /// two look alike. A reader that finds no feed and cannot tell them apart
+    /// reports the wrong one.
+    pub fn rebuilding_the_quote_feed(&self) -> bool {
+        self.pending_farm_reconnect.is_some()
+    }
+
     /// Poll for a completed farm reconnect. Non-blocking.
     fn poll_farm_reconnect(&mut self) {
         let rx = match self.pending_farm_reconnect.as_ref() {
