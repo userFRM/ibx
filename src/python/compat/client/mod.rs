@@ -627,7 +627,7 @@ impl EClient {
             })
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to spawn hot loop: {e}")))?;
 
-        *self.shared.lock().unwrap() = Some(shared);
+        *self.shared.lock().unwrap() = Some(shared.clone());
         *self.control_tx.lock().unwrap() = Some(control_tx);
         *self.event_rx.lock().unwrap() = Some(event_rx);
         // Counted from whatever the venue names as working, once it has;
@@ -652,23 +652,7 @@ impl EClient {
 
         let _ = port; // kept for the reference client's signature
 
-        // Fire initial callbacks synchronously, matching official Python ibapi
-        // where connect_ack signals "socket ready" before run() is called.
-        // Announcements, not permission. The session is up and its engine is
-        // running; a handler that raises here — starting work in
-        // `next_valid_id` is the ordinary way to write one — must not make
-        // this report failure on a session that is live. Only an interrupt
-        // ends this call, as it ends any.
-        self.notify(py, "connect_ack", ())?;
-        self.notify(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
-        // The id is announced once and a program starts numbering from it, so
-        // it is worth the wait: the venue names what the account has used just
-        // after the connection is made, and announced before that lands this
-        // is one a fill spent long ago. A program that trusts the announcement
-        // — which is the ordinary way to write one — then has its first order
-        // refused as a duplicate, and nothing about the refusal points here.
-        self.wait_for_the_replay(py);
-        self.notify(py, "next_valid_id", (self.stated_order_id() as i64,))
+        self.announce_the_new_session(py, &shared)
     }
 
     /// Answer to the name the reference client gives a method as well as the
@@ -1411,6 +1395,39 @@ impl EClient {
         // while still detached rather than moved across the boundary.
         py.detach(|| tx.send(cmd).map_err(|e| e.to_string()))
             .map_err(|e| PyRuntimeError::new_err(format!("Engine stopped: {e}")))
+    }
+
+    /// Announce the session that has just opened: the socket, the accounts the
+    /// venue named, and the id to number orders from.
+    fn announce_the_new_session(&self, py: Python<'_>, shared: &Arc<SharedState>) -> PyResult<()> {
+        // Fire initial callbacks synchronously, matching official Python ibapi
+        // where connect_ack signals "socket ready" before run() is called.
+        // Announcements, not permission. The session is up and its engine is
+        // running; a handler that raises here — starting work in
+        // `next_valid_id` is the ordinary way to write one — must not make
+        // this report failure on a session that is live. Only an interrupt
+        // ends this call, as it ends any.
+        //
+        // And each is read against the session it was announced for. A handler
+        // is a caller's own code and may close the session from inside one —
+        // `connect_ack` calling `disconnect` is the ordinary way to give up on
+        // a connection — after which the rest of these announce a session that
+        // has been torn down, and a handler that reconnects has the startup of
+        // the session it just opened repeated over it. The dispatch surface
+        // reads the same identity for the same reason.
+        self.notify(py, "connect_ack", ())?;
+        if !self.is_current_session(shared) { return Ok(()); }
+        self.notify(py, "managed_accounts", (self.accounts_csv().as_str(),))?;
+        if !self.is_current_session(shared) { return Ok(()); }
+        // The id is announced once and a program starts numbering from it, so
+        // it is worth the wait: the venue names what the account has used just
+        // after the connection is made, and announced before that lands this
+        // is one a fill spent long ago. A program that trusts the announcement
+        // — which is the ordinary way to write one — then has its first order
+        // refused as a duplicate, and nothing about the refusal points here.
+        self.wait_for_the_replay(py);
+        if !self.is_current_session(shared) { return Ok(()); }
+        self.notify(py, "next_valid_id", (self.stated_order_id() as i64,))
     }
 
     /// A callback can replace the session. Its old pass ends before reading
@@ -2976,6 +2993,38 @@ setattr(w, boundary, replace_session)
         });
     }
 
+    /// A handler that closes the session stops the rest of the startup.
+    ///
+    /// The announcements are a caller's own code, and giving up on a
+    /// connection from inside `connect_ack` is the ordinary way to write one.
+    /// Read on the session they were announced for, the rest go on describing
+    /// a session that has been torn down — and a handler that reconnects has
+    /// the startup of the session it just opened repeated over it.
+    #[test]
+    fn a_handler_that_ends_the_session_stops_the_rest_of_the_startup() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, w) = wired_client(py);
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            g.set_item("client", &client).unwrap();
+            // Named as the reference client names them, which is what the
+            // announcement looks for first.
+            py.run(c"
+w.connectAck = lambda: (w.calls.append(('connectAck',)), client.disconnect())
+", Some(&g), None).unwrap();
+
+            client.get().announce_the_new_session(py, &shared).unwrap();
+
+            let said: Vec<String> = py.eval(c"[c[0] for c in w.calls]", Some(&g), None)
+                .unwrap().extract().unwrap();
+            assert_eq!(
+                said, ["connectAck"],
+                "a session the handler closed went on announcing itself",
+            );
+        });
+    }
+
     #[test]
     fn reentrant_local_answers_wait_for_the_next_dispatch_pass() {
         Python::initialize();
@@ -3080,6 +3129,69 @@ w.openOrder = preview
             assert!(matches!(heard.lock().unwrap()[..], [ControlCommand::Logout, ControlCommand::Shutdown]),
                 "collecting the client stops its engine");
             assert!(provider(IbKeyChallenge::default()).unwrap_err().to_string().contains("no longer available"));
+        });
+    }
+
+    /// A refused model calculation does not claim the watch the request was
+    /// already holding.
+    ///
+    /// A request already watching something is refused a second watch, so a
+    /// slot found after the refused subscribe is the other contract's. Read as
+    /// this calculation's, the question was kept against a contract the venue
+    /// never answered for — and cancelling it withdrew the caller's own
+    /// subscription. A contract stated by description carries no id to tell
+    /// the two apart, so what the request held before is what says it.
+    #[test]
+    fn a_refused_model_does_not_claim_the_watch_the_request_already_held() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, rx, shared, w) = wired_client(py);
+            shared.market.set_instrument_count(1);
+            let engine = thread::spawn(move || {
+                while let Ok(cmd) = rx.recv() {
+                    if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
+                        reply.send(Ok(0)).unwrap();
+                        return rx;
+                    }
+                }
+                panic!("the stock subscription must reach the engine");
+            });
+            client.get().req_mkt_data(py, 7, &Contract {
+                con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
+                exchange: "SMART".into(), currency: "USD".into(), ..Default::default()
+            }, "", false, false, Vec::new()).unwrap();
+            let rx = py.detach(|| engine.join().unwrap());
+            assert_eq!(client.get().core.watching(7), Some(0));
+
+            // Stated by description: no id to compare the request's own slot
+            // against, and another contract besides.
+            let option = Py::new(py, Contract {
+                symbol: "QQQ".into(), sec_type: "OPT".into(), exchange: "SMART".into(),
+                currency: "USD".into(), last_trade_date_or_contract_month: "20261218".into(),
+                strike: 100.0, right: "C".into(), multiplier: "100".into(), ..Default::default()
+            }).unwrap();
+            let g = pyo3::types::PyDict::new(py);
+            g.set_item("w", &w).unwrap();
+            py.run(c"
+errors = []
+w.error = lambda *a: errors.append(a)
+", Some(&g), None).unwrap();
+
+            client.call_method1(py, "calculate_option_price", (7, &option, 1.0, 100.0))
+                .expect("the refusal is reported to the caller, not raised");
+            let codes: Vec<i32> = py.eval(c"[e[2] for e in errors]", Some(&g), None).unwrap().extract().unwrap();
+            assert_eq!(codes, [crate::error_codes::DUPLICATE_TICKER_ID]);
+            assert!(
+                client.get().pending_option_calcs.lock().unwrap().is_empty(),
+                "a refused calculation was kept against a watch it never opened",
+            );
+
+            client.call_method1(py, "cancel_calculate_option_price", (7,)).unwrap();
+            assert_eq!(
+                client.get().core.watching(7), Some(0),
+                "cancelling the refused calculation withdrew the caller's own subscription",
+            );
+            assert!(rx.try_recv().is_err(), "and sent its unsubscribe to the engine");
         });
     }
 

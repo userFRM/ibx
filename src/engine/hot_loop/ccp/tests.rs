@@ -5986,6 +5986,63 @@ fn a_recovered_orders_replace_rejection_restores_its_terms_and_name() {
     assert_eq!(cancel.get(&38).map(String::as_str), Some("100"));
 }
 
+/// A second refusal for the same cancel does not reach past the order it was
+/// sent for.
+///
+/// A recovered order answers to the permanent id the venue stated beside it,
+/// so the cancel goes out naming that. The first refusal retires the order and
+/// drops the record the name was resolved through — leaving the second with
+/// only the digits, which name whichever live order happens to carry that
+/// number. The cancel's own name on tag 11 is this client's own and still
+/// says which order it was sent for.
+#[test]
+fn a_second_cancel_refusal_does_not_retire_an_unrelated_order() {
+    use std::io::Read;
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+
+    let recovery = exec_report_frame(&[
+        (11, "9000.0"), (6121, "42"), (150, "0"), (39, "0"),
+        (6008, "756733"), (55, "SPY"), (54, "1"), (38, "100"),
+        (40, "2"), (44, "100"), (59, "0"), (100, "ARCA"), (198, "ARCA:1"),
+    ]);
+    ccp.handle_exec_report(&recovery, b"", &mut context, &shared, &None, "DU1");
+    // An unrelated order whose own number is what those digits read as.
+    let other = exec_report_frame(&[
+        (11, "9000"), (6121, "9000"), (150, "0"), (39, "0"),
+        (6008, "756733"), (55, "SPY"), (54, "1"), (38, "50"),
+        (40, "2"), (44, "100"), (59, "0"), (100, "ARCA"), (198, "ARCA:2"),
+    ]);
+    ccp.handle_exec_report(&other, b"", &mut context, &shared, &None, "DU1");
+    assert!(context.order(9000).is_some(), "the unrelated order is live");
+
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut conn = Some(conn);
+    let mut hb = HeartbeatState::new();
+    let mut buf = [0u8; 4096];
+    context.cancel(42);
+    crate::engine::hot_loop::order_builder::drain_and_send_orders(
+        &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,
+    );
+    let n = peer.read(&mut buf).unwrap();
+    let cancel = fix::fix_parse(&buf[..n]);
+    assert_eq!(cancel.get(&41).map(String::as_str), Some("9000.0"));
+
+    let refusal = exec_report_frame(&[
+        (35, "9"), (434, "1"), (102, "1"),
+        (11, cancel.get(&11).expect("the cancel carries its own name")),
+        (41, "9000.0"),
+    ]);
+    ccp.handle_cancel_reject(&refusal, &mut context, &shared, &None);
+    ccp.handle_cancel_reject(&refusal, &mut context, &shared, &None);
+
+    assert!(
+        context.order(9000).is_some(),
+        "the unrelated order was retired in place of the one that was cancelled",
+    );
+}
+
 /// A refused revision puts back the name the venue holds, not only its terms.
 ///
 /// A replace records the name it is about to emit ahead of the venue's answer,
@@ -7687,6 +7744,61 @@ fn a_correction_that_reopens_an_order_puts_it_back_in_the_book() {
             "{undone:?}: the caller is still told the order finished",
         );
     }
+}
+
+/// A correction the window has already seen is that same one again.
+///
+/// The booking refuses it on its key, but the recovery and the correction the
+/// caller reads went by the report alone and took it as a second one: an order
+/// this session had already finished came back working, holding the quantity
+/// the first copy had given back and short every fill that followed it.
+#[test]
+fn a_repeated_correction_does_not_reopen_a_finished_order() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let shared = SharedState::new();
+    context.insert_order(crate::types::Order::new(
+        42, instrument, Side::Buy, 100 * QTY_SCALE, 400 * PRICE_SCALE, b'2', b'0', 0,
+    ));
+
+    let fill = exec_report_frame(&[
+        (39, "2"), (150, "F"), (17, "exec-1"),
+        (32, "100"), (31, "412.25"), (14, "100"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&fill, b"", &mut context, &shared, &None, "");
+    assert!(context.order(42).is_none(), "a filled order is retired");
+
+    let corrected = exec_report_frame(&[
+        (39, "1"), (150, "H"), (17, "exec-2"), (54, "1"), (6008, "756733"),
+        (32, "50"), (31, "412.25"), (14, "50"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
+    assert!(context.order(42).is_some(), "the correction reopened the order");
+    assert_eq!(shared.orders.drain_order_corrections(), vec![42]);
+    let _ = shared.orders.drain_fills();
+
+    // The quantity it gave back is filled again, and the order finishes.
+    let refill = exec_report_frame(&[
+        (39, "2"), (150, "F"), (17, "exec-3"), (54, "1"), (6008, "756733"),
+        (32, "50"), (31, "412.25"), (14, "100"), (38, "100"),
+    ]);
+    ccp.handle_exec_report(&refill, b"", &mut context, &shared, &None, "");
+    assert!(context.order(42).is_none(), "filled whole again, so retired again");
+    let _ = shared.orders.drain_fills();
+
+    // The venue restates the correction while its key is still in the window.
+    ccp.handle_exec_report(&corrected, b"", &mut context, &shared, &None, "");
+
+    assert!(
+        context.order(42).is_none(),
+        "a correction already acted on put a finished order back in the book",
+    );
+    assert!(
+        shared.orders.drain_order_corrections().is_empty(),
+        "and told the caller its completion no longer stands",
+    );
 }
 
 /// A report arriving behind a finished order leaves no name behind it.

@@ -366,13 +366,19 @@ impl AsyncClient {
     }
 
     /// Withdraw an order.
-    pub fn cancel_order(&self, order_id: i64) -> Result<(), Refusal> {
-        self.inner.cancel_order(order_id)
+    ///
+    /// Off the reactor, as every other order call here. A withdrawal waits out
+    /// whatever a reconnect has still to put back, and waited for on the
+    /// reactor that hold stops every other task the caller is running.
+    pub async fn cancel_order(&self, order_id: i64) -> Result<(), Refusal> {
+        off_the_reactor!(self, |client| client.cancel_order(order_id))
     }
 
     /// Withdraw every order this account has working, on every connection.
-    pub fn cancel_all(&self) -> Result<(), Refusal> {
-        self.inner.cancel_all()
+    ///
+    /// Off the reactor, for the reason the single withdrawal above is.
+    pub async fn cancel_all(&self) -> Result<(), Refusal> {
+        off_the_reactor!(self, |client| client.cancel_all())
     }
 
     /// Run a scan and hand back what it found.

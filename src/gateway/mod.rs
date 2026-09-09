@@ -751,6 +751,11 @@ fn drain_init_burst<R: Read>(
                 quiet = 0;
                 crate::protocol::connection::hold_what_was_read(&mut data, &tmp[..n])?;
             }
+            // A signal cut the read short. No time passed and the peer said
+            // nothing either way, so counting it as a poll's worth of silence
+            // ends the drain early — four of them inside one second read as
+            // the whole gap, and routing bytes still in flight are never read.
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) if crate::protocol::connection::read_found_nothing(&e) => {
                 quiet += 1;
                 if quiet >= quiet_reads_at_the_end {

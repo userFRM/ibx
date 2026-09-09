@@ -1861,7 +1861,14 @@ impl FarmState {
         // number the venue hands to the next subscription would otherwise
         // still be read as the tick this one asked for.
         self.generic_tick_reqs.retain(|(req_id, _)| !reqs.contains(req_id));
-        self.generic_tick_tags.retain(|(_, _, held)| *held != instrument);
+        // The news tick is asked for under its own request and withdrawn under
+        // its own, so the tag it was filed under is not this withdrawal's to
+        // take. Dropped here, the subscription stands while its headlines
+        // arrive under a tag nothing reads.
+        let news_stands = self.news_subscriptions.iter().any(|(i, ..)| *i == instrument);
+        self.generic_tick_tags.retain(|(_, tick, held)| {
+            *held != instrument || (news_stands && *tick == NEWS_REQUEST_TYPE)
+        });
         // The option-model records go with the withdrawal whether or not the
         // farm is up: left behind, they outlive the subscription they
         // describe.

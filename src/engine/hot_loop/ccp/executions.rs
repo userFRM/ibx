@@ -924,7 +924,15 @@ impl CcpState {
         // reads.
         let restates_a_trade = matches!(parsed.get(&20).map(String::as_str), Some("1" | "2"))
             || matches!(exec_type, "G" | "H");
-        let recovering = !status.is_terminal() && !marked_resend && !revision_refused
+        // A restatement the window has already seen is that same one again.
+        // The booking further along refuses it on its key, but the recovery
+        // here and the correction published after it read the report on its
+        // own and took it as a second one: an order this session had already
+        // finished came back working, holding the quantity the first copy had
+        // given back and short the fills that followed it.
+        let restated_twice = restates_a_trade
+            && parsed.get(&17).is_some_and(|id| !id.is_empty() && self.already_recorded_exec_id(id));
+        let recovering = !status.is_terminal() && !marked_resend && !revision_refused && !restated_twice
             && clord_id != 0 && (!already_finished || restates_a_trade)
             && (context.order(clord_id).is_none() || unknown);
         if recovering {
@@ -1785,7 +1793,7 @@ impl CcpState {
             // walks and can never reach, and its completion is purged from what
             // the caller reads. The recovery test beside this one keeps the
             // same condition for the same reason.
-            if restates_a_trade && !marked_resend {
+            if restates_a_trade && !marked_resend && !restated_twice {
                 shared.orders.push_order_correction(clord_id, info);
             } else {
                 // A late duplicate of an earlier partial must not rewrite a
@@ -1928,6 +1936,17 @@ impl CcpState {
                 .iter()
                 .find(|(_, name)| *name == stated)
                 .map(|(id, _)| *id)
+                .or_else(|| parsed.get(&11).and_then(|sent| {
+                    // The cancel's own name, which this client built from the
+                    // local order id. Read ahead of tag 41's digits because a
+                    // recovered order answers to the permanent id the venue
+                    // stated beside it: once the first refusal retires it and
+                    // drops its record, those digits name whichever live order
+                    // happens to carry that number, and the second refusal
+                    // retired it in place of the one that was cancelled.
+                    let stripped = sent.strip_prefix('C').or_else(|| sent.strip_prefix('L')).unwrap_or(sent);
+                    stated_order_id(stripped.split('.').next().unwrap_or(stripped))
+                }))
                 .or_else(|| {
                     // No record of having sent that name. A cancel issued
                     // before anything was observed states the versioned form,

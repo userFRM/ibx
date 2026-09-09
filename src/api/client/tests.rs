@@ -22,6 +22,29 @@ pub(crate) fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlComman
     (client, rx, shared)
 }
 
+/// The slot a contract holds is not answered after the engine has taken it
+/// back.
+///
+/// The getter is what a caller reads a quote through, and the cache it reads
+/// answers without asking the engine. A slot goes to the next contract that
+/// needs one, so an answer from here after that names another contract
+/// altogether — the caller asks for one symbol's quote and is given another's.
+#[test]
+fn a_slot_the_engine_took_back_is_not_named_by_the_getter() {
+    let (client, _rx, shared) = test_client();
+    {
+        let mut cache = client.core.con_id_to_instrument.lock().unwrap();
+        cache.insert(756733, 4);
+        cache.insert(265598, 5);
+    }
+
+    shared.market.note_released_slot(4);
+
+    assert_eq!(client.instrument_of(756733), None, "the freed slot is not named");
+    assert_eq!(client.instrument_of(265598), Some(5), "the others stand");
+    assert_eq!(client.instrument_of(0), None, "a contract with no id names no slot");
+}
+
 /// A short bracket is a sell, and its exits take the selling orientation:
 /// take-profit below the entry, stop-loss above.
 #[test]

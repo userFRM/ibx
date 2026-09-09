@@ -1005,6 +1005,37 @@ fn a_subscription_that_was_never_made_leaves_no_stream() {
     assert_eq!(session.kept().streams_recorded(), 0, "which also leaves none behind");
 }
 
+/// Dropping a stream withdraws its subscription at the venue, not only its
+/// record here.
+///
+/// The subscribe numbers itself in the band reserved for this client's own
+/// answering calls, which the request surface refuses to anyone else. Asked
+/// from outside one the withdrawal is refused before it reaches the wire, and
+/// `Drop` has nowhere to report that: the record went, the reader went, and
+/// the venue went on sending five-second bars for the rest of the session.
+#[test]
+fn dropping_a_stream_withdraws_it_at_the_venue() {
+    let shared = Arc::new(crate::bridge::SharedState::new());
+    let (session, rx) = a_session(&shared);
+
+    let bars = session.live_bar_stream(&Contract::stock("SPY")).expect("a bar stream to open");
+    let opened = rx.try_recv().expect("the subscribe reaches the engine");
+    let req_id = match opened {
+        crate::types::ControlCommand::SubscribeRealTimeBar { req_id, .. } => req_id,
+        other => panic!("a bar subscribe, not {other:?}"),
+    };
+    drop(bars);
+    assert!(
+        matches!(
+            rx.try_recv(),
+            Ok(crate::types::ControlCommand::CancelRealTimeBar { req_id: cancelled })
+                if cancelled == req_id
+        ),
+        "the withdrawal never reached the engine",
+    );
+
+}
+
 /// A stream the caller has finished with leaves no record either.
 ///
 /// Dropping the stream is how a caller says so, and the subscription is

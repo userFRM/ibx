@@ -1110,6 +1110,10 @@ mod init_burst_drain_tests {
         Ok(bytes.to_vec())
     }
 
+    fn interrupted() -> io::Result<Vec<u8>> {
+        Err(io::Error::new(io::ErrorKind::Interrupted, "a signal"))
+    }
+
     const POLL: Duration = Duration::from_millis(250);
     const GAP: Duration = Duration::from_secs(1);
 
@@ -1140,6 +1144,35 @@ mod init_burst_drain_tests {
             drained,
             b"6145=usfarm;6171=eufarm;",
             "the bytes after the gap were left undrained",
+        );
+    }
+
+    /// A signal cutting a read short is not a poll's worth of silence. No
+    /// time passed and the peer said nothing either way, so counted as quiet
+    /// a handful of signals inside one second stand in for the whole gap and
+    /// the burst still in flight is left unread.
+    #[test]
+    fn a_signal_is_not_a_quiet_read() {
+        let mut reader = BurstReader {
+            script: vec![
+                quiet(),
+                quiet(),
+                quiet(),
+                interrupted(),
+                interrupted(),
+                chunk(b"6145=usfarm;"),
+                quiet(),
+                quiet(),
+                quiet(),
+                quiet(),
+            ],
+        };
+        let drained = super::super::drain_init_burst(&mut reader, Vec::new(), POLL, GAP, far_enough())
+            .expect("the drain ends on the quiet stretch");
+        assert_eq!(
+            drained,
+            b"6145=usfarm;",
+            "the burst arriving after the signals was left undrained",
         );
     }
 

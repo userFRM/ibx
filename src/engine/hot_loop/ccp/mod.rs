@@ -556,6 +556,13 @@ impl CcpState {
         true
     }
 
+    /// Whether the window has already seen this execution, asked without
+    /// spending its key: the booking that spends it runs further along the
+    /// same report, and the readers before it need the same answer.
+    pub(crate) fn already_recorded_exec_id(&self, exec_id: &str) -> bool {
+        self.seen_exec_ids.contains(exec_id)
+    }
+
     pub(crate) fn process_ccp_message(
         &mut self,
         msg: &[u8],

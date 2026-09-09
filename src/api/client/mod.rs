@@ -791,7 +791,10 @@ impl EClient {
 impl EClient {
     /// Which slot a contract holds on this session, if it holds one.
     pub fn instrument_of(&self, con_id: i64) -> Option<crate::types::InstrumentId> {
-        self.core.con_id_to_instrument.lock().unwrap().get(&con_id).copied()
+        // Through the same lookup every other reader uses, which drops what the
+        // engine has given back before it answers. Read from the map directly,
+        // this named a slot that had already gone to the next contract.
+        self.core.cached_instrument(&self.shared, con_id)
     }
 
     /// The session's own state, for reading what has arrived.

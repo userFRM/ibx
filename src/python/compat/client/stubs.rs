@@ -612,13 +612,18 @@ impl EClient {
             // because the refusal that answers is the caller's to hear — and an
             // interrupt raised in their handler for it leaves the call rather
             // than being swallowed here.
+            let held_before = self.core.holds_mkt_data(req_id);
             self.req_mkt_data(py, req_id, contract, "", false, false, Vec::new())?;
             let took = if its_own != 0 {
                 its_slot().is_some() && its_slot() == self.core.watching(req_id)
             } else {
                 // A contract stated by description carries no id to compare, and
-                // the engine is the first to know which slot it resolved to.
-                self.core.holds_mkt_data(req_id)
+                // the engine is the first to know which slot it resolved to. What
+                // it held before still has to be asked: a request already watching
+                // something is refused a second watch, so a slot found after a
+                // refused subscribe is the other contract's — kept, the question
+                // was answered on it and cancelling the question withdrew it.
+                !held_before && self.core.holds_mkt_data(req_id)
             };
             if !took {
                 return Ok(false);

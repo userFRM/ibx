@@ -144,6 +144,34 @@ mod news_tests {
         assert!(farm.generic_tick_reqs.iter().all(|(rid, _)| *rid != 7));
     }
 
+    /// News is asked for under its own request and withdrawn under its own, so
+    /// withdrawing the quote on the same contract does not take it. Taken with
+    /// it, the subscription stands while its headlines arrive under a tag
+    /// nothing reads: no rejection, no end, just silence.
+    #[test]
+    fn withdrawing_the_quote_leaves_the_news_reading() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut None, &mut hb,
+        );
+        farm.send_news_subscribe(756733, instrument, "STK", "BRFG", 7, &mut None, &mut hb);
+        farm.handle_subscription_ack(b"35=Q\x0133082,7,0.01,0,3", &mut context, &shared);
+
+        farm.send_mktdata_unsubscribe(instrument, &mut None, &mut hb);
+
+        farm.handle_generic_tick(&framed_news(33082, &one_article()), &mut context, &shared, &None);
+        assert_eq!(
+            shared.market.drain_tick_news().len(), 1,
+            "the news subscription stands, so its headline still reaches the caller",
+        );
+    }
+
     /// A frame under a number nothing asked a generic tick under says nothing
     /// about which tick it is, so it is dropped rather than guessed at.
     /// Instrument 0 is a real instrument — the first one registered — so a

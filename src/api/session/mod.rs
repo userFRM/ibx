@@ -646,6 +646,13 @@ impl Iterator for LiveBars {
 
 impl Drop for LiveBars {
     fn drop(&mut self) {
+        // Under the same mark the subscribe was numbered with. Unlike the
+        // ticks above, the number comes from the band reserved for this
+        // client's own answering calls, which the request surface refuses to
+        // anyone else — asked from outside one the withdrawal was refused
+        // before it reached the wire, the error dropped here, and the venue
+        // went on closing five-second bars at a reader that had gone.
+        let _answering = super::client::Answering::begin();
         let _ = self.session.client.cancel_real_time_bars(self.req_id);
         // As the ticks above: the record is taken back too, or a withdrawn
         // subscription leaves one nothing will ever sweep.

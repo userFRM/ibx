@@ -1004,8 +1004,7 @@ impl HotLoop {
                 // holding it.
                 self.drive_replay();
                 self.poll_ccp_reconnect();
-                self.poll_hmds_reconnect();
-                self.poll_secdef_reconnect();
+                self.poll_optional_farm_reconnects();
             }
             // The session's budget is the trading connection's: settled on
             // that connection alone. Settled on the quote feed as well, a
@@ -3471,6 +3470,21 @@ impl HotLoop {
         }
     }
 
+    /// Take back what the optional farms' reconnects returned, each farm's own
+    /// clock read first.
+    ///
+    /// Those clocks live in the schedulers, and a scheduler answers at once
+    /// once the connection is there. Taken first, a connection that came up
+    /// long after the caller had given up on it was installed anyway and the
+    /// deadline it passed was never read — the sweep beside this one answers
+    /// for the trading connection and the quote feed alone.
+    fn poll_optional_farm_reconnects(&mut self) {
+        self.maybe_spawn_hmds_reconnect();
+        self.poll_hmds_reconnect();
+        self.maybe_spawn_secdef_reconnect();
+        self.poll_secdef_reconnect();
+    }
+
     /// Poll for a completed HMDS reconnect. Non-blocking.
     fn poll_hmds_reconnect(&mut self) {
         let rx = match self.pending_hmds_reconnect.as_ref() {
@@ -5561,6 +5575,39 @@ mod tests {
             shared.reference.trading_over(),
             Some(retry::DisconnectReason::AuthorizationFailed.as_str()),
             "orders go on being taken and buffered for a connection nothing will dial again",
+        );
+    }
+
+    /// A farm that came up past its deadline is not installed.
+    ///
+    /// The clock is read in the scheduler, and the scheduler answers at once
+    /// once the connection is there — so a success taken before it is read is
+    /// one whose deadline never fires. The caller was told historical data was
+    /// coming back on a farm they had already stopped waiting for.
+    #[test]
+    fn a_farm_that_came_up_past_its_deadline_is_not_installed() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        hl.set_reconnect_config(
+            crate::reliability::ReconnectConfig::default()
+                .with_max_elapsed(Duration::from_secs(30)),
+        );
+        // Dialled for longer than the caller allowed this farm's whole
+        // recovery, and answered just before the loop got back to it.
+        hl.hmds_budget.record_attempt(Instant::now() - Duration::from_secs(31));
+        let (worker, worker_rx) = std::sync::mpsc::sync_channel(1);
+        let (conn, _peer) = crate::protocol::connection::Connection::for_test();
+        worker.send(Ok(conn)).unwrap();
+        hl.pending_hmds_reconnect = Some(worker_rx);
+
+        hl.poll_optional_farm_reconnects();
+
+        assert_eq!(
+            hl.hmds_halted, Some(retry::DisconnectReason::ByDesign),
+            "the deadline the dial ran past was never read",
+        );
+        assert!(
+            hl.hmds_conn.is_none(),
+            "a farm the session had stopped waiting for was installed anyway",
         );
     }
 
