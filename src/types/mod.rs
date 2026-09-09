@@ -194,9 +194,8 @@ pub fn qty_from_counted(counted: i64, size_tick: f64) -> Qty {
 /// this client refused the two hundred and fifty-seventh while the venue was
 /// still serving.
 ///
-/// Where the venue's own allowance ends is not established: nothing this
-/// client has asked for has reached it. Slots are reused, so a contract
-/// withdrawn stops counting against this one.
+/// The venue states its subscription allowance on the logon. This size only
+/// bounds storage; slots are reused when nothing holds their contract.
 pub const MAX_INSTRUMENTS: usize = 4096;
 
 /// How deep a healthy backlog of order requests goes, which is what the

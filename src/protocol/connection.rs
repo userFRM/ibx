@@ -232,6 +232,8 @@ pub struct Connection {
     /// proposed. The number it answers with is the one the session is held to,
     /// and the one it proposed is not.
     pub heartbeat_secs: Option<u64>,
+    /// How many quote subscriptions this session may hold; the venue states it on the logon.
+    pub market_data_allowance: usize,
     /// What the venue answered this connection's routing request with.
     ///
     /// Sent once, right after logon, on the connection that asked — so it
@@ -296,6 +298,7 @@ impl Connection {
             logged_in_at: None,
             competing: None,
             heartbeat_secs: None,
+            market_data_allowance: 40,
             routing: Default::default(),
             write_failed: false,
             read_failed: false,
@@ -698,6 +701,7 @@ impl Connection {
             logged_in_at: None,
             competing: None,
             heartbeat_secs: None,
+            market_data_allowance: 40,
             routing: Default::default(),
             write_failed: false,
             read_failed: false,
@@ -1191,6 +1195,7 @@ mod tests {
             logged_in_at: None,
             competing: None,
             heartbeat_secs: None,
+            market_data_allowance: 40,
             routing: Default::default(),
             write_failed: false,
             read_failed: false,
@@ -1324,6 +1329,7 @@ mod tests {
             logged_in_at: None,
             competing: None,
             heartbeat_secs: None,
+            market_data_allowance: 40,
             routing: Default::default(),
             write_failed: false,
             read_failed: false,
@@ -1822,6 +1828,7 @@ mod tests {
             logged_in_at: None,
             competing: None,
             heartbeat_secs: None,
+            market_data_allowance: 40,
             routing: Default::default(),
             write_failed: false,
             read_failed: false,

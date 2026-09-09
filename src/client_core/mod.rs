@@ -1453,8 +1453,8 @@ impl ClientCore {
     /// Wait for the hot loop to register a contract, and answer with the slot
     /// it gave. A full instrument table comes back as an `Err` for this
     /// request alone; the engine keeps running.
-    fn recv_registration(
-        &self, reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, String>>,
+    fn recv_registration<E: Into<Refusal>>(
+        &self, reply_rx: std::sync::mpsc::Receiver<Result<InstrumentId, E>>,
     ) -> Result<InstrumentId, Refusal> {
         use std::sync::mpsc::RecvTimeoutError;
         reply_rx.recv_timeout(self.registration_timeout())
@@ -1467,9 +1467,8 @@ impl ClientCore {
                 }
                 RecvTimeoutError::Timeout => Refusal::no_answer("Registration timed out"),
             })?
-            // A full instrument table is the caller asking for more than this
-            // session can hold, which is theirs to fix.
-            .map_err(Refusal::validation)
+            // Keep the number the engine refused this request under.
+            .map_err(Into::into)
     }
 
     /// The instrument this conId is already known to hold. `0` means the

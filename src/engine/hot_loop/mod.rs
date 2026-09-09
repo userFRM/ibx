@@ -1214,8 +1214,12 @@ impl HotLoop {
                 );
                 log::warn!("{told}");
                 match &cmd {
-                    ControlCommand::Subscribe { reply_tx, .. }
-                    | ControlCommand::SubscribeTbt { reply_tx, .. }
+                    ControlCommand::Subscribe { reply_tx, .. } => {
+                        if let Some(tx) = reply_tx {
+                            let _ = tx.try_send(Err(told.into()));
+                        }
+                    }
+                    ControlCommand::SubscribeTbt { reply_tx, .. }
                     | ControlCommand::SubscribeNews { reply_tx, .. }
                     | ControlCommand::RegisterInstrument { reply_tx, .. } => {
                         if let Some(tx) = reply_tx {
@@ -1266,7 +1270,7 @@ impl HotLoop {
                             if let Some(tx) = &reply_tx {
                                 let _ = tx.try_send(Err(format!(
                                     "instrument table full: cannot subscribe to {symbol}"
-                                )));
+                                ).into()));
                             }
                         }
                         // Already subscribed, so nothing goes to the venue
@@ -1291,6 +1295,28 @@ impl HotLoop {
                             }
                         }
                         Some(id) => {
+                            // The venue states it on the logon. Count streams
+                            // waiting on a definition or a reconnect too: they
+                            // were admitted already and still need their line.
+                            let allowance = self.ccp_conn.as_ref().map_or(40, |c| c.market_data_allowance);
+                            let subscribed = self.context.market.active_instruments().filter(|(at, _)| {
+                                *at != id && (self.farm.holds_a_stream(*at)
+                                    || self.ccp.pending_md_subscribe.iter().any(|(_, p, _)| {
+                                        p.instrument == *at && !p.regulatory_snapshot
+                                    })
+                                    || self.ccp.resolved_md_subscribe.iter().any(|(_, p)| {
+                                        p.instrument == *at && !p.regulatory_snapshot
+                                    }))
+                            }).count();
+                            if !regulatory_snapshot && subscribed >= allowance {
+                                if let Some(tx) = &reply_tx {
+                                    let _ = tx.try_send(Err(crate::error_codes::Refusal::stated(
+                                        101, "Max number of tickers has been reached",
+                                    )));
+                                }
+                                self.try_reclaim_instrument(id);
+                                continue;
+                            }
                             // A caller that has stopped waiting gets no
                             // subscription. Its wait is bounded and this loop
                             // is not — a redial or a lookup ahead of this
@@ -4384,6 +4410,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn subscriptions_stop_at_the_logon_allowance_with_101() {
+        for (allowance, sec_type) in [(100, "STK"), (100, ""), (40, "STK")] {
+            let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+            let (mut conn, _peer) = Connection::for_test();
+            if allowance != 40 { conn.market_data_allowance = allowance; }
+            hl.ccp_conn = Some(conn);
+            let (tx, rx) = sync_channel(4);
+            hl.set_control_rx(rx);
+            // A slot held for something other than quotes spends no line.
+            hl.context.market.register(1000);
+            let subscribe = |hl: &mut HotLoop, con_id| {
+                let (reply_tx, reply_rx) = sync_channel(1);
+                tx.send(ControlCommand::Subscribe {
+                    contract: ContractRef {
+                        con_id, sec_type: sec_type.into(), exchange: "SMART".into(),
+                        ..Default::default()
+                    },
+                    mode_9887: 0,
+                    regulatory_snapshot: false,
+                    reply_tx: Some(reply_tx),
+                }).unwrap();
+                hl.poll_once();
+                reply_rx.try_recv().expect("the subscriber is answered")
+            };
+            let first = subscribe(&mut hl, 1).expect("inside the allowance");
+            for con_id in 2..=allowance as i64 {
+                subscribe(&mut hl, con_id).expect("inside the allowance");
+            }
+            let past = allowance as i64 + 1;
+            let refused = subscribe(&mut hl, past).expect_err("past the allowance");
+            assert_eq!(refused.code, 101);
+            assert!(hl.context.market.instrument_by_con_id(past).is_none(), "no slot left behind");
+            assert_eq!(subscribe(&mut hl, 1).unwrap(), first, "a shared contract spends no second line");
+            assert_eq!(hl.farm.instrument_md_reqs.len(), if sec_type.is_empty() { 0 } else { allowance });
+            assert!(hl.ccp.pending_md_subscribe.iter().all(|(_, p, _)| p.con_id != past));
+            assert!(hl.is_running(), "existing subscriptions keep running");
+
+            if !sec_type.is_empty() {
+                tx.send(ControlCommand::Unsubscribe { instrument: first }).unwrap();
+                hl.poll_once();
+                subscribe(&mut hl, past).expect("a withdrawn subscription gives its line back");
+            }
+        }
+    }
+
     /// The calendar's connection is watched like the other three.
     ///
     /// Its send and receive timestamps drive the same liveness check: a socket
@@ -6955,7 +7027,7 @@ mod tests {
         );
         let refused = reply_rx.try_recv().expect("the subscriber is answered");
         assert!(
-            refused.is_err_and(|why| why.contains(&PAST_THE_WIRE.to_string())),
+            refused.is_err_and(|why| why.message.contains(&PAST_THE_WIRE.to_string())),
             "and is told which contract could not be asked about",
         );
         let (_, why) = shared.reference.take_error_for(91)

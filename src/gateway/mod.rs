@@ -1053,6 +1053,7 @@ fn reconnect_ccp_attempt(
     let fix_deadline = std::time::Instant::now()
         + std::time::Duration::from_secs_f64(TIMEOUT_FIX_LOGON * 2.0);
     let mut stated_heartbeat: Option<u64> = None;
+    let mut market_data_allowance = 40;
     // Whoever held the account when this reconnect arrived, if the venue said,
     // and the interval it holds this connection to.
     let took_from = match wait_for_fix_start(
@@ -1129,6 +1130,7 @@ fn reconnect_ccp_attempt(
                 ));
             }
             _ if names_ack => {
+                market_data_allowance = logon::market_data_allowance(&fields);
                 // The interval the venue holds this connection to. Read from
                 // the answer for the same reason the first logon reads it: the
                 // number this client proposes is not what it is held to, and a
@@ -1197,6 +1199,7 @@ fn reconnect_ccp_attempt(
     log::info!("CCP reconnect complete (seq={})", conn.seq);
     conn.competing = took_from;
     conn.heartbeat_secs = stated_heartbeat;
+    conn.market_data_allowance = market_data_allowance;
     // Where this attempt actually landed. A redirect followed here is followed
     // again on every later attempt unless the session remembers it.
     conn.connected_host = Some(host.to_string());
@@ -1984,6 +1987,7 @@ impl Gateway {
             mktdata_route,
             secdef_route,
             trading_port,
+            market_data_allowance,
         } = ack;
 
         // Sent in plain FIX over TLS: the CCP socket has no AES/HMAC envelope
@@ -2005,6 +2009,7 @@ impl Gateway {
         // Auth connection (non-blocking TLS for hot loop)
         let mut ccp_conn = Connection::new(tls)?;
         ccp_conn.seq = ccp_seq;
+        ccp_conn.market_data_allowance = market_data_allowance;
         // The venue's stamp on this logon, where it gave one. The clock a
         // caller asks for reads from it; left None where the venue stamped
         // nothing, because the local fallback the session keeps below is not

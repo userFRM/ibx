@@ -141,7 +141,7 @@ pub enum ControlCommand {
         regulatory_snapshot: bool,
         /// Where the engine sends the slot it registered, for a caller waiting
         /// on one.
-        reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, String>>>,
+        reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, crate::error_codes::Refusal>>>,
     },
     /// Unsubscribe from market data for an instrument.
     Unsubscribe {

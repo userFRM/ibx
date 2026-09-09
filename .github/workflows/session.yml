@@ -94,6 +94,18 @@ jobs:
           IB_USERNAME: ${{ secrets.IB_USERNAME }}
           IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
         run: cargo test --test ib_paper_compat -- --ignored --test-threads=1
+      # The phases above place orders that fill, and a fill leaves a holding
+      # the account keeps. Left standing, run after run, they build until the
+      # venue refuses new orders on the account's margin rather than on
+      # anything the order says — which reads in the output as this client
+      # building a bad order, and is the account being full. Emptied here,
+      # whatever the run did, so the next one starts where this one did.
+      - name: leave the account as it was found
+        if: always()
+        env:
+          IB_USERNAME: ${{ secrets.IB_USERNAME }}
+          IB_PASSWORD: ${{ secrets.IB_PASSWORD }}
+        run: cargo run --features dev-tools --bin flatten_paper
       # Three suites of their own, in no workflow and in no gate: a reconnect
       # on a cached session, a contract listed outside the United States, and
       # the Rust surface against captured answers. Run nowhere, they proved

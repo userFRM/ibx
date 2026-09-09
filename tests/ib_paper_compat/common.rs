@@ -1084,6 +1084,11 @@ const REJECTED_BY_MARKET_OR_ACCOUNT: &[&str] = &[
     "not subscribed",
     "market data",              // no quote to price against
     "insufficient",             // margin, buying power
+    // The account's own margin state refusing the order, stated as the rule it
+    // would breach rather than as a shortfall. A paper account that has been
+    // traded against for weeks reaches this on an order the client built
+    // correctly, so it is the account talking and not the order being wrong.
+    "reg t call",
     "residency",
     "halted",
     // The venue stating which order types and times in force it accepts for a
@@ -1345,6 +1350,23 @@ pub(super) fn run_submit_cancel_phase(
         // on it passed every phase that goes through this helper whether or not
         // anything reached the socket.
         if skip_unacked_if_closed(order_acked) {
+            return conns;
+        }
+        // The venue naming the order and ending it is not the silence this
+        // guard is for. It never worked the order, so nothing acknowledged it,
+        // but it answered — with a terminal status and no prose, which is how
+        // it declines an order type it will not take on this instrument at this
+        // hour. Told apart from silence by there being a status at all: an
+        // order that never reached the socket has none.
+        let ended_unworked = !cancel_sent
+            && shared.orders.get_order_info(order_id).is_some_and(|i| {
+                matches!(i.order_state.status.as_str(), "Cancelled" | "Rejected")
+            });
+        if !order_acked && ended_unworked {
+            skipped!(
+                "  SKIP: the venue ended the order without working it — it declines \
+                 this order type here\n",
+            );
             return conns;
         }
         assert!(

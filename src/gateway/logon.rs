@@ -71,6 +71,16 @@ pub(super) struct LogonAck {
     /// The trading port, tag 6146. Takes precedence over a port carried in
     /// the route string.
     pub trading_port: Option<u16>,
+    /// How many quote subscriptions this session may hold; the venue states it on the logon.
+    pub market_data_allowance: usize,
+}
+
+pub(super) fn market_data_allowance(fields: &std::collections::HashMap<u32, String>) -> usize {
+    let preferred = if fields.contains_key(&8421) && fields.contains_key(&8422) { 8421 } else { 6083 };
+    [preferred, 6847, 6846].into_iter()
+        .filter_map(|tag| fields.get(&tag)?.parse::<i32>().ok())
+        .find(|&stated| stated > 0)
+        .map_or(40, |stated| stated as usize)
 }
 
 /// The messages one answer carried, each whole.
@@ -339,6 +349,7 @@ impl LogonAck {
             // an answer it was already holding, and where the venue was
             // waiting for the opening requests it waited until the deadline.
             if the_ack_is_among(&messages) {
+                ack.market_data_allowance = market_data_allowance(&fields);
                 // And what rode in with it. The venue pushes what it holds the
                 // moment the logon is answered, so the envelope carrying the
                 // acknowledgement carries the session's own traffic beside it —
@@ -1275,6 +1286,40 @@ mod tests {
 
     fn a_minute_from_now() -> Instant {
         Instant::now() + std::time::Duration::from_secs(60)
+    }
+
+    #[test]
+    fn the_logon_states_the_market_data_allowance() {
+        let cases: &[(&[(u32, &str)], usize)] = &[
+            (&[(8421, "100"), (6846, "100"), (6847, "100")], 100),
+            (&[(8421, "75"), (8422, "1"), (6083, "60"), (6846, "150"), (6847, "100")], 75),
+            (&[(8421, "75"), (6083, "60"), (6846, "150"), (6847, "100")], 60),
+            (&[(6083, "60"), (6846, "150"), (6847, "100")], 60),
+            (&[(6083, "0"), (6846, "150"), (6847, "100")], 100),
+            (&[(6083, "-1"), (6846, "150"), (6847, "0")], 150),
+            (&[(8421, "0"), (8422, "1"), (6083, "60"), (6846, "150"), (6847, "100")], 100),
+            (&[(6847, "1")], 1),
+        ];
+        for &(stated, expected) in cases {
+            let mut fields = vec![(35, "A"), (1, "DU111111")];
+            fields.extend_from_slice(stated);
+            let mut wire = answered_with(&[&fields]);
+            let ack = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now()).unwrap();
+            assert_eq!(ack.market_data_allowance, expected, "{stated:?}");
+        }
+    }
+
+    #[test]
+    fn the_logon_defaults_to_forty_when_no_allowance_is_positive() {
+        for stated in ["", "0", "-1", "unreadable"] {
+            let mut fields = vec![(35, "A"), (1, "DU111111")];
+            if !stated.is_empty() {
+                fields.extend([6083, 8421, 8422, 6846, 6847].map(|tag| (tag, stated)));
+            }
+            let mut wire = answered_with(&[&fields]);
+            let ack = LogonAck::read(&mut wire, &mut Vec::new(), a_minute_from_now()).unwrap();
+            assert_eq!(ack.market_data_allowance, 40, "{stated:?}");
+        }
     }
 
     /// Where this login is routed, which farm connection it opens on, and

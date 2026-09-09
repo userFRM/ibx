@@ -2991,7 +2991,7 @@ fn a_registration_that_fails_withdraws_the_headlines_it_asked_for() {
         let mut seen = Vec::new();
         while let Ok(cmd) = rx.recv() {
             if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = &cmd {
-                let _ = reply.try_send(Err("the table is full".to_string()));
+                let _ = reply.try_send(Err(Refusal::stated(101, "Market data is over the limit")));
             }
             seen.push(cmd);
         }
@@ -3002,7 +3002,7 @@ fn a_registration_that_fails_withdraws_the_headlines_it_asked_for() {
         &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
         false, false, "292", 0,
     );
-    assert!(refused.is_err(), "the registration was refused");
+    assert_eq!(refused.unwrap_err().code, 101, "the subscription keeps the engine's refusal code");
     drop(tx);
     let sent = engine.join().expect("the engine thread");
 
