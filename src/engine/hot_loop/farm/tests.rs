@@ -295,6 +295,40 @@ mod news_tests {
             ],
             "each reading under the number a caller reads it by",
         );
+
+        // The auction, which states three things at once, and a future's open
+        // interest, which the venue leaves unstated rather than stating none.
+        let mut auction = Vec::new();
+        auction.extend_from_slice(&5_000i32.to_be_bytes());
+        auction.extend_from_slice(&(-250i32).to_be_bytes());
+        auction.extend_from_slice(&101.25f32.to_be_bytes());
+        farm.generic_tick_tags.push((13, 225, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(13, 225, &auction)]), &mut context, &shared, &None,
+        );
+        farm.generic_tick_tags.push((14, 588, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(14, 588, &i32::MAX.to_be_bytes())]),
+            &mut context, &shared, &None,
+        );
+        let said: Vec<(i32, String)> = shared.market.drain_series_ticks(instrument)
+            .into_iter()
+            .map(|t| (t.tick_type, match t.value {
+                SeriesValue::Generic(v) => format!("generic {v}"),
+                SeriesValue::Size(v) => format!("size {v}"),
+                SeriesValue::Price(v) => format!("price {v}"),
+                SeriesValue::Text(v) => format!("text {v}"),
+            }))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                (34, "size 5000".to_string()),
+                (36, "size -250".to_string()),
+                (35, "price 101.25".to_string()),
+            ],
+            "the auction states three things; an unstated open interest states none",
+        );
     }
 
     /// A frame under a number nothing asked a generic tick under says nothing

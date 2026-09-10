@@ -205,6 +205,50 @@ fn deliver_series(
             let Some(value) = series_f64(payload, 0) else { return true };
             say(56, SeriesValue::Generic(value));
         }
+        // Volatility the venue recomputes through the session, and the bond
+        // factor a redemption changes.
+        411 => {
+            let Some(value) = series_f64(payload, 0) else { return true };
+            say(58, SeriesValue::Generic(value));
+        }
+        460 => {
+            let Some(value) = series_f64(payload, 0) else { return true };
+            say(60, SeriesValue::Generic(value));
+        }
+        // What it costs to borrow, which the venue states as a price.
+        499 => {
+            let Some(value) = series_f64(payload, 0) else { return true };
+            say(111, SeriesValue::Price(value));
+        }
+        // Open interest on a future, left unstated rather than stated as
+        // nothing where the venue does not hold it.
+        588 => {
+            let Some(open) = series_i32(payload, 0) else { return true };
+            if open != i32::MAX {
+                say(86, SeriesValue::Size(open as f64));
+            }
+        }
+        // What last traded in the regular session, which is not the last
+        // trade when the session is shut.
+        318 => {
+            let Some(price) = series_f64(payload, 0) else { return true };
+            say(57, SeriesValue::Price(price));
+        }
+        // The auction: how much is crossing, which way it is unbalanced, and
+        // at what price. The regulatory imbalance follows where the venue
+        // states one and is absent where it does not.
+        225 => {
+            let (Some(volume), Some(imbalance)) = (series_i32(payload, 0), series_i32(payload, 4))
+            else {
+                return true;
+            };
+            say(34, SeriesValue::Size(volume as f64));
+            say(36, SeriesValue::Size(imbalance as f64));
+            if let Some(bytes) = payload.get(8..12) {
+                let price = f32::from_be_bytes(bytes.try_into().unwrap_or([0; 4]));
+                say(35, SeriesValue::Price(price as f64));
+            }
+        }
         _ => return false,
     }
     true

@@ -43,7 +43,13 @@ publishes it under:
 | `106` | option implied volatility, on `tick_generic` 24 |
 | `236` | shortability on `tick_generic` 46, and the borrowable share count on `tick_size` 89 |
 | `292` | news, on `tick_news` |
+| `225` | auction volume and imbalance on `tick_size` 34 and 36, auction price on `tick_price` 35 |
 | `293` `294` `295` | trade count, trade rate and volume rate, on `tick_generic` 54, 55 and 56 |
+| `318` | last regular-session trade, on `tick_price` 57 |
+| `411` | real-time historical volatility, on `tick_generic` 58 |
+| `460` | bond factor multiplier, on `tick_generic` 60 |
+| `499` | borrow fee rate, on `tick_price` 111 |
+| `588` | futures open interest, on `tick_size` 86 |
 
 Any other number is still requested and the venue still serves it, but nothing
 here decodes that payload yet, so no tick arrives for it. Those are stepped over
