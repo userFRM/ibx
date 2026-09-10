@@ -647,8 +647,14 @@ enum PayloadLength {
     OneByte,
     /// Two bytes.
     TwoBytes,
-    /// None at all: the payload runs to the end of the message, so a message
-    /// carries exactly one of these.
+    /// None at all. The venue states no length for these and its own reader
+    /// takes what the tick's shape needs, so where the record ends is the
+    /// reader's to know and nothing here can work it out — a message may well
+    /// carry more after one.
+    ///
+    /// Nothing here reads any of them, so the rest of the message goes unread
+    /// rather than being handed on as this record's payload. Reading one means
+    /// giving it the whole remainder and having it say how much it used.
     ToTheEnd,
 }
 
@@ -658,7 +664,7 @@ const TWO_BYTE_LENGTH_TICKS: [u32; 28] = [
     633, 669, 678, 687, 691, 699, 700, 703, 705, 726,
 ];
 
-/// The ticks that state no length, whose payload runs to the end.
+/// The ticks that state no length of their own.
 const NO_LENGTH_TICKS: [u32; 7] = [221, 320, 376, 530, 532, 619, 787];
 
 impl PayloadLength {
@@ -745,7 +751,18 @@ fn read_generic_ticks<'a>(
         };
         let form = PayloadLength::of(tick);
         let stated = match form {
-            PayloadLength::ToTheEnd => frame.len() - at - form.header(),
+            // Nothing here reads one of these, and where it ends is its own
+            // reader's to know — so the rest of the message goes unread rather
+            // than being handed on as this record's payload and the ones
+            // behind it mistaken for part of it.
+            PayloadLength::ToTheEnd => {
+                log::debug!(
+                    "A generic tick {tick} states no length of its own and nothing here reads \
+                     it, so where its record ends is not known and the rest of the message \
+                     goes unread",
+                );
+                return;
+            }
             PayloadLength::OneByte => match frame.get(at + 4) {
                 Some(&n) => n as usize,
                 None => return,
