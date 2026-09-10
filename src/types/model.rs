@@ -442,12 +442,10 @@ pub struct Order {
     pub min_trade_qty: i32,
     /// Which model the order belongs to.
     ///
-    /// **Not carried by this protocol.** No tag carries it. Tags exist for
-    /// which model a rebalance is of, and what kind of change to a model an
-    /// order is, but not for a model an order belongs to.
-    /// Taken here and kept, so an order built against another client reads
-    /// back what it set, and refused rather than sent, so an order meant for
-    /// one model is not placed against the account at large.
+    /// Stated on tag 6700, beside the account: the account names where the
+    /// order goes and this names which sleeve of it. Left empty the order is
+    /// placed against the account at large, which for a model portfolio is a
+    /// different position from the one asked for.
     pub model_code: String,
     /// Whether the venue may use its discretion over the order.
     pub not_held: bool,
@@ -877,11 +875,14 @@ impl Order {
             "OPG" => b'2',
             "GTD" => b'6',
             "GTX" => b'5',
-            // Day-til-cancelled shares the good-til-date byte. It is named
-            // separately elsewhere, but tag 59 does not carry the difference:
-            // sent as anything else the venue answers
-            // `Invalid value in field # 59`.
-            "DTC" => b'6',
+            // Day-til-cancelled is the good-til-cancelled byte with the
+            // stand-down flag on tag 6436 beside it, and the flag is the whole
+            // of the difference between the two lives. Its own name on tag 59
+            // is answered `Invalid value in field # 59`, and it shared the
+            // good-til-date byte here instead — so the order carried an
+            // expiry the caller never named, or, where no date was given, none
+            // at all, and it did not stand down at the close either way.
+            "DTC" => b'1',
             "AUC" => b'8',
             // A peg that lives by the minute. Refused here before, so a caller
             // could not ask for it at all; the venue answers it by name and
@@ -891,7 +892,11 @@ impl Order {
             // in the same family, and tag 59 answers both with
             // `Invalid value in field # 59` — on the regular route and on the
             // overnight one — exactly as it answers day-til-cancelled's own
-            // byte. A name for a life is not proof the field carries it.
+            // byte. Day-til-cancelled has a flag that states the rest of what
+            // it means; nothing here states an overnight life beside a DAY
+            // byte, and a name taken without one would be a plain DAY order
+            // under an overnight name. A name for a life is not proof the
+            // field carries it.
             "NMIN" => b'p',
             _ => b'0', // DAY
         }
@@ -970,6 +975,10 @@ impl Order {
             ext_operator: self.ext_operator.clone(),
             customer_account: self.customer_account.clone(),
             professional_customer: self.professional_customer,
+            model_code: self.model_code.clone(),
+            // Named as a life on the caller's order and carried as a flag
+            // here, because that is how the wire states it.
+            deactivate_at_close: self.tif == "DTC",
             fa_group: self.fa_group.clone(),
             fa_method: self.fa_method.clone(),
             fa_percentage: self.fa_percentage.clone(),
@@ -1151,6 +1160,7 @@ impl Order {
             || self.is_oms_container
             || !self.ext_operator.is_empty()
             || !self.customer_account.is_empty()
+            || !self.model_code.is_empty()
             || self.professional_customer
             || !self.fa_group.is_empty()
             || !self.fa_method.is_empty()
@@ -1183,6 +1193,7 @@ impl Order {
             || !self.rule80a.is_empty()
             || self.post_to_ats != i32::MAX
             || self.deactivate
+            || self.tif == "DTC"
             || self.deactivate_on_disconnect
             || self.include_overnight
             || self.auto_cancel_parent
@@ -2104,6 +2115,7 @@ mod tests {
             ("rule80a", |o| o.rule80a = "I".into()),
             ("post_to_ats", |o| o.post_to_ats = 30),
             ("deactivate", |o| o.deactivate = true),
+            ("deactivate_at_close", |o| o.tif = "DTC".into()),
             ("deactivate_on_disconnect", |o| o.deactivate_on_disconnect = true),
             ("include_overnight", |o| o.include_overnight = true),
             ("auto_cancel_parent", |o| o.auto_cancel_parent = true),
@@ -2127,6 +2139,7 @@ mod tests {
             ("is_oms_container", |o| o.is_oms_container = true),
             ("ext_operator", |o| o.ext_operator = "OP1".into()),
             ("customer_account", |o| o.customer_account = "CUST".into()),
+            ("model_code", |o| o.model_code = "MODEL-1".into()),
             ("professional_customer", |o| o.professional_customer = true),
             ("fa_group", |o| o.fa_group = "AllAccounts".into()),
             ("fa_method", |o| o.fa_method = "EqualQuantity".into()),
@@ -2169,6 +2182,7 @@ mod tests {
             manual_order_indicator: _, route_marketable_to_bbo: _, imbalance_only: _,
             allow_pre_open: _, ignore_open_auction: _, is_oms_container: _,
             ext_operator: _, customer_account: _, professional_customer: _,
+            model_code: _,
             fa_group: _, fa_method: _, fa_percentage: _,
             ref_futures_con_id: _, mifid2_decision_maker: _, mifid2_decision_algo: _,
             mifid2_execution_trader: _, mifid2_execution_algo: _,
@@ -2180,6 +2194,7 @@ mod tests {
             scale: _, delta_neutral: _, short_sale_slot: _, designated_location: _,
             exempt_code: _, hedge_type: _, hedge_beta: _, hedge_ratio: _,
             combo_legs: _, rule80a: _, post_to_ats: _, deactivate: _,
+            deactivate_at_close: _,
             deactivate_on_disconnect: _,
             include_overnight: _, auto_cancel_parent: _, min_trade_qty: _,
             block_order: _, auto_cancel_date: _, clearing_account: _, clearing_intent: _,

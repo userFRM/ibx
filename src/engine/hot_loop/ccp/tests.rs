@@ -3075,10 +3075,12 @@ fn tif_round_trips_through_encoder_and_decoder() {
         assert_eq!(decode_tif(order.tif_byte()), tif,
             "TIF {tif} must survive encode->decode");
     }
-    // DTC shares the GTD wire byte and decodes as GTD: the two are separate
-    // lives with separate names, but tag 59 does not carry the difference.
+    // Day-till-cancelled goes out as good-till-cancelled with the flag that
+    // stands it down at the day's end beside it, so tag 59 alone decodes as
+    // GTC. The two are separate lives with separate names and that tag does
+    // not carry the difference — the flag does.
     let dtc = api::Order { tif: "DTC".to_string(), ..Default::default() };
-    assert_eq!(decode_tif(dtc.tif_byte()), "GTD");
+    assert_eq!(decode_tif(dtc.tif_byte()), "GTC");
     // Unknown bytes decode to empty, not a wrong TIF.
     assert_eq!(decode_tif(b'7'), "");
 }
@@ -4241,11 +4243,15 @@ fn the_venue_states_which_algorithms_it_offers() {
 fn a_message_not_read_on_purpose_is_told_apart_from_one_overlooked() {
     // 93 is excused on what it carries — the account, a request id and two
     // flags — read off a live session, not on an assumption about it.
-    // Both of these arrive on a real session, which is how they came to be
-    // named here: the notes had them down as never sent.
+    // It arrives on a real session, which is how it came to be named here:
+    // the notes had it down as never sent.
     assert!(super::known_unread("18").is_none(), "the venue's clock is read, not excused");
     assert!(super::known_unread("93").is_some(), "an answer carrying nothing new");
-    assert!(super::known_unread("194").is_some(), "defaults for a user interface");
+    // The order presets were excused as a user interface's defaults. The venue
+    // fills two fields of a pegged-best order from them where the caller
+    // states neither, so an order from here is not the same order — unread and
+    // counted as the gap that is, rather than excused.
+    assert!(super::known_unread("194").is_none(), "the presets reach an order, so not excused");
     assert!(super::known_unread("81").is_none(), "the algorithms are read, not excused");
     // Excused for years as a fill already stated by the execution reports.
     // The fill is, and what it cost is not: those reports carry no charge at
@@ -4274,6 +4280,29 @@ fn what_the_venue_says_went_wrong_reaches_the_caller() {
     // Trouble it says nothing about leaves nothing to report.
     super::handle_venue_error(&std::collections::HashMap::new(), &shared);
     assert!(shared.market.drain_venue_errors().is_empty());
+}
+
+/// What the venue says to the account holder is said on a subtype of its own,
+/// about no request. It reached nobody: nothing read it, so the one thing the
+/// venue ever addressed to the account was noted as unread wire and dropped.
+#[test]
+fn what_the_venue_tells_the_account_holder_reaches_the_caller() {
+    let (mut ccp, mut context, shared) = u186_test_state();
+    let msg = fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "U"), (6040, "42"), (1, "DU1"),
+        (58, "Trading in this account is restricted from tomorrow"),
+    ], 1);
+    ccp.process_ccp_message(
+        &msg, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+    assert_eq!(
+        shared.market.drain_venue_errors(),
+        ["Trading in this account is restricted from tomorrow"],
+    );
+    assert!(
+        !shared.market.unread_wire().iter().any(|(_, what)| what == "user message 42"),
+        "and it is no longer counted among the messages nothing reads",
+    );
 }
 
 /// The venue keeps three sets of holdings and this client read one. The

@@ -819,8 +819,7 @@ impl EClient {
     ///   `smartComboRoutingParams` (57), the delta-neutral settling, clearing
     ///   and open/close fields (58, 66), `scaleInitFillQty` (60), `scaleTable`
     ///   (69), `orderMiscOptions` (70), `algoId` (71), `randomizePrice` (76),
-    ///   `modelCode` on an order (103), `dontUseAutoPriceForHedge` (141),
-    ///   `whatIfType` (217).
+    ///   `dontUseAutoPriceForHedge` (141), `whatIfType` (217).
     /// * Requests and fields that do not exist here, an `AttributeError`: the
     ///   four `verify*` calls (70), `cancelContractData` and
     ///   `cancelHistoricalTicks` (215), `ContractDetails.ineligibilityReasonList`

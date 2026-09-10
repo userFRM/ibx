@@ -4151,6 +4151,33 @@ impl ClientCore {
         changed
     }
 
+    /// Whether a figure the venue stated answers a tag the caller named.
+    ///
+    /// `$LEDGER` is not the name of a figure: it is the venue's word for the
+    /// per-currency cash rows, bare for the base-currency bucket, `$LEDGER:EUR`
+    /// for that currency's, `$LEDGER:ALL` for every one. Matched as a literal
+    /// name it matched nothing, and the standard way to read per-currency cash,
+    /// exchange rate and per-currency profit came back as an end with no rows —
+    /// which a caller cannot tell from an account holding no cash at all.
+    fn answers_tag(tag: &str, key: &str, currency: &str) -> bool {
+        let Some(after) = tag.strip_prefix("$LEDGER") else { return tag == key };
+        // The figures the venue keeps per currency, which are the rows a ledger
+        // request asks for. Every other stated figure is about the account as a
+        // whole and is not part of a currency bucket.
+        const LEDGER: [&str; 26] = [
+            "Currency", "CashBalance", "TotalCashBalance", "AccruedCash", "StockMarketValue",
+            "OptionMarketValue", "FutureOptionValue", "FuturesPNL", "NetLiquidationByCurrency",
+            "UnrealizedPnL", "RealizedPnL", "ExchangeRate", "FundValue", "NetDividend",
+            "MutualFundValue", "MoneyMarketFundValue", "CorporateBondValue", "TBondValue",
+            "TBillValue", "WarrantValue", "FxCashBalance", "AccountOrGroup", "RealCurrency",
+            "IssuerOptionValue", "Cryptocurrency", "InsuredDeposit",
+        ];
+        // Whatever follows the colon is the currency asked for, and no colon at
+        // all is the base bucket — the venue's own reading of the text.
+        let wanted = after.strip_prefix(':').unwrap_or("BASE");
+        LEDGER.contains(&key) && (wanted == "ALL" || wanted == currency)
+    }
+
     /// Prepare the initial summary or the values changed since its last interval.
     pub fn prepare_account_summary(&self, shared: &SharedState, _account_id: &str) -> Option<AccountSummaryBatch> {
         // Wait for gateway account data before delivering summary.
@@ -4195,7 +4222,9 @@ impl ClientCore {
             let wants_all = tags.is_empty() || tags.iter().any(|t| t == "All");
             let entries: Vec<_> = stated
                 .iter()
-                .filter(|(key, ..)| wants_all || tags.iter().any(|t| t == key))
+                .filter(|(key, _, currency)| {
+                    wants_all || tags.iter().any(|t| Self::answers_tag(t, key, currency))
+                })
                 .filter_map(|(key, value, currency)| {
                     let previous = already.insert((key.clone(), currency.clone()), value.clone());
                     if previous.as_ref() == Some(value) {
@@ -4407,7 +4436,7 @@ impl ClientCore {
             delta_neutral_clearing_intent, delta_neutral_designated_location,
             delta_neutral_open_close, delta_neutral_settling_firm,
             delta_neutral_short_sale, delta_neutral_short_sale_slot,
-            delta, dont_use_auto_price_for_hedge, model_code, opt_out_smart_routing,
+            delta, dont_use_auto_price_for_hedge, opt_out_smart_routing,
             order_misc_options, origin, override_percentage_constraints,
             parent_perm_id, pt_order_id, pt_order_type, randomize_price,
             scale_init_fill_qty, scale_table, shareholder, sl_order_id,

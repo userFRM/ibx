@@ -2532,7 +2532,55 @@ mod outside_rth_polarity_tests {
             f.contains(&"616=") && f.contains(&"616=ARCA"),
             "a venue only where the leg has its own: {msg}"
         );
-        assert!(f.contains(&"654=1"), "the position effect where set: {msg}");
+        assert!(f.contains(&"6087=1"), "the position effect where set: {msg}");
+        assert!(
+            !f.iter().any(|field| field.starts_with("654=")),
+            "and not on 654, which counts short-sale legs rather than \
+             positioning them: {msg}",
+        );
+    }
+
+    /// A short leg states the borrow: which slot it comes from, the flag every
+    /// short leg carries, where it is located and the exemption that applies.
+    ///
+    /// The flag went out on no leg at all. It is the same value every time, so
+    /// nothing a caller stated was lost — but a short sale is the one thing on
+    /// this message the venue is always told in full, and this leg was the
+    /// exception.
+    #[test]
+    fn a_short_leg_states_the_borrow_in_full() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let attrs = crate::types::OrderAttrs {
+            combo_legs: vec![crate::types::ComboLegSpec {
+                con_id: 265598,
+                ratio: 1,
+                is_sell: true,
+                exchange: String::new(),
+                open_close: 2,
+                short_sale_slot: 2,
+                designated_location: "IBKR".into(),
+                exempt_code: 3,
+                price: None,
+            }],
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, &shared_for_test(), "DU123456", 32, instrument, Side::Sell,
+            1, crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert!(f.contains(&"6086=2"), "the slot: {msg}");
+        assert!(f.contains(&"6215=N"), "the flag every short leg carries: {msg}");
+        assert!(f.contains(&"6216=IBKR"), "where the borrow is: {msg}");
+        assert!(f.contains(&"1689=3"), "the exemption: {msg}");
+        assert!(f.contains(&"6087=2"), "and the leg closes rather than opens: {msg}");
     }
 
     /// A ladder can start against a position already held and a first
@@ -4439,5 +4487,75 @@ fn a_bracket_leg_is_replaced_on_the_venue_it_went_out_to() {
         tag("100=").as_deref(), Some("NYSE"),
         "the leg's replace named where the contract is watched now, not where the \
          leg is working: {msg}",
+    );
+}
+
+/// Day-till-cancelled goes out as a good-till-cancelled order carrying the
+/// flag that stands it down at the close.
+///
+/// It shared the good-till-date byte, so the order the venue worked was one
+/// with an expiry the caller never named — or, with no date stated beside it,
+/// none at all. Either way it rested on past the close it was meant to end at.
+#[test]
+fn a_day_till_cancelled_order_states_gtc_and_the_flag_that_ends_it() {
+    use std::io::Read;
+    let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let asked = crate::api::Order { tif: "DTC".to_string(), ..Default::default() };
+    send_order_ex(
+        &mut conn, &mut context, &shared_for_test(), "DU123456", 78, instrument, Side::Buy, 1,
+        crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+        asked.tif_byte(), &asked.attrs(),
+    )
+    .unwrap();
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]);
+    let f: Vec<&str> = msg.split('\u{1}').collect();
+    assert!(f.contains(&"59=1"), "the life it goes out under: {msg}");
+    assert!(f.contains(&"6436=1"), "and the flag that ends it at the close: {msg}");
+    assert!(!f.contains(&"59=6"), "not a good-till-date order: {msg}");
+    assert!(
+        !f.iter().any(|field| field.starts_with("432=") || field.starts_with("126=")),
+        "and no expiry the caller never named: {msg}",
+    );
+}
+
+/// An order placed for a model names the model beside the account, on the
+/// order and on the cancel that follows it.
+///
+/// The account says where the order goes; this says which sleeve of it. Sent
+/// without it the order trades the account at large, which for a model
+/// portfolio is a different position from the one asked for.
+#[test]
+fn an_order_for_a_model_names_it_on_the_order_and_on_the_cancel() {
+    use std::io::Read;
+    let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let asked = crate::api::Order { model_code: "GROWTH".to_string(), ..Default::default() };
+    send_order_ex(
+        &mut conn, &mut context, &shared_for_test(), "DU123456", 79, instrument, Side::Buy, 1,
+        crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+        b'0', &asked.attrs(),
+    )
+    .unwrap();
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(
+        msg.split('\u{1}').any(|field| field == "6700=GROWTH"),
+        "the model the order trades against: {msg}",
+    );
+
+    send_cancel(&mut conn, &mut context, "DU123456", 79).unwrap();
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(
+        msg.split('\u{1}').any(|field| field == "6700=GROWTH"),
+        "and the cancel names it too: {msg}",
     );
 }

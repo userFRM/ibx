@@ -1426,6 +1426,51 @@ fn an_account_summary_reports_changes_until_cancelled() {
     assert_eq!(core.prepare_account_summary(&shared, "DU1").unwrap().entries.len(), 2, "a new subscription gets the full batch");
 }
 
+/// `$LEDGER` is the venue's word for the per-currency cash rows rather than the
+/// name of a figure. Matched as a literal name it matched none of them, and the
+/// standard way to read per-currency cash, exchange rate and per-currency profit
+/// came back as an end with no rows at all.
+#[test]
+fn a_ledger_tag_answers_with_the_currency_bucket_it_names() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    for (key, value, currency) in [
+        ("CashBalance", "5000.00", "EUR"),
+        ("ExchangeRate", "1.08", "EUR"),
+        ("CashBalance", "7500.00", "BASE"),
+        ("NetLiquidation", "75425.51", "USD"),
+    ] {
+        shared.portfolio.note_account_value(key, value, currency);
+    }
+    shared.portfolio.account_download_is_settled();
+
+    core.subscribe_account_summary(3, "$LEDGER").unwrap();
+    let batch = core.prepare_account_summary(&shared, "DU1").expect("a ledger request is answered");
+    assert_eq!(
+        batch.entries.iter().map(|e| (e.tag.as_str(), e.currency.as_str())).collect::<Vec<_>>(),
+        [("CashBalance", "BASE")],
+        "naming no currency asks for the base bucket",
+    );
+    core.unsubscribe_account_summary(3);
+
+    core.subscribe_account_summary(4, "$LEDGER:EUR").unwrap();
+    let batch = core.prepare_account_summary(&shared, "DU1").expect("a ledger request is answered");
+    assert_eq!(
+        batch.entries.iter().map(|e| (e.tag.as_str(), e.value.as_str())).collect::<Vec<_>>(),
+        [("CashBalance", "5000.00"), ("ExchangeRate", "1.08")],
+        "every ledger figure the venue stated in the currency named",
+    );
+    core.unsubscribe_account_summary(4);
+
+    core.subscribe_account_summary(5, "$LEDGER:ALL").unwrap();
+    let batch = core.prepare_account_summary(&shared, "DU1").expect("a ledger request is answered");
+    assert_eq!(
+        batch.entries.iter().map(|e| (e.tag.as_str(), e.currency.as_str())).collect::<Vec<_>>(),
+        [("CashBalance", "EUR"), ("ExchangeRate", "EUR"), ("CashBalance", "BASE")],
+        "ALL is every currency, and the account's own figures are not ledger rows",
+    );
+}
+
 /// A quote is per unit and a contract may be worth many of them. Valued from
 /// the price alone, an option holding came out at a hundredth of what it is
 /// worth and the account total with it, so such a position goes to the venue's

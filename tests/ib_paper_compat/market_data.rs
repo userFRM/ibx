@@ -141,13 +141,18 @@ pub(super) fn phase_multi_instrument(conns: Conns) -> Conns {
     }
 
     let conns = shutdown_and_reclaim(&control_tx, join, account_id);
-    if tick_count <= 3 {
-        no_market(&shared, &format!("only {tick_count} ticks, too few for a multi-instrument test"));
+    // Ticks arriving without a quote on them is the venue saying no quote
+    // exists, which is the same thing as no ticks at all and is read the same
+    // way: outside regular hours it is the market, inside them it is this
+    // client. Counted as ticks and no further, a session where the venue
+    // printed for one name and had no quote for the others read as two
+    // instruments gone missing.
+    if tick_count <= 3 || instruments_with_data < 2 {
+        no_market(&shared, &format!(
+            "{tick_count} ticks and {instruments_with_data} of 3 instruments quoted, \
+             too few for a multi-instrument test",
+        ));
     } else {
-        assert!(
-            instruments_with_data >= 2,
-            "At least 2 of 3 instruments should have data, got {instruments_with_data}"
-        );
         println!(
             "  PASS ({tick_count} ticks, {instruments_with_data} instruments with data)\n"
         );

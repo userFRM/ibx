@@ -154,6 +154,13 @@ fn handle_venue_error(parsed: &std::collections::HashMap<u32, String>, shared: &
 /// Told apart from one nobody has looked at yet. Both are discarded, but only
 /// one of them is a gap, and a diagnostic that cannot tell them apart is one
 /// nobody keeps listening to.
+///
+/// Only what carries nothing this client needs belongs here. The order presets
+/// were named here once as a user interface's defaults; they are not. The
+/// venue fills the compete size and the offset of a pegged-best order from
+/// them when the caller states neither, so an order sent from here differs
+/// from the same order sent elsewhere. They are unread, and now counted as the
+/// gap that is.
 fn known_unread(subtype: &str) -> Option<&'static str> {
     match subtype {
         "93" => Some(
@@ -161,11 +168,6 @@ fn known_unread(subtype: &str) -> Option<&'static str> {
              the account, that request's own id and two flags — nothing the subscription does \
              not deliver itself. Named in the vendor's own inventory as a dimension response, \
              which is what it would carry on an account that had dimensions",
-        ),
-        "194" => Some(
-            "it carries the order presets the vendor's own ticket fills its fields from. \
-             They are defaults for a user interface, and this client has none: an order \
-             here states every field it means",
         ),
         _ => None,
     }
@@ -764,6 +766,14 @@ impl CcpState {
                         // on the error.
                         "60" => handle_trade_charge(&parsed, shared),
                         "192" | "278" => handle_venue_error(&parsed, shared),
+                        // The venue speaking to the account holder rather than
+                        // about a request: it states the matter as text and
+                        // names the account it concerns, and it belongs to no
+                        // request anyone made — which is what the channel
+                        // above already reports, so it is reported there.
+                        // Read by nothing, it reached the account holder
+                        // nowhere at all.
+                        "42" => handle_venue_error(&parsed, shared),
                         "81" => handle_algorithms(&parsed, shared),
                         "210" => handle_account_config(&parsed, shared),
                         "139" => self.handle_option_chain(msg, shared),

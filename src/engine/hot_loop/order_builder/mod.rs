@@ -927,6 +927,14 @@ fn send_cancel(
         .and_then(|o| context.market.con_id(o.instrument))
         .filter(|c| *c != 0)
         .map(|c| c.to_string());
+    // The model the order was placed against, restated here. The account
+    // alone does not name the order where the account holds several models,
+    // and the order named one when it went out.
+    let model = context
+        .submitted
+        .get(&order_id)
+        .map(|spec| spec.attrs.model_code.clone())
+        .filter(|code| !code.is_empty());
     let mut fields = vec![
         (fix::TAG_MSG_TYPE, fix::MSG_ORDER_CANCEL),
         (fix::TAG_SENDING_TIME, &now),
@@ -935,6 +943,9 @@ fn send_cancel(
         (1, account_id),
         (6088, "Socket"),
     ];
+    if let Some(code) = model.as_deref() {
+        fields.push((6700, code));
+    }
     // Stated when it is known rather than defaulted: the cancel is keyed by
     // OrigClOrdID, and a guessed side is a claim about someone's order that
     // nothing here can stand behind.
@@ -1780,6 +1791,14 @@ fn push_order_attrs(
     } else if attrs.good_till > 0 {
         fields.push((126, unix_to_ib_utc_dash(attrs.good_till)));
     }
+    // Day-till-cancelled: the order lives on like a good-till-cancelled one
+    // and the venue stands it down at the close. Tag 59 has no byte of its
+    // own for it — the life goes out as GTC and this flag is the whole of
+    // the difference — so an order that stated the life without the flag
+    // rested on as an ordinary GTC order that never came off the book.
+    if attrs.deactivate_at_close {
+        fields.push((6436, "1".to_string()));
+    }
     let oca_str = if !attrs.oca_group_str.is_empty() {
         attrs.oca_group_str.clone()
     } else if attrs.oca_group > 0 {
@@ -1876,6 +1895,13 @@ fn push_order_attrs(
     }
     if !attrs.customer_account.is_empty() {
         fields.push((6207, attrs.customer_account.clone()));
+    }
+    // Which model within the account the order trades against, on tag 6700.
+    // The account names where the order goes and this names which sleeve of
+    // it: an order placed for a model and sent without this trades the
+    // account at large, which is a different position from the one asked for.
+    if !attrs.model_code.is_empty() {
+        fields.push((6700, attrs.model_code.clone()));
     }
     // How an advisor's order is split across the accounts it is placed for.
     // Stated on the order, in this block, so a replace restates it and the
@@ -1980,11 +2006,22 @@ fn push_order_attrs(
             // Empty where the leg routes with the combination rather than on a
             // venue of its own, which is what the terminal writes for SMART.
             fields.push((616, leg.exchange.clone()));
+            // The position effect rides on 6087. Stated on 654, which is
+            // where the venue counts a leg's place within the short-sale
+            // group and not a position at all, the instruction was not read:
+            // each leg took the account's own default, so a leg meant to
+            // close an option already held opened a second one beside it.
             if leg.open_close != 0 {
-                fields.push((654, leg.open_close.to_string()));
+                fields.push((6087, leg.open_close.to_string()));
             }
             if leg.short_sale_slot != 0 {
                 fields.push((6086, leg.short_sale_slot.to_string()));
+                // Stated on every short leg the venue is given, ahead of
+                // where the borrow is. The value is the same for all of them
+                // — nothing a caller states changes it — and a short leg
+                // that left it out was the one statement of a short sale that
+                // did not carry it.
+                fields.push((6215, "N".to_string()));
                 if !leg.designated_location.is_empty() {
                     fields.push((6216, leg.designated_location.clone()));
                 }

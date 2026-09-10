@@ -901,6 +901,30 @@ fn an_order_defined_by_more_than_its_type_is_not_modified() {
     }
 }
 
+/// An order placed for one model within an account is placed for that model.
+///
+/// It was refused here, on the reading that nothing carried the model and that
+/// placing the order against the account at large would be worse than refusing
+/// it. The first half of that is what changed: the model rides beside the
+/// account, so the order can be placed as asked.
+#[test]
+fn an_order_naming_a_model_is_placed_for_it() {
+    let (client, rx, _shared) = test_client();
+    let order = Order {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), model_code: "GROWTH".into(),
+        ..Default::default()
+    };
+    client.place_order(9501, &spy(), &order).expect("an order for a model is placed");
+    match rx.try_recv().expect("the order reaches the wire") {
+        ControlCommand::Order(OrderRequest::SubmitEx { attrs, .. }) => assert_eq!(
+            attrs.model_code, "GROWTH",
+            "the model the order is placed for travels with it",
+        ),
+        cmd => panic!("expected a placement, got {cmd:?}"),
+    }
+}
+
 /// An order that cannot be placed the way it was asked for is refused, rather
 /// than placed a different way.
 ///

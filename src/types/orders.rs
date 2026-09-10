@@ -536,6 +536,9 @@ pub struct OrderAttrs {
     pub customer_account: String,
     /// Whether that customer is a professional.
     pub professional_customer: bool,
+    /// Which model within the account the order trades against, on tag 6700.
+    /// Empty for an order placed against the account itself.
+    pub model_code: String,
     /// How an advisor's order is split across the accounts it is placed for:
     /// which group (tag 6160), by what method (6159) and at what share (6164).
     /// Empty is the caller naming none, and an empty one is left off rather
@@ -641,6 +644,10 @@ pub struct OrderAttrs {
     pub post_to_ats: u32,
     /// Built but not sent: the venue holds it until it is activated (tag 6521).
     pub deactivate: bool,
+    /// Stood down at the close and left on the book until then (tag 6436).
+    /// The life the caller named as `DTC`, which tag 59 carries as GTC: the
+    /// flag is the whole of the difference between the two.
+    pub deactivate_at_close: bool,
     /// Stand the order down if this client's connection goes (tag 6661). What
     /// a headless client wants when nothing is left watching the order.
     pub deactivate_on_disconnect: bool,
@@ -745,6 +752,7 @@ impl Default for OrderAttrs {
             ext_operator: String::new(),
             customer_account: String::new(),
             professional_customer: false,
+            model_code: String::new(),
             fa_group: String::new(),
             fa_method: String::new(),
             fa_percentage: String::new(),
@@ -780,6 +788,7 @@ impl Default for OrderAttrs {
             rule80a: Default::default(),
             post_to_ats: Default::default(),
             deactivate: Default::default(),
+            deactivate_at_close: Default::default(),
             deactivate_on_disconnect: Default::default(),
             include_overnight: Default::default(),
             auto_cancel_parent: Default::default(),
@@ -1321,10 +1330,11 @@ pub struct ComboLegSpec {
     /// Where this leg routes, when it is not the combination's own venue
     /// (tag 616).
     pub exchange: String,
-    /// Whether the leg opens or closes (tag 654).
+    /// Whether the leg opens or closes (tag 6087).
     pub open_close: u8,
-    /// Short-sale slot for the leg (tag 6086), where its shares are located
-    /// (tag 6216) and the exemption that applies (tag 1689).
+    /// Short-sale slot for the leg (tag 6086), stated beside the flag every
+    /// short leg carries (tag 6215), where its shares are located (tag 6216)
+    /// and the exemption that applies (tag 1689).
     pub short_sale_slot: u8,
     /// Where a short leg's borrow is located.
     pub designated_location: String,
