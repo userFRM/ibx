@@ -787,7 +787,12 @@ impl CcpState {
                             // has stated, of which this is the second and last
                             // statement, after the one on the logon.
                             if let Some(seconds) = parsed.get(&6114).and_then(|v| v.parse::<i64>().ok()) {
-                                shared.market.note_venue_millis(seconds * 1_000);
+                                // Saturating, as the reference conversion is:
+                                // a second count near the end of what the type
+                                // holds carries past it in milliseconds, and
+                                // the product wrapped to a clock a thousand
+                                // years behind the one the venue stated.
+                                shared.market.note_venue_millis(seconds.saturating_mul(1_000));
                             }
                         }
                         // Something the venue said that nothing here reads.

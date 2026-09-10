@@ -385,7 +385,11 @@ impl MarketDataState {
     /// The same, where the venue states its clock as a number of its own
     /// rather than as a stamp on something else.
     pub fn note_venue_millis(&self, venue_millis: i64) {
-        self.clock_skew_millis.store(venue_millis - local_millis(), Ordering::Relaxed);
+        // Saturating for the same reason the conversion above is: the
+        // difference between a stated clock at the end of the range and this
+        // machine's is not representable, and wrapping it puts the session on
+        // a clock neither side named.
+        self.clock_skew_millis.store(venue_millis.saturating_sub(local_millis()), Ordering::Relaxed);
     }
 
     /// What the venue's clock reads now: this machine's, shifted by what the
@@ -396,7 +400,7 @@ impl MarketDataState {
     /// long as the venue said nothing, and a caller reading it twice a minute
     /// apart was told the same instant twice.
     pub fn venue_time_millis(&self) -> i64 {
-        local_millis() + self.clock_skew_millis.load(Ordering::Relaxed)
+        local_millis().saturating_add(self.clock_skew_millis.load(Ordering::Relaxed))
     }
 
     /// Take every venue errors waiting, leaving none.
@@ -1017,6 +1021,29 @@ mod venue_clock_tests {
         assert!(
             (market.venue_time_millis() - (1_786_795_200_000 + 86_400_000)).abs() < 2_000,
             "the later statement is the one in force",
+        );
+    }
+
+    /// A clock at the end of what the type holds is clamped, not wrapped.
+    ///
+    /// The venue states its clock in seconds and it is held in milliseconds, so
+    /// a second count near the end of the range does not survive the
+    /// conversion. Wrapped, the product came out negative and the session ran a
+    /// thousand years behind a clock nobody stated — every stamp this client
+    /// puts on a request, and every answer it reads a time off, with it. The
+    /// reference conversion saturates and so does this one.
+    #[test]
+    fn a_clock_past_what_the_type_holds_is_clamped() {
+        let market = MarketDataState::new();
+        market.note_venue_millis(i64::MAX);
+        assert!(
+            market.venue_time_millis() > 0,
+            "the clock stays a clock, however far out the statement is",
+        );
+        market.note_venue_millis(i64::MIN);
+        assert!(
+            market.venue_time_millis() < 0,
+            "and the same at the other end, without wrapping back to a future date",
         );
     }
 
