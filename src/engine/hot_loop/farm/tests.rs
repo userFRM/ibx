@@ -562,6 +562,45 @@ mod news_tests {
         );
     }
 
+    /// The totals a running series is read against go with the subscription.
+    ///
+    /// Left behind, the first reading after a contract is watched again is
+    /// measured from a total the venue stated in another subscription: a print
+    /// for everything that traded in between, or for a negative number of
+    /// shares where the venue has started its day over.
+    #[test]
+    fn the_running_totals_are_released_with_the_subscription() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+        farm.generic_tick_tags.push((60, 233, instrument));
+        let totals = |value: f64, shares: i64, trades: i32| {
+            let mut p = value.to_be_bytes().to_vec();
+            p.extend_from_slice(&shares.to_be_bytes());
+            p.extend_from_slice(&trades.to_be_bytes());
+            p
+        };
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(60, 233, &totals(10_000.0, 100, 1))]),
+            &mut context, &shared, &None,
+        );
+        let _ = shared.market.drain_series_ticks(instrument);
+
+        farm.send_mktdata_unsubscribe(instrument, &mut None, &mut hb);
+        // Watched again, the venue starts its totals over.
+        farm.generic_tick_tags.push((61, 233, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(61, 233, &totals(500.0, 5, 1))]),
+            &mut context, &shared, &None,
+        );
+        assert!(
+            shared.market.drain_series_ticks(instrument).is_empty(),
+            "the first reading of a new subscription is a baseline, not a trade",
+        );
+    }
+
     /// The running volume states a trade, not the totals it is read from.
     ///
     /// The venue states what has traded by value, by shares and by count since

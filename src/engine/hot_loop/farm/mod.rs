@@ -2318,6 +2318,12 @@ impl FarmState {
         // the entry outlives every subscription that used it and the next
         // caller to watch this slot is given a series nobody asked for.
         self.asked_generic_ticks.remove(&instrument);
+        // And so do the totals a running series was being read against. Left
+        // behind, the first reading after this contract is watched again is
+        // measured from a total the venue stated in another subscription — a
+        // print for everything that traded in between, or for a negative
+        // number of shares where the venue has started its day over.
+        self.rt_volume_totals.retain(|(watched, _), _| *watched != instrument);
         let record = match self.instrument_md_reqs.iter()
             .position(|(id, _)| *id == instrument)
         {
@@ -2903,6 +2909,7 @@ impl FarmState {
         self.generic_tick_reqs.clear();
         self.generic_tick_tags.clear();
         self.asked_generic_ticks.clear();
+        self.rt_volume_totals.clear();
         // Keyed the same way, and left behind they are never reachable again:
         // what removes an entry looks it up by an id the reconnect has already
         // replaced, so nothing afterwards names the old one. Both are scanned
