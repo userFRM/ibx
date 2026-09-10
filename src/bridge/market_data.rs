@@ -127,6 +127,7 @@ pub struct MarketDataState {
     /// What the venue has said went wrong, in its own words.
     venue_errors: Mutex<Vec<String>>,
     series_ticks: Mutex<std::collections::HashMap<crate::types::InstrumentId, Vec<SeriesTick>>>,
+    quote_attribute_masks: Mutex<std::collections::HashMap<crate::types::InstrumentId, (i64, i64)>>,
     /// How far the venue's clock runs from this machine's, in milliseconds.
     ///
     /// Nothing here ever asks the venue what time it is — this wire carries no
@@ -170,6 +171,7 @@ impl MarketDataState {
             subscription_moves: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
             series_ticks: Mutex::new(std::collections::HashMap::new()),
+            quote_attribute_masks: Mutex::new(std::collections::HashMap::new()),
             clock_skew_millis: AtomicI64::new(0),
             unread_wire: Mutex::new(Vec::new()),
         }
@@ -702,9 +704,29 @@ impl MarketDataState {
         self.series_ticks.lock().unwrap().remove(&instrument).unwrap_or_default()
     }
 
+    /// What the venue says about a contract's two prices rather than what they
+    /// are: one mask for whether each side may be dealt on without a human,
+    /// one for pre-open and past-limit.
+    ///
+    /// Kept beside the quote rather than in it. A quote is read on the hot
+    /// path and sized to the cache lines it occupies; these change seldom —
+    /// a side becomes eligible or stops being, once — so they are held where
+    /// widening costs nothing.
+    #[doc(hidden)] pub fn note_quote_attributes(
+        &self, instrument: crate::types::InstrumentId, eligible: i64, state: i64,
+    ) {
+        self.quote_attribute_masks.lock().unwrap().insert(instrument, (eligible, state));
+    }
+
+    /// The two masks as the venue last stated them, or nothing stated.
+    pub fn quote_attribute_masks(&self, instrument: crate::types::InstrumentId) -> (i64, i64) {
+        self.quote_attribute_masks.lock().unwrap().get(&instrument).copied().unwrap_or((0, 0))
+    }
+
     /// Everything held for a contract goes when its subscription does.
     #[doc(hidden)] pub fn forget_series_ticks(&self, instrument: crate::types::InstrumentId) {
         self.series_ticks.lock().unwrap().remove(&instrument);
+        self.quote_attribute_masks.lock().unwrap().remove(&instrument);
     }
 
     /// A broadcast notice, kept until someone reads it.

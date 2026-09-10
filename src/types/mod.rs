@@ -617,6 +617,31 @@ pub struct TickNews {
     pub timestamp: u64,
 }
 
+/// What the venue says about one side of a quote, from the masks it states
+/// both sides in.
+///
+/// It carries the two sides together — one bit each for whether the bid and
+/// the ask may be dealt on without a human, one shared bit for a pre-open
+/// indication, and one each for a side that has run past its limit — while a
+/// caller is handed an attribute beside each price. Which side to read is the
+/// number the price is going out under.
+pub fn quote_attributes(
+    tick_type: i32,
+    eligible_mask: i64,
+    quote_state_mask: i64,
+) -> crate::types::model::TickAttrib {
+    // The delayed numbers are the same two prices, served from another feed.
+    let bid = matches!(tick_type, 1 | 66);
+    let ask = matches!(tick_type, 2 | 67);
+    crate::types::model::TickAttrib {
+        can_auto_execute: (bid && eligible_mask & 0x04 != 0)
+            || (ask && eligible_mask & 0x08 != 0),
+        past_limit: (bid && quote_state_mask & 0x02 != 0)
+            || (ask && quote_state_mask & 0x04 != 0),
+        pre_open: (bid || ask) && quote_state_mask & 0x01 != 0,
+    }
+}
+
 /// One reading of an extra series the caller asked for.
 ///
 /// The series ride on the same subscription as the prices and arrive on

@@ -129,6 +129,42 @@ fn order_buffer_drain_reusable() {
     assert!(!buf.is_empty());
 }
 
+/// What the venue says about a price reaches the side it is about.
+///
+/// It states both sides in one mask — one bit each for whether the bid and the
+/// ask may be dealt on without a human, one shared bit for a pre-open
+/// indication, one each for a side past its limit — while a caller is handed
+/// an attribute beside each price. Delivered without reading the side, every
+/// quote carried three false flags whatever the venue said.
+#[test]
+fn a_quote_attribute_reaches_the_side_it_is_about() {
+    use crate::types::quote_attributes;
+
+    // Only the ask may be dealt on; only the bid has run past its limit.
+    let eligible = 0x08;
+    let state = 0x02;
+    let bid = quote_attributes(1, eligible, state);
+    let ask = quote_attributes(2, eligible, state);
+    assert!(!bid.can_auto_execute, "the bid is not the eligible side");
+    assert!(ask.can_auto_execute, "the ask is");
+    assert!(bid.past_limit, "the bid is the one past its limit");
+    assert!(!ask.past_limit, "the ask is not");
+    assert!(!bid.pre_open, "and neither is a pre-open indication");
+
+    // Pre-open is stated once and belongs to both sides.
+    let both = quote_attributes(1, 0, 0x01);
+    assert!(both.pre_open);
+    assert!(quote_attributes(2, 0, 0x01).pre_open);
+
+    // The delayed numbers are the same two prices from another feed.
+    assert!(quote_attributes(66, 0x04, 0).can_auto_execute, "the delayed bid");
+    assert!(quote_attributes(67, 0x08, 0).can_auto_execute, "and the delayed ask");
+
+    // Anything that is not one of those prices carries none of it.
+    let last = quote_attributes(4, 0x0c, 0x07);
+    assert!(!last.can_auto_execute && !last.past_limit && !last.pre_open);
+}
+
 // --- OrderRequest variants ---
 
 #[test]

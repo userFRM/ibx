@@ -730,8 +730,21 @@ impl EClient {
                 }
             }
 
-            let attrib = TickAttrib::default();
-            let attrib_obj = Py::new(py, attrib)?.into_any();
+            // One object per side, because the venue states both sides in one
+            // mask and a caller is handed an attribute beside each price.
+            let side_attrib = |tick_type: i32| {
+                let a = crate::types::quote_attributes(
+                    tick_type, result.eligible_mask, result.quote_state_mask,
+                );
+                TickAttrib {
+                    can_auto_execute: a.can_auto_execute,
+                    past_limit: a.past_limit,
+                    pre_open: a.pre_open,
+                }
+            };
+            let bid_attrib = Py::new(py, side_attrib(1))?.into_any();
+            let ask_attrib = Py::new(py, side_attrib(2))?.into_any();
+            let plain_attrib = Py::new(py, TickAttrib::default())?.into_any();
             // Which kinds the venue has stated, for anything waiting on a
             // snapshot of this contract.
             for tick in &result.ticks {
@@ -742,7 +755,12 @@ impl EClient {
             for tick in &result.ticks {
                 for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
                     if tick.is_price {
-                        call_wrapper!(self, py, shared, "tick_price", (id, tick.tick_type, tick.value, &attrib_obj));
+                        let attrib_obj = match tick.tick_type {
+                            1 | 66 => &bid_attrib,
+                            2 | 67 => &ask_attrib,
+                            _ => &plain_attrib,
+                        };
+                        call_wrapper!(self, py, shared, "tick_price", (id, tick.tick_type, tick.value, attrib_obj));
                     } else {
                         call_wrapper!(self, py, shared, "tick_size", (id, tick.tick_type, tick.value));
                     }

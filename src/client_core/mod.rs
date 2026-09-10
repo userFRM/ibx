@@ -161,6 +161,13 @@ pub struct QuotePollResult {
     pub ticks: Vec<TickEvent>,
     /// Ticks the venue states under a number of its own rather than as a price
     /// or a size, delivered on `tick_generic`.
+    /// What the venue says about the two prices rather than what they are, as
+    /// it states them: one mask for whether each side may be dealt on without
+    /// a human, one for pre-open and past-limit. Read per side where each
+    /// price is handed over.
+    pub eligible_mask: i64,
+    /// The second of those, carried beside it.
+    pub quote_state_mask: i64,
     pub generic_ticks: Vec<TickEvent>,
     /// Ticks whose value is text.
     pub string_ticks: Vec<StringTickEvent>,
@@ -3554,6 +3561,7 @@ impl ClientCore {
         req_id: i64,
     ) -> QuotePollResult {
         let q = shared.market.quote(iid);
+        let (eligible_mask, quote_state_mask) = shared.market.quote_attribute_masks(iid);
         let fields = [
             q.bid, q.ask, q.last, q.bid_size, q.ask_size, q.last_size,
             q.high, q.low, q.volume, q.close, q.open, q.timestamp_ns as i64,
@@ -3686,7 +3694,11 @@ impl ClientCore {
             delivered = true;
         }
 
-        QuotePollResult { delayed, ticks, generic_ticks, string_ticks, timestamp, delivered }
+        QuotePollResult {
+            delayed, ticks, generic_ticks, string_ticks, timestamp, delivered,
+            eligible_mask,
+            quote_state_mask,
+        }
     }
 
     /// Whether a snapshot has just finished arriving.

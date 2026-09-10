@@ -340,7 +340,8 @@ fn zero_price_quote_dispatches_correctly() {
 
     let q = Quote { bid: 0, ask: 0, last: 0, bid_size: 0, ask_size: 0,
         last_size: 0, high: 0, low: 0, volume: 0, close: 0, open: 0, timestamp_ns: 0,
-        bid_exch_mask: 0, ask_exch_mask: 0, last_exch_mask: 0, halted: 0 };
+        bid_exch_mask: 0, ask_exch_mask: 0, last_exch_mask: 0, halted: 0,
+    };
     shared.market.push_quote(0, &q);
 
     let mut w = RecordingWrapper::default();

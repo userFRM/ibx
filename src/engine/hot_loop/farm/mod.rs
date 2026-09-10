@@ -1326,6 +1326,19 @@ impl FarmState {
                         applied = false;
                     }
                 }
+                // What the venue says about the two prices rather than what
+                // they are. Kept beside the quote rather than in it: a quote
+                // is read on the hot path and sized to the cache lines it
+                // occupies, and these change seldom. Read per side where a
+                // caller is handed each price.
+                tick_decoder::O_ELIGIBLE => {
+                    let (_, state) = shared.market.quote_attribute_masks(instrument);
+                    shared.market.note_quote_attributes(instrument, tick.magnitude, state);
+                }
+                tick_decoder::O_QUOTE_STATE => {
+                    let (eligible, _) = shared.market.quote_attribute_masks(instrument);
+                    shared.market.note_quote_attributes(instrument, eligible, tick.magnitude);
+                }
                 tick_decoder::O_BID_EXCH => { q.bid_exch_mask = tick.magnitude; }
                 tick_decoder::O_ASK_EXCH => { q.ask_exch_mask = tick.magnitude; }
                 tick_decoder::O_LAST_EXCH => { q.last_exch_mask = tick.magnitude; }

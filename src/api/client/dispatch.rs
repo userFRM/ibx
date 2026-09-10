@@ -538,14 +538,9 @@ impl EClient {
         }
         // Quote polling → tick_price / tick_size (via ClientCore)
         let instruments = self.core.snapshot_instruments();
-        // Every quote gets the same one, because a quote states no attributes
-        // to carry: a tick on this feed is a kind, a width and a value, with
-        // no room for a flag beside it, and the venue names an attribute
-        // message for the tick-by-tick streams alone — which is where this
-        // client does read them off the wire. Left at the default here because
-        // there is nothing else to put in it, not because nothing was looked
-        // for.
-        let attrib = crate::types::model::TickAttrib::default();
+        // What the venue says about a price rather than what it is. It states
+        // both sides in one mask and a caller is owed an attribute beside each
+        // price, so the side is read off the tick the attribute goes out with.
         let mut snapshot_done: Vec<(i64, Option<u64>)> = Vec::new();
         for (iid, req_id) in instruments {
             let result = self.core.poll_instrument_ticks(&self.shared, iid, req_id);
@@ -581,6 +576,9 @@ impl EClient {
             for tick in &result.ticks {
                 for id in std::iter::once(tick.req_id).chain(watchers.iter().copied()) {
                     if tick.is_price {
+                        let attrib = crate::types::quote_attributes(
+                            tick.tick_type, result.eligible_mask, result.quote_state_mask,
+                        );
                         wrapper.tick_price(id, tick.tick_type, tick.value, &attrib);
                     } else {
                         wrapper.tick_size(id, tick.tick_type, tick.value);

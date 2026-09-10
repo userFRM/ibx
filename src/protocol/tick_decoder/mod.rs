@@ -132,6 +132,18 @@ pub const O_VOLUME: u64 = 10;
 pub const O_TS_BASE: u64 = 20;
 /// Tick type 21 on the wire: the ts offset.
 pub const O_TS_OFFSET: u64 = 21;
+/// Which side of the quote may be dealt on without a human.
+///
+/// A mask over both sides at once: bit 2 says the bid may be, bit 3 says the
+/// ask may be. The reference client reports it per side, as the attribute
+/// beside each price.
+pub const O_ELIGIBLE: u64 = 7;
+/// Whether the quote is a pre-open indication, and whether either side has run
+/// past its limit.
+///
+/// One mask covering both sides: bit 0 says both sides are pre-open, bit 1
+/// that the bid is past its limit, bit 2 that the ask is.
+pub const O_QUOTE_STATE: u64 = 11;
 /// Tick type 13 on the wire: the last exch.
 pub const O_LAST_EXCH: u64 = 13;
 /// Tick type 16 on the wire: the bid exch.
