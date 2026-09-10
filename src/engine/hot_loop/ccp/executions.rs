@@ -27,6 +27,22 @@ const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
 /// message about an order that is still live.
 const ORDER_REJECTED_ERROR_CODE: i32 = 201;
 
+/// Which model within the account a report is about.
+///
+/// The venue states it beside the account, on the same tag an order states it
+/// on going out. A report that names an account-only specification states no
+/// model, whatever else it carries, so the field is left empty rather than
+/// filled from a tag that is about something else.
+///
+/// The default sleeve is not stated on an order going out, but a report that
+/// names it is naming it, so what arrives is what a caller is told.
+fn stated_model(parsed: &std::collections::HashMap<u32, String>) -> String {
+    if parsed.contains_key(&8065) {
+        return String::new();
+    }
+    parsed.get(&6700).cloned().unwrap_or_default()
+}
+
 /// What identifies one execution, for the window that tells a repeat from a
 /// new one.
 ///
@@ -1598,6 +1614,7 @@ impl CcpState {
 
             let order = api::Order {
                 order_id: clord_id as i64,
+                model_code: stated_model(parsed),
                 // What the venue says the order waits for. Read from the
                 // report rather than left empty, so an order read back and
                 // placed again waits for what it waited for the first time
@@ -1697,6 +1714,7 @@ impl CcpState {
             };
 
             let last_exec = api::Execution {
+                model_code: stated_model(parsed),
                 // What the report stated that nothing above names. A report
                 // carries far more than any one client reads, and what is not
                 // read is kept rather than dropped.

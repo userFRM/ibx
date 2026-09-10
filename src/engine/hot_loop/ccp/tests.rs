@@ -1279,6 +1279,34 @@ fn a_repeated_correction_without_an_execution_id_recovers_an_order_only_once() {
     );
 }
 
+/// Which model a fill and its order belong to reaches the caller.
+///
+/// An advisor places for several models inside one account, and a report says
+/// which. Dropped, every fill and every order came back attributed to the
+/// account at large, and a caller could not tell one model's position from
+/// another's.
+#[test]
+fn the_model_a_report_names_reaches_the_caller() {
+    let (mut ccp, mut context, shared) = tracked_order_state();
+    let mut frame = fill_frame(&[]);
+    frame.insert(6700, "GROWTH".to_string());
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    let held = shared.orders.get_order_info(42).expect("the order is held");
+    assert_eq!(held.order.model_code, "GROWTH", "the order names its model");
+    assert_eq!(held.last_exec.model_code, "GROWTH", "and so does the fill");
+
+    // A report naming an account-only specification states no model, whatever
+    // else it carries.
+    let (mut ccp, mut context, shared) = tracked_order_state();
+    let mut only_account = fill_frame(&[]);
+    only_account.insert(6700, "GROWTH".to_string());
+    only_account.insert(8065, "DU1".to_string());
+    ccp.handle_exec_report(&only_account, b"", &mut context, &shared, &None, "");
+    let held = shared.orders.get_order_info(42).expect("the order is held");
+    assert_eq!(held.order.model_code, "", "an account-only report names no model");
+}
+
 /// The venue moving a working order reaches the caller.
 ///
 /// It states only what it changed — where the order is working, what its limit
