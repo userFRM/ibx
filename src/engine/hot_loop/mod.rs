@@ -1247,7 +1247,7 @@ impl HotLoop {
                 continue;
             }
             match cmd {
-                ControlCommand::Subscribe { contract, mode_9887, regulatory_snapshot, reply_tx } => {
+                ControlCommand::Subscribe { contract, mode_9887, regulatory_snapshot, generic_ticks, reply_tx } => {
                     let ContractRef { con_id, symbol, exchange, sec_type, currency, last_trade_date, strike, right, multiplier } = contract;
                     // What tells two conId-less contracts on one underlying apart.
                     // Built by the same function an order uses, or the two
@@ -1266,7 +1266,16 @@ impl HotLoop {
                     // left the caller told it failed while a live subscription
                     // bound the second contract's tag and minTick onto the first,
                     // with no id to cancel it by.
-                    match self.register_or_reject(con_id, symbol.clone(), &sec_type, &exchange, &option_key, &None) {
+                    let registered = self.register_or_reject(con_id, symbol.clone(), &sec_type, &exchange, &option_key, &None);
+                    // Held against the slot before the subscription goes out,
+                    // so the frame that carries them is built from them and the
+                    // rebuild after a reconnect asks for them again.
+                    if let Some(slot) = registered
+                        && !generic_ticks.is_empty()
+                    {
+                        self.farm.asked_generic_ticks.insert(slot, generic_ticks.clone());
+                    }
+                    match registered {
                         None => {
                             if let Some(tx) = &reply_tx {
                                 let _ = tx.try_send(Err(format!(
@@ -4409,6 +4418,7 @@ mod tests {
             contract: ContractRef { con_id: 893091670, ..Default::default() },
             mode_9887: 0,
             regulatory_snapshot: false,
+            generic_ticks: Vec::new(),
             reply_tx: None,
         })
         .expect("the engine holds the other end");
@@ -4446,6 +4456,7 @@ mod tests {
                     },
                     mode_9887: 0,
                     regulatory_snapshot: false,
+                    generic_ticks: Vec::new(),
                     reply_tx: Some(reply_tx),
                 }).unwrap();
                 hl.poll_once();
@@ -5057,6 +5068,7 @@ mod tests {
             },
             mode_9887: 0,
             regulatory_snapshot: true,
+            generic_ticks: Vec::new(),
             reply_tx: None,
         })
         .expect("the engine holds the other end");
@@ -5100,6 +5112,7 @@ mod tests {
             },
             mode_9887: 0,
             regulatory_snapshot: true,
+            generic_ticks: Vec::new(),
             reply_tx: None,
         })
         .expect("the engine holds the other end");
@@ -5265,6 +5278,7 @@ mod tests {
             },
             mode_9887: 0,
             regulatory_snapshot: false,
+            generic_ticks: Vec::new(),
             reply_tx: Some(reply_tx),
         })
         .expect("the engine holds the other end");
@@ -5309,6 +5323,7 @@ mod tests {
             },
             mode_9887: 0,
             regulatory_snapshot: false,
+            generic_ticks: Vec::new(),
             reply_tx: Some(reply_tx),
         })
         .expect("the engine holds the other end");
@@ -7013,6 +7028,7 @@ mod tests {
             },
             mode_9887: 0,
             regulatory_snapshot: false,
+            generic_ticks: Vec::new(),
             reply_tx: Some(reply_tx),
         })
         .expect("the engine holds the other end");
@@ -7995,6 +8011,7 @@ mod tests {
                 mode_9887: 0,
                 regulatory_snapshot: chargeable,
                 reply_tx: None,
+                generic_ticks: Vec::new(),
             })
             .expect("the engine is holding the other end");
             hl.poll_control_commands();

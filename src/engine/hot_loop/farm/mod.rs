@@ -238,6 +238,12 @@ pub(crate) struct FarmState {
     /// only thing that says what a frame holds is what was asked for under
     /// that number.
     pub(crate) generic_tick_reqs: Vec<(u32, u32)>,
+    /// The extra series a caller named for a contract, by the venue's own
+    /// number for each. Held per instrument rather than passed along with the
+    /// subscription, because the rebuild after a reconnect sends the
+    /// subscription again from what is held here and has nowhere else to read
+    /// them from.
+    pub(crate) asked_generic_ticks: std::collections::HashMap<InstrumentId, Vec<u32>>,
     /// The venue's number for a generic-tick subscription, and what it
     /// carries: (server tag, request type, instrument).
     generic_tick_tags: Vec<(u32, u32, InstrumentId)>,
@@ -748,6 +754,7 @@ impl FarmState {
             md_resub_info: Vec::new(),
             greeks_subs: Vec::new(),
             generic_tick_reqs: Vec::new(),
+            asked_generic_ticks: std::collections::HashMap::new(),
             news_subscriptions: Vec::new(),
             generic_tick_tags: Vec::new(),
             unread_types: std::collections::HashSet::new(),
@@ -1648,6 +1655,21 @@ impl FarmState {
         self.next_md_req_id += 1;
         self.md_req_to_instrument.push((venue_map_req_id, instrument));
         self.generic_tick_reqs.push((venue_map_req_id, BBO_EXCHANGE_MAP_REQUEST_TYPE));
+
+        // One request per extra series the caller named, allocated whether or
+        // not the farm is up: what was asked for is bookkeeping, and the
+        // withdrawal has to find every one of them either way.
+        let asked_ticks: Vec<u32> =
+            self.asked_generic_ticks.get(&instrument).cloned().unwrap_or_default();
+        let mut tick_req_ids: std::collections::HashMap<u32, u32> =
+            std::collections::HashMap::new();
+        for &tick in &asked_ticks {
+            let id = self.next_md_req_id;
+            self.next_md_req_id += 1;
+            self.md_req_to_instrument.push((id, instrument));
+            self.generic_tick_reqs.push((id, tick));
+            tick_req_ids.insert(tick, id);
+        }
         if !regulatory_snapshot {
             self.md_req_to_instrument.push((last_id, instrument));
         }
@@ -1776,6 +1798,24 @@ impl FarmState {
                 let refs: Vec<(u32, &str)> =
                     venue_map.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
                 let _ = conn.send_fixcomp(&refs);
+
+                // And every extra series the caller named. Each is a
+                // subscription of its own under the venue's own number for it,
+                // which is the number the caller stated: the same frame as the
+                // trading status beside it, with that number on 264.
+                for tick in asked_ticks {
+                    let mut extra = build_trading_status_subscribe_tags(
+                        tick_req_ids[&tick], con_id, sec_type, exchange, &ts,
+                    );
+                    for (tag, value) in extra.iter_mut() {
+                        if *tag == 264 {
+                            *value = tick.to_string();
+                        }
+                    }
+                    let refs: Vec<(u32, &str)> =
+                        extra.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
+                    let _ = conn.send_fixcomp(&refs);
+                }
             } else {
                 // No con_id — send descriptive fields
                 let strike_str = if strike > 0.0 { strike.to_string() } else { String::new() };
@@ -1838,6 +1878,10 @@ impl FarmState {
         // written down — left standing, the replay re-sends a subscription the
         // caller has just cancelled.
         self.replay_queue.retain(|r| r.0 != instrument);
+        // The extra series asked for on this contract go with it. Left behind,
+        // the entry outlives every subscription that used it and the next
+        // caller to watch this slot is given a series nobody asked for.
+        self.asked_generic_ticks.remove(&instrument);
         let record = match self.instrument_md_reqs.iter()
             .position(|(id, _)| *id == instrument)
         {
@@ -2422,6 +2466,7 @@ impl FarmState {
         // tick the last one asked for.
         self.generic_tick_reqs.clear();
         self.generic_tick_tags.clear();
+        self.asked_generic_ticks.clear();
         // Keyed the same way, and left behind they are never reachable again:
         // what removes an entry looks it up by an id the reconnect has already
         // replaced, so nothing afterwards names the old one. Both are scanned

@@ -2511,6 +2511,7 @@ fn an_off_grid_price_is_refused_and_the_caller_told() {
     // per-instrument tick size. Without it the snap is a no-op.
     control_tx.send(ControlCommand::Subscribe {
         contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, regulatory_snapshot: false, reply_tx: None,
+        generic_ticks: Vec::new(),
     }).expect("send subscribe failed");
 
     let join = run_hot_loop(hot_loop);
@@ -2685,6 +2686,7 @@ fn reclaim_and_symbol_search_phase_live() {
         control_tx.send(ControlCommand::Subscribe {
             contract: ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0,
             regulatory_snapshot: false, reply_tx: Some(tx),
+            generic_ticks: Vec::new(),
         }).expect("send subscribe failed");
         rx.recv_timeout(Duration::from_secs(10))
             .unwrap_or_else(|_| panic!("{req}: no registration reply"))

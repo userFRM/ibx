@@ -1875,16 +1875,31 @@ impl ClientCore {
         // So every other number is reported rather than accepted in silence —
         // option volume, shortable shares. A caller hears that it will not
         // arrive instead of watching for a tick that never comes.
-        let unsent: Vec<&str> = generic_tick_list
-            .split(',')
-            .map(str::trim)
-            .filter(|t| !t.is_empty() && *t != "292" && *t != "mdoff")
-            .collect();
-        if !unsent.is_empty() {
+        // Each remaining entry is asked for. The number a caller states is the
+        // venue's own number for the series, so there is nothing to translate:
+        // it goes out as a subscription of its own under that number, the way
+        // the option model, the trading status and the venue map already do.
+        //
+        // An entry that is not a number is not one of the venue's series, and
+        // saying so is better than sending it and having the whole request
+        // refused for the sake of one bad word in the list.
+        let mut generic_ticks: Vec<u32> = Vec::new();
+        let mut unread: Vec<&str> = Vec::new();
+        for entry in generic_tick_list.split(',').map(str::trim) {
+            if entry.is_empty() || entry == "292" || entry == "mdoff" {
+                continue;
+            }
+            match entry.parse::<u32>() {
+                Ok(tick) if !generic_ticks.contains(&tick) => generic_ticks.push(tick),
+                Ok(_) => {}
+                Err(_) => unread.push(entry),
+            }
+        }
+        if !unread.is_empty() {
             log::warn!(
-                "generic tick(s) {} were asked for and are not served by this \
-                 client, so no tick of those kinds will arrive",
-                unsent.join(", "),
+                "the generic tick list named {}, which is not a number the venue \
+                 knows a series by, so nothing was asked for it",
+                unread.join(", "),
             );
         }
         // Asked for once per contract, whoever asks. Recorded as the decision
@@ -1954,6 +1969,7 @@ impl ClientCore {
             contract: ContractRef { con_id, symbol: symbol.to_string(), exchange: exchange.to_string(), sec_type: sec_type.to_string(), currency: currency.to_string(), last_trade_date: last_trade_date.to_string(), strike, right: right.to_string(), multiplier: multiplier.to_string() },
             mode_9887,
             regulatory_snapshot,
+            generic_ticks,
             reply_tx: Some(reply_tx),
         }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
 

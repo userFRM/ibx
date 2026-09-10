@@ -139,6 +139,13 @@ pub enum ControlCommand {
         /// snapshot action and never with a feed named beside it, and the
         /// venue bills for each one.
         regulatory_snapshot: bool,
+        /// The extra series the caller named, by the venue's number for each.
+        ///
+        /// The number a caller states is the venue's own: a series is asked
+        /// for as a subscription of its own under that number, the way the
+        /// option model, the trading status and the venue map already are.
+        /// Empty where the caller named none.
+        generic_ticks: Vec<u32>,
         /// Where the engine sends the slot it registered, for a caller waiting
         /// on one.
         reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, crate::error_codes::Refusal>>>,

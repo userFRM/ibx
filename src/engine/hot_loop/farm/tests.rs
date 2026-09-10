@@ -172,6 +172,69 @@ mod news_tests {
         );
     }
 
+    /// A series the caller named is asked for, under the venue's own number
+    /// for it.
+    ///
+    /// The number a caller states in the generic tick list is the number the
+    /// venue knows the series by, so there is nothing to translate: the series
+    /// goes out as a subscription of its own carrying that number, beside the
+    /// prices rather than instead of them. This client used to accept the list
+    /// and send nothing for it, so a caller asking for the shortable count or
+    /// the trade rate waited on a stream that was never asked for.
+    #[test]
+    fn a_named_series_is_asked_for_under_the_venues_own_number() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).expect("a connection over the test pair");
+
+        // RTVolume and the shortable count, as a caller names them.
+        farm.asked_generic_ticks.insert(instrument, vec![233, 236]);
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut conn, &mut hb,
+        );
+
+        let stated = |msg: &[u8], tag: u32| -> Vec<String> {
+            let prefix = format!("{tag}=");
+            msg.split(|&b| b == 0x01)
+                .filter_map(|field| {
+                    std::str::from_utf8(field).ok()?.strip_prefix(prefix.as_str()).map(str::to_string)
+                })
+                .collect()
+        };
+        let mut asked_under = std::collections::BTreeSet::new();
+        for msg in super::drain_inner(&mut peer) {
+            if stated(&msg, 263).first().map(String::as_str) == Some("1") {
+                asked_under.extend(stated(&msg, 264));
+            }
+        }
+        for tick in ["233", "236"] {
+            assert!(
+                asked_under.contains(tick),
+                "the series the caller named goes out under its own number: {asked_under:?}",
+            );
+        }
+        // And each under a request of its own, so what comes back can be told
+        // apart from the prices and from the other series.
+        for tick in [233u32, 236] {
+            assert!(
+                farm.generic_tick_reqs.iter().any(|(_, kind)| *kind == tick),
+                "a request of its own is recorded for {tick}: {:?}", farm.generic_tick_reqs,
+            );
+        }
+
+        // And they go with the subscription rather than outliving it.
+        farm.send_mktdata_unsubscribe(instrument, &mut None, &mut hb);
+        assert!(
+            !farm.asked_generic_ticks.contains_key(&instrument),
+            "what was asked for on this contract is released with it",
+        );
+    }
+
     /// A frame under a number nothing asked a generic tick under says nothing
     /// about which tick it is, so it is dropped rather than guessed at.
     /// Instrument 0 is a real instrument — the first one registered — so a

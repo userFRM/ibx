@@ -27,12 +27,16 @@ not, and says so by name rather than answering with an ordinary subscription.
 
 ## Limits
 
-`generic_tick_list` is not transmitted. The one exception is `"292"`, which
-additionally subscribes to news for that contract. Any other entry is warned
-about rather than quietly dropped: the venue asks for those series under
-numbers of its own, and this client does not carry the mapping. So a request for
-RTVolume and friends will not answer, and you will be told so instead of waiting
-on a stream that is never coming.
+Each number in `generic_tick_list` is asked for, as a subscription of its own
+beside the prices. The number you state is the number the venue knows the series
+by, so there is nothing to translate. `"292"` additionally subscribes to news for
+that contract; an entry that is not a number is reported rather than sent.
+
+Asking for a series and reading it are separate things. The subscription goes
+out for every number you name, and the ticks that have a reader here are
+published; the rest arrive and are skipped rather than guessed at. So a number
+you name is genuinely requested, and what comes back reaches you once its reader
+lands.
 
 One subscription per contract. To change the mode on a contract, cancel first.
 
