@@ -1770,7 +1770,6 @@ impl CcpState {
                 // The price on this report may yet be revised.
                 pending_price_revision: parsed.get(&8497)
                     .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
-                ..Default::default()
             };
 
             if con_id != 0 {
