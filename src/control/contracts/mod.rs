@@ -107,6 +107,14 @@ pub const TAG_NEWS_TOPIC: u32 = 6825;
 /// The issuer a contract is looked up by. A lookup that names one is
 /// answered as fixed income, whatever type the request stated.
 pub const TAG_ISSUER_ID: u32 = 6454;
+/// Which reasons a contract may not be dealt in for, as their numbers with a
+/// comma between. Stated on the contract; what each number means is stated
+/// once for the whole message, under the two tags below.
+pub const TAG_INELIGIBILITY_IDS: u32 = 6765;
+/// The number a reason is stated under, opening one entry of that table.
+pub const TAG_INELIGIBILITY_ID: u32 = 6767;
+/// What that number means, in the words the venue sends.
+pub const TAG_INELIGIBILITY_DESCRIPTION: u32 = 6768;
 
 // Market rule tags.
 /// FIX tag 6019: value "1" opens a new rule block.
@@ -420,6 +428,9 @@ pub struct ContractDefinition {
     pub fund_asset_type: String,
     /// When it actually expires, where that differs from its last trading day.
     pub real_expiration_date: String,
+    /// Why the contract may not be dealt in, each as the number the venue
+    /// files the reason under and the words it states for that number.
+    pub ineligibility_reason_list: Vec<(String, String)>,
     /// Whether the issuer may redeem it early.
     pub callable: bool,
     /// Whether the holder may demand redemption.
@@ -567,6 +578,7 @@ impl Default for ContractDefinition {
             fund_distribution_policy_indicator: String::new(),
             fund_asset_type: String::new(),
             real_expiration_date: String::new(),
+            ineligibility_reason_list: Vec::new(),
             callable: false,
             puttable: false,
             convertible: false,
@@ -771,6 +783,14 @@ pub fn parse_secdef_responses(
         }
     }
     flush(&mut open, &mut out);
+    // The table naming the reasons a contract may not be dealt in is stated
+    // once, after the last contract, so on its own only the record that table
+    // happened to follow could name its own numbers. Name them from the whole
+    // reply instead.
+    let reasons = ineligibility_descriptions(data);
+    for def in &mut out {
+        name_the_ineligibility_reasons(def, &reasons);
+    }
     // Records that all name the same contract are one contract described once.
     // The identifier block repeats the symbol tag and states a type and an id
     // beside it, so a single definition can split in two, and a field the
@@ -859,15 +879,16 @@ static READ_FROM_A_DEFINITION: std::sync::LazyLock<std::collections::HashSet<u32
     // the gap this is here to measure, and put fields already parsed into
     // named slots into the list of what this client could not name.
     //
-    // Read out of the two that read a definition, and not out of the file.
+    // Read out of the three that read a definition, and not out of the file.
     // Its neighbours walk their own replies the same way, and a matching
     // symbol's or a schedule's tag counted here is a definition's field
     // reported as read and then dropped from the very list that exists to
     // catch it.
     let walked = format!(
-        "{}{}",
+        "{}{}{}",
         what_a_function_reads(source, "pub fn parse_secdef_response("),
         what_a_function_reads(source, "pub fn parse_market_rules("),
+        what_a_function_reads(source, "fn ineligibility_descriptions("),
     );
     for cap in walked.split("b\"").skip(1) {
         note(&cap.chars().take_while(|c| *c != '=').collect::<String>());
@@ -1281,7 +1302,66 @@ pub fn parse_secdef_response(
             }
         }
     }
+    // Why the contract may not be dealt in. The contract states the reasons by
+    // number only; what a number means is stated once for the whole message,
+    // after the last contract in it. A record read on its own sees that table
+    // when the message holds a single contract, and `parse_secdef_responses`
+    // names the rest from the whole reply.
+    if let Some(v) = tags.get(&TAG_INELIGIBILITY_IDS) {
+        def.ineligibility_reason_list = v
+            .split(',')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(|id| (id.to_string(), String::new()))
+            .collect();
+    }
+    name_the_ineligibility_reasons(&mut def, &ineligibility_descriptions(data));
     Some(def)
+}
+
+/// What each ineligibility number means, in the order the message states them.
+///
+/// A repeating group, so it is walked rather than looked up: the number opens
+/// an entry and the words follow it, and a keyed parse keeps one entry out of
+/// however many the message carries.
+fn ineligibility_descriptions(data: &[u8]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut opened = String::new();
+    for (tag, value) in tag_sequence(data) {
+        match tag {
+            TAG_INELIGIBILITY_ID => {
+                opened = value;
+            }
+            // Words before any number belong to no reason: the venue files
+            // them under an absent key, which nothing can ask for. The number
+            // stays open afterwards, so a second set of words for one number
+            // states it a second time rather than dropping it.
+            TAG_INELIGIBILITY_DESCRIPTION if !opened.is_empty() => {
+                out.push((opened.clone(), value));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Put the venue's words beside the numbers a contract states.
+///
+/// Only where the number is still unnamed, so naming a definition again from
+/// the whole message fills what the record alone could not and displaces
+/// nothing the record already carried.
+fn name_the_ineligibility_reasons(def: &mut ContractDefinition, table: &[(String, String)]) {
+    for (id, description) in &mut def.ineligibility_reason_list {
+        if !description.is_empty() {
+            continue;
+        }
+        // The last entry for a number is the one that stands: the table is
+        // read into a map under the number, where a later entry replaces an
+        // earlier one.
+        if let Some((_, words)) = table.iter().rev().find(|(known, _)| known == id) {
+            description.clone_from(words);
+        }
+    }
 }
 
 /// Extract the SecurityReqID from a response to match with the original request.
@@ -2053,6 +2133,7 @@ impl crate::types::model::ContractDetails {
             isin: def.isin.clone(),
             cusip: def.cusip.clone(),
             sec_id_list: def.sec_id_list.clone(),
+            ineligibility_reason_list: def.ineligibility_reason_list.clone(),
             min_size: def.min_size,
             min_algo_size: f64::MAX,
             maturity: if bond { def.last_trade_date.clone() } else { String::new() },

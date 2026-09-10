@@ -1201,7 +1201,7 @@ fn a_restated_execution_is_filed_and_not_announced() {
     for (tag, val) in [
         (11u32, "78"), (150u32, "F"), (39u32, "1"), (97u32, "Y"), (54u32, "1"),
         (17u32, "OLD-EXEC"), (14u32, "10"), (32u32, "10"), (31u32, "100.0"),
-        (151u32, "90"), (60u32, "20260101-16:00:00"), (37u32, "1234567.0"), (109u32, "7"),
+        (151u32, "90"), (60u32, "20260101-16:00:00"), (37u32, "1234567.0"), (109u32, "the desk"),
     ] {
         replay.insert(tag, val.to_string());
     }
@@ -1215,7 +1215,7 @@ fn a_restated_execution_is_filed_and_not_announced() {
     assert_eq!(execution.exec_id, "OLD-EXEC");
     assert_eq!(execution.side, "BOT");
     assert_eq!(execution.shares, 10.0);
-    assert_eq!(execution.client_id, 7, "the client that placed the order");
+    assert_eq!(execution.submitter, "the desk", "and who entered the order");
     assert_ne!(execution.perm_id, 0, "and the order's permanent number");
 
     // An order finished before the restart has no recovery record. Its
@@ -4195,8 +4195,8 @@ fn a_duplicate_exec_id_suppresses_the_fill_and_nothing_else() {
 
 /// The report restates the order, and a caller asking what its orders are
 /// is answered from that. An order that came back naming neither the
-/// reference the caller gave it nor the client that placed it is not the
-/// order they placed.
+/// reference the caller gave it nor who entered it is not the order they
+/// placed.
 #[test]
 fn the_order_a_report_restates_carries_what_the_caller_gave_it() {
     let (mut ccp, mut context, shared) = ord_status_test_state();
@@ -4207,7 +4207,7 @@ fn the_order_a_report_restates_carries_what_the_caller_gave_it() {
     frame.insert(6010, "my-strategy".to_string());
     frame.insert(47, "A".to_string());
     frame.insert(432, "20260401-16:00:00".to_string());
-    frame.insert(109, "7".to_string());
+    frame.insert(109, "the desk".to_string());
     frame.insert(6160, "GROUP1".to_string());
     frame.insert(6159, "PctChange".to_string());
     frame.insert(6164, "25".to_string());
@@ -4224,7 +4224,7 @@ fn the_order_a_report_restates_carries_what_the_caller_gave_it() {
     );
     assert_eq!(info.order.rule80a, "A");
     assert_eq!(info.order.good_till_date, "20260401-16:00:00");
-    assert_eq!(info.order.client_id, 7);
+    assert_eq!(info.order.submitter, "the desk");
     assert_eq!(info.order.fa_group, "GROUP1");
     assert_eq!(info.order.fa_method, "PctChange");
     assert_eq!(info.order.fa_percentage, "25");

@@ -89,6 +89,8 @@ def install(surface: dict) -> dict:
                  "FundAssetType", "FundDistributionPolicyIndicator"),
             "A contract and the things that describe one.",
         ),
+        "ineligibility_reason": (held("IneligibilityReason"),
+                                 "Why a contract may not be dealt in."),
         "order": (
             held("Order", "OrderComboLeg", "COMPETE_AGAINST_BEST_OFFSET_UP_TO_MID",
                  "CUSTOMER", "FIRM", "UNKNOWN",

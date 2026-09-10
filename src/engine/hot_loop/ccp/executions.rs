@@ -801,12 +801,10 @@ impl CcpState {
                     // reads as standing alone, and resubmitting it drops the
                     // cancellation the group exists for.
                     oca_group: parsed.get(&583).cloned().unwrap_or_default(),
-                    // Tag 109, the client that placed the order, so an order
-                    // this session did not place is not filed under this one.
-                    client_id: parsed
-                        .get(&109)
-                        .and_then(|s| s.trim().parse().ok())
-                        .unwrap_or(0),
+                    // Tag 109, who entered the order. Not a client number:
+                    // read as one, a report naming a person left the order
+                    // under client nought and lost the name as well.
+                    submitter: parsed.get(&109).cloned().unwrap_or_default(),
                     ..Default::default()
                 },
                 order_state: api::OrderState {
@@ -1712,7 +1710,9 @@ impl CcpState {
                 outside_rth,
                 clearing_intent,
                 auto_cancel_date,
-                submitter: account_id.to_string(),
+                // Tag 109, who entered the order, which the report states and
+                // the account does not: an account holds many people.
+                submitter: parsed.get(&109).cloned().unwrap_or_default(),
                 oca_type,
                 use_price_mgmt_algo,
                 trail_stop_price,
@@ -1731,7 +1731,6 @@ impl CcpState {
                 order_ref: parsed.get(&6010).cloned().unwrap_or_default(),
                 rule80a: parsed.get(&47).cloned().unwrap_or_default(),
                 good_till_date: parsed.get(&432).cloned().unwrap_or_default(),
-                client_id: parsed.get(&109).and_then(|s| s.parse().ok()).unwrap_or(0),
                 // How an advisor's order is divided, which is the whole of what
                 // an advisor's order is.
                 fa_group: parsed.get(&6160).cloned().unwrap_or_default(),
@@ -1812,6 +1811,9 @@ impl CcpState {
                 // none of them.
                 perm_id,
                 client_id: i64::from(order.client_id),
+                // Who entered it, which is the order's own and is stated on
+                // the report the fill came on.
+                submitter: order.submitter.clone(),
                 // Read off the report, which restates it every time, rather
                 // than looked up against the order this client remembers: a
                 // fill on an order placed in another session is still

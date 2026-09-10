@@ -822,8 +822,7 @@ impl EClient {
     ///   `dontUseAutoPriceForHedge` (141), `whatIfType` (217).
     /// * Requests and fields that do not exist here, an `AttributeError`: the
     ///   four `verify*` calls (70), `cancelContractData` and
-    ///   `cancelHistoricalTicks` (215), `ContractDetails.ineligibilityReasonList`
-    ///   (186), `Execution.submitter` (198).
+    ///   `cancelHistoricalTicks` (215).
     /// * A withdrawal stating a manual time, an operator or who entered it
     ///   (169, 192), and an execution filter stating `lastNDays` or
     ///   `specificDates` (200): refused by name on `error`.

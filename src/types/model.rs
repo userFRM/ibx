@@ -1442,6 +1442,10 @@ pub struct Execution {
     pub ev_multiplier: f64,
     /// Whether the venue is still revising this order's price.
     pub pending_price_revision: bool,
+    /// Who entered the order this fill belongs to, as the report names them.
+    /// Empty where the report names nobody, which is what a session placing
+    /// its own orders sees.
+    pub submitter: String,
 }
 
 // ── ExecutionFilter ──
@@ -1761,6 +1765,10 @@ pub struct ContractDetails {
     pub cusip: String,
     /// Every identifier the contract is known by, as the kind and the value.
     pub sec_id_list: Vec<(String, String)>,
+    /// Why the contract may not be dealt in, each as the number the venue
+    /// files the reason under and the words it states for that number. Empty
+    /// where the venue states none, which is the usual answer.
+    pub ineligibility_reason_list: Vec<(String, String)>,
     /// The smallest quantity the contract trades in, which is not always one.
     pub min_size: f64,
     /// The smallest quantity an algorithmic order trades in. `f64::MAX`:

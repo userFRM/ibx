@@ -1177,6 +1177,107 @@ fn a_reply_naming_two_listings_is_two_contracts() {
     assert_eq!(defs.len(), 1);
     assert_eq!(defs[0].con_id, 265598);
 }
+
+/// Why a contract may not be dealt in reaches a caller with the venue's words
+/// on it, whichever contract in the reply states it.
+///
+/// The numbers sit on the contract and the table naming them sits once at the
+/// end of the reply, so read record by record only the last contract could say
+/// what its own numbers meant and every contract before it carried bare
+/// numbers.
+#[test]
+fn every_contract_names_the_reasons_it_may_not_be_dealt_in() {
+    let msg = crate::protocol::fix::fix_build(&[
+        (crate::protocol::fix::TAG_MSG_TYPE, "d"),
+        (TAG_SECURITY_REQ_ID, "11"),
+        (TAG_SYMBOL, "SPY"),
+        (TAG_SECURITY_TYPE, "CS"),
+        (TAG_IB_CON_ID, "756733"),
+        (TAG_CURRENCY, "USD"),
+        (TAG_INELIGIBILITY_IDS, "1,2"),
+        (TAG_SYMBOL, "AAPL"),
+        (TAG_SECURITY_TYPE, "CS"),
+        (TAG_IB_CON_ID, "265598"),
+        (TAG_CURRENCY, "USD"),
+        (TAG_INELIGIBILITY_IDS, "2"),
+        (TAG_INELIGIBILITY_ID, "1"),
+        (TAG_INELIGIBILITY_DESCRIPTION, "not offered to this account"),
+        (TAG_INELIGIBILITY_ID, "2"),
+        (TAG_INELIGIBILITY_DESCRIPTION, "closing orders only"),
+    ], 1);
+
+    let defs = parse_secdef_responses(&msg, true);
+    assert_eq!(defs.len(), 2, "two contracts: {defs:?}");
+    assert_eq!(
+        defs[0].ineligibility_reason_list,
+        vec![
+            ("1".to_string(), "not offered to this account".to_string()),
+            ("2".to_string(), "closing orders only".to_string()),
+        ],
+        "the first contract states two reasons and the table names both",
+    );
+    assert_eq!(
+        defs[1].ineligibility_reason_list,
+        vec![("2".to_string(), "closing orders only".to_string())],
+        "and the contract the table follows states only its own",
+    );
+}
+
+/// One contract answers the same way, and a contract the venue states no
+/// reason for carries none.
+#[test]
+fn a_lone_definition_names_its_reasons_and_a_dealable_one_states_none() {
+    let named = crate::protocol::fix::fix_build(&[
+        (crate::protocol::fix::TAG_MSG_TYPE, "d"),
+        (TAG_SECURITY_REQ_ID, "12"),
+        (TAG_SYMBOL, "SPY"),
+        (TAG_SECURITY_TYPE, "CS"),
+        (TAG_IB_CON_ID, "756733"),
+        (TAG_CURRENCY, "USD"),
+        (TAG_INELIGIBILITY_IDS, "4"),
+        (TAG_INELIGIBILITY_ID, "4"),
+        (TAG_INELIGIBILITY_DESCRIPTION, "not offered to this account"),
+    ], 1);
+    let def = super::parse_secdef_response(&named, true).expect("a definition");
+    assert_eq!(
+        def.ineligibility_reason_list,
+        vec![("4".to_string(), "not offered to this account".to_string())],
+    );
+
+    let plain = crate::protocol::fix::fix_build(&[
+        (crate::protocol::fix::TAG_MSG_TYPE, "d"),
+        (TAG_SECURITY_REQ_ID, "13"),
+        (TAG_SYMBOL, "SPY"),
+        (TAG_SECURITY_TYPE, "CS"),
+        (TAG_IB_CON_ID, "756733"),
+        (TAG_CURRENCY, "USD"),
+    ], 1);
+    let def = super::parse_secdef_response(&plain, true).expect("a definition");
+    assert!(def.ineligibility_reason_list.is_empty(), "{:?}", def.ineligibility_reason_list);
+}
+
+/// A number the table never names still reaches the caller: the venue said the
+/// contract may not be dealt in for it, and dropping the entry drops that.
+#[test]
+fn a_reason_the_table_does_not_name_is_still_stated() {
+    let msg = crate::protocol::fix::fix_build(&[
+        (crate::protocol::fix::TAG_MSG_TYPE, "d"),
+        (TAG_SECURITY_REQ_ID, "14"),
+        (TAG_SYMBOL, "SPY"),
+        (TAG_SECURITY_TYPE, "CS"),
+        (TAG_IB_CON_ID, "756733"),
+        (TAG_CURRENCY, "USD"),
+        (TAG_INELIGIBILITY_IDS, "9"),
+        // Words before any number belong to no reason, and the table names a
+        // different one.
+        (TAG_INELIGIBILITY_DESCRIPTION, "orphaned"),
+        (TAG_INELIGIBILITY_ID, "8"),
+        (TAG_INELIGIBILITY_DESCRIPTION, "not offered to this account"),
+    ], 1);
+    let def = super::parse_secdef_response(&msg, true).expect("a definition");
+    assert_eq!(def.ineligibility_reason_list, vec![("9".to_string(), String::new())]);
+}
+
 mod industry_tests {
     use super::super::*;
 
@@ -1344,6 +1445,8 @@ mod unread_tag_tests {
             TAG_INCREMENT,
             TAG_PRICE_INCREMENT_COUNT,
             TAG_SIZE_INCREMENT_COUNT,
+            TAG_INELIGIBILITY_ID,
+            TAG_INELIGIBILITY_DESCRIPTION,
         ] {
             assert!(
                 read.contains(&walked),

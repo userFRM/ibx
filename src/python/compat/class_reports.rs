@@ -113,6 +113,9 @@ pub struct Execution {
     pub last_liquidity: i32,
     #[pyo3(get, set)]
     pub pending_price_revision: bool,
+    /// Who entered the order this fill belongs to, as the report names them.
+    #[pyo3(get, set)]
+    pub submitter: String,
     /// How an option's fill came about, as the reference client codes it;
     /// -1 where none is stated, and this client reads none off a report. Read
     /// and written as that client's `OptionExerciseType` member.
@@ -148,6 +151,7 @@ impl Execution {
             model_code: e.model_code.clone(),
             last_liquidity: e.last_liquidity,
             pending_price_revision: e.pending_price_revision,
+            submitter: e.submitter.clone(),
             opt_exercise_or_lapse_type: -1,
         }
     }

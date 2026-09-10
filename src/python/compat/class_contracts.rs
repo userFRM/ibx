@@ -459,6 +459,45 @@ impl TagValue {
     }
 }
 
+/// One reason a contract may not be dealt in, under the names the reference
+/// client gives its fields.
+///
+/// The venue states the reasons on a contract by number and states what the
+/// numbers mean once for the whole reply; both halves arrive here already put
+/// together.
+#[pyclass(from_py_object)]
+#[derive(Clone, Debug)]
+pub struct IneligibilityReason {
+    /// Trailing underscore because the reference client cannot spell it
+    /// `id`, which names a builtin.
+    #[pyo3(get, set)]
+    pub id_: String,
+    #[pyo3(get, set)]
+    pub description: String,
+}
+
+#[pymethods]
+impl IneligibilityReason {
+    /// `str()` of each, as the reference client keeps them — including the
+    /// pair nobody gave anything, which it holds as the word for nothing
+    /// rather than as an empty string.
+    #[new]
+    #[pyo3(signature = (id_=None, description=None))]
+    fn new(
+        py: Python<'_>, id_: Option<Bound<'_, PyAny>>, description: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let text = |given: Option<Bound<'_, PyAny>>| -> PyResult<String> {
+            let given = given.unwrap_or_else(|| py.None().into_bound(py).into_any());
+            Ok(given.str()?.to_cow()?.into_owned())
+        };
+        Ok(Self { id_: text(id_)?, description: text(description)? })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("IneligibilityReason(id='{}', description='{}')", self.id_, self.description)
+    }
+}
+
 /// One leg of a combination, under the names the reference client gives its
 /// fields.
 ///
@@ -789,6 +828,14 @@ pub struct ContractDetails {
     /// The code the definition states; read and written as the reference
     /// client's `FundAssetType` member.
     pub fund_asset_type: String,
+    /// Why the contract may not be dealt in, each an `IneligibilityReason`.
+    ///
+    /// Nothing rather than an empty list where the venue states no reason,
+    /// which is the usual answer and is how the reference client holds it: a
+    /// program that tests the field rather than its length reads the same
+    /// thing here.
+    #[pyo3(get, set)]
+    pub ineligibility_reason_list: Option<Py<PyList>>,
     /// When the contract trades, stated in UTC.
     ///
     /// The reference client states these in the zone `time_zone_id` names;
@@ -881,6 +928,7 @@ impl ContractDetails {
 
     fn __traverse__(&self, visit: pyo3::PyVisit<'_>) -> Result<(), pyo3::PyTraverseError> {
         visit.call(&self.contract)?;
+        visit.call(self.ineligibility_reason_list.as_ref())?;
         self.sec_id_list.traverse(&visit)
     }
 
@@ -889,6 +937,7 @@ impl ContractDetails {
         // may share. The field continues to hold a Contract.
         self.contract = Py::new(py, Contract::default())?;
         self.sec_id_list = ListField::new();
+        self.ineligibility_reason_list = None;
         Ok(())
     }
 }
@@ -947,6 +996,10 @@ impl Clone for ContractDetails {
             fund_blue_sky_territories: self.fund_blue_sky_territories.clone(),
             fund_distribution_policy_indicator: self.fund_distribution_policy_indicator.clone(),
             fund_asset_type: self.fund_asset_type.clone(),
+            ineligibility_reason_list: self
+                .ineligibility_reason_list
+                .as_ref()
+                .map(|list| list.clone_ref(py)),
             market_name: self.market_name.clone(),
             min_tick: self.min_tick,
             order_types: self.order_types.clone(),
@@ -1063,6 +1116,7 @@ impl ContractDetails {
             fund_blue_sky_territories: String::new(),
             fund_distribution_policy_indicator: String::new(),
             fund_asset_type: String::new(),
+            ineligibility_reason_list: None,
             trading_hours: String::new(),
             liquid_hours: String::new(),
             time_zone_id: String::new(),
@@ -1185,6 +1239,20 @@ impl ContractDetails {
             fund_blue_sky_territories: def.fund_blue_sky_territories.clone(),
             fund_distribution_policy_indicator: def.fund_distribution_policy_indicator.clone(),
             fund_asset_type: def.fund_asset_type.clone(),
+            // Nothing, not an empty list, where the venue named no reason:
+            // the reference client only ever puts a list here when it has one
+            // to put, and a program tests the field for one.
+            ineligibility_reason_list: (!def.ineligibility_reason_list.is_empty()).then(|| {
+                ListField::of(
+                    py,
+                    def.ineligibility_reason_list.iter().map(|(id, description)| {
+                        IneligibilityReason { id_: id.clone(), description: description.clone() }
+                    }),
+                )
+                .unwrap_or_default()
+                .bound(py)
+                .unbind()
+            }),
             trading_hours: def.trading_hours.clone().unwrap_or_default(),
             liquid_hours: def.liquid_hours.clone().unwrap_or_default(),
             time_zone_id: def.time_zone_id.clone().unwrap_or_default(),
@@ -1625,6 +1693,32 @@ for cls in [Contract, ContractDetails, ContractDescription]:
             details.__clear__(py).unwrap();
             assert!(!details.contract.is(&old));
             assert_eq!(old.borrow(py).con_id, 7, "clearing the owner leaves the shared contract alone");
+        });
+    }
+
+    /// A definition naming why a contract may not be dealt in hands a caller
+    /// the venue's words for it; one naming none hands nothing rather than an
+    /// empty list, which is what the reference client holds there and what a
+    /// program tests the field for.
+    #[test]
+    fn the_reasons_a_contract_may_not_be_dealt_in_reach_python() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mut def = crate::control::contracts::ContractDefinition::default();
+            let dealable = ContractDetails::from_definition(py, &def);
+            assert!(dealable.ineligibility_reason_list.is_none());
+
+            def.ineligibility_reason_list =
+                vec![("8".to_string(), "not offered to this account".to_string())];
+            let details = ContractDetails::from_definition(py, &def);
+            let held = details.ineligibility_reason_list.expect("a reason").into_bound(py);
+            assert_eq!(held.len(), 1);
+            let reason: IneligibilityReason =
+                held.get_item(0).unwrap().extract().expect("a reason object");
+            assert_eq!(
+                (reason.id_.as_str(), reason.description.as_str()),
+                ("8", "not offered to this account"),
+            );
         });
     }
 }

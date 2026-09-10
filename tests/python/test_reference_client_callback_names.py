@@ -133,7 +133,7 @@ def test_a_callback_payload_answers_to_the_reference_clients_field_names():
         "orderId", "clientId", "execId", "time", "acctNumber", "exchange",
         "side", "shares", "price", "permId", "liquidation", "cumQty",
         "avgPrice", "orderRef", "evRule", "evMultiplier", "modelCode",
-        "lastLiquidity", "pendingPriceRevision",
+        "lastLiquidity", "pendingPriceRevision", "submitter",
     ]
     e = ibx.Execution()
     for f in published_execution_fields:
@@ -143,7 +143,8 @@ def test_a_callback_payload_answers_to_the_reference_clients_field_names():
     for f in ("marketName", "minTick", "longName", "priceMagnifier", "contractMonth",
               "industry", "category", "subcategory", "bondType", "couponType",
               "nextOptionDate", "fundName", "fundFamily", "fundManagementFee",
-              "fundClosedForNewMoney", "realExpirationDate", "cusip"):
+              "fundClosedForNewMoney", "realExpirationDate", "cusip",
+              "ineligibilityReasonList"):
         assert hasattr(d, f), f"contract details do not answer to {f}"
 
 

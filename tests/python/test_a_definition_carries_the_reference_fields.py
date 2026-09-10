@@ -11,7 +11,7 @@ Run: pytest tests/python/test_a_definition_carries_the_reference_fields.py -v
 """
 
 import ibx
-from ibx import UNSET_DOUBLE, ContractDetails, TagValue
+from ibx import UNSET_DOUBLE, ContractDetails, IneligibilityReason, TagValue
 
 
 class Details(ibx.EWrapper):
@@ -86,3 +86,25 @@ def test_the_derivative_sec_types_share_so_an_append_reaches_the_field():
     cd.derivativeSecTypes.append("OPT")
     cd.derivativeSecTypes.append("WAR")
     assert list(cd.derivativeSecTypes) == ["OPT", "WAR"]
+
+
+def test_a_dealable_contract_names_no_reason_it_cannot_be():
+    """Nothing rather than an empty list, as the reference client holds it: a
+    program that tests the field rather than its length reads the same thing."""
+    assert ContractDetails().ineligibilityReasonList is None
+
+
+def test_a_reason_reads_under_the_reference_names():
+    r = IneligibilityReason("8", "not offered to this account")
+    assert (r.id_, r.description) == ("8", "not offered to this account")
+    # The reference client puts str() round both, so a reason nobody filled in
+    # holds the word for nothing rather than an empty string.
+    assert (IneligibilityReason().id_, IneligibilityReason().description) == ("None", "None")
+
+
+def test_a_reason_is_importable_where_the_reference_client_keeps_it():
+    """That client keeps it in a module of its own, and a program written
+    against it imports the module rather than the flat name."""
+    from ibx.ineligibility_reason import IneligibilityReason as Reference
+
+    assert Reference is IneligibilityReason
