@@ -206,18 +206,28 @@ mod news_tests {
                 })
                 .collect()
         };
-        let mut asked_under = std::collections::BTreeSet::new();
+        // One request carries the prices and the named series together, and
+        // states how many entries it carries.
+        let mut carried = None;
         for msg in super::drain_inner(&mut peer) {
-            if stated(&msg, 263).first().map(String::as_str) == Some("1") {
-                asked_under.extend(stated(&msg, 264));
+            if stated(&msg, 263).first().map(String::as_str) == Some("1")
+                && stated(&msg, 264).iter().any(|t| t == "442")
+            {
+                carried = Some((stated(&msg, 264), stated(&msg, 146), stated(&msg, 262)));
             }
         }
+        let (types, count, numbers) = carried.expect("the subscription goes out");
         for tick in ["233", "236"] {
             assert!(
-                asked_under.contains(tick),
-                "the series the caller named goes out under its own number: {asked_under:?}",
+                types.iter().any(|t| t == tick),
+                "the series the caller named rides on the same request: {types:?}",
             );
         }
+        assert_eq!(
+            count.first().map(String::as_str), Some("4"),
+            "and the count ahead of them is every entry: {types:?}",
+        );
+        assert_eq!(numbers.len(), 4, "each entry under a number of its own: {numbers:?}");
         // And each under a request of its own, so what comes back can be told
         // apart from the prices and from the other series.
         for tick in [233u32, 236] {
@@ -1012,7 +1022,7 @@ fn tag_values(tags: &[(u32, String)], tag: u32) -> Vec<&str> {
 /// futures subscription, so bid/ask never arrives.
 #[test]
 fn conid_subscribe_describes_the_actual_contract() {
-    let fut = build_conid_subscribe_tags(true, false, 1, 2, 793356225, "CME", "FUT", 0, "T");
+    let fut = build_conid_subscribe_tags(true, false, 1, 2, 793356225, "CME", "FUT", 0, "T", &[]);
     assert_eq!(tag_values(&fut, 167), ["FUT", "FUT"], "SecurityType must say FUT");
     assert_eq!(tag_values(&fut, 207), ["CME", "CME"], "Exchange must say CME");
 
@@ -1029,7 +1039,7 @@ fn conid_subscribe_describes_the_actual_contract() {
 /// number is the venue's rather than this client's.
 #[test]
 fn the_chargeable_snapshot_is_its_own_request_type() {
-    let snap = build_conid_subscribe_tags(true, true, 1, 2, 265598, "SMART", "STK", 0, "T");
+    let snap = build_conid_subscribe_tags(true, true, 1, 2, 265598, "SMART", "STK", 0, "T", &[]);
     assert_eq!(
         snap,
         vec![
@@ -1049,7 +1059,7 @@ fn the_chargeable_snapshot_is_its_own_request_type() {
     );
 
     // And a feed named beside it does not turn it back into a stream.
-    let frozen = build_conid_subscribe_tags(false, true, 1, 2, 265598, "SMART", "STK", 2, "T");
+    let frozen = build_conid_subscribe_tags(false, true, 1, 2, 265598, "SMART", "STK", 2, "T", &[]);
     assert_eq!(tag_values(&frozen, 264), ["624"]);
     assert_eq!(tag_values(&frozen, 146), ["1"]);
     assert!(tag_values(&frozen, 9887).is_empty(), "no feed is named beside it");
@@ -1060,7 +1070,7 @@ fn the_chargeable_snapshot_is_its_own_request_type() {
 /// the request is withdrawn once every kind a snapshot is made of has arrived.
 #[test]
 fn an_ordinary_snapshot_is_asked_for_as_a_subscription() {
-    let ordinary = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T");
+    let ordinary = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T", &[]);
     assert_eq!(tag_values(&ordinary, 263), ["1"]);
     assert_eq!(tag_values(&ordinary, 264), ["442", "443"]);
 }
@@ -1071,7 +1081,7 @@ fn an_ordinary_snapshot_is_asked_for_as_a_subscription() {
 /// dropped field is caught here too.
 #[test]
 fn conid_subscribe_is_unchanged_for_stocks() {
-    let stk = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T");
+    let stk = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T", &[]);
     assert_eq!(
         stk,
         vec![
@@ -1098,7 +1108,7 @@ fn conid_subscribe_is_unchanged_for_stocks() {
         ],
     );
 
-    let delayed = build_conid_subscribe_tags(false, false, 1, 2, 265598, "SMART", "STK", 3, "T");
+    let delayed = build_conid_subscribe_tags(false, false, 1, 2, 265598, "SMART", "STK", 3, "T", &[]);
     assert_eq!(
         delayed,
         vec![
@@ -1137,11 +1147,11 @@ fn conid_subscribe_is_unchanged_for_stocks() {
 /// that states a guess subscribes to some other instrument under this id.
 #[test]
 fn conid_subscribe_states_the_description_it_is_given() {
-    let fut = build_conid_subscribe_tags(true, false, 1, 2, 793356225, "CME", "FUT", 0, "T");
+    let fut = build_conid_subscribe_tags(true, false, 1, 2, 793356225, "CME", "FUT", 0, "T", &[]);
     assert_eq!(tag_values(&fut, 167), ["FUT", "FUT"]);
     assert_eq!(tag_values(&fut, 207), ["CME", "CME"]);
 
-    let stk = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T");
+    let stk = build_conid_subscribe_tags(true, false, 1, 2, 265598, "SMART", "STK", 0, "T", &[]);
     assert_eq!(tag_values(&stk, 167), ["CS", "CS"]);
     assert_eq!(tag_values(&stk, 207), ["BEST", "BEST"]);
     assert_ne!(fut, stk, "a future is not sent as a stock");
@@ -1158,7 +1168,7 @@ fn conid_subscribe_states_the_description_it_is_given() {
 fn a_delayed_stream_asks_for_both_legs() {
     for mode in [1, 2, 3] {
         let delayed =
-            build_conid_subscribe_tags(false, false, 7, 8, 265598, "SMART", "STK", mode, "T");
+            build_conid_subscribe_tags(false, false, 7, 8, 265598, "SMART", "STK", mode, "T", &[]);
         assert_eq!(tag_values(&delayed, 262), ["7", "8"], "both legs are numbered");
         assert_eq!(tag_values(&delayed, 264), ["442", "443"]);
         assert_eq!(tag_values(&delayed, 146), ["2"]);
@@ -1168,7 +1178,7 @@ fn a_delayed_stream_asks_for_both_legs() {
         );
     }
 
-    let realtime = build_conid_subscribe_tags(true, false, 7, 8, 265598, "SMART", "STK", 0, "T");
+    let realtime = build_conid_subscribe_tags(true, false, 7, 8, 265598, "SMART", "STK", 0, "T", &[]);
     assert!(tag_values(&realtime, 9887).is_empty(), "realtime carries no 9887");
     assert_eq!(tag_values(&realtime, 264), ["442", "443"]);
 }
@@ -1176,7 +1186,7 @@ fn a_delayed_stream_asks_for_both_legs() {
 /// Every entry must be self-contained: the server reads conId per entry.
 #[test]
 fn each_entry_carries_its_own_conid() {
-    let fut = build_conid_subscribe_tags(true, false, 1, 2, 793356225, "CME", "FUT", 0, "T");
+    let fut = build_conid_subscribe_tags(true, false, 1, 2, 793356225, "CME", "FUT", 0, "T", &[]);
     assert_eq!(tag_values(&fut, 6008), ["793356225", "793356225"]);
 
     let counts: HashMap<u32, usize> =

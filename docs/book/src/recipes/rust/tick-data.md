@@ -32,11 +32,16 @@ beside the prices. The number you state is the number the venue knows the series
 by, so there is nothing to translate. `"292"` additionally subscribes to news for
 that contract; an entry that is not a number is reported rather than sent.
 
-Asking for a series and reading it are separate things. The subscription goes
-out for every number you name, and the ticks that have a reader here are
-published; the rest arrive and are skipped rather than guessed at. So a number
-you name is genuinely requested, and what comes back reaches you once its reader
-lands.
+Asking for a series and reading what it sends back are separate pieces of work,
+and only the first is done. The subscription goes out for every number you name
+and the venue serves it, but nothing here decodes those payloads yet, so no
+`tick_generic`, `tick_string`, `tick_price` or `tick_size` arrives for them.
+They are stepped over rather than guessed at, which is why the prices beside
+them keep arriving normally.
+
+So today a named series is genuinely requested and genuinely not delivered. The
+decoders land per series; `"292"` is the exception that already works end to
+end, because news has a reader.
 
 One subscription per contract. To change the mode on a contract, cancel first.
 

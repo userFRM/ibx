@@ -40,6 +40,7 @@ fn build_conid_subscribe_tags(
     sec_type: &str,
     mode_9887: i32,
     ts: &str,
+    extra_series: &[(u32, u32)],
 ) -> Vec<(u32, String)> {
     let con_id_str = (con_id as u32).to_string();
     // Subscribing by conId alone is a supported shape — `Contract` defaults
@@ -70,11 +71,21 @@ fn build_conid_subscribe_tags(
     // subscription has no number for what last traded, so the venue's answer
     // to that half arrives under nothing and the caller's last-trade price,
     // size and time never move.
-    let entries: Vec<(u32, String)> = if regulatory_snapshot {
+    let mut entries: Vec<(u32, String)> = if regulatory_snapshot {
         vec![(bid_ask_id, REGULATORY_SNAPSHOT_REQUEST_TYPE.to_string())]
     } else {
         vec![(bid_ask_id, "442".to_string()), (last_id, "443".to_string())]
     };
+    // Every extra series the caller named, as further entries of this same
+    // request rather than requests of their own. The venue is sent one message
+    // carrying as many entries as fit, each under its own number, with the
+    // count ahead of them — so a series asked for on its own message states a
+    // count of one where the venue states the whole list.
+    //
+    // The chargeable snapshot is a request type of its own and carries none.
+    if !regulatory_snapshot {
+        entries.extend(extra_series.iter().map(|(req_id, tick)| (*req_id, tick.to_string())));
+    }
     // 146 = NoRelatedSym: how many entries follow, counted rather than stated
     // per shape, so a shape added here cannot state the wrong number.
     let mut tags: Vec<(u32, String)> = vec![
@@ -1661,14 +1672,13 @@ impl FarmState {
         // withdrawal has to find every one of them either way.
         let asked_ticks: Vec<u32> =
             self.asked_generic_ticks.get(&instrument).cloned().unwrap_or_default();
-        let mut tick_req_ids: std::collections::HashMap<u32, u32> =
-            std::collections::HashMap::new();
+        let mut extra_series: Vec<(u32, u32)> = Vec::new();
         for &tick in &asked_ticks {
             let id = self.next_md_req_id;
             self.next_md_req_id += 1;
             self.md_req_to_instrument.push((id, instrument));
             self.generic_tick_reqs.push((id, tick));
-            tick_req_ids.insert(tick, id);
+            extra_series.push((id, tick));
         }
         if !regulatory_snapshot {
             self.md_req_to_instrument.push((last_id, instrument));
@@ -1754,7 +1764,7 @@ impl FarmState {
             if con_id > 0 {
                 let tags = build_conid_subscribe_tags(
                     realtime, regulatory_snapshot, bid_ask_id, last_id, con_id, exchange, sec_type,
-                    mode_9887, &ts,
+                    mode_9887, &ts, &extra_series,
                 );
                 let refs: Vec<(u32, &str)> =
                     tags.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
@@ -1799,23 +1809,6 @@ impl FarmState {
                     venue_map.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
                 let _ = conn.send_fixcomp(&refs);
 
-                // And every extra series the caller named. Each is a
-                // subscription of its own under the venue's own number for it,
-                // which is the number the caller stated: the same frame as the
-                // trading status beside it, with that number on 264.
-                for tick in asked_ticks {
-                    let mut extra = build_trading_status_subscribe_tags(
-                        tick_req_ids[&tick], con_id, sec_type, exchange, &ts,
-                    );
-                    for (tag, value) in extra.iter_mut() {
-                        if *tag == 264 {
-                            *value = tick.to_string();
-                        }
-                    }
-                    let refs: Vec<(u32, &str)> =
-                        extra.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
-                    let _ = conn.send_fixcomp(&refs);
-                }
             } else {
                 // No con_id — send descriptive fields
                 let strike_str = if strike > 0.0 { strike.to_string() } else { String::new() };
