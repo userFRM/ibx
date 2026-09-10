@@ -544,6 +544,17 @@ class _LoopBound:
     tickSize = tick_size
     histogramData = histogram_data
 
+    def error(self, req_id, when, code, text, advanced=""):
+        """A refusal, in the shape their wrapper declares.
+
+        This engine states when the venue said it, as the current reference
+        client does. `ib_async` predates that argument and declares four, so
+        their wrapper is handed four: passed five it raises on the first error
+        or notice of the session, and a callback that raises here closes the
+        session — which turned any refusal at all into a disconnection.
+        """
+        self._wrapper.error(req_id, code, text, advanced)
+
     def __getattr__(self, name):
         # Under either spelling: this engine calls a callback by the name it
         # holds it under, and their wrapper declares the reference client's.
