@@ -1292,9 +1292,9 @@ fn the_venue_revising_a_working_order_reaches_the_caller() {
         order_id: 55, action: "BUY".into(), total_quantity: 100.0,
         order_type: "LMT".into(), lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
     };
-    let mut spy = crate::types::model::Contract::default();
-    spy.symbol = "SPY".into();
-    spy.exchange = "SMART".into();
+    let spy = crate::types::model::Contract {
+        symbol: "SPY".into(), exchange: "SMART".into(), ..Default::default()
+    };
     shared.orders.push_order_info(55, crate::bridge::RichOrderInfo {
         contract: spy,
         order: placed,
