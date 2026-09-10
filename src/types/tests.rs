@@ -141,6 +141,7 @@ fn order_request_is_copy() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     };
     let req2 = req.clone();
     match (req, req2) {
@@ -288,14 +289,14 @@ fn instrument_accessor_covers_submits() {
     assert_eq!(req.instrument(), Some(7));
     assert_eq!(OrderRequest::Cancel { order_id: 1 }.instrument(), None);
     assert_eq!(
-        OrderRequest::Modify { order_id: 1, price: 0, qty: crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 }.instrument(),
+        OrderRequest::Modify { order_id: 1, price: 0, qty: crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0, spec: None }.instrument(),
         None
     );
 }
 
 #[test]
 fn order_request_modify_fields() {
-    let req = OrderRequest::Modify { order_id: 99, price: 200 * PRICE_SCALE, qty: 10 * crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0 };
+    let req = OrderRequest::Modify { order_id: 99, price: 200 * PRICE_SCALE, qty: 10 * crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0, spec: None };
     match req {
         OrderRequest::Modify { order_id, price, qty, .. } => {
             assert_eq!(order_id, 99);

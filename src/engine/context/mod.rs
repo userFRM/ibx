@@ -99,10 +99,6 @@ pub struct Context {
     /// without it a replaced order silently lost its algo, its all-or-none
     /// instruction and every other attribute it was placed with.
     pub(crate) submitted: HashMap<OrderId, Box<crate::types::OrderSpec>>,
-    /// The orders whose record is the caller's statement rather than a
-    /// placement made here. Every statement of such an order is the caller's,
-    /// so the latest stands; a placement's record is never replaced by one.
-    pub(crate) described: std::collections::HashSet<OrderId>,
     /// How many cancels have been sent for an order. A cancel names itself on
     /// tag 11, and a retry that reuses the previous name is a duplicate the
     /// server is entitled to drop — which is exactly the case a retry exists
@@ -162,7 +158,6 @@ impl Context {
             last_clord: HashMap::new(),
             order_destination: HashMap::new(),
             submitted: HashMap::new(),
-            described: std::collections::HashSet::new(),
             cancel_attempts: HashMap::new(),
             pre_replace: HashMap::new(),
             account: AccountState::default(),
@@ -395,6 +390,9 @@ impl Context {
             order_id,
             price,
             stop_price,
+            // Nothing stated to merge: this states the terms in its own
+            // arguments and leaves every attribute the resting order holds.
+            spec: None,
             qty: qty_from_wire(qty as i64),
             outside_rth,
             ord_type,
@@ -439,12 +437,9 @@ impl Context {
         self.market.try_register(con_id)
     }
 
-    /// Record what an order was placed as. A placement's record is the
-    /// engine's own: a statement recorded earlier under the same number is
-    /// superseded, and no later statement replaces it.
+    /// Record what an order was placed as.
     pub fn record_placement(&mut self, order_id: OrderId, spec: Box<crate::types::OrderSpec>) {
         self.submitted.insert(order_id, spec);
-        self.described.remove(&order_id);
     }
 
     pub fn set_symbol(&mut self, id: InstrumentId, symbol: String) {
@@ -604,7 +599,6 @@ impl Context {
     pub fn retire_order(&mut self, order_id: OrderId) {
         self.remove_order(order_id);
         self.modify_versions.remove(&order_id);
-        self.described.remove(&order_id);
         self.last_clord.remove(&order_id);
         self.order_destination.remove(&order_id);
         self.submitted.remove(&order_id);

@@ -79,6 +79,7 @@ fn a_replaced_two_part_peg_keeps_its_order_type() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let n = peer.read(&mut buf).unwrap();
@@ -130,6 +131,7 @@ fn a_replace_does_not_name_an_option_by_its_underlying() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let n = peer.read(&mut buf).unwrap();
@@ -188,6 +190,7 @@ fn a_replace_restates_the_attributes_the_order_was_placed_with() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     });
     drain_and_send_orders(
         &mut conn,
@@ -548,6 +551,7 @@ fn an_order_whose_write_failed_is_unknown_rather_than_rejected() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     });
 
     let mut hb = crate::engine::hot_loop::HeartbeatState::new();
@@ -636,6 +640,7 @@ fn a_replacement_can_itself_be_replaced() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     });
     drain_and_send_orders(
         &mut conn,
@@ -659,6 +664,7 @@ fn a_replacement_can_itself_be_replaced() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     });
     drain_and_send_orders(
         &mut conn,
@@ -1773,6 +1779,7 @@ mod modify_wire_tests {
         context.pending_orders.push(crate::types::OrderRequest::Modify {
             order_id: 7, ord_type: 0, tif: 0, price: 151 * crate::types::PRICE_SCALE,
             qty: 2 * crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+            spec: None,
         });
         let sent = drain(&mut context);
         assert!(sent.contains("|40=PB|"), "it is still a benchmark peg: {sent}");
@@ -1805,6 +1812,7 @@ mod modify_wire_tests {
             qty: crate::types::QTY_SCALE,
             outside_rth: false,
             stop_price: 99 * crate::types::PRICE_SCALE,
+            spec: None,
         });
         let sent = drain(&mut context);
 
@@ -1854,6 +1862,7 @@ mod modify_wire_tests {
                 qty: crate::types::QTY_SCALE,
                 outside_rth: false,
                 stop_price: 610 * crate::types::PRICE_SCALE,
+                spec: None,
             });
             let sent = drain(&mut context);
 
@@ -1894,11 +1903,13 @@ mod modify_wire_tests {
         context.pending_orders.push(crate::types::OrderRequest::Modify {
             order_id: 7, ord_type: b'1', tif: 0, price: 0,
             qty: crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+            spec: None,
         });
         let _ = drain(&mut context);
         context.pending_orders.push(crate::types::OrderRequest::Modify {
             order_id: 7, ord_type: b'1', tif: 0, price: 0,
             qty: 2 * crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+            spec: None,
         });
         let sent = drain(&mut context);
 
@@ -1934,6 +1945,7 @@ mod modify_wire_tests {
         context.pending_orders.push(crate::types::OrderRequest::Modify {
             order_id: 7, ord_type: b'1', tif: 0, price: 0,
             qty: crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+            spec: None,
         });
         let sent = drain(&mut context);
 
@@ -1973,6 +1985,7 @@ mod modify_wire_tests {
         context.pending_orders.push(crate::types::OrderRequest::Modify {
             order_id: 7, ord_type: 0, tif: 0, price: 0,
             qty: 2 * crate::types::QTY_SCALE, outside_rth: false, stop_price: 0,
+            spec: None,
         });
         let sent = drain(&mut context);
         assert!(sent.contains("|211="), "the peg's offset is restated: {sent}");
@@ -2271,6 +2284,7 @@ mod modify_wire_tests {
                 qty: crate::types::QTY_SCALE,
                 outside_rth: false,
                 stop_price: 590 * crate::types::PRICE_SCALE,
+                spec: None,
             });
             let sent = drain(&mut context);
 
@@ -2991,6 +3005,7 @@ mod outside_rth_polarity_tests {
             ord_type: 0,
             tif: 0,
             stop_price: 0,
+            spec: None,
         });
         drain(&mut context);
         assert_eq!(
@@ -3273,6 +3288,7 @@ fn a_replace_for_an_untracked_order_is_refused_rather_than_invented() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     });
     let mut hb = crate::engine::hot_loop::HeartbeatState::new();
     let shared = std::sync::Arc::new(SharedState::new());
@@ -3336,6 +3352,7 @@ fn a_replace_naming_a_new_trail_puts_that_trail_on_the_wire() {
         tif: 0,
         // The trail is the auxiliary price, which is what this field carries.
         stop_price: 9 * crate::types::PRICE_SCALE,
+        spec: None,
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let n = peer.read(&mut buf).unwrap();
@@ -3373,6 +3390,7 @@ fn replace_frame(kind: crate::types::OrderKind, price: i64, stop_price: i64) -> 
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 42, price, qty: crate::types::QTY_SCALE, outside_rth: false,
         ord_type: 0, tif: 0, stop_price,
+        spec: None,
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let n = peer.read(&mut buf).unwrap();
@@ -3403,6 +3421,7 @@ fn second_replace_frame(kind: crate::types::OrderKind, first: (i64, i64), second
         context.pending_orders.push(crate::types::OrderRequest::Modify {
             order_id: 42, price, qty: crate::types::QTY_SCALE, outside_rth: false,
             ord_type: 0, tif: 0, stop_price,
+            spec: None,
         });
         drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
         let n = peer.read(&mut buf).unwrap();
@@ -3512,9 +3531,13 @@ fn a_second_replace_restates_what_the_first_one_moved_to() {
 fn a_replace_of_an_order_this_session_did_not_place_restates_what_the_caller_states() {
     use std::io::Read;
     use crate::types::{OrderKind as K, PRICE_SCALE as P};
-    let modify = || crate::types::OrderRequest::Modify {
+    let modify = |stated: bool| crate::types::OrderRequest::Modify {
         order_id: 77, price: 101 * P, qty: 2 * crate::types::QTY_SCALE, outside_rth: false,
         ord_type: 0, tif: 0, stop_price: 0,
+        spec: stated.then(|| Box::new(crate::types::OrderSpec {
+            kind: K::PegMid { offset: 0, price_cap: 100 * P },
+            attrs: crate::types::OrderAttrs::default(),
+        })),
     };
     for described in [false, true] {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3531,16 +3554,7 @@ fn a_replace_of_an_order_this_session_did_not_place_restates_what_the_caller_sta
         ));
         let mut hb = crate::engine::hot_loop::HeartbeatState::new();
         let shared = std::sync::Arc::new(SharedState::new());
-        if described {
-            context.pending_orders.push(crate::types::OrderRequest::Describe {
-                order_id: 77,
-                spec: Box::new(crate::types::OrderSpec {
-                    kind: K::PegMid { offset: 0, price_cap: 100 * P },
-                    attrs: crate::types::OrderAttrs::default(),
-                }),
-            });
-        }
-        context.pending_orders.push(modify());
+        context.pending_orders.push(modify(described));
         drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
         let mut buf = [0u8; 8192];
         let n = peer.read(&mut buf).unwrap_or(0);
@@ -3571,15 +3585,12 @@ fn a_replace_of_an_order_this_session_did_not_place_restates_what_the_caller_sta
 fn the_latest_statement_stands_however_the_order_was_first_known() {
     use std::io::Read;
     use crate::types::{OrderKind as K, PRICE_SCALE as P};
-    let statement = |order_id: u64, display_size: u32| crate::types::OrderRequest::Describe {
-        order_id,
-        spec: Box::new(crate::types::OrderSpec {
+    let modify = |order_id: u64, display_size: u32| crate::types::OrderRequest::Modify {
+        order_id, price: 0, qty: 2 * crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        spec: Some(Box::new(crate::types::OrderSpec {
             kind: K::PegMid { offset: 0, price_cap: 100 * P },
             attrs: crate::types::OrderAttrs { display_size, ..Default::default() },
-        }),
-    };
-    let modify = |order_id: u64| crate::types::OrderRequest::Modify {
-        order_id, price: 0, qty: 2 * crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        })),
     };
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -3602,9 +3613,10 @@ fn the_latest_statement_stands_however_the_order_was_first_known() {
     context.insert_order(crate::types::Order::new(
         77, instrument, Side::Buy, crate::types::QTY_SCALE, 0, crate::types::ORD_PEG_MID, b'0', 0,
     ));
-    context.pending_orders.push(statement(77, 0));
-    context.pending_orders.push(statement(77, 10));
-    context.pending_orders.push(modify(77));
+    context.pending_orders.push(modify(77, 0));
+    let msg = frame(&mut context);
+    assert!(stated(&msg, "111=").is_empty(), "stated without one: {msg}");
+    context.pending_orders.push(modify(77, 10));
     let msg = frame(&mut context);
     assert_eq!(stated(&msg, "111=").first().map(String::as_str), Some("10"), "the latest statement: {msg}");
 
@@ -3616,8 +3628,7 @@ fn the_latest_statement_stands_however_the_order_was_first_known() {
     });
     let placed = frame(&mut context);
     assert!(stated(&placed, "111=").is_empty(), "placed without one: {placed}");
-    context.pending_orders.push(statement(78, 10));
-    context.pending_orders.push(modify(78));
+    context.pending_orders.push(modify(78, 10));
     let msg = frame(&mut context);
     assert_eq!(stated(&msg, "35=").first().map(String::as_str), Some("G"), "{msg}");
     assert_eq!(
@@ -3636,15 +3647,12 @@ fn the_latest_statement_stands_however_the_order_was_first_known() {
 fn a_refusal_puts_the_whole_statement_back() {
     use std::io::Read;
     use crate::types::{OrderKind as K, PRICE_SCALE as P};
-    let statement = |display_size: u32| crate::types::OrderRequest::Describe {
-        order_id: 77,
-        spec: Box::new(crate::types::OrderSpec {
+    let modify = |price: i64, qty: i64, display_size: u32| crate::types::OrderRequest::Modify {
+        order_id: 77, price, qty, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        spec: Some(Box::new(crate::types::OrderSpec {
             kind: K::PegMid { offset: 0, price_cap: 100 * P },
             attrs: crate::types::OrderAttrs { display_size, ..Default::default() },
-        }),
-    };
-    let modify = |price: i64, qty: i64| crate::types::OrderRequest::Modify {
-        order_id: 77, price, qty, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        })),
     };
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -3665,19 +3673,17 @@ fn a_refusal_puts_the_whole_statement_back() {
         let n = peer.read(&mut buf).unwrap_or(0);
         String::from_utf8_lossy(&buf[..n]).to_string()
     };
-    context.pending_orders.push(statement(0));
-    context.pending_orders.push(modify(101 * P, crate::types::QTY_SCALE));
+    context.pending_orders.push(modify(101 * P, crate::types::QTY_SCALE, 0));
     let first = frame(&mut context);
     assert_eq!(stated(&first, "44=").first().map(String::as_str), Some("101"), "{first}");
-    context.pending_orders.push(statement(10));
-    context.pending_orders.push(modify(0, 2 * crate::types::QTY_SCALE));
+    context.pending_orders.push(modify(0, 2 * crate::types::QTY_SCALE, 10));
     let second = frame(&mut context);
     assert_eq!(stated(&second, "111=").first().map(String::as_str), Some("10"), "{second}");
 
     // The venue refuses the first revision, and every later one with it.
     context.restore_pre_replace(77, 1);
 
-    context.pending_orders.push(modify(0, 3 * crate::types::QTY_SCALE));
+    context.pending_orders.push(modify(0, 3 * crate::types::QTY_SCALE, 0));
     let third = frame(&mut context);
     assert_eq!(stated(&third, "44=").first().map(String::as_str), Some("100"), "the shape before the refused revision: {third}");
     assert!(stated(&third, "111=").is_empty(), "and its attributes, not the later statement's: {third}");
@@ -3712,6 +3718,7 @@ fn a_refused_replace_puts_the_shape_back_with_the_terms() {
     let moved = send(&mut context, crate::types::OrderRequest::Modify {
         order_id: 42, price: 0, qty: crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0,
         stop_price: 10 * P / 100,
+        spec: None,
     });
     assert_eq!(stated(&moved, "211=").first().map(String::as_str), Some("0.1"), "{moved}");
 
@@ -3722,6 +3729,7 @@ fn a_refused_replace_puts_the_shape_back_with_the_terms() {
     let again = send(&mut context, crate::types::OrderRequest::Modify {
         order_id: 42, price: 0, qty: 2 * crate::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0,
         stop_price: 0,
+        spec: None,
     });
     assert_eq!(
         (stated(&again, "211=").first().map(String::as_str), stated(&again, "99=").first().map(String::as_str)),
@@ -3791,6 +3799,7 @@ fn an_advisor_allocation_rides_the_order_and_its_replacement() {
     let moved = send(&mut context, crate::types::OrderRequest::Modify {
         order_id: 31, price: 101 * P, qty: crate::types::QTY_SCALE, outside_rth: false,
         ord_type: 0, tif: 0, stop_price: 0,
+        spec: None,
     });
     assert_eq!(spread(&moved), spread(&placed), "and the replacement restates it: {moved}");
 
@@ -4097,6 +4106,7 @@ fn a_replacement_that_cannot_be_named_leaves_the_order_standing() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     });
 
     let mut hb = crate::engine::hot_loop::HeartbeatState::new();
@@ -4317,6 +4327,7 @@ fn a_replaced_bracket_leg_keeps_its_group_and_its_parent() {
         order_id: 12, price: 0,
         qty: 100 * crate::types::QTY_SCALE, outside_rth: false,
         ord_type: 0, tif: 0, stop_price: 144 * crate::types::PRICE_SCALE,
+        spec: None,
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let n = peer.read(&mut buf).unwrap();
@@ -4350,23 +4361,91 @@ fn a_statement_for_a_refused_replace_goes_with_the_refusal() {
     context.register_instrument(756733);
     let mut hb = crate::engine::hot_loop::HeartbeatState::new();
     let shared = std::sync::Arc::new(SharedState::new());
-    context.pending_orders.push(crate::types::OrderRequest::Describe {
-        order_id: 77,
-        spec: Box::new(crate::types::OrderSpec {
-            kind: K::Limit { price: 100 * P },
-            attrs: crate::types::OrderAttrs::default(),
-        }),
-    });
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 77, price: 101 * P, qty: crate::types::QTY_SCALE, outside_rth: false,
         ord_type: 0, tif: 0, stop_price: 0,
+        spec: Some(Box::new(crate::types::OrderSpec {
+            kind: K::Limit { price: 100 * P },
+            attrs: crate::types::OrderAttrs::default(),
+        })),
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let refused = shared.orders.drain_order_inactive();
     assert!(refused.iter().any(|(id, ..)| *id == 77), "the replace is refused: {refused:?}");
     assert!(
-        !context.submitted.contains_key(&77) && !context.described.contains(&77),
-        "and the statement kept for it went with the refusal",
+        !context.submitted.contains_key(&77),
+        "and the statement it carried left no record of an order that does not exist",
+    );
+}
+
+/// A replace changes the order the venue is working; it does not restate it
+/// from nothing.
+///
+/// What the caller states is merged onto the terms the venue already holds, so
+/// an attribute the caller says nothing about keeps the value it has. A caller
+/// who repriced an order and stated no reference for it had their own name for
+/// that order cleared, because the statement was taken whole.
+///
+/// Three attributes a replace cannot change at all — the group it is in, its
+/// permission to trade outside the session, and its permission to join the
+/// pre-open auction. The venue answers a replace that tries to change them by
+/// naming them back, not by applying them.
+#[test]
+fn a_replace_merges_onto_the_order_the_venue_holds() {
+    use std::io::Read;
+    use crate::types::{OrderKind as K, PRICE_SCALE as P};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let mut hb = crate::engine::hot_loop::HeartbeatState::new();
+    let shared = std::sync::Arc::new(SharedState::new());
+    let mut buf = [0u8; 8192];
+
+    // Placed naming itself, in a group, and allowed outside the session.
+    context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
+        con_id: 0, order_id: 91, instrument, side: Side::Buy, qty: crate::types::QTY_SCALE,
+        kind: K::Limit { price: 100 * P }, tif: b'0',
+        attrs: crate::types::OrderAttrs {
+            order_ref: "KEEP".to_string(),
+            oca_group_str: "G1".to_string(),
+            outside_rth: true,
+            ..Default::default()
+        },
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let n = peer.read(&mut buf).unwrap_or(0);
+    let placed = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert_eq!(stated(&placed, "6010=").first().map(String::as_str), Some("KEEP"), "{placed}");
+
+    // Repriced, stating no reference, no group and no permission: each keeps
+    // what the order already carries.
+    context.pending_orders.push(crate::types::OrderRequest::Modify {
+        order_id: 91, price: 101 * P, qty: crate::types::QTY_SCALE, outside_rth: false,
+        ord_type: 0, tif: 0, stop_price: 0,
+        spec: Some(Box::new(crate::types::OrderSpec {
+            kind: K::Limit { price: 101 * P },
+            attrs: crate::types::OrderAttrs { display_size: 25, ..Default::default() },
+        })),
+    });
+    drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
+    let n = peer.read(&mut buf).unwrap_or(0);
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert_eq!(
+        stated(&msg, "6010=").first().map(String::as_str), Some("KEEP"),
+        "the caller's own name for the order survives a replace that states none: {msg}",
+    );
+    assert_eq!(
+        stated(&msg, "583=").first().map(String::as_str), Some("G1"),
+        "and the group it is in, which a replace cannot change: {msg}",
+    );
+    assert_eq!(
+        stated(&msg, "111=").first().map(String::as_str), Some("25"),
+        "while what the caller did state reaches the venue: {msg}",
     );
 }
 
@@ -4421,6 +4500,7 @@ fn a_replace_names_the_venue_the_order_went_out_on() {
         ord_type: 0,
         tif: 0,
         stop_price: 0,
+        spec: None,
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let n = peer.read(&mut buf).unwrap();
@@ -4484,6 +4564,7 @@ fn a_bracket_leg_is_replaced_on_the_venue_it_went_out_to() {
         price: 411 * crate::types::PRICE_SCALE,
         qty: crate::types::QTY_SCALE,
         outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+        spec: None,
     });
     drain_and_send_orders(&mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None);
     let n = peer.read(&mut buf).unwrap();

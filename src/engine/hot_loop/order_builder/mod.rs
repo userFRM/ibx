@@ -30,6 +30,51 @@ fn states_a_model(code: &str) -> bool {
     !code.is_empty() && code != "Core"
 }
 
+/// Merge what a replace states onto the order the venue is already working.
+///
+/// A replace is not a fresh statement of an order; it is a set of changes to
+/// one the venue holds. What the caller states is applied to the resting
+/// terms and the result is what goes out, so anything the caller says nothing
+/// about keeps the value it already had.
+///
+/// Two kinds of field are left alone. Some cannot be changed by a replace at
+/// all — the OCA group an order belongs to, whether it may trade outside the
+/// regular session, and whether it may join the pre-open auction — and the
+/// venue answers a replace that tries by naming them rather than by applying
+/// them. The rest are the ones whose absence is not a value: a caller who
+/// states no order reference is not asking for the reference to be cleared,
+/// and clearing it lost the caller's own name for an order they were only
+/// repricing.
+fn merge_statement(resting: &mut crate::types::OrderSpec, stated: crate::types::OrderSpec) {
+    let keep_oca = resting.attrs.oca_group;
+    let keep_oca_str = std::mem::take(&mut resting.attrs.oca_group_str);
+    let keep_outside_rth = resting.attrs.outside_rth;
+    let keep_allow_pre_open = resting.attrs.allow_pre_open;
+    // Absence is not a value on these: the caller stating nothing leaves what
+    // the order already carries.
+    let kept_where_unstated = [
+        (std::mem::take(&mut resting.attrs.order_ref), &stated.attrs.order_ref),
+        (std::mem::take(&mut resting.attrs.algo_id), &stated.attrs.algo_id),
+        (std::mem::take(&mut resting.attrs.mifid2_decision_maker), &stated.attrs.mifid2_decision_maker),
+        (std::mem::take(&mut resting.attrs.mifid2_decision_algo), &stated.attrs.mifid2_decision_algo),
+        (std::mem::take(&mut resting.attrs.mifid2_execution_trader), &stated.attrs.mifid2_execution_trader),
+    ]
+    .map(|(held, asked)| if asked.is_empty() { held } else { asked.clone() });
+
+    *resting = stated;
+
+    resting.attrs.oca_group = keep_oca;
+    resting.attrs.oca_group_str = keep_oca_str;
+    resting.attrs.outside_rth = keep_outside_rth;
+    resting.attrs.allow_pre_open = keep_allow_pre_open;
+    let [order_ref, algo_id, decision_maker, decision_algo, execution_trader] = kept_where_unstated;
+    resting.attrs.order_ref = order_ref;
+    resting.attrs.algo_id = algo_id;
+    resting.attrs.mifid2_decision_maker = decision_maker;
+    resting.attrs.mifid2_decision_algo = decision_algo;
+    resting.attrs.mifid2_execution_trader = execution_trader;
+}
+
 /// Say that a change did not go, on the channel a refusal already travels on.
 ///
 /// The surfaces restate their record before the command is queued, because the
@@ -115,23 +160,6 @@ pub(crate) fn drain_and_send_orders(
     let orders: Vec<OrderRequest> = context.drain_pending_orders().collect();
     let mut unsent: Vec<OrderRequest> = Vec::new();
     for order_req in orders {
-        // The caller's statement of an order they are replacing: the record the
-        // replace behind it restates its shape from, and nothing for the wire.
-        // Kept here, in the order the commands arrived, so the replace sees it.
-        //
-        // The latest statement stands, whoever made the last one. A record made
-        // at placement used to hold against it, on the reading that the
-        // engine's own account of what it sent outranks the caller's account of
-        // what they want — but a replace is the caller changing what they want,
-        // and holding the placement meant the venue was sent the terms of the
-        // first statement while this client answered "what is working" with the
-        // terms of the latest. One of those is a lie either way; this way the
-        // venue and the answer agree, which is what the caller asked for.
-        if let OrderRequest::Describe { order_id, spec } = order_req {
-            context.submitted.insert(order_id, spec);
-            context.described.insert(order_id);
-            continue;
-        }
         // Once a write has abandoned the transport nothing else can leave on
         // it, and the pre-write guard refuses the rest before they touch the
         // wire. Those are not in doubt the way the failed one is: they were
@@ -456,7 +484,6 @@ pub(crate) fn drain_and_send_orders(
                 }
                 Ok(())
             }
-            OrderRequest::Describe { .. } => unreachable!("kept above, before anything is sent"),
             OrderRequest::Modify {
                 order_id,
                 price,
@@ -465,6 +492,7 @@ pub(crate) fn drain_and_send_orders(
                 ord_type,
                 tif,
                 stop_price,
+                spec: stated,
             } => {
                 // A replace states the whole order, so an untracked order has
                 // nothing to restate. Refused rather than sent under defaults
@@ -479,14 +507,26 @@ pub(crate) fn drain_and_send_orders(
                         ORDER_NOT_FOUND_ERROR_CODE,
                         format!("no order {order_id} is tracked here, so it cannot be replaced"),
                     );
-                    // A statement kept for this replace was the record for it
-                    // and for nothing else; it goes with the refusal.
-                    if context.described.remove(&order_id) {
-                        context.submitted.remove(&order_id);
-                    }
                     the_change_did_not_go(order_id, 0, None, context, shared, event_tx);
                     continue;
                 };
+                // What the venue is known to be working, before this replace
+                // is merged onto it. A refusal puts this back, so it is taken
+                // first: taken after the merge it was the attempted terms, and
+                // a rejected replace left the record holding the terms the
+                // venue had just refused.
+                let accepted = context.submitted.get(&order_id).cloned();
+                // The venue merges what a replace states onto the order it is
+                // already working and sends the result. It does not take the
+                // caller's statement whole: an attribute the caller states
+                // nothing for keeps the value the order already has, and three
+                // of them cannot be changed by a replace at all.
+                if let Some(stated) = stated {
+                    match context.submitted.get_mut(&order_id) {
+                        Some(resting) => merge_statement(resting, *stated),
+                        None => { context.submitted.insert(order_id, stated); }
+                    }
+                }
                 let spec = context.submitted.get(&order_id).cloned();
                 // A trail rides on tag 211, restated from the record of the
                 // order as it was placed. An order this session did not place
@@ -636,7 +676,7 @@ pub(crate) fn drain_and_send_orders(
                 // it ahead of the answer, and a refusal has to put both back.
                 context.pre_replace.insert(
                     (order_id, new_ver),
-                    (orig, orig_clord.clone(), context.submitted.get(&order_id).cloned()),
+                    (orig, orig_clord.clone(), accepted.clone()),
                 );
                 context.modify_versions.insert(order_id, new_ver);
                 // Pre-seed `last_clord` with the id about to be emitted, so a
@@ -1043,7 +1083,6 @@ pub(crate) fn refuse_what_is_left(
                 format!("{why} before this order reached the venue, so it was never placed"),
             ),
             // Names nothing to the venue, so there is nothing to report.
-            OrderRequest::Describe { .. } => continue,
         };
         for id in ids {
             if id == 0 {

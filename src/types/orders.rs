@@ -1476,21 +1476,18 @@ pub enum OrderRequest {
         /// which case a trigger-only order type takes `price` as its trigger
         /// and every other type keeps the trigger it already had.
         stop_price: Price,
-    },
-    /// The caller's own statement of an order this session did not place,
-    /// kept as its record where there is none.
-    ///
-    /// A replace of a pegged, snap or trailing order restates the shape from
-    /// the record of the placement, so an order known only from the venue's
-    /// naming at connect could not be replaced at all. The reference client
-    /// sends whatever the caller states on a modify, and this carries that
-    /// statement; where a record exists it is left alone. Nothing goes to the
-    /// venue for it.
-    Describe {
-        /// The caller's number for the order.
-        order_id: OrderId,
-        /// The shape and the attributes, as the caller states them.
-        spec: Box<OrderSpec>,
+        /// The caller's own statement of the order they are replacing.
+        ///
+        /// It travels with the replace rather than ahead of it. The venue
+        /// merges what a replace states onto the order it is already working
+        /// and sends the result, so the statement is only meaningful together
+        /// with the replace it belongs to: sent separately, two replaces of one
+        /// order interleaved and each went out carrying the other's terms, and
+        /// a statement that arrived after its order had been retired stayed
+        /// behind as a record of an order that no longer existed.
+        ///
+        /// None where the caller stated nothing to merge.
+        spec: Option<Box<OrderSpec>>,
     },
 }
 
@@ -1500,7 +1497,7 @@ impl OrderRequest {
         match self {
             Self::Cancel { order_id } => *order_id,
             Self::CancelAll { .. } => 0,
-            Self::Modify { order_id, .. } | Self::Describe { order_id, .. } => *order_id,
+            Self::Modify { order_id, .. } => *order_id,
             | Self::SubmitEx { order_id, .. } => *order_id,
             Self::SubmitBracket { parent_id, .. } => *parent_id,
         }
@@ -1526,7 +1523,7 @@ impl OrderRequest {
     /// the tracked order).
     pub fn instrument(&self) -> Option<InstrumentId> {
         match self {
-            Self::Cancel { .. } | Self::Modify { .. } | Self::Describe { .. } => None,
+            Self::Cancel { .. } | Self::Modify { .. } => None,
             Self::CancelAll { instrument }
             | Self::SubmitEx { instrument, .. }
             | Self::SubmitBracket { instrument, .. } => Some(*instrument),

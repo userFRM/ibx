@@ -2187,16 +2187,13 @@ fn a_replayed_pegs_replace_carries_the_shape_a_placements_does() {
     let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
     let mut hb = crate::engine::hot_loop::HeartbeatState::new();
     let shared = std::sync::Arc::new(SharedState::new());
-    context.pending_orders.push(crate::types::OrderRequest::Describe {
-        order_id: 77,
-        spec: Box::new(crate::types::OrderSpec {
-            kind: K::PegMid { offset: 0, price_cap: 101 * P },
-            attrs: crate::types::OrderAttrs::default(),
-        }),
-    });
     context.pending_orders.push(crate::types::OrderRequest::Modify {
         order_id: 77, price: 0, qty: 3 * crate::types::QTY_SCALE, outside_rth: false,
         ord_type: 0, tif: 0, stop_price: 0,
+        spec: Some(Box::new(crate::types::OrderSpec {
+            kind: K::PegMid { offset: 0, price_cap: 101 * P },
+            attrs: crate::types::OrderAttrs::default(),
+        })),
     });
     crate::engine::hot_loop::order_builder::drain_and_send_orders(
         &mut conn, &mut context, "DU1", &mut hb, false, &shared, false, &None,

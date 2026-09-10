@@ -333,6 +333,17 @@ impl EClient {
             let price = ClientCore::replace_price(&api_order);
             let qty = crate::types::qty_from_f64(api_order.total_quantity);
             let stop_price = ClientCore::replace_trigger(&api_order);
+            // Built with the replace it belongs to, as on the other surface: a
+            // statement that cannot be built refuses the replace before
+            // anything moves, and the two travel as one command so that two
+            // replaces of the same order cannot exchange their terms.
+            let spec = match ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract)) {
+                Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) => {
+                    Some(Box::new(crate::types::OrderSpec { kind, attrs }))
+                }
+                Ok(_) => None,
+                Err(why) => return self.report_refusal(py, order_id, why),
+            };
             ControlCommand::Order(OrderRequest::Modify {
                 order_id: oid,
                 price,
@@ -341,6 +352,7 @@ impl EClient {
                 ord_type: api_order.ord_type_byte(),
                 tif: api_order.tif_byte(),
                 stop_price,
+                spec,
             })
         } else {
             match ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract)) {
@@ -393,20 +405,8 @@ impl EClient {
         // changes and nothing else and the shape comes from the record. Left
         // at what was first placed, that record sent the venue the first of
         // everything the caller had since changed while this client's own
-        // answer already read back the new ones. Built before the record is
-        // restated, so a statement that cannot be built refuses the replace
-        // with nothing moved.
-        let statement = if replacing {
-            match ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract)) {
-                Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) => {
-                    Some(Box::new(crate::types::OrderSpec { kind, attrs }))
-                }
-                Ok(_) => None,
-                Err(why) => return self.report_refusal(py, order_id, why),
-            }
-        } else {
-            None
-        };
+        // answer already read back the new ones. The statement rides on the
+        // replace, built with it above.
         if replacing {
             // Whether or not the session state is still here. Skipped where it
             // was not, the record went unchanged for a change that did go out
@@ -415,9 +415,6 @@ impl EClient {
             self.core.restate_order(
                 venue_now, oid, api_contract.clone(), tracked_order.clone(), instrument,
             );
-        }
-        if let Some(spec) = statement {
-            let _ = Self::send_control(py, &tx, ControlCommand::Order(OrderRequest::Describe { order_id: oid, spec }));
         }
         if api_order.transmit {
             if !replacing {

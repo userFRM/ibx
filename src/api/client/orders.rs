@@ -282,6 +282,18 @@ impl EClient {
             let price = ClientCore::replace_price(order);
             let qty = crate::types::qty_from_f64(order.total_quantity);
             let stop_price = ClientCore::replace_trigger(order);
+            // Built here, with the replace it belongs to, so that a statement
+            // which cannot be built refuses the replace before anything moves,
+            // and so that the two travel as one command: the venue merges what
+            // a replace states onto the order it is working, and a statement
+            // sent on its own arrived out of order beside a second replace of
+            // the same order and left each carrying the other's terms.
+            let spec = match ClientCore::build_order_request(order, oid, instrument, Some(contract))? {
+                ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. }) => {
+                    Some(Box::new(crate::types::OrderSpec { kind, attrs }))
+                }
+                _ => None,
+            };
             ControlCommand::Order(OrderRequest::Modify {
                 order_id: oid,
                 price,
@@ -290,6 +302,7 @@ impl EClient {
                 ord_type: order.ord_type_byte(),
                 tif: order.tif_byte(),
                 stop_price,
+                spec,
             })
         } else {
             ClientCore::build_order_request(order, oid, instrument, Some(contract))?
@@ -331,25 +344,12 @@ impl EClient {
         // this client's own answer to "what is working" already read back the
         // new ones. The change never left the process and nothing said so.
         //
-        // Built before the record below is restated, so a statement that cannot
-        // be built refuses the replace with nothing moved; and sent whether or
-        // not the replace transmits now, since a held replace leaves the hold
-        // later as the command it was held as, with nothing built then.
-        let statement = if replacing {
-            match ClientCore::build_order_request(order, oid, instrument, Some(contract))? {
-                ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. }) => {
-                    Some(Box::new(crate::types::OrderSpec { kind, attrs }))
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
+        // The statement itself rides on the replace, built above with it. A
+        // held replace therefore leaves the hold carrying its own terms, and a
+        // replace that never goes leaves nothing behind to be taken for the
+        // record of an order.
         if replacing {
             self.core.restate_order(Some(&self.shared), oid, contract.clone(), placed.clone(), instrument);
-        }
-        if let Some(spec) = statement {
-            let _ = self.control_tx.send(ControlCommand::Order(OrderRequest::Describe { order_id: oid, spec }));
         }
         if order.transmit {
             if !replacing {
