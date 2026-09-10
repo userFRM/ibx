@@ -7728,14 +7728,24 @@ fn the_millisecond_clock_keeps_what_the_second_one_drops() {
     client.req_current_time(&mut heard);
     client.req_current_time_in_millis(&mut heard);
     assert_eq!(heard.secs[0], 1_786_795_200);
-    assert_eq!(heard.millis[0], 1_786_795_200_000);
+    // The clock keeps running between the statement and the reading — that is
+    // the whole point of holding a difference rather than a stamp — so this is
+    // near the stated instant rather than exactly on it. The margin is far
+    // below the quarter-second the second half of this test turns on.
+    let near = |read: i64, stated: i64, what: &str| {
+        assert!(
+            (read - stated).abs() < 100,
+            "{what}: read {read}, which is not near {stated}",
+        );
+    };
+    near(heard.millis[0], 1_786_795_200_000, "a stamp with no fraction");
 
     // One with a fraction: seconds cannot carry it, milliseconds can.
     shared.market.note_venue_time("20260815-12:00:00.250");
     client.req_current_time(&mut heard);
     client.req_current_time_in_millis(&mut heard);
     assert_eq!(heard.secs[1], 1_786_795_200, "the same second");
-    assert_eq!(heard.millis[1], 1_786_795_200_250, "and a quarter of it besides");
+    near(heard.millis[1], 1_786_795_200_250, "and a quarter of it besides");
 }
 
 /// A session that came back and went again is not a connected session.
