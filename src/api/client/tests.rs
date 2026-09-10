@@ -139,10 +139,10 @@ fn modifying_a_trailing_stop_limit_carries_its_offset_and_trail() {
     }
 }
 
-/// A replace is preceded by the caller's own statement of the order, so an
-/// order this session did not place can be restated from it.
+/// A replace carries the caller's own statement of the order, so an order this
+/// session did not place can be restated from it.
 #[test]
-fn a_replace_is_preceded_by_the_callers_statement_of_the_order() {
+fn a_replace_carries_the_callers_statement_of_the_order() {
     let (client, rx, shared) = test_client();
     let named = Order {
         action: "BUY".into(), total_quantity: 1.0, order_type: "PEG MID".into(),

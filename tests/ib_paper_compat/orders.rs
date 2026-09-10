@@ -256,6 +256,7 @@ pub(super) fn phase_modify_order(conns: Conns) -> Conns {
                         order_acked = true;
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                             order_id, price: 2_00_000_000, qty: ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            spec: None,
                         })).unwrap();
                         modify_sent = true;
                     }
@@ -514,6 +515,7 @@ pub(super) fn phase_modify_qty(conns: Conns) -> Conns {
                         order_acked = true;
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                             order_id, price: 1_00_000_000, qty: 2 * ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            spec: None,
                         })).unwrap();
                         modify_sent = true;
                     }
@@ -1898,6 +1900,7 @@ pub(super) fn phase_modify_price_and_qty(conns: Conns) -> Conns {
                         // Modify BOTH price ($1→$2) and qty (1→3) in a single Modify
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                             order_id, price: 2_00_000_000, qty: 3 * ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            spec: None,
                         })).unwrap();
                         modify_sent = true;
                     }
@@ -1965,6 +1968,7 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
                             // Original order acked → modify to $2
                             control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                                 order_id, price: 2_00_000_000, qty: ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                                spec: None,
                             })).unwrap();
                             phase = 1;
                         }
@@ -1972,6 +1976,7 @@ pub(super) fn phase_double_modify(conns: Conns) -> Conns {
                             // First modify acked → modify again to $3
                             control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                                 order_id, price: 3_00_000_000, qty: ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                                spec: None,
                             })).unwrap();
                             phase = 2;
                         }
@@ -2049,6 +2054,7 @@ pub(super) fn phase_cancel_during_modify(conns: Conns) -> Conns {
                             // Send modify AND cancel back-to-back — no waiting
                             control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                                 order_id, price: 2_00_000_000, qty: ibx::types::QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                                spec: None,
                             })).unwrap();
                             control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id })).unwrap();
                             race_sent = true;
@@ -2315,6 +2321,7 @@ pub(super) fn phase_replace_a_trailing_stop(conns: Conns) -> Conns {
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                             order_id, price: 0, qty: 2 * ibx::types::QTY_SCALE, outside_rth: false,
                             ord_type: 0, tif: 0, stop_price: 0,
+                            spec: None,
                         })).unwrap();
                         replace_sent = true;
                     }
@@ -2404,6 +2411,7 @@ pub(super) fn phase_replace_a_trail_amount(conns: Conns) -> Conns {
                     control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                         order_id, price: 0, qty: ibx::types::QTY_SCALE,
                         outside_rth: false, ord_type: 0, tif: 0, stop_price: asked_trail,
+                        spec: None,
                     })).unwrap();
                     replace_sent = true;
                 }
@@ -2608,6 +2616,7 @@ pub(super) fn phase_replace_each_refused_order(conns: Conns) -> Conns {
                         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                             order_id: oid, price: RESTING, qty: 300 * ibx::types::QTY_SCALE,
                             outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                            spec: None,
                         })).unwrap();
                         replaced = true;
                     }
@@ -2725,6 +2734,7 @@ pub(super) fn phase_replace_one_refused_order(
                     control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                         order_id: oid, price: RESTING, qty: 300 * ibx::types::QTY_SCALE,
                         outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                        spec: None,
                     })).unwrap();
                     replaced = true;
                 }
@@ -2832,6 +2842,7 @@ pub(super) fn phase_replace_a_bracket_child(conns: Conns) -> Conns {
                     control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                         order_id: child, price: 901_00_000_000, qty: 200 * ibx::types::QTY_SCALE,
                         outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                        spec: None,
                     })).unwrap();
                     replaced = true;
                 }
@@ -2929,6 +2940,7 @@ pub(super) fn phase_replace_keeps_the_directed_venue(conns: Conns) -> Conns {
                     control_tx.send(ControlCommand::Order(OrderRequest::Modify {
                         order_id, price: replaced_at, qty: ibx::types::QTY_SCALE,
                         outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+                        spec: None,
                     })).unwrap();
                     replace_sent = true;
                 }

@@ -1518,6 +1518,7 @@ fn a_cancel_racing_an_unacked_replace_live() {
     control_tx.send(ControlCommand::Order(OrderRequest::Modify {
         order_id, price: 2_00_000_000, qty: ibx::types::QTY_SCALE,
         outside_rth: true, ord_type: 0, tif: 0, stop_price: 0,
+        spec: None,
     })).expect("replace failed");
     control_tx.send(ControlCommand::Order(OrderRequest::Cancel { order_id }))
         .expect("cancel failed");
@@ -1667,6 +1668,7 @@ fn what_the_venue_holds_after_a_replace_of_each_priced_shape_live() {
         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
             order_id, price: *price, qty: QTY_SCALE, outside_rth: false,
             ord_type: 0, tif: 0, stop_price: *stop_price,
+            spec: None,
         })).expect("replace failed");
     }
     let deadline = Instant::now() + Duration::from_secs(12);
@@ -1689,6 +1691,7 @@ fn what_the_venue_holds_after_a_replace_of_each_priced_shape_live() {
         println!("  {name}: a second replace moves the quantity alone");
         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
             order_id, price: 0, qty: 2 * QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+            spec: None,
         })).expect("second replace failed");
     }
     let deadline = Instant::now() + Duration::from_secs(12);
@@ -1789,17 +1792,18 @@ fn what_the_venue_holds_after_a_replace_of_each_priced_shape_live() {
             identity: String::new(), reply_tx: None,
         }).expect("register failed");
         let named = shared.orders.get_order_info(order_id).expect("named by the venue").order;
-        if let Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) =
-            ibx::client_core::ClientCore::build_order_request(&named, order_id, 0, None)
-        {
-            control_tx.send(ControlCommand::Order(OrderRequest::Describe {
-                order_id, spec: Box::new(ibx::types::OrderSpec { kind, attrs }),
-            })).expect("statement failed");
-        } else {
-            println!("  the venue's naming does not build an order this client can state");
-        }
+        let spec = match ibx::client_core::ClientCore::build_order_request(&named, order_id, 0, None) {
+            Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) => {
+                Some(Box::new(ibx::types::OrderSpec { kind, attrs }))
+            }
+            _ => {
+                println!("  the venue's naming does not build an order this client can state");
+                None
+            }
+        };
         control_tx.send(ControlCommand::Order(OrderRequest::Modify {
             order_id, price: 0, qty: 3 * QTY_SCALE, outside_rth: false, ord_type: 0, tif: 0, stop_price: 0,
+            spec,
         })).expect("replace failed");
         // Held behind the naming at connect and released by the recovery
         // sweep, so the answer is measured in tens of seconds, not one.
