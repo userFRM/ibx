@@ -193,6 +193,16 @@ pub enum SecurityType {
 }
 
 impl SecurityType {
+    /// Whether the venue treats this as fixed income.
+    ///
+    /// Three types share one answer — a bond, a bill and the type the venue
+    /// spells `FIXED` — and it is a different answer from every other type's:
+    /// a lookup for one of them is answered on its own callback, carrying the
+    /// fields only fixed income has.
+    pub fn is_fixed_income(&self) -> bool {
+        matches!(self, Self::Bond | Self::Bill | Self::FixedIncome)
+    }
+
     /// The official API string: `STK`, `OPT`, and so on.
     ///
     /// The one mapping everything user-visible reads, so a contract a callback
@@ -2042,7 +2052,7 @@ impl crate::types::model::ContractDetails {
         // The reference client files a bond's date as the details' maturity
         // and leaves the contract's expiry empty; every other type's date is
         // the contract's.
-        let bond = matches!(def.sec_type, SecurityType::Bond);
+        let bond = def.sec_type.is_fixed_income();
         let c = crate::types::model::Contract {
             con_id: def.con_id as i64,
             symbol: def.symbol.clone(),

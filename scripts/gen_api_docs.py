@@ -1264,12 +1264,10 @@ STUB_METHODS: set[str] = {
 }
 
 #: Callbacks nothing fires. Each for its own reason, and none of them a
-#: message this client fails to read: the advisor replies are not parsed,
-#: the venue answers a bond on `contract_details` rather than on its own
-#: callback, and the rest name state the venue does not send here.
+#: message this client fails to read: they name state the venue does not send
+#: here.
 STUB_CALLBACKS = {
-    "receive_fa", "replace_fa_end",
-    "bond_contract_details", "delta_neutral_validation",
+    "delta_neutral_validation",
     "order_bound",
     # A tick-by-tick subscription is asked for by name and the venue names
     # three: all-last, last, and bid-ask. There is no name for a midpoint

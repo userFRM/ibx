@@ -57,6 +57,15 @@ use super::{HeartbeatState, emit, clone_for_event, parse_price_tag, decode_tif, 
 /// place and must not report first.
 const SECDEF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// What a caller is told when a replacement of the advisor's configuration
+/// stands, and the code a refused one is reported under.
+///
+/// Both are the reference client's own, in its own words: the venue states no
+/// text at all on a replacement that stands, and a program written against
+/// that client reads these.
+const ADVISOR_SAVED: &str = "FA data saved";
+const ADVISOR_SAVE_REFUSED: i32 = 10229;
+
 /// The same, for a lookup a caller asked for.
 ///
 /// A caller can name a whole class, which the venue takes about ten seconds to
@@ -254,6 +263,22 @@ fn handle_account_config(parsed: &std::collections::HashMap<u32, String>, shared
     }
     log::info!("Account configuration states {} further features: {raw}", more.len());
     shared.reference.add_enabled_features(more);
+}
+
+/// An advisor request the venue has not answered yet.
+///
+/// The reply states nothing about what was asked — not which partition, not
+/// whether it was a question or a replacement — beyond the number the request
+/// went out under, so what the caller is owed is remembered here.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingAdvisor {
+    /// The caller's number for a replacement, carried back on its end.
+    pub(crate) req_id: i64,
+    /// Which partition, as the reference client numbers it.
+    pub(crate) fa_data_type: i32,
+    /// Whether the caller was writing rather than reading. A question is
+    /// answered with the configuration; a replacement with its end.
+    pub(crate) replacing: bool,
 }
 
 /// A market data subscription held back until the venue names its contract.
@@ -459,6 +484,11 @@ pub(crate) struct CcpState {
     /// count as a string, so a reply can be matched to the question that asked
     /// it.
     pub(crate) next_advisor_request: u32,
+    /// The advisor requests waiting on an answer, by the number they went out
+    /// under. The venue carries that number back on its reply and nothing
+    /// else identifies which question was asked, so a reply arriving with no
+    /// entry here belongs to nobody.
+    pub(crate) pending_advisor: std::collections::HashMap<String, PendingAdvisor>,
     /// The key the open account subscription was asked for under, so the
     /// withdrawal can name it. Tag 6036 carries whether the request opens the
     /// subscription or closes it; a session that only ever opens them holds one
@@ -557,6 +587,7 @@ impl CcpState {
             next_fanout_id: 1,
             next_internal_secdef_id: 0xF000_0000,
             next_advisor_request: 1,
+            pending_advisor: std::collections::HashMap::new(),
             account_request_key: None,
             unread_subtypes: std::collections::HashSet::new(),
             unread_types: std::collections::HashSet::new(),
@@ -821,6 +852,7 @@ impl CcpState {
                         // different one.
                         "110" => handle_order_revision(&parsed, shared),
                         "210" => handle_account_config(&parsed, shared),
+                        "117" => self.handle_advisor_config(&parsed, shared),
                         "139" => self.handle_option_chain(msg, shared),
                         "102" => self.handle_exchange_list(msg, shared),
                         "107" => self.handle_schedule_reply(msg, shared, event_tx),
@@ -1712,6 +1744,53 @@ impl CcpState {
         }
     }
 
+    /// What the venue answers an advisor request with.
+    ///
+    /// The reply states the number the request went out under and nothing else
+    /// about what was asked, so what the caller is owed is read from what was
+    /// remembered when the question left. A question is answered with the
+    /// configuration itself; a replacement with its end, or, where the venue
+    /// states trouble, with that trouble under the code the reference client
+    /// reports a failed replacement on.
+    ///
+    /// A reply carrying no number at all is the venue volunteering a change to
+    /// a model nobody asked about. Nothing here asked for it and no caller is
+    /// waiting on it, so it is logged rather than delivered to whichever
+    /// request happens to be open.
+    fn handle_advisor_config(
+        &mut self,
+        parsed: &std::collections::HashMap<u32, String>,
+        shared: &SharedState,
+    ) {
+        let Some(key) = parsed.get(&6158).filter(|k| !k.is_empty()) else {
+            log::info!("The venue stated an advisor configuration nobody asked for");
+            return;
+        };
+        let Some(asked) = self.pending_advisor.remove(key.as_str()) else {
+            log::warn!("The venue answered advisor request {key}, which nothing here asked");
+            return;
+        };
+        // Tag 58 is the venue's own account of what went wrong. Empty is the
+        // only shape that means the request stands.
+        let trouble = parsed.get(&58).map(String::as_str).unwrap_or("");
+        if !trouble.is_empty() {
+            log::warn!("The venue refused advisor request {key}: {trouble}");
+            shared.reference.push_advisor_refused(
+                asked.req_id, ADVISOR_SAVE_REFUSED, trouble.to_string(),
+            );
+            return;
+        }
+        if asked.replacing {
+            shared.reference.push_advisor_replaced(asked.req_id, ADVISOR_SAVED.to_string());
+            return;
+        }
+        // A partition the venue holds nothing for is stated as nothing rather
+        // than left out, and an advisor with no groups is an answer: delivered
+        // empty, the caller learns there are none; dropped, they wait.
+        let document = parsed.get(&6118).cloned().unwrap_or_default();
+        shared.reference.push_advisor_config(asked.fa_data_type, document);
+    }
+
     /// Ask for, or replace, the advisor's own configuration.
     ///
     /// An advisor's groups, allocation profiles and models are held by the
@@ -1723,8 +1802,10 @@ impl CcpState {
     /// says so rather than answering with an empty one.
     pub(crate) fn send_advisor_config(
         &mut self,
+        req_id: i64,
         command: i32,
         partition: &str,
+        fa_data_type: i32,
         document: Option<&str>,
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
@@ -1755,6 +1836,13 @@ impl CcpState {
                 fields.push((6118, xml));
             }
             let _ = conn.send_fix(&fields);
+            // Held before the frame is called sent: the reply states only this
+            // number, so a question nobody remembers asking is a reply nobody
+            // can be given.
+            self.pending_advisor.insert(
+                key.clone(),
+                PendingAdvisor { req_id, fa_data_type, replacing: document.is_some() },
+            );
             hb.last_ccp_sent = Instant::now();
             log::info!("Sent advisor configuration request: command={command} partition={partition}");
         }

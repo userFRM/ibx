@@ -2051,9 +2051,9 @@ impl HotLoop {
                 ControlCommand::RefreshAccount { account } => {
                     self.ccp.send_account_refresh(&account, &mut self.ccp_conn, &mut self.hb, &self.shared);
                 }
-                ControlCommand::AdvisorConfig { command, partition, document } => {
+                ControlCommand::AdvisorConfig { req_id, command, partition, fa_data_type, document } => {
                     self.ccp.send_advisor_config(
-                        command, &partition, document.as_deref(),
+                        req_id, command, &partition, fa_data_type, document.as_deref(),
                         &mut self.ccp_conn, &mut self.hb,
                     );
                 }

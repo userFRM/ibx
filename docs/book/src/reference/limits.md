@@ -9,24 +9,14 @@ before writing against it.
 
 ## Callbacks nothing fires
 
-Six callbacks exist so a program written against the reference client compiles
+Three callbacks exist so a program written against the reference client compiles
 and runs. No message reaches any of them.
 
 | Callback | Why |
 | --- | --- |
-| `bond_contract_details` | The venue answers a bond on `contract_details`, like everything else. Read the bond there |
-| `receive_fa` | The advisor configuration request reaches the venue; its reply is not parsed |
-| `replace_fa_end` | As above, for the replacement |
 | `order_bound` | The permanent id an order was given arrives on the order's status and on its fills, so there is no separate message to fire this on |
 | `delta_neutral_validation` | Nothing on this client's connections produces it |
 | `tick_by_tick_mid_point` | A tick-by-tick stream is asked for by name and the venue names three: all-last, last and bid-ask. There is no name for a midpoint stream to ask under, and a midpoint record arriving anyway is kept as a frame nothing reads |
-
-## Calls whose answer is not read
-
-`request_fa` and `replace_fa` send. The venue's reply lands among the messages
-this client records as unread, and reading it needs an advisor account to state
-the reply's shape. Allocation on an individual order is a different thing and is
-carried.
 
 Every other call in the reference client's surface is served on both languages.
 The call-by-call matrix is [generated from the source](./coverage.md).

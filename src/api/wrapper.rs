@@ -256,9 +256,9 @@ pub trait Wrapper {
     /// The contract a display group now holds, as `conId@exchange`, or `none`.
     fn display_group_updated(&mut self, req_id: i64, contract_info: &str) {
     }
-    /// A bond's contract details, answering `req_contract_details` for a bond.
-    /// The venue answers bonds on the same callback as everything else here,
-    /// so this exists for callers written against a client that separates them.
+    /// A bond's contract details, answering `req_contract_details` for fixed
+    /// income: a bond, a bill, and the type the venue spells `FIXED`. Every
+    /// other type answers on `contract_details`.
     fn bond_contract_details(&mut self, req_id: i64, details: &ContractDetails) {
     }
     /// The permanent id an order was given, paired with the id this client used.

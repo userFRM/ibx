@@ -1139,7 +1139,7 @@ impl ContractDetails {
         // The reference client files a bond's date as the details' maturity
         // and leaves the contract's expiry empty; every other type's date is
         // the contract's.
-        let bond = matches!(def.sec_type, crate::control::contracts::SecurityType::Bond);
+        let bond = def.sec_type.is_fixed_income();
         let c = Contract {
             con_id: def.con_id as i64,
             // Official API string ("STK"), not the Debug derive ("Stock"): the

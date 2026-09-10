@@ -74,6 +74,15 @@ pub struct ReferenceState {
     /// ending the request, so an empty one still ends it.
     option_params: Mutex<Vec<(u32, i64, Vec<OptionChainScope>)>>,
     scanner_params: Mutex<Vec<String>>,
+    /// A partition of the advisor's configuration the venue has stated, as the
+    /// number it is asked for under and the document itself.
+    advisor_config: Mutex<Vec<(i32, String)>>,
+    /// The end of a replacement, as the caller's number for it and what the
+    /// venue said about it.
+    advisor_replaced: Mutex<Vec<(i64, String)>>,
+    /// A replacement the venue refused, as the caller's number for it, the
+    /// code it is reported under and what the venue said.
+    advisor_refused: Mutex<Vec<(i64, i32, String)>>,
     scanner_data: Mutex<Vec<(u32, ScannerResult)>>,
     historical_news: Mutex<Vec<(u32, Vec<NewsHeadline>, bool)>>,
     news_articles: Mutex<Vec<(u32, i32, String)>>,
@@ -156,6 +165,9 @@ impl ReferenceState {
             calendar_events: Mutex::new(Vec::new()),
             option_params: Mutex::new(Vec::with_capacity(4)),
             scanner_params: Mutex::new(Vec::new()),
+            advisor_config: Mutex::new(Vec::new()),
+            advisor_replaced: Mutex::new(Vec::new()),
+            advisor_refused: Mutex::new(Vec::new()),
             scanner_data: Mutex::new(Vec::with_capacity(8)),
             historical_news: Mutex::new(Vec::with_capacity(8)),
             news_articles: Mutex::new(Vec::with_capacity(8)),
@@ -703,6 +715,21 @@ impl ReferenceState {
         self.scanner_params.lock().unwrap().drain(..).collect()
     }
 
+    /// Take every advisor partition waiting, leaving none.
+    pub fn drain_advisor_config(&self) -> Vec<(i32, String)> {
+        self.advisor_config.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every finished replacement waiting, leaving none.
+    pub fn drain_advisor_replaced(&self) -> Vec<(i64, String)> {
+        self.advisor_replaced.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every refused replacement waiting, leaving none.
+    pub fn drain_advisor_refused(&self) -> Vec<(i64, i32, String)> {
+        self.advisor_refused.lock().unwrap().drain(..).collect()
+    }
+
     /// Take every scanner data waiting, leaving none.
     pub fn drain_scanner_data(&self) -> Vec<(u32, ScannerResult)> {
         self.scanner_data.lock().unwrap().drain(..).collect()
@@ -850,6 +877,18 @@ impl ReferenceState {
 
     #[doc(hidden)] pub fn push_option_params(&self, req_id: u32, underlying_con_id: i64, scopes: Vec<OptionChainScope>) {
         self.option_params.lock().unwrap().push((req_id, underlying_con_id, scopes));
+    }
+
+    #[doc(hidden)] pub fn push_advisor_config(&self, fa_data_type: i32, xml: String) {
+        self.advisor_config.lock().unwrap().push((fa_data_type, xml));
+    }
+
+    #[doc(hidden)] pub fn push_advisor_replaced(&self, req_id: i64, text: String) {
+        self.advisor_replaced.lock().unwrap().push((req_id, text));
+    }
+
+    #[doc(hidden)] pub fn push_advisor_refused(&self, req_id: i64, code: i32, text: String) {
+        self.advisor_refused.lock().unwrap().push((req_id, code, text));
     }
 
     #[doc(hidden)] pub fn push_scanner_params(&self, xml: String) {

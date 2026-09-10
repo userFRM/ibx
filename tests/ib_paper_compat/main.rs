@@ -1416,8 +1416,10 @@ fn what_an_advisor_request_is_answered_with_live() {
     for (which, partition) in [(1, "Group"), (2, "Profile"), (3, "Aliases")] {
         println!("  asking for {partition} ({which})");
         control_tx.send(ControlCommand::AdvisorConfig {
+            req_id: -1,
             command: 5,
             partition: partition.to_string(),
+            fa_data_type: which,
             document: None,
         }).expect("send failed");
     }

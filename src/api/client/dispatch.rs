@@ -872,7 +872,15 @@ impl EClient {
         let ends = self.shared.reference.drain_contract_details_end();
         for (req_id, def) in self.shared.reference.drain_contract_details() {
             let details = ContractDetails::from_definition(&def);
-            wrapper.contract_details(req_id as i64, &details);
+            // Fixed income answers on its own callback. A bond, a bill and the
+            // type the venue spells `FIXED` share it; every other type is
+            // answered on the ordinary one. Answered on the ordinary one too,
+            // a program written to wait for a bond waited through the answer.
+            if def.sec_type.is_fixed_income() {
+                wrapper.bond_contract_details(req_id as i64, &details);
+            } else {
+                wrapper.contract_details(req_id as i64, &details);
+            }
         }
         for req_id in ends {
             wrapper.contract_details_end(req_id as i64);
@@ -923,6 +931,19 @@ impl EClient {
         // Scanner params
         for xml in self.shared.reference.drain_scanner_params() {
             wrapper.scanner_parameters(&xml);
+        }
+
+        // The advisor's own configuration: a partition the caller asked for,
+        // the end of one they replaced, and the venue's account of a
+        // replacement it would not take.
+        for (fa_data_type, xml) in self.shared.reference.drain_advisor_config() {
+            wrapper.receive_fa(fa_data_type, &xml);
+        }
+        for (req_id, text) in self.shared.reference.drain_advisor_replaced() {
+            wrapper.replace_fa_end(req_id, &text);
+        }
+        for (req_id, code, text) in self.shared.reference.drain_advisor_refused() {
+            wrapper.error(req_id, i64::from(code), &text, "");
         }
 
         // Scanner data. Cache is populated by the engine before dispatch
@@ -1076,6 +1097,48 @@ impl EClient {
             }
             wrapper.account_summary_end(batch.req_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod fixed_income_tests {
+    use crate::api::wrapper::Wrapper;
+    use crate::control::contracts::{ContractDefinition, SecurityType};
+    use crate::types::model::ContractDetails;
+
+    /// A lookup for fixed income is answered on its own callback.
+    ///
+    /// A bond, a bill and the type the venue spells `FIXED` share it, and the
+    /// venue answers them with a different set of fields from every other
+    /// type's. Answered on the ordinary callback, a program written against
+    /// the reference client waited through its own answer.
+    #[test]
+    fn fixed_income_answers_on_the_callback_written_for_it() {
+        #[derive(Default)]
+        struct Heard { plain: Vec<String>, fixed: Vec<String> }
+        impl Wrapper for Heard {
+            fn contract_details(&mut self, _: i64, d: &ContractDetails) {
+                self.plain.push(d.contract.symbol.clone());
+            }
+            fn bond_contract_details(&mut self, _: i64, d: &ContractDetails) {
+                self.fixed.push(d.contract.symbol.clone());
+            }
+        }
+        let (client, _rx, shared) = crate::api::client::tests::test_client();
+        for (symbol, sec_type) in [
+            ("T 4 05/15/30", SecurityType::Bond),
+            ("B 0 08/01/26", SecurityType::Bill),
+            ("F 3 01/01/28", SecurityType::FixedIncome),
+            ("SPY", SecurityType::Stock),
+        ] {
+            shared.reference.push_contract_details(1, ContractDefinition {
+                symbol: symbol.to_string(), sec_type, ..Default::default()
+            });
+        }
+        let mut heard = Heard::default();
+        client.dispatch_data(&mut heard);
+        assert_eq!(heard.fixed, ["T 4 05/15/30", "B 0 08/01/26", "F 3 01/01/28"]);
+        assert_eq!(heard.plain, ["SPY"], "and nothing else moves");
     }
 }
 

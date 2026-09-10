@@ -826,11 +826,10 @@ impl EClient {
     /// * A withdrawal stating a manual time, an operator or who entered it
     ///   (169, 192), and an execution filter stating `lastNDays` or
     ///   `specificDates` (200): refused by name on `error`.
-    /// * Callbacks nothing fires, said on the call that would produce them:
-    ///   `receiveFA` and `replaceFAEnd` (157) after `requestFA` and `replaceFA`,
-    ///   whose answer is not read back, and `orderBound` (144) after
-    ///   `reqAutoOpenOrders`. These are the one case that is quiet at run
-    ///   time: a program that waits on them waits, and only the doc says why.
+    /// * One callback nothing fires, said on the call that would produce it:
+    ///   `orderBound` (144) after `reqAutoOpenOrders`. It is the one case that
+    ///   is quiet at run time: a program that waits on it waits, and only the
+    ///   doc says why.
     ///
     /// Every other gate at or below 217 names a request, field or callback
     /// that is here and carried.

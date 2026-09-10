@@ -69,34 +69,37 @@ impl EClient {
     /// the number is turned into the word it stands for. A number that stands
     /// for nothing is refused rather than sent as an empty partition.
     ///
-    /// The request reaches the venue; its answer is not read back yet, so
-    /// [`Wrapper::receive_fa`] does not fire. What the venue replies with
-    /// lands among the messages this client records as unread. Reading it
-    /// needs an advisor account to state the reply's shape, and inventing one
-    /// would be a guess about a frame nobody here has seen.
+    /// The venue's answer reaches [`Wrapper::receive_fa`] under the same
+    /// number the partition was asked for by.
     pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal> {
         let partition = advisor_partition(fa_data_type)
             .ok_or_else(|| format!("no advisor configuration is named by {fa_data_type}"))?;
         self.send(crate::types::ControlCommand::AdvisorConfig {
+            // Nothing to carry back: the answer to a question about a
+            // partition names the partition, not a request.
+            req_id: -1,
             // Asking for it by name.
             command: 5,
             partition: partition.to_string(),
+            fa_data_type,
             document: None,
         })
     }
 
     /// Replace a partition of the advisor's configuration with the one given.
     ///
-    /// As with [`request_fa`](Self::request_fa), the replacement reaches the
-    /// venue and its answer is not read back, so [`Wrapper::replace_fa_end`]
-    /// does not fire.
-    pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal> {
+    /// [`Wrapper::replace_fa_end`] fires with `req_id` once the venue has
+    /// taken it, and a venue that refuses states why on [`Wrapper::error`]
+    /// under the same number.
+    pub fn replace_fa(&self, req_id: i64, fa_data_type: i32, cxml: &str) -> Result<(), Refusal> {
         let partition = advisor_partition(fa_data_type)
             .ok_or_else(|| format!("no advisor configuration is named by {fa_data_type}"))?;
         self.send(crate::types::ControlCommand::AdvisorConfig {
+            req_id,
             // Replacing it with what is carried.
             command: 3,
             partition: partition.to_string(),
+            fa_data_type,
             document: Some(cxml.to_string()),
         })
     }

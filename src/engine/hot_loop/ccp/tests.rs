@@ -1698,7 +1698,7 @@ fn an_advisor_request_names_the_partition_on_the_tag_that_carries_it() {
     };
 
     // Asking for one partition: the whole of it, under command five.
-    ccp.send_advisor_config(5, "Profile", None, &mut conn, &mut hb);
+    ccp.send_advisor_config(-1, 5, "Profile", 2, None, &mut conn, &mut hb);
     let fields = sent(&mut peer, &mut buf);
     let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
     assert_eq!(names, ["6040", "6905", "6158", "6906"], "{fields:?}");
@@ -1708,13 +1708,101 @@ fn an_advisor_request_names_the_partition_on_the_tag_that_carries_it() {
     assert_eq!(fields[3].1, "Profile", "the partition, on the tag that carries it");
 
     // Replacing one carries the document beside it, and the next number.
-    ccp.send_advisor_config(3, "Group", Some("<xml/>"), &mut conn, &mut hb);
+    ccp.send_advisor_config(77, 3, "Group", 1, Some("<xml/>"), &mut conn, &mut hb);
     let fields = sent(&mut peer, &mut buf);
     let names: Vec<&str> = fields.iter().map(|(t, _)| t.as_str()).collect();
     assert_eq!(names, ["6040", "6905", "6158", "6906", "6118"], "{fields:?}");
     assert_eq!(fields[2].1, "2", "each request states a number of its own");
     assert_eq!(fields[3].1, "Group");
     assert_eq!(fields[4].1, "<xml/>");
+}
+
+/// The venue's answer to an advisor request reaches the caller who asked.
+///
+/// It states the number the request went out under and nothing else about
+/// what was asked, so a question is told from a replacement by what this
+/// client remembered when it sent one. Read as neither, the configuration a
+/// caller asked for arrived and went nowhere.
+#[test]
+fn an_advisor_answer_reaches_the_caller_who_asked_for_it() {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+    let mut buf = [0u8; 4096];
+
+    // Two questions and a replacement, each under a number of its own.
+    ccp.send_advisor_config(-1, 5, "Group", 1, None, &mut conn, &mut hb);
+    ccp.send_advisor_config(-1, 5, "Profile", 2, None, &mut conn, &mut hb);
+    ccp.send_advisor_config(88, 3, "Group", 1, Some("<Groups/>"), &mut conn, &mut hb);
+    let _ = peer.read(&mut buf);
+
+    let reply = |key: &str, text: &str, xml: &str| {
+        crate::protocol::fix::fix_build(&[
+            (fix::TAG_MSG_TYPE, "U"), (6040, "117"), (6158, key), (58, text), (6118, xml),
+        ], 1)
+    };
+    let feed = |ccp: &mut CcpState, context: &mut Context, frame: &[u8]| {
+        ccp.process_ccp_message(
+            frame, &mut None, context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+        );
+    };
+
+    // Answered out of order, which the number is there to survive.
+    feed(&mut ccp, &mut context, &reply("2", "", "<Profiles/>"));
+    feed(&mut ccp, &mut context, &reply("1", "", "<Groups/>"));
+    assert_eq!(
+        shared.reference.drain_advisor_config(),
+        vec![(2, "<Profiles/>".to_string()), (1, "<Groups/>".to_string())],
+        "each partition under the number it was asked for by",
+    );
+
+    // The replacement ends rather than answering with a configuration.
+    feed(&mut ccp, &mut context, &reply("3", "", ""));
+    assert!(shared.reference.drain_advisor_config().is_empty());
+    assert_eq!(
+        shared.reference.drain_advisor_replaced(),
+        vec![(88, "FA data saved".to_string())],
+        "the caller's own number for it, and what the reference client states",
+    );
+
+    // A number nothing asked under belongs to nobody.
+    feed(&mut ccp, &mut context, &reply("9", "", "<Groups/>"));
+    assert!(shared.reference.drain_advisor_config().is_empty(), "and is not delivered");
+}
+
+/// A venue that will not take the replacement says why, and the caller hears
+/// it as trouble rather than as a replacement that stood.
+#[test]
+fn an_advisor_replacement_the_venue_refuses_is_reported_as_trouble() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+
+    ccp.send_advisor_config(51, 3, "Group", 1, Some("<Groups/>"), &mut conn, &mut hb);
+    let refused = crate::protocol::fix::fix_build(&[
+        (fix::TAG_MSG_TYPE, "U"), (6040, "117"), (6158, "1"),
+        (58, "group DU1 is not yours"), (6118, ""),
+    ], 1);
+    ccp.process_ccp_message(
+        &refused, &mut None, &mut context, &shared, &None, &mut HeartbeatState::new(), "DU1",
+    );
+
+    assert!(shared.reference.drain_advisor_replaced().is_empty(), "it did not stand");
+    assert_eq!(
+        shared.reference.drain_advisor_refused(),
+        vec![(51, 10229, "group DU1 is not yours".to_string())],
+    );
 }
 
 /// The venue reads a chain request positionally, so the tags have to be

@@ -18,22 +18,32 @@ class Details(ibx.EWrapper):
     def __init__(self):
         super().__init__()
         self.details = []
+        self.on = []
 
     def contractDetails(self, reqId, contractDetails):
         self.details.append(contractDetails)
+        self.on.append("contractDetails")
+
+    def bondContractDetails(self, reqId, contractDetails):
+        self.details.append(contractDetails)
+        self.on.append("bondContractDetails")
 
     def error(self, *a):
         pass
 
 
-def _details_for(sec_type, last_trade_date):
+def _heard(sec_type, last_trade_date):
     w = Details()
     c = ibx.EClient(w)
     c._test_connect("T")
     c._test_push_contract_details(1, 4, "T", "", sec_type, last_trade_date)
     c._test_dispatch_once()
     assert w.details, "no details arrived"
-    return w.details[0]
+    return w
+
+
+def _details_for(sec_type, last_trade_date):
+    return _heard(sec_type, last_trade_date).details[0]
 
 
 def test_the_security_ids_are_tag_values():
@@ -108,3 +118,22 @@ def test_a_reason_is_importable_where_the_reference_client_keeps_it():
     from ibx.ineligibility_reason import IneligibilityReason as Reference
 
     assert Reference is IneligibilityReason
+
+
+def test_fixed_income_answers_on_the_callback_written_for_it():
+    """A bond, a bill and the type the venue spells `FIXED` share one callback,
+    and the venue answers them with a different set of fields from every other
+    type's. Answered on the ordinary one, a program written to wait for a bond
+    waited through its own answer."""
+    for sec_type in ("BOND", "BILL", "FIXED"):
+        assert _heard(sec_type, "20300615").on == ["bondContractDetails"], sec_type
+    assert _heard("STK", "").on == ["contractDetails"]
+
+
+def test_a_bill_and_a_fixed_state_their_maturity_like_a_bond():
+    """The venue answers all three the same way, so all three file the date
+    where the reference client's bond decoder files it."""
+    for sec_type in ("BILL", "FIXED"):
+        d = _details_for(sec_type, "20300615")
+        assert d.maturity == "20300615", sec_type
+        assert d.contract.lastTradeDateOrContractMonth == "", sec_type

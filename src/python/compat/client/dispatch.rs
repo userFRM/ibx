@@ -997,8 +997,16 @@ impl EClient {
         for (req_id, def) in contract_defs {
             let details = ContractDetails::from_definition(py, &def);
             let details_py = Py::new(py, details)?.into_any();
-            call_wrapper!(self, py, shared, "contract_details",
-                (req_id as i64, &details_py));
+            // Fixed income answers on its own callback. A bond, a bill and the
+            // type the venue spells `FIXED` share it; every other type is
+            // answered on the ordinary one. Answered on the ordinary one too,
+            // a program written to wait for a bond waited through the answer.
+            let named = if def.sec_type.is_fixed_income() {
+                "bond_contract_details"
+            } else {
+                "contract_details"
+            };
+            call_wrapper!(self, py, shared, named, (req_id as i64, &details_py));
         }
         for req_id in contract_ends {
             call_wrapper!(self, py, shared, "contract_details_end", (req_id as i64,));
@@ -1069,6 +1077,22 @@ impl EClient {
         let scanner_params = shared.reference.drain_scanner_params();
         for xml in scanner_params {
             call_wrapper!(self, py, shared, "scanner_parameters", (xml.as_str(),));
+        }
+
+        // The advisor's own configuration: a partition the caller asked for,
+        // the end of one they replaced, and the venue's account of a
+        // replacement it would not take.
+        for (fa_data_type, xml) in shared.reference.drain_advisor_config() {
+            call_wrapper!(self, py, shared, "receive_fa", (fa_data_type, xml.as_str()));
+        }
+        for (req_id, text) in shared.reference.drain_advisor_replaced() {
+            call_wrapper!(self, py, shared, "replace_fa_end", (req_id, text.as_str()));
+        }
+        for (req_id, code, text) in shared.reference.drain_advisor_refused() {
+            call_wrapper!(
+                self, py, shared, "error",
+                (req_id, super::raised_now(), i64::from(code), text.as_str(), "")
+            );
         }
 
         // Drain scanner data -> scannerData + scannerDataEnd

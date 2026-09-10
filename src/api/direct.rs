@@ -786,8 +786,12 @@ impl Client {
     }
 
     /// Replace a partition of that configuration with the one given.
+    ///
+    /// Numbered here rather than by the caller, as every other call on this
+    /// surface is, so the end of the replacement can be told from the end of
+    /// any other.
     pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal> {
-        self.inner.replace_fa(fa_data_type, cxml)
+        self.inner.replace_fa(self.stream_id(), fa_data_type, cxml)
     }
 
     /// What event types the corporate-events calendar carries.

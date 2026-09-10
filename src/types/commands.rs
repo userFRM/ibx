@@ -227,10 +227,17 @@ pub enum ControlCommand {
     /// `partition` names which part — its groups, its allocation profiles, its
     /// models. A replacement carries the configuration as its own document.
     AdvisorConfig {
+        /// The caller's number for a replacement, which the answer carries
+        /// back. Minus one where the caller stated none, as asking for a
+        /// partition does.
+        req_id: i64,
         /// Which operation on the configuration.
         command: i32,
-        /// Which part of it.
+        /// Which part of it, as the venue names it.
         partition: String,
+        /// The same part as the reference client numbers it, which is what the
+        /// answer to a question about it is delivered under.
+        fa_data_type: i32,
         /// The configuration itself, where one is being written.
         document: Option<String>,
     },

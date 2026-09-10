@@ -1901,7 +1901,7 @@ pub fn req_current_time_in_millis(&self, wrapper: &mut impl Wrapper)
 
 #### `request_fa`
 
-Ask the venue for a partition of the advisor's own configuration. The reference client names the partition by a number — its aliases, its groups, its allocation profiles — and the venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition. The request reaches the venue; its answer is not read back yet, so [`Wrapper::receive_fa`] does not fire. What the venue replies with lands among the messages this client records as unread. Reading it needs an advisor account to state the reply's shape, and inventing one would be a guess about a frame nobody here has seen.
+Ask the venue for a partition of the advisor's own configuration. The reference client names the partition by a number — its aliases, its groups, its allocation profiles — and the venue names it by a word, so the number is turned into the word it stands for. A number that stands for nothing is refused rather than sent as an empty partition. The venue's answer reaches [`Wrapper::receive_fa`] under the same number the partition was asked for by.
 
 ```rust
 pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal>
@@ -1917,14 +1917,15 @@ pub fn request_fa(&self, fa_data_type: i32) -> Result<(), Refusal>
 
 #### `replace_fa`
 
-Replace a partition of the advisor's configuration with the one given. As with `request_fa`, the replacement reaches the venue and its answer is not read back, so [`Wrapper::replace_fa_end`] does not fire.
+Replace a partition of the advisor's configuration with the one given. [`Wrapper::replace_fa_end`] fires with `req_id` once the venue has taken it, and a venue that refuses states why on [`Wrapper::error`] under the same number.
 
 ```rust
-pub fn replace_fa(&self, fa_data_type: i32, cxml: &str) -> Result<(), Refusal>
+pub fn replace_fa(&self, req_id: i64, fa_data_type: i32, cxml: &str) -> Result<(), Refusal>
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
+| `req_id` | `i64` | Request identifier. Used to match responses to requests. |
 | `fa_data_type` | `i32` | FA data type (1=Groups, 2=Profiles, 3=Aliases). |
 | `cxml` | `&str` | FA XML configuration data. |
 
@@ -2812,7 +2813,7 @@ The contract a display group now holds, as `conId@exchange`, or `none`.
 
 #### `bond_contract_details`
 
-A bond's contract details, answering `req_contract_details` for a bond. The venue answers bonds on the same callback as everything else here, so this exists for callers written against a client that separates them.
+A bond's contract details, answering `req_contract_details` for fixed income: a bond, a bill, and the type the venue spells `FIXED`. Every other type answers on `contract_details`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

@@ -23,7 +23,7 @@ that did not run.
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
 | **EClient methods** | 78 | 77 impl, 1 stub | 77 impl, 1 stub |
-| **EWrapper callbacks** | 85 | 76 impl, 6 stub | 76 impl, 6 stub |
+| **EWrapper callbacks** | 85 | 79 impl, 3 stub | 79 impl, 3 stub |
 
 ## EClient Methods
 
@@ -149,7 +149,7 @@ that did not run.
 |  | `account_update_multi_end` | Y | Y |
 | Contract | `contract_details` | Y | Y |
 |  | `contract_details_end` | Y | Y |
-|  | `bond_contract_details` | STUB | STUB |
+|  | `bond_contract_details` | Y | Y |
 |  | `symbol_samples` | Y | Y |
 | Historical Data | `historical_data` | Y | Y |
 |  | `historical_data_end` | Y | Y |
@@ -187,8 +187,8 @@ that did not run.
 |  | `soft_dollar_tiers` | Y | Y |
 |  | `family_codes` | Y | Y |
 |  | `user_info` | Y | Y |
-| FA | `receive_fa` | STUB | STUB |
-|  | `replace_fa_end` | STUB | STUB |
+| FA | `receive_fa` | Y | Y |
+|  | `replace_fa_end` | Y | Y |
 | Display Groups | `display_group_list` | Y | Y |
 |  | `display_group_updated` | Y | Y |
 | Other | `delta_neutral_validation` | STUB | STUB |
