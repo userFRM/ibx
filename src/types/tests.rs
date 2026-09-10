@@ -569,7 +569,7 @@ fn a_stated_price_converts_to_the_price_that_was_stated() {
 /// every quantity the order path accepts.
 #[test]
 fn qty_from_f64_is_exact_up_to_the_bound() {
-    use super::{qty_from_f64, qty_to_f64, MAX_QTY_SHARES, QTY_SCALE};
+    use super::{qty_from_f64, qty_to_f64, MAX_QTY_SHARES, QTY_SCALE, Qty};
 
     assert_eq!(qty_from_f64(0.5), QTY_SCALE / 2, "half a share");
     assert_eq!(qty_from_f64(100.0), 100 * QTY_SCALE, "a whole one");
@@ -606,6 +606,25 @@ fn qty_from_f64_is_exact_up_to_the_bound() {
         qty_from_f64(100_000_000.00000001), 100_000_000 * QTY_SCALE + 1,
         "the last digit survives a magnitude the double cannot hold whole",
     );
+
+    // Above the order bound the conversion still converts. What an order may
+    // state is an order rule, applied where orders are validated; a holding, a
+    // book size and a cumulative quantity all come through here too, and a
+    // holding above that bound has to keep moving. Clamped to it, a position
+    // that changed reported the same figure twice and the change was lost.
+    let past_the_order_bound = MAX_QTY_SHARES + 1.0;
+    assert_eq!(
+        qty_to_f64(qty_from_f64(past_the_order_bound)), past_the_order_bound,
+        "a holding larger than any single order may state is still a holding",
+    );
+    assert_ne!(
+        qty_from_f64(1_000_000_000.0), qty_from_f64(1_000_000_001.0),
+        "and one that moves by a share is not the same figure twice",
+    );
+
+    // Past what the form itself holds, it saturates rather than wrapping.
+    assert_eq!(qty_from_f64(1e18), Qty::MAX, "beyond the form is the end of it");
+    assert_eq!(qty_from_f64(-1e18), Qty::MIN);
 }
 
 mod counted_size_tests {

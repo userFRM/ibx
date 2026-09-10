@@ -147,7 +147,15 @@ pub fn qty_from_f64(shares: f64) -> Qty {
     // Always below one, so this product is nowhere near the double's limit.
     let whole = shares.trunc();
     let frac = ((shares - whole) * QTY_SCALE as f64).round();
-    if whole.abs() > MAX_QTY_SHARES {
+    // Bounded by what this form holds, not by what an order may state. The two
+    // are different rules: the venue refuses an order above its own size bound,
+    // and order validation says so before the request goes — but a position, a
+    // book size and a cumulative quantity all convert through here as well, and
+    // none of them is an order. Held to the order bound, a holding above it
+    // came back as the same clamped figure however it moved, so a position
+    // that changed by a share reported no change at all.
+    const HOLDS_AT_MOST: f64 = (Qty::MAX / QTY_SCALE) as f64;
+    if whole.abs() > HOLDS_AT_MOST {
         return if shares < 0.0 { Qty::MIN } else { Qty::MAX };
     }
     (whole as Qty)
