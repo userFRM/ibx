@@ -814,6 +814,10 @@ impl HotLoop {
             // previous contract's volatility and price, and answered finite.
             self.shared.market.forget_option_model(instrument);
             self.shared.market.forget_subscription_failures(instrument);
+            // What the extra series stated and nobody read goes with the
+            // subscription: held, it outlives every caller that asked and the
+            // next one to watch this slot is handed readings from before it.
+            self.shared.market.forget_series_ticks(instrument);
             log::info!("Reclaimed instrument slot {instrument}");
         }
     }

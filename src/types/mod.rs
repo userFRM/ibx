@@ -617,6 +617,36 @@ pub struct TickNews {
     pub timestamp: u64,
 }
 
+/// One reading of an extra series the caller asked for.
+///
+/// The series ride on the same subscription as the prices and arrive on
+/// records of their own, so a reading is queued rather than written into the
+/// quote: a quote holds one value per field and these are not fields of a
+/// quote. Which of the caller's four tick callbacks carries it is part of what
+/// the venue's own record says, so it travels with the value.
+#[derive(Debug, Clone)]
+pub struct SeriesTick {
+    /// The contract it is about.
+    pub instrument: InstrumentId,
+    /// The number the reference client reports it under.
+    pub tick_type: i32,
+    /// The reading itself, and the callback that carries it.
+    pub value: SeriesValue,
+}
+
+/// What an extra series states, and therefore how it reaches a caller.
+#[derive(Debug, Clone)]
+pub enum SeriesValue {
+    /// A price, on `tick_price`.
+    Price(f64),
+    /// A size, on `tick_size`.
+    Size(f64),
+    /// A number that is neither, on `tick_generic`.
+    Generic(f64),
+    /// Text, on `tick_string`.
+    Text(String),
+}
+
 /// A historical tick (midpoint).
 #[derive(Debug, Clone)]
 pub struct HistoricalTickMidpoint {

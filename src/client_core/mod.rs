@@ -3663,6 +3663,29 @@ impl ClientCore {
 
         map.insert(iid, cached);
 
+        // The extra series the caller asked for. They arrive on records of
+        // their own rather than as quote fields, so they are queued as they
+        // are decoded and handed over here, beside the quote they were asked
+        // for alongside. Each already knows which of the four callbacks
+        // carries it, because the venue's own record says.
+        for series in shared.market.drain_series_ticks(iid) {
+            match series.value {
+                crate::types::SeriesValue::Price(value) => ticks.push(TickEvent {
+                    req_id, tick_type: series.tick_type, value, is_price: true,
+                }),
+                crate::types::SeriesValue::Size(value) => ticks.push(TickEvent {
+                    req_id, tick_type: series.tick_type, value, is_price: false,
+                }),
+                crate::types::SeriesValue::Generic(value) => generic_ticks.push(TickEvent {
+                    req_id, tick_type: series.tick_type, value, is_price: false,
+                }),
+                crate::types::SeriesValue::Text(value) => string_ticks.push(StringTickEvent {
+                    req_id, tick_type: series.tick_type, value,
+                }),
+            }
+            delivered = true;
+        }
+
         QuotePollResult { delayed, ticks, generic_ticks, string_ticks, timestamp, delivered }
     }
 

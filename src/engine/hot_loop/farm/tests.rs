@@ -245,6 +245,58 @@ mod news_tests {
         );
     }
 
+    /// What an extra series states reaches the caller, under the number the
+    /// reference client publishes it under.
+    ///
+    /// Asking for a series and reading it are separate things, and for a long
+    /// time this client did only the first: the venue served what was asked
+    /// for and the payloads were stepped over, so a caller who asked for the
+    /// shortable count or the trade rate waited on a stream that was arriving
+    /// and reaching nobody.
+    #[test]
+    fn what_an_extra_series_states_reaches_the_caller() {
+        use crate::types::SeriesValue;
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+
+        // Shortability: the flag, then the borrowable count behind it.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&3i32.to_be_bytes());
+        payload.extend_from_slice(&40_000i32.to_be_bytes());
+        farm.generic_tick_tags.push((11, 236, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(11, 236, &payload)]), &mut context, &shared, &None,
+        );
+
+        // The rate of volume, which the venue states as one number.
+        farm.generic_tick_tags.push((12, 295, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(12, 295, &1234.5f64.to_be_bytes())]),
+            &mut context, &shared, &None,
+        );
+
+        let said: Vec<(i32, String)> = shared.market.drain_series_ticks(instrument)
+            .into_iter()
+            .map(|t| (t.tick_type, match t.value {
+                SeriesValue::Generic(v) => format!("generic {v}"),
+                SeriesValue::Size(v) => format!("size {v}"),
+                SeriesValue::Price(v) => format!("price {v}"),
+                SeriesValue::Text(v) => format!("text {v}"),
+            }))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                (46, "generic 3".to_string()),
+                (89, "size 40000".to_string()),
+                (56, "generic 1234.5".to_string()),
+            ],
+            "each reading under the number a caller reads it by",
+        );
+    }
+
     /// A frame under a number nothing asked a generic tick under says nothing
     /// about which tick it is, so it is dropped rather than guessed at.
     /// Instrument 0 is a real instrument — the first one registered — so a

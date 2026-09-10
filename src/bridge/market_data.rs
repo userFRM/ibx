@@ -126,6 +126,7 @@ pub struct MarketDataState {
     subscription_moves: Mutex<Vec<(crate::types::InstrumentId, crate::types::InstrumentId)>>,
     /// What the venue has said went wrong, in its own words.
     venue_errors: Mutex<Vec<String>>,
+    series_ticks: Mutex<std::collections::HashMap<crate::types::InstrumentId, Vec<SeriesTick>>>,
     /// How far the venue's clock runs from this machine's, in milliseconds.
     ///
     /// Nothing here ever asks the venue what time it is — this wire carries no
@@ -168,6 +169,7 @@ impl MarketDataState {
             tick_req_params_direct: Mutex::new(Vec::new()),
             subscription_moves: Mutex::new(Vec::new()),
             venue_errors: Mutex::new(Vec::new()),
+            series_ticks: Mutex::new(std::collections::HashMap::new()),
             clock_skew_millis: AtomicI64::new(0),
             unread_wire: Mutex::new(Vec::new()),
         }
@@ -668,6 +670,41 @@ impl MarketDataState {
 
     #[doc(hidden)] pub fn push_tick_news(&self, news: TickNews) {
         push_bounded(&self.tick_news, news, STREAM_BACKLOG_LIMIT, "tick_news");
+    }
+
+    /// A series the caller asked for, decoded, waiting to be delivered.
+    ///
+    /// The extra series ride on the same subscription as the prices but arrive
+    /// on records of their own, so they are queued here rather than written
+    /// into the quote: a quote holds one value per field and these are not
+    /// fields of a quote. The poll that delivers the quote drains them and
+    /// hands each to the caller under the number the reference client uses.
+    ///
+    /// Bounded like every other stream the venue pushes unasked: a caller who
+    /// asked for a busy series and stopped reading would otherwise hold every
+    /// record of the day.
+    #[doc(hidden)] pub fn push_series_tick(&self, tick: SeriesTick) {
+        let mut held = self.series_ticks.lock().unwrap();
+        let queued = held.entry(tick.instrument).or_default();
+        // Bounded per contract, because the venue serves a series whether or
+        // not the caller polls: a busy series on a contract nobody is reading
+        // would otherwise hold every record of the day. Past the bound the
+        // oldest go, so what a late reader gets is the most recent rather than
+        // everything or nothing.
+        if queued.len() >= STREAM_BACKLOG_LIMIT {
+            queued.remove(0);
+        }
+        queued.push(tick);
+    }
+
+    /// What this contract's extra series have stated since the last read.
+    pub fn drain_series_ticks(&self, instrument: crate::types::InstrumentId) -> Vec<SeriesTick> {
+        self.series_ticks.lock().unwrap().remove(&instrument).unwrap_or_default()
+    }
+
+    /// Everything held for a contract goes when its subscription does.
+    #[doc(hidden)] pub fn forget_series_ticks(&self, instrument: crate::types::InstrumentId) {
+        self.series_ticks.lock().unwrap().remove(&instrument);
     }
 
     /// A broadcast notice, kept until someone reads it.

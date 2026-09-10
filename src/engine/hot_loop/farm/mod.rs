@@ -114,6 +114,102 @@ fn build_conid_subscribe_tags(
     tags
 }
 
+/// Read a big-endian `f64` off the front of a payload.
+fn series_f64(payload: &[u8], at: usize) -> Option<f64> {
+    let bytes: [u8; 8] = payload.get(at..at + 8)?.try_into().ok()?;
+    Some(f64::from_be_bytes(bytes))
+}
+
+/// Read a big-endian `i32` off a payload.
+fn series_i32(payload: &[u8], at: usize) -> Option<i32> {
+    let bytes: [u8; 4] = payload.get(at..at + 4)?.try_into().ok()?;
+    Some(i32::from_be_bytes(bytes))
+}
+
+/// Hand one reading of an extra series to whoever asked for it.
+///
+/// The venue states each series in its own shape and under its own number, and
+/// the reference client republishes it to an API caller under a number of the
+/// API's own. Both are the venue's to decide, so both are read from it rather
+/// than chosen here: the payload layout is what the series' own reader reads,
+/// and the number is the one the reference client publishes it under.
+///
+/// Returns whether the series was one this client reads. A series it does not
+/// is stepped over rather than guessed at — the record's length is known
+/// whatever the tick, so the ones beside it still arrive.
+fn deliver_series(
+    tick: u32,
+    payload: &[u8],
+    instrument: InstrumentId,
+    shared: &SharedState,
+) -> bool {
+    use crate::types::{SeriesTick, SeriesValue};
+    let mut say = |tick_type: i32, value: SeriesValue| {
+        shared.market.push_series_tick(SeriesTick { instrument, tick_type, value });
+    };
+    match tick {
+        // Shortability. The count of shares available to borrow follows the
+        // flag where the venue states one, and is left unstated — rather than
+        // stated as nothing — where it does not, so a caller is not told that
+        // nothing can be borrowed when the venue simply did not say.
+        236 => {
+            let Some(shortable) = series_i32(payload, 0) else { return true };
+            say(46, SeriesValue::Generic(shortable as f64));
+            if let Some(shares) = series_i32(payload, 4)
+                && shares != i32::MAX
+            {
+                say(89, SeriesValue::Size(shares as f64));
+            }
+        }
+        // Option volume and open interest: the calls first, then the puts.
+        100 => {
+            let (Some(call), Some(put)) = (series_i32(payload, 0), series_i32(payload, 4))
+            else {
+                return true;
+            };
+            say(29, SeriesValue::Size(call as f64));
+            say(30, SeriesValue::Size(put as f64));
+        }
+        101 => {
+            let (Some(call), Some(put)) = (series_i32(payload, 0), series_i32(payload, 4))
+            else {
+                return true;
+            };
+            say(27, SeriesValue::Size(call as f64));
+            say(28, SeriesValue::Size(put as f64));
+        }
+        // Volatility, historical and implied. The venue states a figure it
+        // does not hold as the largest a double carries, which is not a
+        // volatility of nearly two hundred undecillion — it is silence.
+        104 => {
+            let Some(vol) = series_f64(payload, 0) else { return true };
+            say(23, SeriesValue::Generic(vol));
+        }
+        106 => {
+            let Some(vol) = series_f64(payload, 0) else { return true };
+            if vol > 0.0 && vol.is_finite() && vol != f64::MAX {
+                say(24, SeriesValue::Generic(vol));
+            }
+        }
+        // How fast it is trading: the count of trades, the rate of them, and
+        // the rate of volume.
+        293 => {
+            let Some(value) = series_f64(payload, 0) else { return true };
+            say(54, SeriesValue::Generic(value));
+        }
+        294 => {
+            let Some(value) = series_f64(payload, 0) else { return true };
+            say(55, SeriesValue::Generic(value));
+        }
+        295 => {
+            let Some(value) = series_f64(payload, 0) else { return true };
+            say(56, SeriesValue::Generic(value));
+        }
+        _ => return false,
+    }
+    true
+}
+
 /// Option resub info: (instrument, symbol, exchange, sec_type, last_trade_date, strike,
 /// right, multiplier, mode_9887).
 type MdResubInfo = (InstrumentId, String, String, String, String, f64, String, String, i32);
@@ -2717,7 +2813,11 @@ impl FarmState {
                     emit(event_tx, Event::Tick(instrument));
                 }
                 NEWS_REQUEST_TYPE => self.deliver_news(instrument, payload, shared, event_tx),
-                other => log::debug!("Generic tick {other} arrives and nothing here reads it"),
+                other => {
+                    if !deliver_series(other, payload, instrument, shared) {
+                        log::debug!("Generic tick {other} arrives and nothing here reads it");
+                    }
+                }
             }
         }
     }
