@@ -27,6 +27,75 @@ const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
 /// message about an order that is still live.
 const ORDER_REJECTED_ERROR_CODE: i32 = 201;
 
+/// Everything else the report says about the order.
+///
+/// A report carries the whole order, not the handful of terms that identify
+/// it, and each of these is a field a caller already has on the order handed
+/// back. Left unread, an order read back from the venue came back as the
+/// defaults for all of them — no display size, no trigger method, not hidden,
+/// no discretionary amount — whatever the venue actually held.
+///
+/// Only what the report states is taken. A term it does not mention is one the
+/// order does not carry, and the default already says that.
+fn read_stated_attributes(
+    order: &mut api::Order,
+    parsed: &std::collections::HashMap<u32, String>,
+) {
+    if let Some(v) = parsed.get(&77) { order.open_close = v.clone(); }
+    if let Some(v) = parsed.get(&111).and_then(|v| v.parse::<i32>().ok()) { order.display_size = v; }
+    if let Some(v) = parsed.get(&126) { order.good_till_date = v.clone(); }
+    if let Some(v) = parsed.get(&168) { order.good_after_time = v.clone(); }
+    if let Some(v) = parsed.get(&440) { order.clearing_account = v.clone(); }
+    if let Some(v) = parsed.get(&1028).and_then(|v| v.parse::<i32>().ok()) { order.manual_order_indicator = v; }
+    if let Some(v) = parsed.get(&3055) { order.account = v.clone(); }
+    if let Some(v) = parsed.get(&6102) { order.sweep_to_fill = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6115).and_then(|v| v.parse::<i32>().ok()) { order.trigger_method = v; }
+    if let Some(v) = parsed.get(&6135) { order.hidden = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6152).and_then(|v| v.parse::<f64>().ok()) { order.stock_range_lower = v; }
+    if let Some(v) = parsed.get(&6153).and_then(|v| v.parse::<f64>().ok()) { order.stock_range_upper = v; }
+    if let Some(v) = parsed.get(&6154).and_then(|v| v.parse::<f64>().ok()) { order.delta = v; }
+    if let Some(v) = parsed.get(&6207) { order.customer_account = v.clone(); }
+    if let Some(v) = parsed.get(&6259).and_then(|v| v.parse::<f64>().ok()) { order.adjusted_stop_price = v; }
+    if let Some(v) = parsed.get(&6260).and_then(|v| v.parse::<f64>().ok()) { order.adjusted_trailing_amount = v; }
+    if let Some(v) = parsed.get(&6261) { order.adjusted_order_type = v.clone(); }
+    if let Some(v) = parsed.get(&6262).and_then(|v| v.parse::<f64>().ok()) { order.adjusted_stop_limit_price = v; }
+    if let Some(v) = parsed.get(&6269).and_then(|v| v.parse::<i32>().ok()) { order.adjustable_trailing_unit = v; }
+    if let Some(v) = parsed.get(&6275) { order.continuous_update = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6279).and_then(|v| v.parse::<i32>().ok()) { order.reference_price_type = v; }
+    if let Some(v) = parsed.get(&6280).and_then(|v| v.parse::<i32>().ok()) { order.volatility_type = v; }
+    if let Some(v) = parsed.get(&6287) { order.not_held = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6290) { order.delta_neutral_order_type = v.clone(); }
+    if let Some(v) = parsed.get(&6291).and_then(|v| v.parse::<f64>().ok()) { order.delta_neutral_aux_price = v; }
+    if let Some(v) = parsed.get(&6300) { order.manual_order_time = v.clone(); }
+    if let Some(v) = parsed.get(&6446).and_then(|v| v.parse::<f64>().ok()) { order.scale_profit_offset = v; }
+    if let Some(v) = parsed.get(&6461) { order.scale_auto_reset = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6488) { order.solicited = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6526).and_then(|v| v.parse::<i32>().ok()) { order.scale_price_adjust_interval = v; }
+    if let Some(v) = parsed.get(&6527).and_then(|v| v.parse::<f64>().ok()) { order.scale_price_adjust_value = v; }
+    if let Some(v) = parsed.get(&6564).and_then(|v| v.parse::<i32>().ok()) { order.ref_futures_con_id = v; }
+    if let Some(v) = parsed.get(&6580).and_then(|v| v.parse::<f64>().ok()) { order.stock_ref_price = v; }
+    if let Some(v) = parsed.get(&6605) { order.post_only = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6636) { order.professional_customer = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6670) { order.active_start_time = v.clone(); }
+    if let Some(v) = parsed.get(&6737) { order.imbalance_only = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6965) { order.auto_cancel_parent = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&8089) { order.ext_operator = v.clone(); }
+    if let Some(v) = parsed.get(&8229) { order.advanced_error_override = v.clone(); }
+    if let Some(v) = parsed.get(&8265).and_then(|v| v.parse::<bool>().ok()) { order.route_marketable_to_bbo = Some(v); }
+    if let Some(v) = parsed.get(&8402).and_then(|v| v.parse::<i32>().ok()) { order.duration = v; }
+    if let Some(v) = parsed.get(&8403).and_then(|v| v.parse::<f64>().ok()) { order.mid_offset_at_whole = v; }
+    if let Some(v) = parsed.get(&8404).and_then(|v| v.parse::<f64>().ok()) { order.mid_offset_at_half = v; }
+    if let Some(v) = parsed.get(&8405).and_then(|v| v.parse::<i32>().ok()) { order.post_to_ats = v; }
+    if let Some(v) = parsed.get(&8411).and_then(|v| v.parse::<i32>().ok()) { order.min_compete_size = v; }
+    if let Some(v) = parsed.get(&8412).and_then(|v| v.parse::<f64>().ok()) { order.compete_against_best_offset = v; }
+    if let Some(v) = parsed.get(&8415).and_then(|v| v.parse::<i32>().ok()) { order.min_trade_qty = v; }
+    if let Some(v) = parsed.get(&8534) { order.include_overnight = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&9801) { order.block_order = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&9813).and_then(|v| v.parse::<f64>().ok()) { order.discretionary_amt = v; }
+    if let Some(v) = parsed.get(&9816).and_then(|v| v.parse::<f64>().ok()) { order.volatility = v; }
+    if let Some(v) = parsed.get(&9822).and_then(|v| v.parse::<f64>().ok()) { order.percent_offset = v; }
+}
+
 /// Which model within the account a report is about.
 ///
 /// The venue states it beside the account, on the same tag an order states it
@@ -1612,7 +1681,7 @@ impl CcpState {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(f64::MAX);
 
-            let order = api::Order {
+            let mut order = api::Order {
                 order_id: clord_id as i64,
                 model_code: stated_model(parsed),
                 // What the venue says the order waits for. Read from the
@@ -1670,6 +1739,8 @@ impl CcpState {
                 fa_percentage: parsed.get(&6164).cloned().unwrap_or_default(),
                 ..Default::default()
             };
+            // And everything else the report says about it.
+            read_stated_attributes(&mut order, parsed);
 
             let completed_time = if matches!(status,
                 crate::types::OrderStatus::Filled |

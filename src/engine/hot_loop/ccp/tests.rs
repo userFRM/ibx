@@ -1307,6 +1307,44 @@ fn the_model_a_report_names_reaches_the_caller() {
     assert_eq!(held.order.model_code, "", "an account-only report names no model");
 }
 
+/// The whole order the venue states comes back, not the handful of terms that
+/// identify it.
+///
+/// A report carries every term the order holds. Only a few were read, so an
+/// order read back from the venue came back as the defaults for the rest — no
+/// display size, no trigger method, not hidden, no discretionary amount —
+/// whatever the venue was actually working.
+#[test]
+fn the_whole_order_the_venue_states_comes_back() {
+    let (mut ccp, mut context, shared) = tracked_order_state();
+    let mut frame = fill_frame(&[]);
+    for (tag, value) in [
+        (111u32, "25"), (6135u32, "1"), (6115u32, "2"), (9813u32, "0.05"),
+        (440u32, "CLEAR1"), (6488u32, "1"), (8402u32, "300"), (6287u32, "1"),
+    ] {
+        frame.insert(tag, value.to_string());
+    }
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    let held = shared.orders.get_order_info(42).expect("the order is held").order;
+    assert_eq!(held.display_size, 25, "what it shows on the book");
+    assert!(held.hidden, "and that it does not show at all");
+    assert_eq!(held.trigger_method, 2, "how its trigger is judged");
+    assert_eq!(held.discretionary_amt, 0.05, "what it may pay past its limit");
+    assert_eq!(held.clearing_account, "CLEAR1", "where it clears");
+    assert!(held.solicited);
+    assert_eq!(held.duration, 300);
+    assert!(held.not_held);
+
+    // A term the report does not mention is one the order does not carry, and
+    // the default already says that.
+    let (mut ccp, mut context, shared) = tracked_order_state();
+    ccp.handle_exec_report(&fill_frame(&[]), b"", &mut context, &shared, &None, "");
+    let held = shared.orders.get_order_info(42).expect("held").order;
+    assert_eq!(held.display_size, 0, "unstated stays unstated");
+    assert!(!held.hidden);
+}
+
 /// The per-currency figures are read off the bucket the venue states them in.
 ///
 /// A ledger reply is not the name-and-value stream the other account messages
