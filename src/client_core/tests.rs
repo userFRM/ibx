@@ -1867,8 +1867,6 @@ fn a_family_send_that_stops_partway_forgets_what_it_did_not_send() {
 /// and a midprice cap used to be refused as numbers the replace had nowhere to
 /// put. Measured on a paper session, each shape placed and replaced, the venue
 /// takes them on the tags the submit states them on, so the replace carries
-
-
 /// them; the percent is neither a price nor a trigger and is still refused.
 #[test]
 fn a_replace_carries_every_number_but_a_trailing_percent() {
