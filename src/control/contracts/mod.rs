@@ -58,6 +58,9 @@ pub const TAG_IB_PRIMARY_EXCHANGE: u32 = 6470;
 pub const TAG_IB_ORDER_TYPES: u32 = 6431;
 /// FIX tag 6031: the market rule id.
 pub const TAG_IB_MARKET_RULE_ID: u32 = 6031;
+/// What the venue suggests this contract is dealt in, stated for the contract
+/// rather than derived from its rule.
+pub const TAG_IB_SUGGESTED_SIZE: u32 = 6581;
 /// The economic-value rule, stated on the definition as its own field.
 pub const TAG_EV_RULE: u32 = 6858;
 /// What the economic-value evaluation is multiplied by, stated as a number.
@@ -1025,16 +1028,21 @@ pub fn parse_secdef_response(
         .min_by(|a, b| a.total_cmp(b))
     {
         def.size_increment = size;
-        // And the suggestion falls back to it. The reference client derives a
-        // figure of its own from the contract's market rule and its security
-        // definition, which this does not; what it also does, where nothing
-        // separate was stated, is stand the suggestion on the increment. This
-        // used to copy it here for no stated reason, which was worth removing;
-        // removing it and putting nothing back left the field empty on every
-        // contract, which is a figure the reference client always has and this
-        // one never did. The fallback is the closer of the two until the
-        // derivation is read.
-        def.suggested_size_increment = size;
+        // What the venue suggests trading in is the larger of two things: the
+        // size the contract's own rule deals in, and a figure the venue states
+        // separately for it. Standing it on the rule alone reported the finest
+        // size the contract can be dealt in as the size to deal in, which for
+        // a contract dealt in fractions is a suggestion of a ten-thousandth of
+        // a share where the venue suggests one.
+        def.suggested_size_increment = size.max(def.suggested_size_increment);
+    }
+    // Stated by the venue for the contract, apart from any rule: what it
+    // suggests dealing in, which is not the finest size it can be dealt in.
+    if let Some(v) = tags.get(&TAG_IB_SUGGESTED_SIZE)
+        && let Ok(suggested) = v.parse::<f64>()
+        && suggested > 0.0
+    {
+        def.suggested_size_increment = def.suggested_size_increment.max(suggested);
     }
     if let Some(v) = tags.get(&TAG_MULTIPLIER) {
         // A multiplier that does not read is not the multiplier one. This is

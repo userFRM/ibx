@@ -139,6 +139,50 @@ fn build_secdef_by_symbol() {
     assert!(!tags.contains_key(&TAG_ISSUER_ID), "no issuer was named");
 }
 
+/// What the venue suggests dealing in is not the finest size it can be dealt
+/// in.
+///
+/// The venue states a figure for the contract apart from any rule, and the
+/// suggestion is the larger of the two. Stood on the rule alone, a contract
+/// dealt in fractions suggested a ten-thousandth of a share where the venue
+/// suggests one.
+#[test]
+fn the_suggested_size_is_the_larger_of_what_the_venue_states() {
+    let built = |extra: &[(u32, &str)]| {
+        let mut fields: Vec<(u32, &str)> = vec![
+            (TAG_MSG_TYPE, "d"),
+            (TAG_SECURITY_REQ_ID, "R1"),
+            (TAG_SECURITY_RESPONSE_TYPE, "4"),
+            (TAG_IB_CON_ID, "265598"),
+            (TAG_SYMBOL, "AAPL"),
+            (TAG_SECURITY_TYPE, "CS"),
+            (TAG_SECURITY_EXCHANGE, "NASDAQ"),
+            (TAG_CURRENCY, "USD"),
+            (TAG_MARKET_RULE_START, "1"),
+            (TAG_MARKET_RULE_ID, "26"),
+            (TAG_LOW_EDGE, "0"),
+            (TAG_INCREMENT, "0.01"),
+            (TAG_SIZE_INCREMENT_COUNT, "1"),
+            (TAG_LOW_EDGE, "0"),
+            (TAG_INCREMENT, "0.0001"),
+        ];
+        fields.extend_from_slice(extra);
+        let msg = fix::fix_build(&fields, 1);
+        super::parse_secdef_response(&msg, true).expect("a definition")
+    };
+
+    let stated = built(&[(super::TAG_IB_SUGGESTED_SIZE, "1")]);
+    assert_eq!(stated.size_increment, 0.0001, "the finest it can be dealt in");
+    assert_eq!(
+        stated.suggested_size_increment, 1.0,
+        "and what the venue suggests dealing in, which is larger",
+    );
+
+    // Nothing stated for the contract leaves the rule's own size.
+    let rule_only = built(&[]);
+    assert_eq!(rule_only.suggested_size_increment, 0.0001);
+}
+
 /// The venue states a rule id for every venue the contract trades on, and all
 /// of them reach the caller.
 ///

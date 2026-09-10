@@ -1661,12 +1661,12 @@ pub struct ContractDetails {
     pub size_increment: f64,
     /// What the venue suggests trading in.
     ///
-    /// A figure of its own, which the reference client works out from the
-    /// contract's market rule and its security definition. This client does
-    /// not do that arithmetic and stands it on `size_increment` instead, which
-    /// is what the reference client's own record does where nothing separate
-    /// was stated. Not the same thing as deriving it, and closer than leaving
-    /// it empty, which no reference client does.
+    /// The larger of two things the venue states: the size the contract's own
+    /// rule deals in, and a figure it states separately for the contract. It
+    /// is not the finest size the contract can be dealt in — for one dealt in
+    /// fractions those differ by four decimal places, and reporting the finest
+    /// as the suggestion suggests a ten-thousandth of a share where the venue
+    /// suggests one.
     pub suggested_size_increment: f64,
     /// How many decimal places its prices carry.
     pub last_price_precision: f64,
