@@ -15,14 +15,41 @@ impl EClient {
     /// own one-shot snapshot is the chargeable one, asked for with
     /// `regulatory_snapshot` on [`req_mkt_data_ex`](EClient::req_mkt_data_ex).
     ///
-    /// `generic_tick_list` is NOT transmitted to the gateway, with one
-    /// exception: "292" additionally subscribes per-contract news. Other
-    /// generic tick types (RTVolume and friends) are not requested — the venue
-    /// asks for those under numbers of its own rather than the ones this list
-    /// uses, and this client does not know the mapping. Naming one is warned
-    /// about rather than quietly dropped.
+    /// `generic_tick_list` goes out with the subscription, and what comes back
+    /// reaches the caller on the callback the series belongs to. These are
+    /// read:
     ///
-    /// `tick_generic` does fire, for the halt the venue states on its own tick:
+    /// * `100`, `101`, `105` — option volume, open interest and the average
+    ///   volume, calls before puts.
+    /// * `104`, `106`, `411` — volatility: the historical figure, the implied
+    ///   one, and the one the venue restrikes through the session.
+    /// * `162`, `165` — an index's premium over its future; the extremes of
+    ///   the last quarter, half-year and year with the ordinary day's volume.
+    /// * `221`, `232` — the mark the venue keeps, which is not a trade.
+    /// * `225` — the auction: what is crossing, which way, and at what price.
+    /// * `233`, `375` — everything that traded, and what traded on a trade
+    ///   report, each stated as a trade rather than as the totals it is read
+    ///   from.
+    /// * `236` — whether it can be borrowed, and how much of it.
+    /// * `258` (or `47`) — the company ratios, as the venue writes them.
+    /// * `292` — news for the contract.
+    /// * `293`, `294`, `295` — how fast it is trading.
+    /// * `318` — what last traded in the regular session.
+    /// * `456` (or `59`) — what it pays out.
+    /// * `460` — the factor a redemption changes.
+    /// * `499` — what it costs to borrow.
+    /// * `577`, `614`, `623` — a fund's value per share: last, the day's
+    ///   extremes, and the frozen one.
+    /// * `586` — what a share is expected to open at, and what it did.
+    /// * `588` — a future's open interest.
+    /// * `595` — what has traded over the last three, five and ten minutes.
+    ///
+    /// A code outside that list still goes to the venue, and a reading of it
+    /// arrives and is recorded rather than delivered: the shape it is written
+    /// in is the series' own, and nothing here can read one it has not been
+    /// taught.
+    ///
+    /// `tick_generic` also fires for the halt the venue states on its own tick:
     /// tick 49, 0 while a contract is trading and 1 once it has stopped.
     ///
     /// Delayed and frozen data are requested, contrary to what this said: name

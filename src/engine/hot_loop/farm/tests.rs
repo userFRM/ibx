@@ -59,7 +59,7 @@ mod news_tests {
                 PayloadLength::TwoBytes => {
                     body.extend_from_slice(&(payload.len() as u16).to_be_bytes())
                 }
-                PayloadLength::ToTheEnd => {}
+                PayloadLength::ToTheEnd | PayloadLength::Fixed(_) => {}
             }
             body.extend_from_slice(payload);
         }
@@ -375,6 +375,191 @@ mod news_tests {
         assert_eq!(said[0].tick_type, 47);
         let SeriesValue::Text(text) = &said[0].value else { panic!("stated as text") };
         assert_eq!(text, "MKTCAP=1234;PEEXCLXOR=18.2", "inflated and trimmed");
+    }
+
+    /// The series a caller can ask for beyond a quote, each read the way the
+    /// venue writes it.
+    ///
+    /// Every one of these arrived and was stepped over: the request went out,
+    /// the venue served it, and the payload was logged as something nothing
+    /// here reads. A caller asking for the year's extremes, the mark, the
+    /// dividend, a fund's value or the last few minutes' volume waited on a
+    /// stream that was already arriving.
+    #[test]
+    fn the_series_beyond_a_quote_are_read_the_way_the_venue_writes_them() {
+        use crate::types::SeriesValue;
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        let said = |shared: &SharedState| -> Vec<(i32, String)> {
+            shared.market.drain_series_ticks(instrument)
+                .into_iter()
+                .map(|t| (t.tick_type, match t.value {
+                    SeriesValue::Generic(v) => format!("generic {v}"),
+                    SeriesValue::Size(v) => format!("size {v}"),
+                    SeriesValue::Price(v) => format!("price {v}"),
+                    SeriesValue::Text(v) => format!("text {v}"),
+                }))
+                .collect()
+        };
+        let serve = |farm: &mut FarmState, req: u32, code: u32, payload: &[u8],
+                         context: &mut Context| {
+            farm.generic_tick_tags.push((req, code, instrument));
+            farm.handle_generic_tick(
+                &framed_generic_ticks(&[(req, code, payload)]), context, &shared, &None,
+            );
+        };
+
+        // The premium of an index over the future written on it.
+        serve(&mut farm, 30, 162, &2.75f64.to_be_bytes(), &mut context);
+        assert_eq!(said(&shared), [(31, "generic 2.75".to_string())]);
+
+        // Stated as the largest a double carries, it is not a figure at all.
+        serve(&mut farm, 31, 162, &f64::MAX.to_be_bytes(), &mut context);
+        assert!(said(&shared).is_empty(), "an unstated premium states nothing");
+
+        // The extremes and the ordinary day's volume: a table of whole
+        // numbers, then a table of fractional ones, each naming its entries.
+        let mut stats = Vec::new();
+        stats.extend_from_slice(&1i32.to_be_bytes());
+        stats.extend_from_slice(&768i32.to_be_bytes());
+        stats.extend_from_slice(&12_500i32.to_be_bytes());
+        stats.extend_from_slice(&7i32.to_be_bytes());
+        for (named, value) in [
+            (201i32, 61.5f32), (202, 40.25), (203, 63.0), (204, 38.5),
+            (205, 70.75), (206, 31.0),
+            // What it opened at a year ago, which reaches no caller.
+            (210, 44.0),
+        ] {
+            stats.extend_from_slice(&named.to_be_bytes());
+            stats.extend_from_slice(&value.to_be_bytes());
+        }
+        serve(&mut farm, 32, 165, &stats, &mut context);
+        assert_eq!(
+            said(&shared),
+            [
+                (21, "size 12500".to_string()),
+                (16, "price 61.5".to_string()), (15, "price 40.25".to_string()),
+                (18, "price 63".to_string()), (17, "price 38.5".to_string()),
+                (20, "price 70.75".to_string()), (19, "price 31".to_string()),
+            ],
+            "each extreme under its own number, and nothing for the rest",
+        );
+
+        // The mark, with the flags that say whether it stands.
+        let mark = |price: f64, flags: i32| {
+            let mut p = price.to_be_bytes().to_vec();
+            p.extend_from_slice(&flags.to_be_bytes());
+            p
+        };
+        serve(&mut farm, 33, 221, &mark(101.5, 1), &mut context);
+        assert_eq!(said(&shared), [(37, "price 101.5".to_string())]);
+        serve(&mut farm, 34, 232, &mark(101.5, 0), &mut context);
+        assert!(said(&shared).is_empty(), "the lowest bit unset is no mark");
+        serve(&mut farm, 35, 232, &mark(101.5, 1 | 0x0800_0000), &mut context);
+        assert!(said(&shared).is_empty(), "and the high bit overrides it");
+        serve(&mut farm, 36, 232, &mark(-1.0, 1), &mut context);
+        assert!(said(&shared).is_empty(), "minus one is no mark, not a mark of minus one");
+
+        // What the contract pays out: four bytes of the venue's own, then one
+        // line.
+        let mut dividends = vec![0u8, 0, 0, 0];
+        dividends.extend_from_slice(b"0.83,0.79,20260215,0.21
+");
+        serve(&mut farm, 37, 456, &dividends, &mut context);
+        assert_eq!(said(&shared), [(59, "text 0.83,0.79,20260215,0.21".to_string())]);
+
+        // A fund's value: last, frozen, and the day's two extremes.
+        serve(&mut farm, 38, 577, &55.25f64.to_be_bytes(), &mut context);
+        serve(&mut farm, 39, 623, &55.10f64.to_be_bytes(), &mut context);
+        let mut band = 56.0f64.to_be_bytes().to_vec();
+        band.extend_from_slice(&54.5f64.to_be_bytes());
+        serve(&mut farm, 40, 614, &band, &mut context);
+        assert_eq!(
+            said(&shared),
+            [
+                (96, "price 55.25".to_string()),
+                (97, "price 55.1".to_string()),
+                (98, "price 56".to_string()), (99, "price 54.5".to_string()),
+            ],
+        );
+        let mut backwards = 54.5f64.to_be_bytes().to_vec();
+        backwards.extend_from_slice(&56.0f64.to_be_bytes());
+        serve(&mut farm, 41, 614, &backwards, &mut context);
+        assert!(said(&shared).is_empty(), "a high under its own low states neither");
+
+        // The last few minutes' volume, each span named by its length.
+        let mut spans = 3i32.to_be_bytes().to_vec();
+        for (minutes, volume) in [(5i32, 220i32), (10, 480), (3, 90)] {
+            spans.extend_from_slice(&minutes.to_be_bytes());
+            spans.extend_from_slice(&volume.to_be_bytes());
+        }
+        serve(&mut farm, 42, 595, &spans, &mut context);
+        assert_eq!(
+            said(&shared),
+            [
+                (64, "size 220".to_string()),
+                (65, "size 480".to_string()),
+                (63, "size 90".to_string()),
+            ],
+            "read by the span the venue names, not by where it sits",
+        );
+    }
+
+    /// The two running series keep their own baselines.
+    ///
+    /// Everything that traded is one series; what traded on a trade report is
+    /// another. Sharing one baseline, each reading of one states its trade
+    /// against the other's totals, which is a print nobody made.
+    #[test]
+    fn each_running_series_states_its_trade_against_its_own_totals() {
+        use crate::types::SeriesValue;
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.generic_tick_tags.push((50, 233, instrument));
+        farm.generic_tick_tags.push((51, 375, instrument));
+        let totals = |value: f64, shares: i64, trades: i32| {
+            let mut p = value.to_be_bytes().to_vec();
+            p.extend_from_slice(&shares.to_be_bytes());
+            p.extend_from_slice(&trades.to_be_bytes());
+            p
+        };
+        let serve = |farm: &mut FarmState, req: u32, code: u32, payload: &[u8],
+                     context: &mut Context| {
+            farm.handle_generic_tick(
+                &framed_generic_ticks(&[(req, code, payload)]), context, &shared, &None,
+            );
+        };
+
+        // A baseline each, which states nothing on its own.
+        serve(&mut farm, 50, 233, &totals(10_000.0, 100, 1), &mut context);
+        serve(&mut farm, 51, 375, &totals(4_000.0, 40, 1), &mut context);
+        assert!(shared.market.drain_series_ticks(instrument).is_empty(), "a baseline is not a trade");
+
+        // Then one trade on each, read against its own baseline.
+        serve(&mut farm, 50, 233, &totals(11_010.0, 110, 2), &mut context);
+        serve(&mut farm, 51, 375, &totals(4_505.0, 45, 2), &mut context);
+        let said: Vec<(i32, String)> = shared.market.drain_series_ticks(instrument)
+            .into_iter()
+            .map(|t| (t.tick_type, match t.value {
+                SeriesValue::Text(v) => v,
+                other => format!("{other:?}"),
+            }))
+            .collect();
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(said[0].0, 48);
+        assert_eq!(said[1].0, 77);
+        assert!(
+            said[0].1.starts_with("101;10.0000"),
+            "ten shares at a hundred and one: {}", said[0].1,
+        );
+        assert!(
+            said[1].1.starts_with("101;5.0000"),
+            "five shares at a hundred and one, off its own totals: {}", said[1].1,
+        );
     }
 
     /// The running volume states a trade, not the totals it is read from.

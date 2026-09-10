@@ -159,6 +159,16 @@ fn series_i64(payload: &[u8], at: usize) -> Option<i64> {
     Some(i64::from_be_bytes(bytes))
 }
 
+/// Read a big-endian `f32` off a payload.
+///
+/// The venue states some figures to single precision and others to double, in
+/// the same message: the misc-stats series carries its whole numbers and its
+/// fractional ones in two tables, and the fractional table is four bytes wide.
+fn series_f32(payload: &[u8], at: usize) -> Option<f32> {
+    let bytes: [u8; 4] = payload.get(at..at + 4)?.try_into().ok()?;
+    Some(f32::from_be_bytes(bytes))
+}
+
 /// Read a big-endian `i32` off a payload.
 fn series_i32(payload: &[u8], at: usize) -> Option<i32> {
     let bytes: [u8; 4] = payload.get(at..at + 4)?.try_into().ok()?;
@@ -184,6 +194,13 @@ fn deliver_series(
 ) -> bool {
     use crate::types::{SeriesTick, SeriesValue};
     let say = |tick_type: i32, value: SeriesValue| {
+        // The venue states a figure it does not hold as the largest a double
+        // carries. On the callback that takes a plain number the reference
+        // client sends nothing at all rather than that number, so neither does
+        // this: read as a figure it is two hundred undecillion.
+        if matches!(value, SeriesValue::Generic(v) if v == f64::MAX) {
+            return;
+        }
         shared.market.push_series_tick(SeriesTick { instrument, tick_type, value });
     };
     match tick {
@@ -253,6 +270,135 @@ fn deliver_series(
         460 => {
             let Some(value) = series_f64(payload, 0) else { return true };
             say(60, SeriesValue::Generic(value));
+        }
+        // What the index costs above the future written on it. Stated for an
+        // index and for nothing else.
+        162 => {
+            let Some(value) = series_f64(payload, 0) else { return true };
+            say(31, SeriesValue::Generic(value));
+        }
+        // The extremes of the last quarter, half-year and year, and what
+        // trades in an ordinary day. The venue states two tables — whole
+        // numbers first, then fractional ones — each opening with how many
+        // entries it carries, and each entry naming what it is before stating
+        // it. The fractional table is four bytes to the figure, not eight.
+        165 => {
+            let Some(whole) = series_i32(payload, 0) else { return true };
+            let mut at = 4;
+            for _ in 0..whole.clamp(0, (payload.len() / 8) as i32) {
+                let (Some(named), Some(value)) =
+                    (series_i32(payload, at), series_i32(payload, at + 4))
+                else {
+                    return true;
+                };
+                at += 8;
+                // What trades in an ordinary day. The rest of this table is
+                // the venue's own and reaches no caller.
+                if named == 768 {
+                    say(21, SeriesValue::Size(f64::from(value)));
+                }
+            }
+            let Some(fractional) = series_i32(payload, at) else { return true };
+            at += 4;
+            for _ in 0..fractional.clamp(0, (payload.len() / 8) as i32) {
+                let (Some(named), Some(value)) =
+                    (series_i32(payload, at), series_f32(payload, at + 4))
+                else {
+                    return true;
+                };
+                at += 8;
+                // The high above the low in each pair, and the venue numbers
+                // the high first. What it opened at a year ago and how many
+                // shares are on issue are stated here and published to no
+                // caller, so they are read past rather than handed over.
+                let tick = match named {
+                    201 => 16,
+                    202 => 15,
+                    203 => 18,
+                    204 => 17,
+                    205 => 20,
+                    206 => 19,
+                    _ => continue,
+                };
+                say(tick, SeriesValue::Price(f64::from(value)));
+            }
+        }
+        // The mark the venue keeps for a contract, which is not a trade and is
+        // asked for under either of two numbers. A word of flags follows the
+        // price: the lowest bit says the price stands, and one high bit says
+        // it does not whatever the lowest says.
+        221 | 232 => {
+            let (Some(price), Some(flags)) = (series_f64(payload, 0), series_i32(payload, 8))
+            else {
+                return true;
+            };
+            // And minus one is the venue holding none, not a price of minus
+            // one: taken as a price it marks the position at a negative.
+            if flags & 1 == 1 && flags & 0x0800_0000 == 0 && price != -1.0 {
+                say(37, SeriesValue::Price(price));
+            }
+        }
+        // What the contract pays out, which the venue states as text: four
+        // bytes of its own and then one line of figures with commas between.
+        456 => {
+            let Some(rest) = payload.get(4..) else { return true };
+            let stated = String::from_utf8_lossy(rest);
+            let line = stated.split(['\r', '\n']).next().unwrap_or_default();
+            if !line.is_empty() {
+                say(59, SeriesValue::Text(line.to_string()));
+            }
+        }
+        // What a fund is worth per share: where it last stood, where it stood
+        // when it was frozen, and the day's two extremes.
+        577 => {
+            let Some(value) = series_f64(payload, 0) else { return true };
+            if value != f64::MAX {
+                say(96, SeriesValue::Price(value));
+            }
+        }
+        623 => {
+            let Some(value) = series_f64(payload, 0) else { return true };
+            if value != f64::MAX {
+                say(97, SeriesValue::Price(value));
+            }
+        }
+        614 => {
+            let (Some(high), Some(low)) = (series_f64(payload, 0), series_f64(payload, 8))
+            else {
+                return true;
+            };
+            // A high under its own low is the venue stating neither, and
+            // handing over both would state a day that ran backwards.
+            if high >= low {
+                if high != f64::MAX {
+                    say(98, SeriesValue::Price(high));
+                }
+                if low != f64::MAX {
+                    say(99, SeriesValue::Price(low));
+                }
+            }
+        }
+        // How much has traded over the last few minutes. The venue states how
+        // many spans it carries and names each by its length, so the span is
+        // read off the message rather than assumed from its place in it.
+        595 => {
+            let Some(spans) = series_i32(payload, 0) else { return true };
+            let mut at = 4;
+            for _ in 0..spans.clamp(0, (payload.len() / 8) as i32) {
+                let (Some(minutes), Some(volume)) =
+                    (series_i32(payload, at), series_i32(payload, at + 4))
+                else {
+                    return true;
+                };
+                at += 8;
+                let tick = match minutes {
+                    3 => 63,
+                    5 => 64,
+                    10 => 65,
+                    _ => continue,
+                };
+                say(tick, SeriesValue::Size(f64::from(volume)));
+            }
         }
         // What it costs to borrow, which the venue states as a price.
         499 => {
@@ -501,7 +647,12 @@ pub(crate) struct FarmState {
     /// The series states totals and the caller is owed the trade between two
     /// of them, so the previous totals are what make a reading mean anything.
     /// Until one has been seen there is no trade to state, only a baseline.
-    rt_volume_totals: std::collections::HashMap<InstrumentId, (f64, i64, i32)>,
+    ///
+    /// Kept per series as well as per contract: the venue runs two of them
+    /// side by side — everything that traded, and what traded on a trade
+    /// report — and one baseline for both would state each series' trades
+    /// against the other's totals.
+    rt_volume_totals: std::collections::HashMap<(InstrumentId, i32), (f64, i64, i32)>,
     /// The venue's number for a generic-tick subscription, and what it
     /// carries: (server tag, request type, instrument).
     generic_tick_tags: Vec<(u32, u32, InstrumentId)>,
@@ -713,11 +864,22 @@ enum PayloadLength {
     /// reader's to know and nothing here can work it out — a message may well
     /// carry more after one.
     ///
-    /// Nothing here reads any of them, so the rest of the message goes unread
+    /// Where nothing here reads one, the rest of the message goes unread
     /// rather than being handed on as this record's payload. Reading one means
-    /// giving it the whole remainder and having it say how much it used.
+    /// knowing its shape, which is what `Fixed` states.
     ToTheEnd,
+    /// None at all, and this many bytes wide — because the reader for this
+    /// tick knows the shape the venue writes it in. That is exactly what the
+    /// venue relies on for a record that states no length: the mark states a
+    /// price and a word of flags, and is twelve bytes whatever follows it.
+    Fixed(usize),
 }
+
+/// A tick that states no length and whose shape is known here, with its width.
+///
+/// The width is the reader's, not a guess: the mark is a price and a word of
+/// flags beside it.
+const FIXED_WIDTH_TICKS: [(u32, usize); 1] = [(221, 12)];
 
 /// The ticks that state their payload's length in two bytes.
 const TWO_BYTE_LENGTH_TICKS: [u32; 28] = [
@@ -726,11 +888,13 @@ const TWO_BYTE_LENGTH_TICKS: [u32; 28] = [
 ];
 
 /// The ticks that state no length of their own.
-const NO_LENGTH_TICKS: [u32; 7] = [221, 320, 376, 530, 532, 619, 787];
+const NO_LENGTH_TICKS: [u32; 6] = [320, 376, 530, 532, 619, 787];
 
 impl PayloadLength {
     fn of(tick: u32) -> Self {
-        if TWO_BYTE_LENGTH_TICKS.contains(&tick) {
+        if let Some((_, width)) = FIXED_WIDTH_TICKS.iter().find(|(t, _)| *t == tick) {
+            Self::Fixed(*width)
+        } else if TWO_BYTE_LENGTH_TICKS.contains(&tick) {
             Self::TwoBytes
         } else if NO_LENGTH_TICKS.contains(&tick) {
             Self::ToTheEnd
@@ -742,7 +906,7 @@ impl PayloadLength {
     /// How many bytes stand between the start of a record and its payload.
     fn header(self) -> usize {
         match self {
-            Self::ToTheEnd => 4,
+            Self::ToTheEnd | Self::Fixed(_) => 4,
             Self::OneByte => 5,
             Self::TwoBytes => 6,
         }
@@ -824,6 +988,7 @@ fn read_generic_ticks<'a>(
                 );
                 return;
             }
+            PayloadLength::Fixed(width) => width,
             PayloadLength::OneByte => match frame.get(at + 4) {
                 Some(&n) => n as usize,
                 None => return,
@@ -3004,7 +3169,12 @@ impl FarmState {
                 // The running volume states totals, and what a caller is owed
                 // is the trade between two of them — so it is read here, where
                 // the totals this contract last stated are held.
-                233 => self.deliver_running_volume(instrument, payload, shared),
+                // Everything that traded is one series and what traded on a
+                // trade report is another; the venue states both as totals in
+                // the same shape and the reference client publishes each under
+                // its own number.
+                233 => self.deliver_running_volume(instrument, 48, payload, shared),
+                375 => self.deliver_running_volume(instrument, 77, payload, shared),
                 other => {
                     if !deliver_series(other, payload, instrument, shared) {
                         log::debug!("Generic tick {other} arrives and nothing here reads it");
@@ -3026,6 +3196,7 @@ impl FarmState {
     fn deliver_running_volume(
         &mut self,
         instrument: InstrumentId,
+        tick_type: i32,
         payload: &[u8],
         shared: &SharedState,
     ) {
@@ -3041,12 +3212,13 @@ impl FarmState {
         if shares == i64::MAX {
             return;
         }
-        let Some(&(was_value, was_shares, was_trades)) = self.rt_volume_totals.get(&instrument)
+        let Some(&(was_value, was_shares, was_trades)) =
+            self.rt_volume_totals.get(&(instrument, tick_type))
         else {
-            self.rt_volume_totals.insert(instrument, (value, shares, trades));
+            self.rt_volume_totals.insert((instrument, tick_type), (value, shares, trades));
             return;
         };
-        self.rt_volume_totals.insert(instrument, (value, shares, trades));
+        self.rt_volume_totals.insert((instrument, tick_type), (value, shares, trades));
 
         let moved_shares = shares - was_shares;
         let moved_value = value - was_value;
@@ -3075,7 +3247,7 @@ impl FarmState {
         );
         shared.market.push_series_tick(crate::types::SeriesTick {
             instrument,
-            tick_type: 48,
+            tick_type,
             value: crate::types::SeriesValue::Text(said),
         });
     }
