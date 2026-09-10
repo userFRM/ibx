@@ -2984,7 +2984,7 @@ pub(super) fn phase_replace_keeps_the_directed_venue(conns: Conns) -> Conns {
                             con_id: 756733, symbol: "SPY".into(), sec_type: "STK".into(),
                             exchange: "SMART".into(), ..Default::default()
                         },
-                        mode_9887: 0, regulatory_snapshot: false, reply_tx: None,
+                        mode_9887: 0, regulatory_snapshot: false, generic_ticks: Vec::new(), reply_tx: None,
                     }).unwrap();
                     std::thread::sleep(Duration::from_secs(2));
                     control_tx.send(ControlCommand::Order(OrderRequest::Modify {
