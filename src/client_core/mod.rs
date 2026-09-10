@@ -155,6 +155,27 @@ fn as_delayed(tick_type: i32) -> i32 {
     }
 }
 
+impl ClientCore {
+    /// Note this contract's feed as delayed, so a test can read what a caller
+    /// who asked for delayed data reads.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn mark_feed_delayed_for_test(&self, instrument: InstrumentId) {
+        self.mdt_by_instrument.lock().unwrap().insert(instrument, MDT_DELAYED);
+    }
+
+    /// Whether this contract's readings are the delayed feed's.
+    ///
+    /// The reference client numbers a delayed reading apart from a live one,
+    /// so what is delivered under 13 on a live feed is delivered under 83 on a
+    /// delayed one — a program that asked for delayed data reads it there.
+    pub fn feed_is_delayed(&self, instrument: InstrumentId) -> bool {
+        matches!(
+            self.mdt_by_instrument.lock().unwrap().get(&instrument),
+            Some(&MDT_DELAYED) | Some(&MDT_DELAYED_FROZEN)
+        )
+    }
+}
+
 /// Result of polling quotes for one instrument.
 pub struct QuotePollResult {
     /// Numeric ticks that arrived.

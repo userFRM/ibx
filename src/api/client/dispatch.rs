@@ -19,6 +19,13 @@ use super::{Contract, EClient};
 /// client's own numbering.
 const MODEL_OPTION_COMPUTATION: i32 = 13;
 
+/// The same on a delayed feed, which the reference client numbers apart.
+///
+/// A program that asked for delayed data reads its model there; delivered
+/// under 13 it arrived indistinguishable from a live reading, on a feed the
+/// caller had been told was delayed.
+const DELAYED_MODEL_OPTION_COMPUTATION: i32 = 83;
+
 /// Tick type 53: a computation this client was asked for.
 ///
 /// The stream and the answer are two different things, and the venue names
@@ -752,7 +759,11 @@ impl EClient {
                             .filter(|id| *id >= 0)
                             .chain(self.core.followers_of(comp.instrument))
                             .collect(),
-                        MODEL_OPTION_COMPUTATION,
+                        if self.core.feed_is_delayed(comp.instrument) {
+                            DELAYED_MODEL_OPTION_COMPUTATION
+                        } else {
+                            MODEL_OPTION_COMPUTATION
+                        },
                     )
                 }
             };
@@ -1183,6 +1194,14 @@ mod delivered_size_tests {
         client.dispatch_data(&mut heard);
         assert_eq!(heard.news, [1, 2]);
         assert_eq!(heard.models, [(1, 13), (2, 13)]);
+
+        // On a delayed feed the reference client numbers the model apart, and
+        // a program that asked for delayed data reads it there.
+        client.core.mark_feed_delayed_for_test(0);
+        publish();
+        let mut delayed_heard = Heard::default();
+        client.dispatch_data(&mut delayed_heard);
+        assert_eq!(delayed_heard.models, [(1, 83), (2, 83)], "the delayed model, not the live one");
 
         publish();
         client.cancel_mkt_data(1).unwrap();
