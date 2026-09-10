@@ -1867,6 +1867,36 @@ fn a_family_send_that_stops_partway_forgets_what_it_did_not_send() {
 /// and a midprice cap used to be refused as numbers the replace had nowhere to
 /// put. Measured on a paper session, each shape placed and replaced, the venue
 /// takes them on the tags the submit states them on, so the replace carries
+/// A field the caller never mentioned is not a field stated wrongly.
+///
+/// The models a caller builds an order from carry this API's own "not set"
+/// value as the default for a trailing percentage, so an ordinary limit order
+/// arrives with it in that field. Checked as a number, it fails every bound
+/// there is — and every order that never mentioned a trailing percentage was
+/// refused for the one thing it did not say.
+#[test]
+fn an_unset_trailing_percentage_is_not_a_wrong_one() {
+    let plain = ApiOrder {
+        action: "BUY".into(), total_quantity: 1.0, order_type: "LMT".into(),
+        lmt_price: 100.0, tif: "DAY".into(), trailing_percent: f64::MAX,
+        ..Default::default()
+    };
+    assert!(
+        ClientCore::validate_order(&plain, "DU1").is_ok(),
+        "an order that states no trailing percentage is not refused for it",
+    );
+
+    // What the check exists for still fails.
+    for bad in [f64::NAN, f64::INFINITY, -1.0, 1e12] {
+        let order = ApiOrder { trailing_percent: bad, ..plain.clone() };
+        assert!(
+            ClientCore::validate_order(&order, "DU1").is_err(),
+            "a trailing percentage of {bad} is not a percentage",
+        );
+    }
+}
+
+
 /// them; the percent is neither a price nor a trigger and is still refused.
 #[test]
 fn a_replace_carries_every_number_but_a_trailing_percent() {

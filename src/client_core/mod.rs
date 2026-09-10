@@ -4395,9 +4395,14 @@ impl ClientCore {
                 require_finite_price(&format!("order_combo_legs[{at}]"), *leg)?;
             }
         }
-        if !order.trailing_percent.is_finite()
-            || order.trailing_percent < 0.0
-            || order.trailing_percent * 100.0 > u32::MAX as f64
+        // f64::MAX is this API's "not set" here too, and a caller who states
+        // it is stating nothing: the models a caller builds from carry it as
+        // the default for this field, so refusing it refused every order that
+        // never mentioned a trailing percentage at all.
+        if order.trailing_percent != f64::MAX
+            && (!order.trailing_percent.is_finite()
+                || order.trailing_percent < 0.0
+                || order.trailing_percent * 100.0 > u32::MAX as f64)
         {
             return Err(format!(
                 "trailing_percent must be a finite, non-negative number, got {}",
