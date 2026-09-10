@@ -1119,7 +1119,7 @@ impl ContractDetails {
             last_trade_date: def.last_trade_date.clone(),
             multiplier: if def.multiplier != 1.0 { format!("{}", def.multiplier) } else { String::new() },
             market_rule_id: def.market_rule_id.map(|id| id as i64).unwrap_or(-1),
-            market_rule_ids: def.market_rule_id.map(|id| id.to_string()).unwrap_or_default(),
+            market_rule_ids: def.market_rule_ids.clone(),
             strike: def.strike,
             right: right_str(def.right),
             primary_exchange: def.primary_exchange.clone(),

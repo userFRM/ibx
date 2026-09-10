@@ -337,6 +337,14 @@ pub struct ContractDefinition {
     pub order_types: Vec<String>,
     /// Which price ladder it trades on.
     pub market_rule_id: Option<u32>,
+    /// The rule ids as the venue stated them, in the order its venues are
+    /// listed.
+    ///
+    /// It states one per venue the contract trades on, and a caller reads the
+    /// two lists side by side to know which increment applies where. Parsed
+    /// into a single number, a contract listed on several came back with none
+    /// at all: the parse of a list fails, and what a caller reads is empty.
+    pub market_rule_ids: String,
     // Options/futures specific
     /// The last day it trades.
     pub last_trade_date: String,
@@ -524,6 +532,7 @@ impl Default for ContractDefinition {
             valid_exchanges: Vec::new(),
             order_types: Vec::new(),
             market_rule_id: None,
+            market_rule_ids: String::new(),
             last_trade_date: String::new(),
             strike: 0.0,
             right: None,
@@ -1046,6 +1055,10 @@ pub fn parse_secdef_response(
         def.order_types = v.split(',').map(|s| s.to_string()).collect();
     }
     if let Some(v) = tags.get(&TAG_IB_MARKET_RULE_ID) {
+        // Kept as stated, and also as a number where it is one: a contract on
+        // a single venue states a single id, and the rule lookup takes a
+        // number.
+        def.market_rule_ids = v.clone();
         def.market_rule_id = v.parse().ok();
     }
     // Either tag may carry it: a contract month on 200, a full expiry date on
@@ -1977,7 +1990,7 @@ impl crate::types::model::ContractDetails {
             trading_hours: def.trading_hours.clone(),
             liquid_hours: def.liquid_hours.clone(),
             time_zone_id: def.time_zone_id.clone(),
-            market_rule_ids: def.market_rule_id.map(|r| r.to_string()).unwrap_or_default(),
+            market_rule_ids: def.market_rule_ids.clone(),
             stock_type: def.stock_type.clone(),
             ev_rule: def.ev_rule.clone(),
             ev_multiplier: def.ev_multiplier,

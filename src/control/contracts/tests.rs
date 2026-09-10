@@ -139,6 +139,45 @@ fn build_secdef_by_symbol() {
     assert!(!tags.contains_key(&TAG_ISSUER_ID), "no issuer was named");
 }
 
+/// The venue states a rule id for every venue the contract trades on, and all
+/// of them reach the caller.
+///
+/// A caller reads the rule ids and the venues side by side to know which price
+/// increment applies where. Parsed into a single number, a contract listed on
+/// several came back with none at all — the parse of a list fails, and what a
+/// caller reads is empty.
+#[test]
+fn every_market_rule_the_venue_states_reaches_the_caller() {
+    let listed = |ids: &str| {
+        let msg = fix::fix_build(
+            &[
+                (TAG_MSG_TYPE, "d"),
+                (TAG_SECURITY_REQ_ID, "R1"),
+                (TAG_SECURITY_RESPONSE_TYPE, "4"),
+                (TAG_IB_CON_ID, "265598"),
+                (TAG_SYMBOL, "AAPL"),
+                (TAG_SECURITY_TYPE, "CS"),
+                (TAG_SECURITY_EXCHANGE, "NASDAQ"),
+                (TAG_CURRENCY, "USD"),
+                (TAG_IB_VALID_EXCHANGES, "BEST,NYSE,ARCA"),
+                (TAG_IB_MARKET_RULE_ID, ids),
+            ],
+            1,
+        );
+        super::parse_secdef_response(&msg, true).expect("a definition")
+    };
+
+    let many = listed("26,32,635");
+    assert_eq!(many.market_rule_ids, "26,32,635", "as the venue stated them");
+    assert_eq!(many.market_rule_id, None, "a list is not one number");
+
+    // A contract on a single venue states a single id, and the rule lookup
+    // still takes it as a number.
+    let one = listed("32");
+    assert_eq!(one.market_rule_ids, "32");
+    assert_eq!(one.market_rule_id, Some(32));
+}
+
 /// A news feed is looked up under its topic, stated beside the security
 /// type; the venue refuses a news request without it. The topic is read off
 /// the exchange: the half after the colon where the exchange names two, the
