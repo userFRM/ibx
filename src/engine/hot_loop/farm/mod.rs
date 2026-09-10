@@ -63,15 +63,17 @@ fn build_conid_subscribe_tags(
     debug_assert!(!sec_type.is_empty(), "contract {con_id} reached the wire untyped");
     let (fix_exchange, fix_sec_type) = stated_venue_and_type(sec_type, exchange);
 
-    // The chargeable snapshot is a request type of its own and one entry. A
-    // stream is the realtime fan-out into BID_ASK and LAST, or the single TOP
-    // the delayed and frozen feeds are served on.
+    // The chargeable snapshot is a request type of its own and one entry.
+    // Every stream is the same pair, BID_ASK and LAST, whichever feed serves
+    // it: the feed is named beside the entries on 9887 and does not change
+    // what they ask for. Asked for as one entry instead, a delayed or frozen
+    // subscription has no number for what last traded, so the venue's answer
+    // to that half arrives under nothing and the caller's last-trade price,
+    // size and time never move.
     let entries: Vec<(u32, String)> = if regulatory_snapshot {
         vec![(bid_ask_id, REGULATORY_SNAPSHOT_REQUEST_TYPE.to_string())]
-    } else if realtime {
-        vec![(bid_ask_id, "442".to_string()), (last_id, "443".to_string())]
     } else {
-        vec![(bid_ask_id, "1".to_string())]
+        vec![(bid_ask_id, "442".to_string()), (last_id, "443".to_string())]
     };
     // 146 = NoRelatedSym: how many entries follow, counted rather than stated
     // per shape, so a shape added here cannot state the wrong number.
@@ -330,18 +332,16 @@ const REGULATORY_SNAPSHOT_REQUEST_TYPE: u32 = 624;
 
 /// The entries that are the quote itself.
 ///
-/// A realtime subscription asks for the pair; a delayed or frozen one is
-/// served on the single top; the chargeable snapshot is its own. Everything
-/// else a subscription registers — the trading status, the exchange map, the
-/// model — rides beside whichever of these was asked for and says nothing
-/// about which it was. Read as though it did, a contract carrying nothing but
-/// a snapshot answered to "is there a stream here" because the companions
-/// beside the snapshot are not the snapshot's number.
+/// Every stream asks for the pair, whichever feed serves it; the chargeable
+/// snapshot is its own. Everything else a subscription registers — the
+/// trading status, the exchange map, the model — rides beside whichever of
+/// these was asked for and says nothing about which it was. Read as though it
+/// did, a contract carrying nothing but a snapshot answered to "is there a
+/// stream here" because the companions beside the snapshot are not the
+/// snapshot's number.
 const REALTIME_BID_ASK_REQUEST_TYPE: u32 = 442;
-/// The other half of a realtime pair: what last traded.
+/// The other half of the pair: what last traded.
 const REALTIME_LAST_REQUEST_TYPE: u32 = 443;
-/// The single top a delayed or frozen feed is served on.
-const TOP_REQUEST_TYPE: u32 = 1;
 
 /// Deliver the request once, on tag 263, in place of subscribing to it.
 const SNAPSHOT_ACTION: &str = "3";
@@ -724,9 +724,7 @@ impl FarmState {
                 && record.entries.iter().any(|e| {
                     matches!(
                         e.request_type,
-                        REALTIME_BID_ASK_REQUEST_TYPE
-                            | REALTIME_LAST_REQUEST_TYPE
-                            | TOP_REQUEST_TYPE,
+                        REALTIME_BID_ASK_REQUEST_TYPE | REALTIME_LAST_REQUEST_TYPE,
                     )
                 })
         }) || self.md_resub_info.iter().any(|r| r.0 == instrument)
@@ -1610,17 +1608,17 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        // Realtime fans out into BID_ASK + LAST; frozen/delayed/delayed-frozen
-        // collapse to a single 264=1 (TOP) sub with 9887=mode_9887. The
-        // chargeable snapshot is one entry whatever the feed, so it takes one
-        // id and has no second leg to route.
+        // A stream is the pair BID_ASK + LAST on every feed; a delayed or
+        // frozen one names the feed beside them on 9887 and asks for the same
+        // two. The chargeable snapshot is one entry whatever the feed, so it
+        // takes one id and has no second leg to route.
         let realtime = mode_9887 == 0 && !regulatory_snapshot;
         let bid_ask_id = self.next_md_req_id;
         let last_id = self.next_md_req_id + 1;
-        if realtime {
-            self.next_md_req_id += 2;
-        } else {
+        if regulatory_snapshot {
             self.next_md_req_id += 1;
+        } else {
+            self.next_md_req_id += 2;
         }
 
 
@@ -1650,7 +1648,7 @@ impl FarmState {
         self.next_md_req_id += 1;
         self.md_req_to_instrument.push((venue_map_req_id, instrument));
         self.generic_tick_reqs.push((venue_map_req_id, BBO_EXCHANGE_MAP_REQUEST_TYPE));
-        if realtime {
+        if !regulatory_snapshot {
             self.md_req_to_instrument.push((last_id, instrument));
         }
         if let Some(id) = greeks_req_id {
@@ -1668,7 +1666,9 @@ impl FarmState {
         // being served.
         let (venue, wire_sec_type) = stated_venue_and_type(sec_type, exchange);
         let venue = venue.to_string();
-        let mut entries = if realtime {
+        let mut entries = if regulatory_snapshot {
+            vec![MdReqEntry { req_id: bid_ask_id, request_type: REGULATORY_SNAPSHOT_REQUEST_TYPE, venue: venue.clone() }]
+        } else {
             vec![
                 MdReqEntry {
                     req_id: bid_ask_id,
@@ -1681,10 +1681,6 @@ impl FarmState {
                     venue: venue.clone(),
                 },
             ]
-        } else if regulatory_snapshot {
-            vec![MdReqEntry { req_id: bid_ask_id, request_type: REGULATORY_SNAPSHOT_REQUEST_TYPE, venue: venue.clone() }]
-        } else {
-            vec![MdReqEntry { req_id: bid_ask_id, request_type: TOP_REQUEST_TYPE, venue: venue.clone() }]
         };
         entries.push(MdReqEntry { req_id: status_req_id, request_type: TRADING_STATUS_REQUEST_TYPE, venue: venue.clone() });
         entries.push(MdReqEntry { req_id: venue_map_req_id, request_type: BBO_EXCHANGE_MAP_REQUEST_TYPE, venue: venue.clone() });
@@ -1722,8 +1718,9 @@ impl FarmState {
             let mode_str = mode_9887.to_string();
             let ts = chrono_free_timestamp();
 
-            // 146 = NoRelatedSym count: 2 entries for realtime fan-out, 1 for TOP.
-            let no_related_sym = if realtime { "2" } else { "1" };
+            // 146 = NoRelatedSym count: 2 entries for the stream's pair, 1 for
+            // the chargeable snapshot.
+            let no_related_sym = if regulatory_snapshot { "1" } else { "2" };
 
             let fix_exchange = crate::control::contracts::exchange_to_fix(exchange);
             let fix_sec_type = crate::control::contracts::sec_type_to_fix(sec_type);
@@ -1791,10 +1788,8 @@ impl FarmState {
                 let snapshot_type = REGULATORY_SNAPSHOT_REQUEST_TYPE.to_string();
                 let entries: &[(&String, &str)] = if regulatory_snapshot {
                     &[(&bid_ask_str, &snapshot_type)]
-                } else if realtime {
-                    &[(&bid_ask_str, "442"), (&last_str, "443")]
                 } else {
-                    &[(&bid_ask_str, "1")]
+                    &[(&bid_ask_str, "442"), (&last_str, "443")]
                 };
                 for (req_str, depth) in entries {
                     tags.push((262, req_str));
@@ -1813,12 +1808,12 @@ impl FarmState {
                 }
                 let _ = conn.send_fixcomp(&tags);
             }
-            if realtime {
-                log::info!("Sent 35=V subscribe: con_id={} sec_type={} ids={},{} seq={}",
-                    con_id, sec_type, bid_ask_id, last_id, conn.seq);
+            if regulatory_snapshot {
+                log::info!("Sent 35=V snapshot: con_id={} sec_type={} id={} seq={}",
+                    con_id, sec_type, bid_ask_id, conn.seq);
             } else {
-                log::info!("Sent 35=V subscribe (9887={}): con_id={} sec_type={} id={} seq={}",
-                    mode_9887, con_id, sec_type, bid_ask_id, conn.seq);
+                log::info!("Sent 35=V subscribe (9887={}): con_id={} sec_type={} ids={},{} seq={}",
+                    mode_9887, con_id, sec_type, bid_ask_id, last_id, conn.seq);
             }
             hb.last_farm_sent = Instant::now();
         }
@@ -1898,9 +1893,21 @@ impl FarmState {
                 (207, entry.venue.as_str()),
                 (167, record.sec_type.as_str()),
                 (264, &request_type_str),
+                // Stated the way the subscription stated them. The venue
+                // writes an entry from one encoder whichever action carries
+                // it, so a withdrawal short of the fields the subscription
+                // carried is not the same entry coming back.
+                (6088, "Socket"),
+                (9830, "1"),
+                (9839, "1"),
             ];
             let mode_str = record.mode_9887.to_string();
-            if record.mode_9887 != 0 && entry.request_type == 1 {
+            if record.mode_9887 != 0
+                && matches!(
+                    entry.request_type,
+                    REALTIME_BID_ASK_REQUEST_TYPE | REALTIME_LAST_REQUEST_TYPE,
+                )
+            {
                 tags.push((9887, &mode_str));
             }
             let _ = conn.send_fixcomp(&tags);
@@ -2141,6 +2148,9 @@ impl FarmState {
                     (207, venue.as_str()),
                     (167, fix_sec_type.as_str()),
                     (264, DEEP_REQUEST),
+                    (6088, "Socket"),
+                    (9830, "1"),
+                    (9839, "1"),
                 ]);
             }
             hb.last_farm_sent = Instant::now();
@@ -2165,11 +2175,14 @@ impl FarmState {
         &self, conn: &mut Connection, req_id_str: &str, con_id_str: &str,
         exchange: &str, sec_type: &str,
     ) {
+        // 9839 rides on a book the same way it rides on a quote: the venue
+        // states it on every entry it writes, a book's among them, and this
+        // was the one entry this client left it off.
         let _ = conn.send_fixcomp(&[
             (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
             (263, "1"), (146, "1"), (262, req_id_str),
             (6008, con_id_str), (207, exchange), (167, sec_type),
-            (264, DEEP_REQUEST), (6088, "Socket"), (9830, "1"),
+            (264, DEEP_REQUEST), (6088, "Socket"), (9830, "1"), (9839, "1"),
         ]);
     }
 

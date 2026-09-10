@@ -1042,12 +1042,21 @@ fn conid_subscribe_is_unchanged_for_stocks() {
             (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ.to_string()),
             (fix::TAG_SENDING_TIME, "T".to_string()),
             (263, "1".to_string()),
-            (146, "1".to_string()),
+            (146, "2".to_string()),
             (262, "1".to_string()),
             (6008, "265598".to_string()),
             (207, "BEST".to_string()),
             (167, "CS".to_string()),
-            (264, "1".to_string()),
+            (264, "442".to_string()),
+            (6088, "Socket".to_string()),
+            (9830, "1".to_string()),
+            (9839, "1".to_string()),
+            (9887, "3".to_string()),
+            (262, "2".to_string()),
+            (6008, "265598".to_string()),
+            (207, "BEST".to_string()),
+            (167, "CS".to_string()),
+            (264, "443".to_string()),
             (6088, "Socket".to_string()),
             (9830, "1".to_string()),
             (9839, "1".to_string()),
@@ -1075,17 +1084,30 @@ fn conid_subscribe_states_the_description_it_is_given() {
     assert_ne!(fut, stk, "a future is not sent as a stock");
 }
 
-/// Non-realtime modes collapse to a single TOP subscription carrying 9887.
+/// A delayed or frozen stream asks for both legs, the same two a realtime one
+/// asks for, and names its feed beside each.
+///
+/// Asked for as the single top instead, the subscription carries no number
+/// for what last traded: the venue's answer to that half has no request to
+/// arrive under, so a caller watching a delayed contract sees bid and ask
+/// move while the last price, size and time stay where they were.
 #[test]
-fn conid_subscribe_collapses_to_one_entry_when_not_realtime() {
-    let delayed = build_conid_subscribe_tags(false, false, 7, 8, 265598, "SMART", "STK", 3, "T");
-    assert_eq!(tag_values(&delayed, 262), ["7"], "only the first req id is used");
-    assert_eq!(tag_values(&delayed, 264), ["1"]);
-    assert_eq!(tag_values(&delayed, 146), ["1"]);
-    assert_eq!(tag_values(&delayed, 9887), ["3"], "delayed mode must be carried");
+fn a_delayed_stream_asks_for_both_legs() {
+    for mode in [1, 2, 3] {
+        let delayed =
+            build_conid_subscribe_tags(false, false, 7, 8, 265598, "SMART", "STK", mode, "T");
+        assert_eq!(tag_values(&delayed, 262), ["7", "8"], "both legs are numbered");
+        assert_eq!(tag_values(&delayed, 264), ["442", "443"]);
+        assert_eq!(tag_values(&delayed, 146), ["2"]);
+        assert_eq!(
+            tag_values(&delayed, 9887), [mode.to_string(), mode.to_string()],
+            "the feed is named beside each leg",
+        );
+    }
 
     let realtime = build_conid_subscribe_tags(true, false, 7, 8, 265598, "SMART", "STK", 0, "T");
     assert!(tag_values(&realtime, 9887).is_empty(), "realtime carries no 9887");
+    assert_eq!(tag_values(&realtime, 264), ["442", "443"]);
 }
 
 /// Every entry must be self-contained: the server reads conId per entry.
@@ -1959,6 +1981,15 @@ mod withdrawal_wire_tests {
                 !values_of(msg, 264).is_empty(),
                 "the kind of market data it asked for",
             );
+            // And the rest of the fields the subscription carried. The venue
+            // writes one entry whichever action carries it, so an entry short
+            // of them is not the entry that went out coming back.
+            for (tag, stated) in [(6088, "Socket"), (9830, "1"), (9839, "1")] {
+                assert_eq!(
+                    values_of(msg, tag).first().map(String::as_str), Some(stated),
+                    "tag {tag} is stated the way the subscription stated it",
+                );
+            }
         }
     }
 
@@ -1978,7 +2009,14 @@ mod withdrawal_wire_tests {
         farm.send_depth_subscribe(
             7, 756733, "SMART", "", "STK", 10, true, &mut conn, &mut hb, &shared,
         );
-        let _asked = super::drain_inner(&mut peer);
+        let asked = super::drain_inner(&mut peer);
+        let book = asked.iter()
+            .find(|msg| values_of(msg, 264).first().map(String::as_str) == Some("0"))
+            .expect("the book went out");
+        assert_eq!(
+            values_of(book, 9839).first().map(String::as_str), Some("1"),
+            "a book states 9839 the way every other entry does",
+        );
 
         farm.send_depth_unsubscribe(7, &mut conn, &mut hb);
         let withdrawals: Vec<Vec<u8>> = super::drain_inner(&mut peer)
@@ -2004,6 +2042,12 @@ mod withdrawal_wire_tests {
             "the type it was asked for",
         );
         assert_eq!(values_of(msg, 264).first().map(String::as_str), Some("0"), "and a book");
+        for (tag, stated) in [(6088, "Socket"), (9830, "1"), (9839, "1")] {
+            assert_eq!(
+                values_of(msg, tag).first().map(String::as_str), Some(stated),
+                "tag {tag} is stated the way the subscription stated it",
+            );
+        }
     }
 }
 
@@ -2348,7 +2392,7 @@ fn a_given_up_number_is_refused_on_the_ticker_setup_too() {
 }
 
 /// A snapshot and a stream can share the record, but only the stream's
-/// selector describes the TOP entry when it is withdrawn.
+/// selector describes the stream's entries when they are withdrawn.
 #[test]
 fn a_stream_beside_snapshots_is_withdrawn_with_its_own_selector() {
     for mode in [1, 2, 3] {
@@ -2364,12 +2408,14 @@ fn a_stream_beside_snapshots_is_withdrawn_with_its_own_selector() {
         farm.send_mktdata_subscribe(
             756733, "SPY", "SMART", "STK", "", 0.0, "", "", 0, mode, false, &mut conn, &mut hb,
         );
-        let asked = drain_inner(&mut peer).into_iter().find(|msg| {
-            fix::fix_parse(msg).get(&264).is_some_and(|v| v == "1")
-        }).expect("the TOP entry went out");
-        let asked = fix::fix_parse(&asked);
+        // Read per entry: a stream states its group twice, and a map keyed by
+        // the tag alone would hold only the second leg.
+        let asked = drain_inner(&mut peer).into_iter()
+            .flat_map(|msg| fix::fix_parse_repeating(&msg, 262))
+            .find(|entry| entry.get(&264).is_some_and(|v| v == "442"))
+            .expect("the quote entries went out");
         assert_eq!(asked.get(&9887), Some(&mode.to_string()));
-        let stream_req_id = asked.get(&262).unwrap();
+        let stream_req_id = asked.get(&262).cloned().unwrap();
         // A later snapshot asks under a different mode, which must not change
         // how the already running stream is withdrawn.
         farm.send_mktdata_subscribe(
@@ -2379,10 +2425,14 @@ fn a_stream_beside_snapshots_is_withdrawn_with_its_own_selector() {
         farm.send_mktdata_unsubscribe(0, &mut conn, &mut hb);
         let withdrawn = drain_inner(&mut peer).into_iter().find(|msg| {
             let tags = fix::fix_parse(msg);
-            tags.get(&263).is_some_and(|v| v == "2") && tags.get(&262) == Some(stream_req_id)
+            tags.get(&263).is_some_and(|v| v == "2")
+                && tags.get(&262) == Some(&stream_req_id)
         }).expect("the same request is withdrawn");
         let withdrawn = fix::fix_parse(&withdrawn);
-        assert_eq!(withdrawn.get(&264).map(String::as_str), Some("1"));
-        assert_eq!(withdrawn.get(&9887), Some(&mode.to_string()), "the TOP withdrawal keeps its selector");
+        assert_eq!(withdrawn.get(&264).map(String::as_str), Some("442"));
+        assert_eq!(
+            withdrawn.get(&9887), Some(&mode.to_string()),
+            "the quote withdrawal keeps its selector",
+        );
     }
 }

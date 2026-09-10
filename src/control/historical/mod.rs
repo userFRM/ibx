@@ -54,6 +54,16 @@ pub enum BarDataType {
     HistoricalVolatility,
     /// The volatility its options implied.
     ImpliedVolatility,
+    /// The price and size an auction is indicating it would match at.
+    IndicativeAuctionPriceSize,
+    /// Open interest across the calls written on this contract.
+    CallOptionOpenInterest,
+    /// Open interest across the puts written on it.
+    PutOptionOpenInterest,
+    /// Volume across the calls written on it.
+    CallOptionVolume,
+    /// Volume across the puts written on it.
+    PutOptionVolume,
 }
 
 impl BarDataType {
@@ -104,12 +114,23 @@ impl BarDataType {
             ),
             "HISTORICAL_VOLATILITY" => Self::HistoricalVolatility,
             "OPTION_IMPLIED_VOLATILITY" => Self::ImpliedVolatility,
+            "INDICATIVE_AUCTION_PRICE_SIZE" => Self::IndicativeAuctionPriceSize,
+            // Open interest and volume, one series per side of the chain and
+            // stated against the contract the options are written on rather
+            // than against an option. Historical open interest is not served
+            // any other way, so refused here it could not be asked for at all.
+            "CALL_OPTION_OPEN_INTEREST" => Self::CallOptionOpenInterest,
+            "PUT_OPTION_OPEN_INTEREST" => Self::PutOptionOpenInterest,
+            "CALL_OPTION_VOLUME" => Self::CallOptionVolume,
+            "PUT_OPTION_VOLUME" => Self::PutOptionVolume,
             other => {
                 return Err(format!(
                     "Unsupported what_to_show '{other}': expected TRADES, MIDPOINT, \
                      BID, ASK, BID_ASK, AGGTRADES, FEE_RATE, YIELD_BID, YIELD_ASK, \
-                     YIELD_LAST, YIELD_MARK, NAV_LAST, HISTORICAL_VOLATILITY or \
-                     OPTION_IMPLIED_VOLATILITY",
+                     YIELD_LAST, YIELD_MARK, NAV_LAST, HISTORICAL_VOLATILITY, \
+                     OPTION_IMPLIED_VOLATILITY, INDICATIVE_AUCTION_PRICE_SIZE, \
+                     CALL_OPTION_OPEN_INTEREST, PUT_OPTION_OPEN_INTEREST, \
+                     CALL_OPTION_VOLUME or PUT_OPTION_VOLUME",
                 ));
             }
         })
@@ -138,6 +159,14 @@ impl BarDataType {
             Self::NavLast => "NavLast",
             Self::HistoricalVolatility => "HistVol",
             Self::ImpliedVolatility => "OptionImpliedVol",
+            Self::IndicativeAuctionPriceSize => "AuctionIndicLast",
+            Self::CallOptionOpenInterest => "CallOpenInterest",
+            Self::PutOptionOpenInterest => "PutOpenInterest",
+            // The venue names the option-volume series after the last trade
+            // and not after the volume. Read as a typo and "corrected" to
+            // something with Volume in it, both come back refused.
+            Self::CallOptionVolume => "CallLast",
+            Self::PutOptionVolume => "PutLast",
         }
     }
 }
@@ -747,6 +776,9 @@ pub fn tick_data_type(what_to_show: &str) -> Result<&'static str, String> {
         "" | "TRADES" => "AllLast",
         "MIDPOINT" => "MidPoint",
         "BID_ASK" => "BidAsk",
+        // Trades as the venue aggregates them, which it serves on the tick
+        // query as well as the bar one.
+        "AGGTRADES" => "AggLast",
         // The rate the venue prices options at. A tick type, not a bar one:
         // asked for as bars the venue answers that the query type is not
         // supported for it, and names the tick type back. Every window asked
@@ -756,7 +788,7 @@ pub fn tick_data_type(what_to_show: &str) -> Result<&'static str, String> {
         other => {
             return Err(format!(
                 "Unsupported what_to_show '{other}' for historical ticks: expected TRADES, \
-                 MIDPOINT, BID_ASK or OPTION_EXERCISE_INTEREST_RATE",
+                 MIDPOINT, BID_ASK, AGGTRADES or OPTION_EXERCISE_INTEREST_RATE",
             ));
         }
     })

@@ -26,6 +26,25 @@ pub(crate) fn wire_con_id(con_id: i64, what: &str) -> Result<u32, Refusal> {
     })
 }
 
+/// A matching-symbols pattern as the venue is given one.
+///
+/// The venue trims the pattern and collapses its runs of spaces before it
+/// sends it, and refuses one holding nothing to search for or anything but
+/// visible characters and spaces. Sent as the caller wrote it, `"  APPLE   INC "`
+/// asked the search service about a name nothing is listed under, so a call
+/// that matches through the reference client matched nothing here, and an
+/// empty pattern went out as a request instead of being refused.
+pub(crate) fn matching_symbols_pattern(pattern: &str) -> Result<String, Refusal> {
+    if pattern.trim().is_empty()
+        || !pattern.chars().all(|c| c == ' ' || c.is_ascii_graphic())
+    {
+        return Err(Refusal::validation(format!(
+            "a matching-symbols pattern is visible characters and spaces with something              among them to search for, and '{pattern}' is not one: the venue refuses it              rather than answering it",
+        )));
+    }
+    Ok(pattern.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 impl EClient {
     // ── Historical Data ──
 
@@ -149,9 +168,10 @@ impl EClient {
     /// Request matching symbols. Matches `reqMatchingSymbols` in C++.
     pub fn req_matching_symbols(&self, req_id: i64, pattern: &str) -> Result<(), Refusal> {
         wire_text("a matching-symbols pattern", pattern)?;
+        let pattern = matching_symbols_pattern(pattern)?;
         self.send(ControlCommand::FetchMatchingSymbols {
             req_id: wire_req_id(req_id)?,
-            pattern: pattern.into(),
+            pattern,
         })
     }
 
@@ -522,5 +542,29 @@ mod tests {
             wrapper.events[0].starts_with("error:-1:322:market rule 26 "),
             "reported against -1 under 322: {}", wrapper.events[0],
         );
+    }
+
+    /// The pattern goes out as the venue would have sent it, and one it
+    /// would not have sent at all is refused here rather than asked.
+    #[test]
+    fn a_matching_symbols_pattern_is_sent_as_the_venue_sends_it() {
+        use crate::types::ControlCommand;
+
+        let (client, rx, _shared) = super::super::tests::test_client();
+        client.req_matching_symbols(8, "  APPLE   INC ").unwrap();
+        match rx.try_recv().expect("the search is asked for") {
+            ControlCommand::FetchMatchingSymbols { pattern, .. } => {
+                assert_eq!(pattern, "APPLE INC", "trimmed, and its runs of spaces collapsed");
+            }
+            cmd => panic!("expected FetchMatchingSymbols, got {cmd:?}"),
+        }
+
+        for nothing_to_search_for in ["", "   ", "\u{a0}", "AAPL\n"] {
+            let why = client
+                .req_matching_symbols(8, nothing_to_search_for)
+                .expect_err("the venue refuses this rather than answering it");
+            assert!(why.message.contains("visible characters"), "{}", why.message);
+        }
+        assert!(rx.try_recv().is_err(), "and nothing was asked");
     }
 }

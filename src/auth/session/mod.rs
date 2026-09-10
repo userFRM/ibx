@@ -238,6 +238,42 @@ pub fn send_secure<W: Write>(
     Ok(())
 }
 
+/// The number the venue puts first in an error response when the site the
+/// login was routed to is down.
+const SITE_DOWN: u32 = 4;
+
+/// The same, for a site that is up but not yet serving logins.
+const SITE_NOT_READY: u32 = 5;
+
+/// An error frame the venue sent, read for which of them it is.
+///
+/// An error response numbers itself in its first field, and two of those
+/// numbers are not refusals: the site being down and the site not being ready
+/// both say come back, not no. Carried as a refusal they classify as the
+/// credentials being wrong and the retry ladder stops there, so a maintenance
+/// window ends the session for good where the venue asked only for a wait.
+/// Stated as nothing having answered, they are waited out and retried, which
+/// is what the venue asked for.
+///
+/// Every other number keeps the refusal it is — a locked-out account, a
+/// refused address, a restriction — because the next attempt would carry
+/// exactly the same credentials to exactly the same answer.
+///
+/// A secure error is not numbered. Its first field is the message text, so
+/// nothing is read out of it and it is only ever a refusal here.
+pub fn error_the_venue_stated(what: &str, msg_type: u32, fields: &[&str]) -> io::Error {
+    let stated = fields.join(";");
+    let numbered = (msg_type == ns::NS_ERROR_RESPONSE)
+        .then(|| fields.first().and_then(|f| f.trim().parse::<u32>().ok()))
+        .flatten();
+    let waiting = match numbered {
+        Some(SITE_DOWN) => "the venue states its site is down",
+        Some(SITE_NOT_READY) => "the venue states its site is not ready",
+        _ => return ns::refused_by_the_venue(what, stated),
+    };
+    io::Error::new(io::ErrorKind::TimedOut, format!("{what}: {waiting}: {stated}"))
+}
+
 /// Receive an encrypted response and decrypt.
 pub fn recv_secure<R: Read>(
     stream: &mut R,
@@ -269,7 +305,7 @@ pub fn recv_secure<R: Read>(
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid msg type"))?;
 
         if msg_type == NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(ns::refused_by_the_venue("Auth error", parts[2..].join(";")));
+            return Err(error_the_venue_stated("Auth error", msg_type, &parts[2..]));
         }
         if msg_type == NS_REDIRECT {
             let target = parts.get(2).unwrap_or(&"");

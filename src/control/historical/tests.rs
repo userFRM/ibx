@@ -1136,6 +1136,62 @@ fn the_series_the_venue_carries_are_asked_for_by_its_own_names() {
     }
 }
 
+/// The auction and option-chain series the venue serves and this client refused.
+///
+/// Five names the venue answers to on a bar query and on a head timestamp,
+/// turned away here before anything was sent, so a caller asking for
+/// historical option open interest — which the venue states no other way — got
+/// a validation error instead of data. Their wire names are the venue's own
+/// and do not follow from the caller's: both option-volume series are named
+/// after the last trade rather than after the volume.
+#[test]
+fn the_auction_and_option_chain_series_are_asked_for_by_the_venues_own_names() {
+    for (asked, on_the_wire) in [
+        ("INDICATIVE_AUCTION_PRICE_SIZE", "AuctionIndicLast"),
+        ("CALL_OPTION_OPEN_INTEREST", "CallOpenInterest"),
+        ("PUT_OPTION_OPEN_INTEREST", "PutOpenInterest"),
+        ("CALL_OPTION_VOLUME", "CallLast"),
+        ("PUT_OPTION_VOLUME", "PutLast"),
+    ] {
+        let read = BarDataType::from_api_str(asked)
+            .unwrap_or_else(|why| panic!("{asked} is a series the venue carries: {why}"));
+        assert_eq!(read.as_str(), on_the_wire, "{asked} goes out under the wrong name");
+        let req = HistoricalRequest {
+            query_id: "q".to_string(),
+            con_id: 265598,
+            symbol: "AAPL".to_string(),
+            sec_type: "CS".to_string(),
+            exchange: "SMART".to_string(),
+            data_type: read,
+            end_time: "20260228-15:00:00".to_string(),
+            duration: "1 d".to_string(),
+            bar_size: BarSize::Day1,
+            use_rth: true,
+            keep_up_to_date: false,
+            include_expired: false,
+        };
+        assert!(
+            build_query_xml(&req).contains(&format!("<data>{on_the_wire}</data>")),
+            "{asked} does not reach the bar query",
+        );
+        // The head timestamp reads the same table, so it takes them too.
+        assert_eq!(head_timestamp_data_type(asked), Ok(on_the_wire), "{asked}");
+    }
+}
+
+/// Aggregated trades are a tick series as well as a bar one.
+///
+/// The bar table has carried the name all along and the tick table refused it,
+/// so the same series could be asked for as bars and not as ticks.
+#[test]
+fn aggregated_trades_can_be_asked_for_as_ticks() {
+    assert_eq!(tick_data_type("AGGTRADES"), Ok("AggLast"));
+    let xml = build_tick_query_xml(
+        "tk_agg", 265598, "", "20260312-15:00:00", 10, "AGGTRADES", true, "CS", "BEST", false,
+    );
+    assert!(xml.contains("<data>AggLast</data>"), "{xml}");
+}
+
 /// The head timestamp takes a name the bar query refuses.
 ///
 /// Its query type is its own and so is the venue's vocabulary for it: asked

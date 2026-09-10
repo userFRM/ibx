@@ -8,6 +8,8 @@
 
 use std::io::Read;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+
 use crate::protocol::datetime::{ib_datetime_to_unix, unix_to_ib_utc_dash};
 
 /// FIX tag 6040: the sub protocol.
@@ -557,20 +559,48 @@ fn decode_byte_array(s: &str) -> Vec<u8> {
 
 /// Parse a news article body from the binary payload in tag 96.
 /// Returns (article_type, article_text).
+///
+/// The answer says which of the three it is. `error_code` is the venue
+/// declining to serve the article; `cmd="pdf"` beside a `pdf` value is the
+/// article as bytes; anything else carrying a body has it gzipped under `b`.
+/// Read for `b` alone, a refusal and a PDF both came back as the properties
+/// document itself, handed to the caller as a successful answer under the
+/// type that means a PDF — nothing a caller could write to a file, and no
+/// error under the request for a caller waiting on one.
 pub fn parse_article_payload(raw: &[u8]) -> Option<(i32, String)> {
     let after_status = if raw.starts_with(b"200\n") { &raw[4..] } else { raw };
     let decoded = jc_decode(after_status);
     let entry = extract_zip_entry(&decoded)?;
     let text = String::from_utf8_lossy(&entry);
 
+    let mut cmd = String::new();
+    let mut pdf_encoded: Option<String> = None;
     let mut body_encoded: Option<String> = None;
 
     for line in text.lines() {
-        let line = line.trim();
-        let unescaped = unescape_properties(line);
-        if let Some(val) = unescaped.strip_prefix("b=") {
-            body_encoded = Some(val.to_string());
+        let unescaped = unescape_properties(line.trim());
+        let Some(eq) = unescaped.find('=') else { continue };
+        let value = unescaped[eq + 1..].to_string();
+        match &unescaped[..eq] {
+            // Decisive wherever it sits: the venue said why there is no
+            // article, so there is no article to look for further down.
+            "error_code" => {
+                log::warn!("news: the venue would not serve the article: {value}");
+                return None;
+            }
+            "cmd" => cmd = value,
+            "pdf" => pdf_encoded = Some(value),
+            "b" => body_encoded = Some(value),
+            _ => {}
         }
+    }
+
+    // Bytes, not text. Base64 is the form a caller gets them in, as it is
+    // the one the reference client hands over.
+    if cmd == "pdf"
+        && let Some(encoded) = &pdf_encoded
+    {
+        return Some((1, B64.encode(decode_byte_array(encoded))));
     }
 
     if let Some(encoded) = &body_encoded {
@@ -588,8 +618,10 @@ pub fn parse_article_payload(raw: &[u8]) -> Option<(i32, String)> {
         }
     }
 
-    // Fallback: return raw properties text
-    Some((1, text.into_owned()))
+    // An answer with no article in it this can read. Said so, the request is
+    // answered by the error beside this call rather than by the properties
+    // document dressed as an article.
+    None
 }
 
 #[cfg(test)]
@@ -850,10 +882,27 @@ mod tests {
         );
     }
 
-    /// An article body is a gzip stream inside the zip the answer arrived in,
-    /// and what it inflates to is bounded the same way the zip itself is:
-    /// past the ceiling the article is not read, and the answer falls back to
-    /// what could be.
+    /// The array encoding the venue states bytes in: a length, a hash, and
+    /// each byte as a signed number led by its sign.
+    fn encode_byte_array(bytes: &[u8]) -> String {
+        let mut encoded = format!("{}#", bytes.len());
+        for &b in bytes {
+            let v = b as i8 as i16;
+            if v >= 0 {
+                encoded.push_str(&format!("+{v}"));
+            } else {
+                encoded.push_str(&format!("{v}"));
+            }
+        }
+        encoded
+    }
+
+    /// An answer that arrives with a properties document in it and no article
+    /// this can read is not an article.
+    ///
+    /// Handed back as one, a body past the ceiling reached the caller as the
+    /// properties document under the type that means a PDF: a successful
+    /// answer whose content was the document describing it.
     #[test]
     fn an_article_inflating_past_the_ceiling_is_refused() {
         use flate2::Compression;
@@ -866,26 +915,66 @@ mod tests {
         let bomb = encoder.finish().unwrap();
         assert!(bomb.len() < 1 << 20, "the body itself is small: {}", bomb.len());
 
-        // The array encoding the venue states the body in: a length, a hash,
-        // and each byte as a signed number led by its sign.
-        let mut encoded = format!("{}#", bomb.len());
-        for &b in &bomb {
-            let v = b as i8 as i16;
-            if v >= 0 {
-                encoded.push_str(&format!("+{v}"));
-            } else {
-                encoded.push_str(&format!("{v}"));
-            }
-        }
-        let props = format!("b={encoded}\n");
+        let props = format!("b={}\n", encode_byte_array(&bomb));
         let zip = build_test_zip(b"article", props.as_bytes());
         // jc header stating no escaped newlines, then the zip.
         let mut raw = vec![0u8; 8];
         raw.extend_from_slice(&zip);
 
-        let (kind, text) = parse_article_payload(&raw).expect("the answer still reads");
-        assert_eq!(kind, 1, "the article past the ceiling is not delivered as one");
-        assert!(text.starts_with("b="), "the fallback carries what could be read");
+        assert!(
+            parse_article_payload(&raw).is_none(),
+            "an answer with no readable article in it is not delivered as one",
+        );
+    }
+
+    /// The three answers a request for an article comes back as, told apart.
+    ///
+    /// A refusal and a PDF both used to come back as the properties document
+    /// under the type that means a PDF: the caller waiting on an error waited
+    /// out its deadline, and the caller writing the PDF wrote the document
+    /// that described it.
+    #[test]
+    fn a_refusal_and_a_pdf_are_not_delivered_as_article_text() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+
+        let answer = |props: String| {
+            let zip = build_test_zip(b"article", props.as_bytes());
+            // jc header stating no escaped newlines, then the zip.
+            let mut raw = vec![0u8; 8];
+            raw.extend_from_slice(&zip);
+            parse_article_payload(&raw)
+        };
+
+        // The article the venue does serve, still served.
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"Shares rose.").unwrap();
+        let body = encoder.finish().unwrap();
+        assert_eq!(
+            answer(format!("cmd=details\nh=BRFG$100\nb={}\n", encode_byte_array(&body))),
+            Some((0, "Shares rose.".to_string())),
+            "a text article reads as one",
+        );
+
+        // Bytes, handed over in the form a caller writes to a file.
+        let pdf = b"%PDF-1.4\n\xff\xfe";
+        assert_eq!(
+            answer(format!("cmd=pdf\npdf={}\n", encode_byte_array(pdf))),
+            Some((1, B64.encode(pdf))),
+            "a PDF article reads as its bytes, not as the document naming them",
+        );
+
+        // The venue declining, which is the error beside this call and not an
+        // article at all.
+        assert_eq!(
+            answer("error_code=NEWS_NOT_ALLOWED\ncmd=details\nh=BRFG$100\n".to_string()),
+            None,
+            "a refusal is not an article",
+        );
+
+        // Nothing this can read is nothing, not the document saying so.
+        assert_eq!(answer("cmd=details\n".to_string()), None, "no body is no article");
     }
 }
 

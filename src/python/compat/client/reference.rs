@@ -163,10 +163,16 @@ impl EClient {
     /// Search for matching symbols.
     pub(crate) fn req_matching_symbols(&self, py: Python<'_>, req_id: i64, pattern: &str) -> PyResult<()> {
         super::wire_text("a matching-symbols pattern", pattern)?;
+        // Normalised and checked the way the request surface does it: the
+        // same pattern reaches the same search service over the same wire,
+        // and agreeing on one surface and not the other answers the same
+        // call two ways.
+        let pattern = crate::api::client::reference::matching_symbols_pattern(pattern)
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.message))?;
         let Some(tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         if let Err(why) = Self::send_control(py, &tx, ControlCommand::FetchMatchingSymbols {
                 req_id: wire_req_id(req_id)?,
-                pattern: pattern.to_string(),
+                pattern,
             }) {
             return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
         }
@@ -861,6 +867,39 @@ mod tests {
                 .req_matching_symbols(py, 1, "AAPL\x011=999")
                 .expect_err("a pattern cannot carry the byte that separates fields");
             assert!(err.to_string().contains("separates fields"), "{err}");
+        });
+    }
+
+    /// The pattern goes out as the venue would have sent it, on this surface
+    /// as on the other, and one it would not have sent at all is refused
+    /// here rather than asked.
+    #[test]
+    fn a_matching_symbols_pattern_is_sent_as_the_venue_sends_it() {
+        Python::initialize();
+        Python::attach(|py| {
+            let client = EClient::__new__(&pyo3::types::PyTuple::empty(py), None);
+            let wrapper = py.eval(
+                c"__import__('builtins').type('W', (), {'__init__': lambda s: setattr(s, 'calls', []), '__getattr__': lambda s, n: (lambda *a: s.calls.append((n, a)))})()",
+                None, None,
+            ).unwrap().unbind();
+            client.__init__(wrapper).unwrap();
+            let (tx, rx) = std::sync::mpsc::sync_channel(16);
+            *client.control_tx.lock().unwrap() = Some(tx);
+            *client.shared.lock().unwrap() = Some(std::sync::Arc::new(crate::bridge::SharedState::new()));
+            client.connected.store(true, std::sync::atomic::Ordering::Release);
+
+            client.req_matching_symbols(py, 8, "  APPLE   INC ").unwrap();
+            let ControlCommand::FetchMatchingSymbols { pattern, .. } =
+                rx.try_recv().expect("the search is asked for") else {
+                panic!("the request asks the search service");
+            };
+            assert_eq!(pattern, "APPLE INC", "trimmed, and its runs of spaces collapsed");
+
+            let err = client
+                .req_matching_symbols(py, 8, "   ")
+                .expect_err("the venue refuses this rather than answering it");
+            assert!(err.to_string().contains("visible characters"), "{err}");
+            assert!(rx.try_recv().is_err(), "and nothing was asked");
         });
     }
 

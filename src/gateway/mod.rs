@@ -204,9 +204,10 @@ fn read_server_hello(tls: &mut impl std::io::Read, what: &str) -> io::Result<Vec
         let msg_type: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
 
         if msg_type == ns::NS_SECURE_ERROR || msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(ns::refused_by_the_venue(
+            return Err(session::error_the_venue_stated(
                 &format!("{what} DH error"),
-                parts[2..].join(";"),
+                msg_type,
+                &parts[2..],
             ));
         }
         if msg_type == ns::NS_REDIRECT {
@@ -643,6 +644,65 @@ fn alternates_to(seen: &[String], current: &str) -> Vec<String> {
     seen.iter().filter(|host| *host != current).cloned().collect()
 }
 
+/// How many backup peers the venue keeps behind a host. Two, and not a number
+/// anything a caller sets moves.
+const HOT_BACKUP_PEERS: u32 = 2;
+
+/// The venue's own backup peers for a host, which it names by rewriting the
+/// host rather than by announcing them anywhere.
+///
+/// The first label of `x.example.com` becomes `x-hb1` and `x-hb2`, on the same
+/// port. A host already carrying one is taken back to its primary first, so a
+/// walk that stepped onto a backup does not go looking for backups of a
+/// backup. A literal address has no label to rewrite and is left alone.
+///
+/// These come first when the host stops answering: same region, same account,
+/// and nothing has to redirect the session to reach them. One that does not
+/// exist does not resolve, and a host that cannot be reached is exactly what
+/// the walk already steps past — which is how the venue tolerates their
+/// absence too.
+fn hot_backup_peers(host: &str) -> Vec<String> {
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Vec::new();
+    }
+    let (label, domain) = match host.split_once('.') {
+        Some((label, rest)) => (label, format!(".{rest}")),
+        None => (host, String::new()),
+    };
+    let primary = match label.to_ascii_lowercase().find("-hb") {
+        Some(at) => &label[..at],
+        None => label,
+    };
+    if primary.is_empty() {
+        return Vec::new();
+    }
+    (1..=HOT_BACKUP_PEERS).map(|n| format!("{primary}-hb{n}{domain}")).collect()
+}
+
+/// Where a first connect knocks next, once the host the caller named has not
+/// answered.
+///
+/// The host's own backups first. They stand for the host that was asked for,
+/// so they are tried whatever host that is, and reaching one needs no
+/// redirect.
+///
+/// Then the doors this client ships. The venue runs one per region and any of
+/// them will route a session to where its account lives, so a session whose
+/// default door is unreachable knocks on the next rather than giving up on a
+/// venue that is up. Only when the caller is standing at one of them: a caller
+/// that named its own host meant that host, and being sent to another region
+/// is not failover, it is the session going somewhere nobody asked for.
+fn doors_after(host: &str) -> Vec<String> {
+    let mut doors = hot_backup_peers(host);
+    if crate::config::CCP_HOSTS.contains(&host) {
+        doors.extend(alternates_to(
+            &crate::config::CCP_HOSTS.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+            host,
+        ));
+    }
+    doors
+}
+
 /// Reconnect to the CCP (order/auth) server using cached session credentials.
 /// Performs TLS + DH + CONNECT_REQUEST, then attempts SOFT_TOKEN auth with cached K.
 /// If the server signals at AUTH_START that it requires full SRP, transparently
@@ -660,7 +720,12 @@ pub fn reconnect_ccp(
     let token_hash = token_short_hash(&auth.session_token);
     let first = reconnect_ccp_attempt(auth, &token_hash, &auth.host, 0, cancel);
     let Err(why) = first else { return first };
-    failover(&auth.host, why, &auth.alternate_hosts, |host| {
+    // The host's own backups before the hosts this session was sent to: they
+    // stand in for the one that stopped answering without the session having
+    // to be routed anywhere else.
+    let mut hosts = hot_backup_peers(&auth.host);
+    hosts.extend(auth.alternate_hosts.iter().cloned());
+    failover(&auth.host, why, &hosts, |host| {
         reconnect_ccp_attempt(auth, &token_hash, host, 0, cancel)
     })
 }
@@ -887,9 +952,10 @@ fn wait_for_fix_start<S: Read + Write>(
         } else if msg_type == ns::NS_FIX_START {
             return Ok(ReconnectPostAuth::Ready(competing));
         } else if msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(ns::refused_by_the_venue(
+            return Err(session::error_the_venue_stated(
                 "CCP reconnect post-auth error",
-                inner_parts[2..].join(";"),
+                msg_type,
+                &inner_parts[2..],
             ));
         }
         // Ignore 530 keepalives and other types
@@ -1395,9 +1461,10 @@ fn wait_for_data_start(
             fix_ready = true;
             break;
         } else if msg_type == ns::NS_ERROR_RESPONSE {
-            return Err(ns::refused_by_the_venue(
+            return Err(session::error_the_venue_stated(
                 "Post-auth error",
-                inner_parts[2..].join(";"),
+                msg_type,
+                &inner_parts[2..],
             ));
         } else {
             log::info!("Post-auth msg type={msg_type}: {inner_text}");
@@ -1747,29 +1814,16 @@ impl Gateway {
         let first = Self::connect_to_host(config, &config.host, AUTH_PORT, 0);
         let Err(why) = first else { return first };
 
-        // A door that does not open is not an answer. The venue runs one per
-        // region and any of them will route a session to where its account
-        // lives, so a session whose default door is unreachable knocks on the
-        // next rather than giving up on a venue that is up.
-        //
-        // Only for the doors this client ships: a caller that named a host
-        // meant that host, and being sent somewhere else is not failover, it
-        // is the session going somewhere the caller did not ask for.
-        if !crate::config::CCP_HOSTS.contains(&config.host.as_str()) {
-            return Err(why);
-        }
-        // And only when nothing answered. A refusal is the same refusal at
-        // every door, and asking again with the same credentials is how an
-        // account gets locked rather than connected.
+        // A door that does not open is not an answer. Only when nothing
+        // answered, though: a refusal is the same refusal at every door, and
+        // asking again with the same credentials is how an account gets locked
+        // rather than connected.
         if !nobody_answered(&why) {
             return Err(why);
         }
 
         let mut last = why;
-        for host in alternates_to(
-            &crate::config::CCP_HOSTS.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
-            &config.host,
-        ) {
+        for host in doors_after(&config.host) {
             log::warn!("{} did not answer ({last}); trying {host}", config.host);
             match Self::connect_to_host(config, &host, AUTH_PORT, 0) {
                 Ok(session) => {

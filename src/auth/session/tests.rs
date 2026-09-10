@@ -2027,3 +2027,44 @@ fn a_fix_start_read_by_the_security_code_gate_is_handed_on() {
         "the gate kept a message it did not own: {outcome:?}",
     );
 }
+
+/// The venue numbers its error responses, and two of those numbers say wait
+/// rather than no.
+///
+/// Read as a refusal, a site that is down or not yet serving classifies as
+/// the credentials being wrong and the retry ladder stops there — so a
+/// maintenance window ended an established session for good, where the venue
+/// only asked for a wait and comes back on its own.
+#[test]
+fn a_site_that_is_down_is_not_the_credentials_being_refused() {
+    let stated = |code: &str| {
+        error_the_venue_stated("Auth error", ns::NS_ERROR_RESPONSE, &[code, "some words"])
+    };
+
+    for (code, why) in [("4", "the site is down"), ("5", "the site is not ready")] {
+        let err = stated(code);
+        assert_ne!(
+            retry::DisconnectReason::from_error(&err).recovery(),
+            retry::Recovery::Stop,
+            "{why}: the venue asked for a wait, not for the session to end",
+        );
+        assert!(err.to_string().contains("some words"), "and it still says what the venue said");
+    }
+
+    // Every other number is the venue refusing what was sent, and the next
+    // attempt would carry exactly the same credentials.
+    for code in ["1", "10", "11", "12", "", "lockedout"] {
+        assert_eq!(
+            stated(code).kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "error type {code:?} is a refusal",
+        );
+    }
+
+    // A secure error is not numbered — its first field is the message — so a
+    // message that happens to start with a 4 is not read as a site being down.
+    assert_eq!(
+        error_the_venue_stated("Auth error", NS_SECURE_ERROR, &["4", "words"]).kind(),
+        std::io::ErrorKind::PermissionDenied,
+    );
+}

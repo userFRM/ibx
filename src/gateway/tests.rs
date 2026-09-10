@@ -130,6 +130,57 @@ fn the_doors_after_the_one_that_failed_are_the_rest_of_them() {
     assert_eq!(rest[0], crate::config::CCP_HOSTS[1], "and in the order they are listed");
 }
 
+/// A host that stops answering has backups behind it, and the venue names
+/// them by rewriting the host rather than by announcing them.
+///
+/// Without them a dead auth host ends the session: a first connect has no
+/// alternates at all, and a reconnect has only the hosts a redirect
+/// happened to name. The venue's answer is one label away.
+#[test]
+fn a_host_that_stops_answering_has_backups_named_after_it() {
+    assert_eq!(
+        super::hot_backup_peers("cdc1.ibllc.com"),
+        ["cdc1-hb1.ibllc.com", "cdc1-hb2.ibllc.com"],
+    );
+
+    // A walk that already stepped onto a backup derives from the primary.
+    // Backups of a backup are hosts nobody runs.
+    assert_eq!(
+        super::hot_backup_peers("cdc1-hb2.ibllc.com"),
+        ["cdc1-hb1.ibllc.com", "cdc1-hb2.ibllc.com"],
+    );
+
+    // Only the first label is rewritten; the rest of the name is the same
+    // domain, and the port the caller dials never enters into it.
+    assert_eq!(super::hot_backup_peers("gw1.example.co.uk")[0], "gw1-hb1.example.co.uk");
+    assert_eq!(super::hot_backup_peers("localhost"), ["localhost-hb1", "localhost-hb2"]);
+
+    // An address has no label to rewrite, so there is nothing to derive and
+    // the walk is not sent at a host that cannot exist.
+    assert!(super::hot_backup_peers("127.0.0.1").is_empty());
+    assert!(super::hot_backup_peers("::1").is_empty());
+    assert!(super::hot_backup_peers("-hb1.example").is_empty());
+}
+
+/// The backups behind the host that failed are knocked on before any other
+/// region's door, and a caller that named its own host gets them too.
+#[test]
+fn the_backups_behind_a_door_are_tried_before_the_other_doors() {
+    let shipped = crate::config::CCP_HOSTS[0];
+    let backups = super::hot_backup_peers(shipped);
+    let doors = super::doors_after(shipped);
+    assert_eq!(doors[..backups.len()], backups[..], "the host's own backups come first");
+    assert_eq!(doors[backups.len()], crate::config::CCP_HOSTS[1], "then the other regions");
+    assert_eq!(doors.len(), backups.len() + crate::config::CCP_HOSTS.len() - 1);
+
+    // A caller that named its own host is not sent to another region — but
+    // the backups behind that host are still the host it named.
+    assert_eq!(
+        super::doors_after("gw1.example.com"),
+        ["gw1-hb1.example.com", "gw1-hb2.example.com"],
+    );
+}
+
 /// Which session a logon the venue names belongs to, decided by when it
 /// was made.
 #[test]
