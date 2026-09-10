@@ -11,6 +11,23 @@ use crate::control::scanner::{ScannerEntry, ScannerResult};
 use crate::control::news::NewsHeadline;
 use crate::control::histogram::HistogramEntry;
 
+/// The next command a replace puts on the channel after the statement of the
+/// order it is replacing.
+///
+/// Every replace states the order in full before the terms it changes, because
+/// the terms alone do not say what the rest of the order still is. A test
+/// asking for "the modify" wants the second of those two.
+pub(crate) fn past_the_statement(
+    rx: &std::sync::mpsc::Receiver<ControlCommand>,
+) -> Option<ControlCommand> {
+    while let Ok(cmd) = rx.try_recv() {
+        if !matches!(cmd, ControlCommand::Order(OrderRequest::Describe { .. })) {
+            return Some(cmd);
+        }
+    }
+    None
+}
+
 /// Helper: create a test EClient backed by SharedState + channel.
 pub(crate) fn test_client() -> (EClient, std::sync::mpsc::Receiver<ControlCommand>, Arc<SharedState>) {
     let shared = Arc::new(SharedState::new());
@@ -97,7 +114,7 @@ fn modifying_a_stop_carries_the_new_trigger() {
     let moved = Order { aux_price: 610.0, ..stop };
     client.place_order(9201, &spy(), &moved).unwrap();
 
-    match rx.try_recv().expect("the modify") {
+    match past_the_statement(&rx).expect("the modify") {
         ControlCommand::Order(OrderRequest::Modify { stop_price, .. }) => assert_eq!(
             stop_price, (610.0 * PRICE_SCALE_F) as i64,
             "the new trigger must reach the request",
@@ -121,7 +138,7 @@ fn modifying_a_trailing_stop_limit_carries_its_offset_and_trail() {
 
     let moved = Order { aux_price: 2.0, lmt_price_offset: 0.2, ..placed };
     client.place_order(9202, &spy(), &moved).unwrap();
-    match rx.try_recv().expect("the modify") {
+    match past_the_statement(&rx).expect("the modify") {
         ControlCommand::Order(OrderRequest::Modify { price, stop_price, .. }) => assert_eq!(
             (price, stop_price), ((0.2 * PRICE_SCALE_F) as i64, (2.0 * PRICE_SCALE_F) as i64),
         ),
@@ -158,7 +175,7 @@ fn a_replace_is_preceded_by_the_callers_statement_of_the_order() {
         }
         other => panic!("the statement goes first, got {other:?}"),
     }
-    assert!(matches!(rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::Modify { order_id: 9302, .. }))));
+    assert!(matches!(past_the_statement(&rx), Some(ControlCommand::Order(OrderRequest::Modify { order_id: 9302, .. }))));
 
     // The venue's status has been dispatched, which tracks the order here
     // without making it one this client placed; and the statement goes with
@@ -235,7 +252,10 @@ fn a_bracket_leg_replaced_before_its_acknowledgement_is_replaced_not_placed_agai
             _ => "other",
         });
     }
-    assert_eq!(seen, ["replace"], "a leg this client placed is replaced from the engine's own record");
+    assert_eq!(
+        seen, ["statement", "replace"],
+        "the leg is replaced, behind the caller's own statement of what it now is",
+    );
 }
 
 /// The legs are recorded as the wire states them, since the open-order reads
@@ -1004,7 +1024,7 @@ fn a_limit_if_touched_is_replaced_as_itself() {
     while rx.try_recv().is_ok() {}
 
     client.place_order(9302, &spy(), &order).expect("and is replaced as itself");
-    match rx.try_recv().expect("the replace reaches the wire") {
+    match past_the_statement(&rx).expect("the replace reaches the wire") {
         ControlCommand::Order(OrderRequest::Modify { order_id, .. }) => {
             assert_eq!(order_id, 9302);
         }
@@ -1072,7 +1092,7 @@ fn every_restatable_type_still_modifies() {
 
         client.place_order(9701, &spy(), &order)
             .unwrap_or_else(|e| panic!("{order_type} must still modify: {e}"));
-        match rx.try_recv().expect("the modify") {
+        match past_the_statement(&rx).expect("the modify") {
             ControlCommand::Order(OrderRequest::Modify { .. }) => {}
             other => panic!("{order_type}: expected a Modify, got {other:?}"),
         }
@@ -1115,7 +1135,7 @@ fn a_limit_order_still_modifies() {
 
     let moved = Order { lmt_price: 101.0, ..order };
     client.place_order(9202, &spy(), &moved).expect("a limit modify still goes through");
-    match rx.try_recv().expect("the modify") {
+    match past_the_statement(&rx).expect("the modify") {
         ControlCommand::Order(OrderRequest::Modify { .. }) => {}
         other => panic!("expected a Modify, got {other:?}"),
     }
@@ -2531,7 +2551,7 @@ fn modify_carries_outside_rth_from_the_resubmitted_order() {
     // Same id -> modify. Caller still says outside_rth=false.
     let reprice = Order { lmt_price: 101.0, ..order.clone() };
     client.place_order(70, &spy(), &reprice).unwrap();
-    match rx.try_recv().unwrap() {
+    match past_the_statement(&rx).expect("the modify") {
         ControlCommand::Order(OrderRequest::Modify { outside_rth, .. }) => {
             assert!(!outside_rth, "a modify must not opt the order into the extended session");
         }
@@ -2541,7 +2561,7 @@ fn modify_carries_outside_rth_from_the_resubmitted_order() {
     // And it survives when the caller does want it.
     let rth_out = Order { lmt_price: 102.0, outside_rth: true, ..order.clone() };
     client.place_order(70, &spy(), &rth_out).unwrap();
-    match rx.try_recv().unwrap() {
+    match past_the_statement(&rx).expect("the modify") {
         ControlCommand::Order(OrderRequest::Modify { outside_rth, .. }) => {
             assert!(outside_rth, "an explicit outside_rth=true must reach the replace");
         }
@@ -3384,7 +3404,7 @@ fn a_staged_revision_does_not_hide_the_order_the_venue_is_working() {
     ));
     // A revision of it, kept rather than sent.
     client.place_order(88, &spy(), &order(false, 101.0)).expect("the change is kept");
-    assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
+    assert!(past_the_statement(&rx).is_none(), "nothing goes to the venue for a change that is held");
     assert!(
         client.core.is_working_at_the_venue(88, Some(&client.shared)),
         "the order is still one the venue is working",
@@ -3426,11 +3446,11 @@ fn replacing_an_order_does_not_send_the_family_it_is_still_building() {
     assert!(rx.try_recv().is_err(), "and nothing goes out for it");
 
     client.place_order(50, &spy(), &entry(99.0)).expect("the parent is replaced");
-    match rx.try_recv().expect("the replace goes out") {
+    match past_the_statement(&rx).expect("the replace goes out") {
         ControlCommand::Order(OrderRequest::Modify { order_id, .. }) => assert_eq!(order_id, 50),
         other => panic!("expected a replace of the parent, got {other:?}"),
     }
-    assert!(rx.try_recv().is_err(), "and the exit is not sent with it");
+    assert!(past_the_statement(&rx).is_none(), "and the exit is not sent with it");
     assert!(client.core.is_held(51), "it is still waiting to be placed");
 }
 
@@ -3454,7 +3474,7 @@ fn a_change_to_an_order_that_finished_is_not_released_with_the_next_family() {
         rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::SubmitEx { .. })),
     ));
     client.place_order(61, &spy(), &exit(false, 111.0)).expect("a change to it is kept");
-    assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
+    assert!(past_the_statement(&rx).is_none(), "nothing goes to the venue for a change that is held");
     // And then the order it was a change to fills.
     client.core.update_order_status(
         &shared, 61, crate::types::OrderStatus::Filled, 100.0, 0.0, 0,
@@ -3892,7 +3912,7 @@ fn a_global_cancel_keeps_the_order_a_staged_revision_belongs_to() {
         rx.try_recv(), Ok(ControlCommand::Order(OrderRequest::SubmitEx { .. })),
     ));
     client.place_order(85, &spy(), &order(101.0, false)).expect("the change is kept");
-    assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
+    assert!(past_the_statement(&rx).is_none(), "nothing goes to the venue for a change that is held");
 
     shared.orders.set_replay_done();
     client.req_global_cancel().expect("everything withdrawn");
@@ -6942,10 +6962,12 @@ fn rapid_modify_multiple_prices_no_crash() {
         let _ = client.place_order(77, &spy(), &order);
     }
     let mut order_count = 0;
+    // The statement each replace goes behind is not itself a modify.
     while let Ok(cmd) = rx.try_recv() {
-        if matches!(cmd, ControlCommand::Order(_)) { order_count += 1; }
+        if matches!(cmd, ControlCommand::Order(OrderRequest::Modify { .. })) { order_count += 1; }
     }
-    assert_eq!(order_count, 50, "All 50 modify commands should be sent");
+    // The first of the fifty places the order; the other forty-nine move it.
+    assert_eq!(order_count, 49, "every price after the first is sent as a modify");
 }
 
 #[test]
@@ -9089,7 +9111,7 @@ fn a_held_revision_that_is_withdrawn_leaves_the_terms_the_venue_holds() {
     ));
     // A change to it, kept rather than sent.
     client.place_order(91, &spy(), &order(false, 101.0)).expect("the change is kept");
-    assert!(rx.try_recv().is_err(), "nothing goes out for a change that is held");
+    assert!(past_the_statement(&rx).is_none(), "nothing goes to the venue for a change that is held");
 
     client.cancel_order(91, "").expect("withdrawn");
 

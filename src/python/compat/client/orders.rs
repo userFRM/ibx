@@ -388,12 +388,15 @@ impl EClient {
         // this call returns, and a restatement written behind that answer put
         // the attempted terms over a refusal that had already put back the
         // real ones.
-        // Whether this client placed the order, as on the other surface; and
-        // the caller's statement of one it did not, built before the record
-        // is restated so a statement that cannot be built refuses the replace
+        // The caller's statement of the order, as on the other surface: every
+        // replace goes behind one, because a replace states the terms it
+        // changes and nothing else and the shape comes from the record. Left
+        // at what was first placed, that record sent the venue the first of
+        // everything the caller had since changed while this client's own
+        // answer already read back the new ones. Built before the record is
+        // restated, so a statement that cannot be built refuses the replace
         // with nothing moved.
-        let placed_here = self.core.placed_here(oid);
-        let statement = if replacing && !placed_here {
+        let statement = if replacing {
             match ClientCore::build_order_request(&api_order, oid, instrument, Some(&api_contract)) {
                 Ok(ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. })) => {
                     Some(Box::new(crate::types::OrderSpec { kind, attrs }))

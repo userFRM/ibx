@@ -105,17 +105,21 @@ pub(crate) fn drain_and_send_orders(
     let orders: Vec<OrderRequest> = context.drain_pending_orders().collect();
     let mut unsent: Vec<OrderRequest> = Vec::new();
     for order_req in orders {
-        // The caller's statement of an order this session did not place: the
-        // record, where there is none, and nothing for the wire. Kept here,
-        // in the order the commands arrived, so the replace behind it
-        // restates from it.
+        // The caller's statement of an order they are replacing: the record the
+        // replace behind it restates its shape from, and nothing for the wire.
+        // Kept here, in the order the commands arrived, so the replace sees it.
+        //
+        // The latest statement stands, whoever made the last one. A record made
+        // at placement used to hold against it, on the reading that the
+        // engine's own account of what it sent outranks the caller's account of
+        // what they want — but a replace is the caller changing what they want,
+        // and holding the placement meant the venue was sent the terms of the
+        // first statement while this client answered "what is working" with the
+        // terms of the latest. One of those is a lie either way; this way the
+        // venue and the answer agree, which is what the caller asked for.
         if let OrderRequest::Describe { order_id, spec } = order_req {
-            // The latest statement stands where the record is a statement;
-            // a record made at placement is the engine's own and stays.
-            if !context.submitted.contains_key(&order_id) || context.described.contains(&order_id) {
-                context.submitted.insert(order_id, spec);
-                context.described.insert(order_id);
-            }
+            context.submitted.insert(order_id, spec);
+            context.described.insert(order_id);
             continue;
         }
         // Once a write has abandoned the transport nothing else can leave on

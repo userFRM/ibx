@@ -3558,15 +3558,17 @@ fn a_replace_of_an_order_this_session_did_not_place_restates_what_the_caller_sta
     }
 }
 
-/// The caller's latest statement of a venue-named order is the one restated,
-/// and a record the engine made at placement is never replaced by one.
+/// The caller's latest statement is the one restated, whether or not this
+/// session placed the order.
 ///
-/// Every statement of an order this session did not place is the caller's,
-/// so the latest stands, as it does on the reference client, where each
-/// modify carries the whole order. An order placed here keeps the record of
-/// its placement, whatever a caller states later.
+/// Every statement is the caller's, so the latest stands, as it does on the
+/// reference client, where each modify carries the whole order. A record made
+/// at placement used to hold against a later statement, which meant a caller
+/// who changed an attribute and replaced had the first value sent to the venue
+/// while this client answered "what is working" with the second: the change
+/// never left the process and nothing said so.
 #[test]
-fn the_latest_statement_of_a_venue_named_order_stands_and_a_placement_is_kept() {
+fn the_latest_statement_stands_however_the_order_was_first_known() {
     use std::io::Read;
     use crate::types::{OrderKind as K, PRICE_SCALE as P};
     let statement = |order_id: u64, display_size: u32| crate::types::OrderRequest::Describe {
@@ -3606,17 +3608,22 @@ fn the_latest_statement_of_a_venue_named_order_stands_and_a_placement_is_kept() 
     let msg = frame(&mut context);
     assert_eq!(stated(&msg, "111=").first().map(String::as_str), Some("10"), "the latest statement: {msg}");
 
-    // Placed here, then stated by a caller: the placement stands.
+    // Placed here with no iceberg, then stated by the caller with one: the
+    // replace carries the iceberg, because that is what the caller now wants.
     context.pending_orders.push(crate::types::OrderRequest::SubmitEx {
         con_id: 0, order_id: 78, instrument, side: Side::Buy, qty: crate::types::QTY_SCALE,
         kind: K::PegMid { offset: 0, price_cap: 100 * P }, tif: b'0', attrs: crate::types::OrderAttrs::default(),
     });
-    let _placed = frame(&mut context);
+    let placed = frame(&mut context);
+    assert!(stated(&placed, "111=").is_empty(), "placed without one: {placed}");
     context.pending_orders.push(statement(78, 10));
     context.pending_orders.push(modify(78));
     let msg = frame(&mut context);
     assert_eq!(stated(&msg, "35=").first().map(String::as_str), Some("G"), "{msg}");
-    assert!(stated(&msg, "111=").is_empty(), "a placement's record is not replaced by a statement: {msg}");
+    assert_eq!(
+        stated(&msg, "111=").first().map(String::as_str), Some("10"),
+        "the attribute the caller changed reaches the venue: {msg}",
+    );
 }
 
 /// A refusal puts the whole statement back, attributes included.

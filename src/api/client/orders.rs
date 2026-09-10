@@ -322,19 +322,20 @@ impl EClient {
         // does — the venue can answer the replace before this call returns,
         // and a restatement written behind that answer put the attempted
         // terms over a refusal that had already put back the real ones.
-        // Whether this client placed the order, as against learning of it
-        // from the venue through a status or an earlier restatement.
-        let placed_here = self.core.placed_here(oid);
-        // A replace of an order this client did not place — one the venue
-        // named at connect — goes behind the caller's own statement of the
-        // order, which the engine keeps as the record it has none of and
-        // restates the shape from. That is what the reference client sends
-        // on a modify. An order placed here has its record already. Built
-        // before the record below is restated, so a statement that cannot be
-        // built refuses the replace with nothing moved; and sent whether or
+        // Every replace goes behind the caller's own statement of the order,
+        // which the engine keeps as the record the replace restates its shape
+        // from. A replace states the terms it changes and nothing else, so the
+        // shape comes from that record — and a record left at what was first
+        // placed sent the venue the first display size, the first discretionary
+        // amount, the first of everything the caller had since changed, while
+        // this client's own answer to "what is working" already read back the
+        // new ones. The change never left the process and nothing said so.
+        //
+        // Built before the record below is restated, so a statement that cannot
+        // be built refuses the replace with nothing moved; and sent whether or
         // not the replace transmits now, since a held replace leaves the hold
         // later as the command it was held as, with nothing built then.
-        let statement = if replacing && !placed_here {
+        let statement = if replacing {
             match ClientCore::build_order_request(order, oid, instrument, Some(contract))? {
                 ControlCommand::Order(OrderRequest::SubmitEx { kind, attrs, .. }) => {
                     Some(Box::new(crate::types::OrderSpec { kind, attrs }))
