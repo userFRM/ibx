@@ -1702,6 +1702,24 @@ mod record_boundary_tests {
 mod size_and_precision_tests {
     use super::super::*;
 
+    /// A contract dealt in fractions takes its least size from its own size
+    /// rule, and it is the same figure as the step between sizes.
+    ///
+    /// Read only off the tag the venue states for a contract dealt in whole
+    /// units, every fractional contract came back saying nothing about the
+    /// smallest order it takes — the tag is for the other kind.
+    #[test]
+    fn a_contract_dealt_in_fractions_takes_its_least_from_its_own_rule() {
+        // A size table whose finest band is a ten-thousandth: that is what
+        // being dealt in fractions means here.
+        let frame = b"35=d\x01320=R1\x016008=756733\x0155=SPY\x01\
+                      6019=1\x016031=42\x016026=1\x016023=0\x016027=0.01\x01\
+                      6030=1\x016023=0\x016027=0.0001\x01";
+        let def = parse_secdef_response(frame, true).expect("the definition parses");
+        assert_eq!(def.size_increment, 0.0001);
+        assert_eq!(def.min_size, 0.0001, "the least it deals in, off its own rule");
+    }
+
     /// The smallest order a venue will take is stated only where a contract can
     /// be dealt in fractions, and gated by the flag that says so. Read from
     /// the field stating a size, not the one stating how many places a price is

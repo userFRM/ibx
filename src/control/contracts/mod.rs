@@ -84,12 +84,14 @@ pub const TAG_LAST_TRADE_TIME: u32 = 8584;
 /// contracts that have an issuer — which is why asking about shares never saw
 /// it.
 pub const TAG_ISSUE_DATE: u32 = 225;
-/// The smallest order the venue will take, and the flag that says a contract
-/// can be dealt in fractions at all. Stated together; the size without the flag
-/// is not in force.
+/// The smallest order the venue will take on a contract dealt in whole units.
+///
+/// Stated with the flag below, which says the venue stated one at all. A
+/// contract dealt in fractions takes its least from its own size rule instead;
+/// see where `min_size` is worked out.
 pub const TAG_MIN_SIZE: u32 = 8175;
-/// FIX tag 8193: the fractionable.
-pub const TAG_FRACTIONABLE: u32 = 8193;
+/// FIX tag 8193: whether the venue stated a least size on the tag above.
+pub const TAG_MIN_SIZE_STATED: u32 = 8193;
 /// How many places the venue states a price and a size to.
 pub const TAG_LAST_PRICE_PRECISION: u32 = 8598;
 /// FIX tag 8599: the last size precision.
@@ -1217,15 +1219,29 @@ pub fn parse_secdef_response(
     if let Some(v) = tags.get(&8502) { def.fund_distribution_policy_indicator = v.clone(); }
     if let Some(v) = tags.get(&8503) { def.fund_asset_type = v.clone(); }
     if let Some(v) = tags.get(&8383) { def.real_expiration_date = v.clone(); }
-    // The smallest order the venue will take, stated only where a contract can
-    // be dealt in fractions and gated by the flag that says so.
+    // The least the venue will take. A contract dealt in fractions — which is
+    // what a size rule whose finest band is under one unit means — takes it
+    // from that rule, and it is the same figure as the increment: the least
+    // that can be dealt and the step between sizes are one thing there. A
+    // contract dealt in whole units takes it from a tag of its own, stated
+    // behind a flag saying the venue stated one.
+    //
+    // Read only off the tag, a contract dealt in fractions reported no least
+    // size at all — the tag is for the other kind — and every fractional
+    // contract came back saying nothing about the smallest order it takes.
     //
     // Not 8598, which states the precision of a price rather than a size.
-    if tags.get(&TAG_FRACTIONABLE).map(|v| v.as_str()) == Some("1")
-        && let Some(v) = tags.get(&TAG_MIN_SIZE)
-    {
-        def.min_size = v.parse().unwrap_or(0.0);
-    }
+    //
+    // One case is left out because nothing here can decide it: the venue holds
+    // a fund to whole units despite a fractional rule, on a flag this client
+    // does not read.
+    def.min_size = if def.size_increment > 0.0 && def.size_increment < 1.0 {
+        def.size_increment
+    } else if tags.get(&TAG_MIN_SIZE_STATED).map(|v| v.as_str()) == Some("1") {
+        tags.get(&TAG_MIN_SIZE).and_then(|v| v.parse().ok()).unwrap_or(0.0)
+    } else {
+        0.0
+    };
     // How many places the venue states a price and a size to. Published by the
     // reference client and recorded here as computed rather than sent, which
     // was wrong — they are sent.
