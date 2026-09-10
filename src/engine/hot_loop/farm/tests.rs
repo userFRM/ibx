@@ -358,6 +358,23 @@ mod news_tests {
             said, [(87, "size 1000".to_string())],
             "the two sides added, and nothing at all where one is unstated",
         );
+
+        // The company ratios arrive as compressed text behind a header the
+        // venue does not describe.
+        use std::io::Write as _;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(b"  MKTCAP=1234;PEEXCLXOR=18.2  ").unwrap();
+        let mut ratios = vec![0u8; 8];
+        ratios.extend_from_slice(&z.finish().unwrap());
+        farm.generic_tick_tags.push((16, 258, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(16, 258, &ratios)]), &mut context, &shared, &None,
+        );
+        let said = shared.market.drain_series_ticks(instrument);
+        assert_eq!(said.len(), 1, "the ratios reach the caller: {said:?}");
+        assert_eq!(said[0].tick_type, 47);
+        let SeriesValue::Text(text) = &said[0].value else { panic!("stated as text") };
+        assert_eq!(text, "MKTCAP=1234;PEEXCLXOR=18.2", "inflated and trimmed");
     }
 
     /// The running volume states a trade, not the totals it is read from.

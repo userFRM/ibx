@@ -327,6 +327,28 @@ fn deliver_series(
                 say(102, SeriesValue::Generic(settled));
             }
         }
+        // The company ratios, which the venue sends as compressed text behind
+        // a header it does not describe. Held to what one inflated payload may
+        // become, as every other inflate here is: what arrives is bounded on
+        // the wire and what it becomes is not.
+        258 => {
+            let Some(compressed) = payload.get(8..) else { return true };
+            use std::io::Read as _;
+            let mut text = String::new();
+            let read = flate2::read::ZlibDecoder::new(compressed)
+                .take(crate::protocol::fixcomp::MAX_INFLATED + 1)
+                .read_to_string(&mut text);
+            match read {
+                Ok(_) if text.len() as u64 <= crate::protocol::fixcomp::MAX_INFLATED => {
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        say(47, SeriesValue::Text(text.to_string()));
+                    }
+                }
+                Ok(_) => log::warn!("the company ratios inflated past what one payload may be"),
+                Err(why) => log::debug!("the company ratios did not inflate: {why}"),
+            }
+        }
         _ => return false,
     }
     true

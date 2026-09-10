@@ -46,6 +46,7 @@ publishes it under:
 | `105` | average option volume, the two sides added, on `tick_size` 87 |
 | `225` | auction volume and imbalance on `tick_size` 34 and 36, auction price on `tick_price` 35 |
 | `233` | the trade tape, on `tick_string` 48: `price;size;time;volume;vwap;single` |
+| `258` | company ratios, on `tick_string` 47 |
 | `293` `294` `295` | trade count, trade rate and volume rate, on `tick_generic` 54, 55 and 56 |
 | `318` | last regular-session trade, on `tick_price` 57 |
 | `411` | real-time historical volatility, on `tick_generic` 58 |
