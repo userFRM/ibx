@@ -302,6 +302,13 @@ mod news_tests {
         auction.extend_from_slice(&5_000i32.to_be_bytes());
         auction.extend_from_slice(&(-250i32).to_be_bytes());
         auction.extend_from_slice(&101.25f32.to_be_bytes());
+        // And, past the auction's own type and six figures the venue keeps for
+        // itself, the imbalance it must publish.
+        auction.extend_from_slice(&(b'O' as i32).to_be_bytes());
+        for _ in 0..7 {
+            auction.extend_from_slice(&i32::MAX.to_be_bytes());
+        }
+        auction.extend_from_slice(&(-1_200i32).to_be_bytes());
         farm.generic_tick_tags.push((13, 225, instrument));
         farm.handle_generic_tick(
             &framed_generic_ticks(&[(13, 225, &auction)]), &mut context, &shared, &None,
@@ -326,8 +333,9 @@ mod news_tests {
                 (34, "size 5000".to_string()),
                 (36, "size -250".to_string()),
                 (35, "price 101.25".to_string()),
+                (61, "size -1200".to_string()),
             ],
-            "the auction states three things; an unstated open interest states none",
+            "the auction states four things; an unstated open interest states none",
         );
 
         // The average option volume is the two sides added, and unstated

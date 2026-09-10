@@ -26,7 +26,8 @@ impl EClient {
     /// * `162`, `165` — an index's premium over its future; the extremes of
     ///   the last quarter, half-year and year with the ordinary day's volume.
     /// * `221`, `232` — the mark the venue keeps, which is not a trade.
-    /// * `225` — the auction: what is crossing, which way, and at what price.
+    /// * `225` — the auction: what is crossing, which way, at what price, and
+    ///   the imbalance the venue must publish.
     /// * `233`, `375` — everything that traded, and what traded on a trade
     ///   report, each stated as a trade rather than as the totals it is read
     ///   from.

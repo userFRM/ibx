@@ -439,6 +439,16 @@ fn deliver_series(
                 let price = f32::from_be_bytes(bytes.try_into().unwrap_or([0; 4]));
                 say(35, SeriesValue::Price(price as f64));
             }
+            // The imbalance the venue must publish sits further down the same
+            // record, past the auction's own type and six figures the venue
+            // keeps for itself, each four bytes wide. Nought there is the
+            // venue holding none rather than an auction in balance.
+            if let Some(regulatory) = series_i32(payload, 44)
+                && regulatory != 0
+                && regulatory != i32::MAX
+            {
+                say(61, SeriesValue::Size(f64::from(regulatory)));
+            }
         }
         // The average option volume the venue keeps for each side, which it
         // publishes as one figure: the two added. Either side left unstated
