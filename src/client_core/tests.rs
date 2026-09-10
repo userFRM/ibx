@@ -2951,6 +2951,9 @@ fn one_number_cannot_be_registered_twice_at_once() {
 #[test]
 fn a_request_the_engine_names_the_slot_for_is_paid_like_any_joiner() {
     let core = ClientCore::new();
+    // Answered from another thread, so the wait has to outlast being
+    // scheduled; see `followers_keep_the_subscriptions_market_data_type`.
+    core.set_registration_timeout(std::time::Duration::from_secs(30));
     let shared = SharedState::new();
     let (tx, rx) = std::sync::mpsc::sync_channel(64);
     shared.market.set_instrument_count(4);
@@ -3203,12 +3206,19 @@ fn an_answer_this_side_worked_out_is_not_dropped_with_a_slot() {
 fn followers_keep_the_subscriptions_market_data_type() {
     for con_id in [756733, 0] {
         let core = ClientCore::new();
+        // This one answers from another thread, so the wait has to outlast
+        // being scheduled. A millisecond — what a test that wants the wait to
+        // fire states — is a race the suite loses under load, and the answer
+        // arriving late reads as an engine that went away.
+        core.set_registration_timeout(std::time::Duration::from_secs(30));
         let shared = SharedState::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
         let engine = std::thread::spawn(move || {
             while let Ok(cmd) = rx.recv() {
                 if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
-                    reply.send(Ok(0)).unwrap();
+                    // The caller may have stopped waiting; that is its
+                    // business, and not this thread's to die over.
+                    let _ = reply.send(Ok(0));
                 }
             }
         });
@@ -3246,12 +3256,17 @@ fn followers_keep_the_subscriptions_market_data_type() {
 #[test]
 fn moved_watchers_report_the_destination_subscriptions_type() {
     let core = ClientCore::new();
+    // Answered from another thread, so the wait has to outlast being
+    // scheduled; see `followers_keep_the_subscriptions_market_data_type`.
+    core.set_registration_timeout(std::time::Duration::from_secs(30));
     let shared = SharedState::new();
     let (tx, rx) = std::sync::mpsc::sync_channel(64);
     let engine = std::thread::spawn(move || {
         while let Ok(cmd) = rx.recv() {
             if let ControlCommand::Subscribe { contract, reply_tx: Some(reply), .. } = cmd {
-                reply.send(Ok(contract.con_id as InstrumentId)).unwrap();
+                // The caller may have stopped waiting; not this thread's to
+                // die over.
+                let _ = reply.send(Ok(contract.con_id as InstrumentId));
             }
         }
     });
