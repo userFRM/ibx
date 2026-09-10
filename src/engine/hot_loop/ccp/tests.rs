@@ -1240,6 +1240,45 @@ fn a_restated_execution_is_filed_and_not_announced() {
     assert!(shared.orders.drain_restated_executions().is_empty(), "and is not filed twice");
 }
 
+/// A correction the venue states no execution id for does not bring a finished
+/// order back a second time.
+///
+/// The window that tells a repeat from a new execution is asked twice on one
+/// report: once by the recovery, which decides whether an order this session
+/// no longer holds comes back, and once by the booking, which decides whether
+/// the quantity moves. The recovery used to ask only when the venue stated an
+/// id, and an absent id is exactly the shape a replay takes — so a repeated
+/// correction was a repeat to the booking, which refused it, and a new
+/// execution to the recovery, which brought the finished order back anyway.
+#[test]
+fn a_repeated_correction_without_an_execution_id_recovers_an_order_only_once() {
+    let (mut ccp, mut context, shared) = tracked_order_state();
+    // The order is gone from this session's book: filled and retired, or
+    // finished before the process started.
+    context.retire_order(42);
+
+    // A correction that restates a trade, stating no execution id of its own.
+    let correction = fill_frame(&[
+        (17u32, ""), (150u32, "G"), (39u32, "1"), (20u32, "1"),
+        (32u32, "50"), (14u32, "50"), (151u32, "50"),
+        (6008u32, "756733"), (55u32, "SPY"), (54u32, "1"), (40u32, "2"), (38u32, "100"),
+    ]);
+    ccp.handle_exec_report(&correction, b"", &mut context, &shared, &None, "");
+    assert!(
+        context.order(42).is_some(),
+        "a correction on an order this session does not hold brings it back",
+    );
+    let _ = shared.orders.drain_fills();
+
+    // It finishes again, and the very same correction arrives a second time.
+    context.retire_order(42);
+    ccp.handle_exec_report(&correction, b"", &mut context, &shared, &None, "");
+    assert!(
+        context.order(42).is_none(),
+        "the same correction twice is one correction, so the order stays gone",
+    );
+}
+
 /// The case a blanket suppression of marked reports loses. A CCP reconnect
 /// keeps this state — window and order book both survive — and the gateway
 /// replays recent executions on the new session. A fill that executed

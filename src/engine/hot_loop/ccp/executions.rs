@@ -27,6 +27,34 @@ const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
 /// message about an order that is still live.
 const ORDER_REJECTED_ERROR_CODE: i32 = 201;
 
+/// What identifies one execution, for the window that tells a repeat from a
+/// new one.
+///
+/// The venue's own id where it states one. Where it does not — which is the
+/// shape a replay takes, and so exactly when the window matters — the fields
+/// that identify the execution stand in for it, cumulative quantity among
+/// them, because that is what separates two otherwise identical slices of one
+/// order.
+///
+/// One function because every reader of this report has to agree. The
+/// recovery ahead of the booking used to ask the window only when the venue
+/// stated an id, so a repeated correction with none was new to the recovery
+/// and a repeat to the booking: the booking refused it, and the recovery had
+/// already brought a finished order back to life.
+fn execution_key(parsed: &std::collections::HashMap<u32, String>, clord_id: u64) -> String {
+    match parsed.get(&17).map(String::as_str).filter(|id| !id.is_empty()) {
+        Some(id) => id.to_string(),
+        None => format!(
+            "{}|{}|{}|{}|{}",
+            clord_id,
+            parsed.get(&60).map(|s| s.as_str()).unwrap_or(""),
+            parse_qty_tag(parsed.get(&32)).unwrap_or(0),
+            parsed.get(&31).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0),
+            parse_qty_tag(parsed.get(&14)).unwrap_or(0),
+        ),
+    }
+}
+
 /// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a
 /// stable i64 permId.
 /// Uses FNV-1a hash of the first 3 dot-segments (the stable prefix) so that permId
@@ -915,8 +943,12 @@ impl CcpState {
         // own and took it as a second one: an order this session had already
         // finished came back working, holding the quantity the first copy had
         // given back and short the fills that followed it.
-        let restated_twice = restates_a_trade
-            && parsed.get(&17).is_some_and(|id| !id.is_empty() && self.already_recorded_exec_id(id));
+        // Asked on the same key the booking will spend, so that a repeat with
+        // no stated id is a repeat here too. Asked only of a report that
+        // restates a trade, as before: an ordinary fill is deduped by the
+        // booking and has no business reopening anything.
+        let restated_twice =
+            restates_a_trade && self.already_recorded_exec_id(&execution_key(parsed, clord_id));
         let recovering = !status.is_terminal() && !marked_resend && !revision_refused && !restated_twice
             && clord_id != 0 && (!already_finished || restates_a_trade)
             && (context.order(clord_id).is_none() || unknown);
@@ -1307,18 +1339,7 @@ impl CcpState {
         // with every execution on the order, including across a replacement
         // that raised the total, where LastShares, price, LeavesQty and the
         // timestamp tick can all repeat.
-        let dedup_key = if exec_id.is_empty() {
-            format!(
-                "{}|{}|{}|{}|{}",
-                clord_id,
-                parsed.get(&60).map(|s| s.as_str()).unwrap_or(""),
-                last_shares,
-                last_px,
-                report_cum_qty.unwrap_or(0),
-            )
-        } else {
-            exec_id.to_string()
-        };
+        let dedup_key = execution_key(parsed, clord_id);
 
         // A trade cancel and a trade correction carry a quantity and restate
         // what the account holds, exactly as a fill does; the reconciliation
