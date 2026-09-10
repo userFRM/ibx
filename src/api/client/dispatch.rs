@@ -511,9 +511,13 @@ impl EClient {
     fn dispatch_quotes(&self, wrapper: &mut impl Wrapper) {
         // The increment each subscription was acknowledged with, to everyone
         // watching the contract, once: the reference client delivers it on
-        // `tick_req_params` ahead of the first tick. The venue names one
-        // exchange table for every contract and states no permission figure,
-        // so those two fields are empty and nought.
+        // `tick_req_params` ahead of the first tick.
+        //
+        // The exchange and the permission figure beside it are stated on the
+        // acknowledgement only above a version this session does not negotiate
+        // — every acknowledgement seen here carries five fields and neither of
+        // them — so they go out empty and nought. That is what the venue said,
+        // not a claim that it never says more.
         for (req_id, min_tick) in self.shared.market.drain_tick_req_params_direct() {
             wrapper.tick_req_params(req_id, min_tick, "", 0);
         }

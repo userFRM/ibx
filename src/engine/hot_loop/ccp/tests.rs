@@ -1279,6 +1279,49 @@ fn a_repeated_correction_without_an_execution_id_recovers_an_order_only_once() {
     );
 }
 
+/// The venue moving a working order reaches the caller.
+///
+/// It states only what it changed — where the order is working, what its limit
+/// is, or both — against the order it names. Read by nothing, a caller's own
+/// account of the order stayed at what it was placed with while the venue
+/// worked a different one, and nothing said so.
+#[test]
+fn the_venue_revising_a_working_order_reaches_the_caller() {
+    let shared = SharedState::new();
+    let placed = crate::types::model::Order {
+        order_id: 55, action: "BUY".into(), total_quantity: 100.0,
+        order_type: "LMT".into(), lmt_price: 100.0, tif: "DAY".into(), ..Default::default()
+    };
+    let mut spy = crate::types::model::Contract::default();
+    spy.symbol = "SPY".into();
+    spy.exchange = "SMART".into();
+    shared.orders.push_order_info(55, crate::bridge::RichOrderInfo {
+        contract: spy,
+        order: placed,
+        order_state: crate::types::model::OrderState {
+            status: "Submitted".into(), ..Default::default()
+        },
+        last_exec: Default::default(),
+    });
+
+    let revision: std::collections::HashMap<u32, String> = [
+        (11u32, "55".to_string()), (30u32, "ARCA".to_string()), (44u32, "101.5".to_string()),
+    ].into_iter().collect();
+    super::handle_order_revision(&revision, &shared);
+
+    let held = shared.orders.get_order_info(55).expect("the order is still held");
+    assert_eq!(held.order.lmt_price, 101.5, "the limit the venue is now working");
+    assert_eq!(held.contract.exchange, "ARCA", "and where it is working it");
+
+    // Stating nothing changes nothing, rather than blanking what was held.
+    let quiet: std::collections::HashMap<u32, String> =
+        [(11u32, "55".to_string())].into_iter().collect();
+    super::handle_order_revision(&quiet, &shared);
+    let held = shared.orders.get_order_info(55).expect("still held");
+    assert_eq!(held.order.lmt_price, 101.5, "what it did not state, it did not change");
+    assert_eq!(held.contract.exchange, "ARCA");
+}
+
 /// The case a blanket suppression of marked reports loses. A CCP reconnect
 /// keeps this state — window and order book both survive — and the gateway
 /// replays recent executions on the new session. A fill that executed

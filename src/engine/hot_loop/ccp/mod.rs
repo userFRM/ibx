@@ -149,6 +149,44 @@ fn handle_venue_error(parsed: &std::collections::HashMap<u32, String>, shared: &
     shared.market.push_venue_error(told);
 }
 
+/// The venue restating a working order's terms.
+///
+/// It names the order and states only what it has changed — the venue it is
+/// working on, its limit, or both — so what it does not state is what the
+/// order already held. The revised order goes back to the caller the way any
+/// other change to it does.
+fn handle_order_revision(
+    parsed: &std::collections::HashMap<u32, String>,
+    shared: &SharedState,
+) {
+    let Some(order_id) = parsed.get(&11).and_then(|id| id.split('.').next()?.parse::<u64>().ok())
+    else {
+        return;
+    };
+    let Some(mut held) = shared.orders.get_order_info(order_id) else {
+        // An order this session holds no account of. The venue states the
+        // change against the order, and there is nothing here to state it on.
+        log::debug!("the venue revised order {order_id}, which is not held here");
+        return;
+    };
+    let mut changed = false;
+    if let Some(exchange) = parsed.get(&30).filter(|at| !at.is_empty()) {
+        // The venue an order works on is the contract's, which is what a
+        // caller reads it off.
+        held.contract.exchange = exchange.clone();
+        changed = true;
+    }
+    if let Some(price) = parsed.get(&44).and_then(|p| p.parse::<f64>().ok()) {
+        held.order.lmt_price = price;
+        changed = true;
+    }
+    if !changed {
+        return;
+    }
+    log::info!("the venue revised order {order_id}");
+    shared.orders.push_order_info(order_id, held);
+}
+
 /// Why a message this client receives is deliberately not read.
 ///
 /// Told apart from one nobody has looked at yet. Both are discarded, but only
@@ -775,6 +813,13 @@ impl CcpState {
                         // nowhere at all.
                         "42" => handle_venue_error(&parsed, shared),
                         "81" => handle_algorithms(&parsed, shared),
+                        // The venue moving a working order: it names the order
+                        // and states the terms it has changed — where it is
+                        // now working, what its limit now is, or both. Read by
+                        // nothing, a caller's own account of the order stayed
+                        // at what it was placed with while the venue worked a
+                        // different one.
+                        "110" => handle_order_revision(&parsed, shared),
                         "210" => handle_account_config(&parsed, shared),
                         "139" => self.handle_option_chain(msg, shared),
                         "102" => self.handle_exchange_list(msg, shared),
