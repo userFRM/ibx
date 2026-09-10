@@ -43,6 +43,7 @@ publishes it under:
 | `106` | option implied volatility, on `tick_generic` 24 |
 | `236` | shortability on `tick_generic` 46, and the borrowable share count on `tick_size` 89 |
 | `292` | news, on `tick_news` |
+| `105` | average option volume, the two sides added, on `tick_size` 87 |
 | `225` | auction volume and imbalance on `tick_size` 34 and 36, auction price on `tick_price` 35 |
 | `233` | the trade tape, on `tick_string` 48: `price;size;time;volume;vwap;single` |
 | `293` `294` `295` | trade count, trade rate and volume rate, on `tick_generic` 54, 55 and 56 |
@@ -50,6 +51,7 @@ publishes it under:
 | `411` | real-time historical volatility, on `tick_generic` 58 |
 | `460` | bond factor multiplier, on `tick_generic` 60 |
 | `499` | borrow fee rate, on `tick_price` 111 |
+| `586` | the estimated IPO midpoint on `tick_generic` 101, and what it opened at on 102 |
 | `588` | futures open interest, on `tick_size` 86 |
 
 Any other number is still requested and the venue still serves it, but nothing

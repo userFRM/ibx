@@ -329,6 +329,35 @@ mod news_tests {
             ],
             "the auction states three things; an unstated open interest states none",
         );
+
+        // The average option volume is the two sides added, and unstated
+        // altogether when either side is.
+        let mut avg = Vec::new();
+        avg.extend_from_slice(&300i32.to_be_bytes());
+        avg.extend_from_slice(&700i32.to_be_bytes());
+        farm.generic_tick_tags.push((15, 105, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(15, 105, &avg)]), &mut context, &shared, &None,
+        );
+        let mut half = Vec::new();
+        half.extend_from_slice(&300i32.to_be_bytes());
+        half.extend_from_slice(&i32::MAX.to_be_bytes());
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(15, 105, &half)]), &mut context, &shared, &None,
+        );
+        let said: Vec<(i32, String)> = shared.market.drain_series_ticks(instrument)
+            .into_iter()
+            .map(|t| (t.tick_type, match t.value {
+                SeriesValue::Generic(v) => format!("generic {v}"),
+                SeriesValue::Size(v) => format!("size {v}"),
+                SeriesValue::Price(v) => format!("price {v}"),
+                SeriesValue::Text(v) => format!("text {v}"),
+            }))
+            .collect();
+        assert_eq!(
+            said, [(87, "size 1000".to_string())],
+            "the two sides added, and nothing at all where one is unstated",
+        );
     }
 
     /// The running volume states a trade, not the totals it is read from.

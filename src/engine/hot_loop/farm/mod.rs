@@ -288,6 +288,45 @@ fn deliver_series(
                 say(35, SeriesValue::Price(price as f64));
             }
         }
+        // The average option volume the venue keeps for each side, which it
+        // publishes as one figure: the two added. Either side left unstated
+        // leaves the whole figure unstated rather than counting it as none.
+        105 => {
+            let (Some(call), Some(put)) = (series_i32(payload, 0), series_i32(payload, 4))
+            else {
+                return true;
+            };
+            if call != i32::MAX && put != i32::MAX {
+                say(87, SeriesValue::Size(call as f64 + put as f64));
+            }
+        }
+        // What a share is expected to open at, and what it did open at. The
+        // venue states up to three prices — the top, the middle and the bottom
+        // of its estimate — and a flag word saying which of them stand.
+        586 => {
+            let Some(stated) = series_i32(payload, 4) else { return true };
+            let prices: Vec<f64> = (0..stated.clamp(0, 3))
+                .filter_map(|i| series_f64(payload, 8 + 8 * i as usize))
+                .collect();
+            let Some(flags) = series_i32(payload, 8 + 8 * prices.len()) else { return true };
+            if flags == -1 {
+                return true;
+            }
+            // The middle of the estimate stands while the estimate does.
+            if flags & 0x03 == 0x03
+                && let Some(&middle) = prices.get(1)
+                && middle != f64::MAX
+            {
+                say(101, SeriesValue::Generic(middle));
+            }
+            // And the figure it finally opened at, once it is final.
+            if flags & 0x07 == 0x05
+                && let Some(&settled) = prices.first()
+                && settled != f64::MAX
+            {
+                say(102, SeriesValue::Generic(settled));
+            }
+        }
         _ => return false,
     }
     true
