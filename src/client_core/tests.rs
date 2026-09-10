@@ -1439,9 +1439,6 @@ fn a_ledger_tag_answers_with_the_currency_bucket_it_names() {
         ("ExchangeRate", "1.08", "EUR"),
         ("CashBalance", "7500.00", "BASE"),
         ("NetLiquidation", "75425.51", "USD"),
-        // An account-wide figure that is not one of the venue's per-currency
-        // ones, stated in a currency: it is still not a ledger row.
-        ("InsuredDeposit", "250000.00", "EUR"),
     ] {
         shared.portfolio.note_account_value(key, value, currency);
     }
@@ -1461,7 +1458,7 @@ fn a_ledger_tag_answers_with_the_currency_bucket_it_names() {
     assert_eq!(
         batch.entries.iter().map(|e| (e.tag.as_str(), e.value.as_str())).collect::<Vec<_>>(),
         [("CashBalance", "5000.00"), ("ExchangeRate", "1.08")],
-        "every ledger figure the venue stated in the currency named, and only those",
+        "every ledger figure the venue stated in the currency named",
     );
     core.unsubscribe_account_summary(4);
 

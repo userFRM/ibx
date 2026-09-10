@@ -898,7 +898,10 @@ impl CcpState {
                     }
                 }
             }
-            "UT" | "UM" | "RL" => positions::handle_account_update(msg, context, shared),
+            "UT" | "UM" => positions::handle_account_update(msg, context, shared),
+            // The per-currency figures, which are not a name-and-value stream
+            // the way the two above are.
+            "RL" => positions::handle_ledger_update(msg, shared),
             // The same figures, for the sets of holdings the account does not
             // hold itself. Applied to the account's own they would overstate
             // what it is worth, so they are kept where the holdings they

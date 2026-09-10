@@ -1307,6 +1307,43 @@ fn the_model_a_report_names_reaches_the_caller() {
     assert_eq!(held.order.model_code, "", "an account-only report names no model");
 }
 
+/// The per-currency figures are read off the bucket the venue states them in.
+///
+/// A ledger reply is not the name-and-value stream the other account messages
+/// are: it opens a bucket, names the currency, and states each figure on a tag
+/// of its own. Read as name-and-value it matched nothing, and the standard way
+/// to read per-currency cash came back empty — which a caller cannot tell from
+/// an account holding no cash at all.
+#[test]
+fn the_per_currency_figures_are_read_off_their_bucket() {
+    let shared = SharedState::new();
+    // Two buckets in one frame: euros, then the base currency.
+    let frame = concat!(
+        "8001=1\x0115=EUR\x019806=5000\x018174=250\x019820=1.08\x016099=12.5",
+        "\x018001=2\x0115=BASE\x019806=7500\x019819=75425.51",
+    );
+    super::positions::handle_ledger_update(frame.as_bytes(), &shared);
+
+    let held = shared.portfolio.stated_account_values();
+    let read = |name: &str, currency: &str| {
+        held.iter()
+            .find(|(k, _, c)| k == name && c == currency)
+            .map(|(_, v, _)| v.clone())
+    };
+    assert_eq!(
+        read("CashBalance", "EUR").as_deref(), Some("5250.00"),
+        "the cash balance with the insured deposit in it, which is where the venue puts it",
+    );
+    assert_eq!(read("ExchangeRate", "EUR").as_deref(), Some("1.08"));
+    assert_eq!(read("RealizedPnL", "EUR").as_deref(), Some("12.50"), "at least two places");
+    assert_eq!(read("CashBalance", "BASE").as_deref(), Some("7500.00"), "the second bucket");
+    assert_eq!(read("NetLiquidationByCurrency", "BASE").as_deref(), Some("75425.51"));
+    assert!(
+        read("CashBalance", "EUR").is_some() && read("NetLiquidationByCurrency", "EUR").is_none(),
+        "and a figure stated in one bucket does not leak into the other",
+    );
+}
+
 /// The venue moving a working order reaches the caller.
 ///
 /// It states only what it changed — where the order is working, what its limit

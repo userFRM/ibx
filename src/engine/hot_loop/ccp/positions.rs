@@ -82,6 +82,120 @@ pub(crate) fn handle_account_update(msg: &[u8], context: &mut Context, shared: &
     }
 }
 
+/// The figures the venue keeps per currency, by the tag each arrives on.
+///
+/// A ledger reply is not the name-and-value stream the other account messages
+/// are: it opens a bucket, names the currency it is in, and then states each
+/// figure on a tag of its own. Read as name-and-value it matched nothing, and
+/// the standard way to read per-currency cash came back empty — which a caller
+/// cannot tell from an account holding no cash at all.
+///
+/// The names are the venue's own. Five tags it states — 6925, 6926, 8007, 8208
+/// and 8398 — have a place in its own formatter and no name in the map it
+/// publishes from, so they are left out rather than given one here. A figure
+/// with a name invented for it is worse than a figure withheld: a caller reads
+/// it as the venue's.
+const LEDGER_FIGURES: [(u32, &str); 21] = [
+    (9807, "StockMarketValue"),
+    (9808, "OptionMarketValue"),
+    (9809, "FutureOptionValue"),
+    (9810, "FuturesPNL"),
+    (9818, "TotalCashBalance"),
+    (9819, "NetLiquidationByCurrency"),
+    (9820, "ExchangeRate"),
+    (6681, "NetDividend"),
+    (6682, "MutualFundValue"),
+    (6683, "MoneyMarketFundValue"),
+    (6684, "CorporateBondValue"),
+    (6685, "TBondValue"),
+    (6686, "TBillValue"),
+    (6687, "WarrantValue"),
+    (6924, "IssuerOptionValue"),
+    (6099, "RealizedPnL"),
+    (6100, "UnrealizedPnL"),
+    (6242, "AccruedCash"),
+    (6483, "FundValue"),
+    (6711, "FxCashBalance"),
+    (8406, "Cryptocurrency"),
+];
+
+/// A ledger figure as the venue writes it: at least two places and at most
+/// seven, without grouping.
+fn ledger_figure(value: f64) -> String {
+    let mut text = format!("{value:.7}");
+    while text.contains('.')
+        && text.ends_with('0')
+        && text.split('.').nth(1).is_some_and(|frac| frac.len() > 2)
+    {
+        text.pop();
+    }
+    text
+}
+
+/// One per-currency bucket of the account's figures.
+///
+/// The venue opens a bucket, names its currency, and states each figure on its
+/// own tag. An insured-deposit balance is stated apart and belongs to the cash
+/// balance unless the session is set to split the two, which this one is not —
+/// so it is added in rather than published as a figure of its own.
+pub(crate) fn handle_ledger_update(msg: &[u8], shared: &SharedState) {
+    let Ok(text) = std::str::from_utf8(msg) else { return };
+    let mut currency = String::new();
+    let mut opened = false;
+    let mut cash: Option<f64> = None;
+    let mut insured: Option<f64> = None;
+    let mut stated: Vec<(&str, String)> = Vec::new();
+    let publish = |currency: &str,
+                   cash: &Option<f64>,
+                   insured: &Option<f64>,
+                   stated: &mut Vec<(&str, String)>| {
+        if currency.is_empty() {
+            stated.clear();
+            return;
+        }
+        if let Some(balance) = cash {
+            // The insured deposit is part of what is held in cash unless the
+            // session splits them, and it is stated apart either way.
+            let held = balance + insured.filter(|d| d.is_finite()).unwrap_or(0.0);
+            shared.portfolio.note_account_value("CashBalance", &ledger_figure(held), currency);
+        }
+        for (name, value) in stated.drain(..) {
+            shared.portfolio.note_account_value(name, &value, currency);
+        }
+    };
+    for part in text.split('\x01') {
+        let Some((tag, value)) = part.split_once('=') else { continue };
+        let Ok(tag) = tag.parse::<u32>() else { continue };
+        match tag {
+            // A new bucket: whatever the last one stated goes out under its own
+            // currency before this one starts.
+            8001 => {
+                if opened {
+                    publish(&currency, &cash, &insured, &mut stated);
+                }
+                opened = true;
+                currency.clear();
+                cash = None;
+                insured = None;
+            }
+            15 => currency = value.to_string(),
+            9806 => cash = value.parse().ok(),
+            8174 => insured = value.parse().ok(),
+            _ => {
+                if let Some((_, name)) = LEDGER_FIGURES.iter().find(|(t, _)| *t == tag)
+                    && let Ok(figure) = value.parse::<f64>()
+                {
+                    stated.push((name, ledger_figure(figure)));
+                }
+            }
+        }
+    }
+    if opened {
+        publish(&currency, &cash, &insured, &mut stated);
+    }
+}
+
+
 /// Handle 6040=143, the venue's daily P&L seeds.
 /// Repeating group: 146={count} × (6008=conId, 6064=qtyMidnight, 8223=qtyTraded,
 /// 8233=costMidnight, 6822=moneyTraded, 6099=realizedPnl), then 8058 combo
