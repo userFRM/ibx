@@ -4180,13 +4180,20 @@ impl ClientCore {
         // The figures the venue keeps per currency, which are the rows a ledger
         // request asks for. Every other stated figure is about the account as a
         // whole and is not part of a currency bucket.
-        const LEDGER: [&str; 26] = [
+        //
+        // The names are the venue's own and the set is closed, so it is written
+        // down here as the venue writes it down. A name that is not in it is
+        // not a ledger figure: an insured-deposit balance, for one, is an
+        // account-wide figure and a setting that splits it out of the cash
+        // balance, and naming it here answered a ledger request with a row the
+        // venue does not keep per currency.
+        const LEDGER: [&str; 25] = [
             "Currency", "CashBalance", "TotalCashBalance", "AccruedCash", "StockMarketValue",
             "OptionMarketValue", "FutureOptionValue", "FuturesPNL", "NetLiquidationByCurrency",
             "UnrealizedPnL", "RealizedPnL", "ExchangeRate", "FundValue", "NetDividend",
             "MutualFundValue", "MoneyMarketFundValue", "CorporateBondValue", "TBondValue",
             "TBillValue", "WarrantValue", "FxCashBalance", "AccountOrGroup", "RealCurrency",
-            "IssuerOptionValue", "Cryptocurrency", "InsuredDeposit",
+            "IssuerOptionValue", "Cryptocurrency",
         ];
         // Whatever follows the colon is the currency asked for, and no colon at
         // all is the base bucket — the venue's own reading of the text.
