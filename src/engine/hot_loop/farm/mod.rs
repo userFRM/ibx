@@ -201,6 +201,12 @@ fn deliver_series(
         if matches!(value, SeriesValue::Generic(v) if v == f64::MAX) {
             return;
         }
+        // And on the callback that takes text, a series with nothing to say
+        // says nothing: an empty string is not a reading, and the reference
+        // client sends none.
+        if matches!(&value, SeriesValue::Text(t) if t.is_empty()) {
+            return;
+        }
         shared.market.push_series_tick(SeriesTick { instrument, tick_type, value });
     };
     match tick {

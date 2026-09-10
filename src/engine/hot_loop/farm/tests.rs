@@ -489,6 +489,10 @@ mod news_tests {
         serve(&mut farm, 41, 614, &backwards, &mut context);
         assert!(said(&shared).is_empty(), "a high under its own low states neither");
 
+        // A dividend line with nothing on it is not a reading.
+        serve(&mut farm, 43, 456, &[0u8, 0, 0, 0, b'\n'], &mut context);
+        assert!(said(&shared).is_empty(), "an empty line says nothing");
+
         // The last few minutes' volume, each span named by its length.
         let mut spans = 3i32.to_be_bytes().to_vec();
         for (minutes, volume) in [(5i32, 220i32), (10, 480), (3, 90)] {
