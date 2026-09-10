@@ -144,7 +144,7 @@ fn deliver_series(
     shared: &SharedState,
 ) -> bool {
     use crate::types::{SeriesTick, SeriesValue};
-    let mut say = |tick_type: i32, value: SeriesValue| {
+    let say = |tick_type: i32, value: SeriesValue| {
         shared.market.push_series_tick(SeriesTick { instrument, tick_type, value });
     };
     match tick {
