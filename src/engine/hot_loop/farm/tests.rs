@@ -331,6 +331,63 @@ mod news_tests {
         );
     }
 
+    /// The running volume states a trade, not the totals it is read from.
+    ///
+    /// The venue states what has traded by value, by shares and by count since
+    /// the day began; a caller is owed the trade between two of those
+    /// statements. Read as the totals themselves, a caller subscribing at
+    /// noon would have been handed the whole morning as one print.
+    #[test]
+    fn the_running_volume_states_the_trade_between_two_totals() {
+        use crate::types::SeriesValue;
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.generic_tick_tags.push((21, 233, instrument));
+
+        let totals = |value: f64, shares: i64, trades: i32| {
+            let mut p = Vec::new();
+            p.extend_from_slice(&value.to_be_bytes());
+            p.extend_from_slice(&shares.to_be_bytes());
+            p.extend_from_slice(&trades.to_be_bytes());
+            p
+        };
+
+        // The first statement is a baseline and nothing else: there is no
+        // earlier one to take a difference from.
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(21, 233, &totals(1_000_000.0, 10_000, 40))]),
+            &mut context, &shared, &None,
+        );
+        assert!(
+            shared.market.drain_series_ticks(instrument).is_empty(),
+            "the first totals are a baseline, not a trade",
+        );
+
+        // A hundred shares at 101 apiece, on one trade.
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(21, 233, &totals(1_010_100.0, 10_100, 41))]),
+            &mut context, &shared, &None,
+        );
+        let said = shared.market.drain_series_ticks(instrument);
+        assert_eq!(said.len(), 1, "one statement for one trade");
+        assert_eq!(said[0].tick_type, 48);
+        let SeriesValue::Text(text) = &said[0].value else {
+            panic!("the running volume is stated as text: {:?}", said[0].value)
+        };
+        let parts: Vec<&str> = text.split(';').collect();
+        assert_eq!(parts.len(), 6, "six fields: {text}");
+        assert_eq!(parts[0], "101", "what it traded at: {text}");
+        assert_eq!(parts[1], "100.0000000000000000", "and how many: {text}");
+        assert_eq!(parts[3], "10100.0000000000000000", "the day's shares so far: {text}");
+        assert_eq!(
+            parts[4], "100.00990099",
+            "the average struck over the day, to the eight places the venue starts at: {text}",
+        );
+        assert_eq!(parts[5], "true", "one trade is a single trade: {text}");
+    }
+
     /// A frame under a number nothing asked a generic tick under says nothing
     /// about which tick it is, so it is dropped rather than guessed at.
     /// Instrument 0 is a real instrument — the first one registered — so a

@@ -44,6 +44,7 @@ publishes it under:
 | `236` | shortability on `tick_generic` 46, and the borrowable share count on `tick_size` 89 |
 | `292` | news, on `tick_news` |
 | `225` | auction volume and imbalance on `tick_size` 34 and 36, auction price on `tick_price` 35 |
+| `233` | the trade tape, on `tick_string` 48: `price;size;time;volume;vwap;single` |
 | `293` `294` `295` | trade count, trade rate and volume rate, on `tick_generic` 54, 55 and 56 |
 | `318` | last regular-session trade, on `tick_price` 57 |
 | `411` | real-time historical volatility, on `tick_generic` 58 |

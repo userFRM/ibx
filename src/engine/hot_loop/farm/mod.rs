@@ -114,10 +114,49 @@ fn build_conid_subscribe_tags(
     tags
 }
 
+/// A quantity as the running-volume string states it.
+///
+/// The venue's own decimal, whose text is that of a fixed-point number held to
+/// sixteen places and not stripped of its trailing zeros — so two shares are
+/// `2.0000000000000000` and none at all is `0E-16`. A caller splitting the
+/// string on its separators parses these as numbers, but they are the venue's
+/// spelling and not this client's, so they are written as the venue writes
+/// them.
+fn rt_volume_quantity(shares: i64) -> String {
+    if shares == 0 {
+        return "0E-16".to_string();
+    }
+    format!("{shares}.0000000000000000")
+}
+
+/// A price as the running-volume string states it.
+///
+/// Up to eight places, which is where the venue's own formatter starts, with
+/// no grouping. How many places it keeps at the low end is the instrument's
+/// own market rule, which this client does not hold in full — a caller reading
+/// the field as a number is unaffected, and one comparing its text against the
+/// reference client's may see fewer trailing zeros.
+fn rt_volume_price(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let mut text = format!("{value:.8}");
+    if text.contains('.') {
+        text = text.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
+    text
+}
+
 /// Read a big-endian `f64` off the front of a payload.
 fn series_f64(payload: &[u8], at: usize) -> Option<f64> {
     let bytes: [u8; 8] = payload.get(at..at + 8)?.try_into().ok()?;
     Some(f64::from_be_bytes(bytes))
+}
+
+/// Read a big-endian `i64` off a payload.
+fn series_i64(payload: &[u8], at: usize) -> Option<i64> {
+    let bytes: [u8; 8] = payload.get(at..at + 8)?.try_into().ok()?;
+    Some(i64::from_be_bytes(bytes))
 }
 
 /// Read a big-endian `i32` off a payload.
@@ -395,6 +434,13 @@ pub(crate) struct FarmState {
     /// subscription again from what is held here and has nowhere else to read
     /// them from.
     pub(crate) asked_generic_ticks: std::collections::HashMap<InstrumentId, Vec<u32>>,
+    /// What the running-volume series last stated for a contract: the
+    /// cumulative value, share count and trade count, in that order.
+    ///
+    /// The series states totals and the caller is owed the trade between two
+    /// of them, so the previous totals are what make a reading mean anything.
+    /// Until one has been seen there is no trade to state, only a baseline.
+    rt_volume_totals: std::collections::HashMap<InstrumentId, (f64, i64, i32)>,
     /// The venue's number for a generic-tick subscription, and what it
     /// carries: (server tag, request type, instrument).
     generic_tick_tags: Vec<(u32, u32, InstrumentId)>,
@@ -906,6 +952,7 @@ impl FarmState {
             greeks_subs: Vec::new(),
             generic_tick_reqs: Vec::new(),
             asked_generic_ticks: std::collections::HashMap::new(),
+            rt_volume_totals: std::collections::HashMap::new(),
             news_subscriptions: Vec::new(),
             generic_tick_tags: Vec::new(),
             unread_types: std::collections::HashSet::new(),
@@ -2781,22 +2828,28 @@ impl FarmState {
         // number is the only thing that says what these bytes are — and, since
         // a tick's payload states its length in a way particular to that tick,
         // the only thing that says where the record ends.
-        let asked = &self.generic_tick_tags;
-        let mut delivered: Vec<(u32, u32, &[u8])> = Vec::new();
-        read_generic_ticks(
-            body,
-            |server_tag| asked.iter().find(|(tag, ..)| *tag == server_tag).map(|(_, tick, _)| *tick),
-            |tick, record| delivered.push((tick, record.server_tag, record.payload)),
-        );
+        // The contract each record belongs to is resolved here, while the
+        // record of what was asked for is still in hand, so that reading a
+        // series which keeps state of its own does not borrow it a second time.
+        let mut delivered: Vec<(u32, InstrumentId, &[u8])> = Vec::new();
+        {
+            let asked = &self.generic_tick_tags;
+            read_generic_ticks(
+                body,
+                |server_tag| {
+                    asked.iter().find(|(tag, ..)| *tag == server_tag).map(|(_, tick, _)| *tick)
+                },
+                |tick, record| {
+                    if let Some((_, _, instrument)) =
+                        asked.iter().find(|(tag, ..)| *tag == record.server_tag)
+                    {
+                        delivered.push((tick, *instrument, record.payload));
+                    }
+                },
+            );
+        }
 
-        for (tick, server_tag, payload) in delivered {
-            let Some(instrument) = asked
-                .iter()
-                .find(|(tag, ..)| *tag == server_tag)
-                .map(|(_, _, instrument)| *instrument)
-            else {
-                continue;
-            };
+        for (tick, instrument, payload) in delivered {
             match tick {
                 GREEKS_REQUEST_TYPE => {
                     if let Some(mut comp) = decode_greeks(payload) {
@@ -2857,6 +2910,10 @@ impl FarmState {
                     emit(event_tx, Event::Tick(instrument));
                 }
                 NEWS_REQUEST_TYPE => self.deliver_news(instrument, payload, shared, event_tx),
+                // The running volume states totals, and what a caller is owed
+                // is the trade between two of them — so it is read here, where
+                // the totals this contract last stated are held.
+                233 => self.deliver_running_volume(instrument, payload, shared),
                 other => {
                     if !deliver_series(other, payload, instrument, shared) {
                         log::debug!("Generic tick {other} arrives and nothing here reads it");
@@ -2864,6 +2921,72 @@ impl FarmState {
                 }
             }
         }
+    }
+
+    /// One trade off the running-volume series, as the reference client
+    /// states it.
+    ///
+    /// The venue states running totals — what has traded by value, by shares
+    /// and by count — and the reference client publishes the difference
+    /// between two of them as one semicolon-separated string. Until a first
+    /// pair has been seen there is no difference to state, so the first
+    /// reading sets the baseline and says nothing; a caller is not handed a
+    /// trade of the whole day's volume for having just subscribed.
+    fn deliver_running_volume(
+        &mut self,
+        instrument: InstrumentId,
+        payload: &[u8],
+        shared: &SharedState,
+    ) {
+        let (Some(value), Some(shares), Some(trades)) = (
+            series_f64(payload, 0),
+            series_i64(payload, 8),
+            series_i32(payload, 16),
+        ) else {
+            return;
+        };
+        // The venue says it holds no total by stating the largest the type
+        // carries, which is not a share count.
+        if shares == i64::MAX {
+            return;
+        }
+        let Some(&(was_value, was_shares, was_trades)) = self.rt_volume_totals.get(&instrument)
+        else {
+            self.rt_volume_totals.insert(instrument, (value, shares, trades));
+            return;
+        };
+        self.rt_volume_totals.insert(instrument, (value, shares, trades));
+
+        let moved_shares = shares - was_shares;
+        let moved_value = value - was_value;
+        let moved_trades = trades - was_trades;
+        // A trade of no shares has no price: the venue divides by the share
+        // difference and states nothing where it is nought, rather than
+        // standing in the last price it knew.
+        let last_price = if moved_shares == 0 {
+            String::new()
+        } else {
+            rt_volume_price(moved_value / moved_shares as f64)
+        };
+        // The average is struck over everything traded, not over this trade,
+        // so it survives a trade that moved no shares.
+        let vwap = if shares == 0 {
+            String::new()
+        } else {
+            rt_volume_price(value / shares as f64)
+        };
+        let said = format!(
+            "{last_price};{};{};{};{vwap};{}",
+            rt_volume_quantity(moved_shares),
+            shared.market.venue_time_millis(),
+            rt_volume_quantity(shares),
+            moved_trades < 2,
+        );
+        shared.market.push_series_tick(crate::types::SeriesTick {
+            instrument,
+            tick_type: 48,
+            value: crate::types::SeriesValue::Text(said),
+        });
     }
 
     /// The articles in one news tick.
