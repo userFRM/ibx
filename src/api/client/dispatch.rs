@@ -38,6 +38,12 @@ pub(crate) const NO_REQUEST: i64 = -1;
 /// says only that the venue is the one saying it.
 const VENUE_REPORTED: i64 = 321;
 
+/// What the venue sends every session when it has something to say that
+/// belongs to no request. The number is the venue's own, not a stand-in: it
+/// arrives on the session as a message of its own subtype and reaches every
+/// client under this code.
+const VENUE_MESSAGE: i64 = 2148;
+
 /// What the reference client reports when data a caller asked for is not being
 /// served. A book this client has given up on is not being served: the venue
 /// goes on sending it and nothing further is kept, until the caller withdraws
@@ -771,7 +777,7 @@ impl EClient {
         // What the venue said went wrong. It attributes these to no request,
         // so neither does this.
         for text in self.shared.market.drain_venue_errors() {
-            wrapper.error(NO_REQUEST, VENUE_REPORTED, &text, "");
+            wrapper.error(NO_REQUEST, VENUE_MESSAGE, &text, "");
         }
 
         // A subscription the venue could not be asked for, because it never
@@ -1123,6 +1129,34 @@ mod delivered_size_tests {
         client.dispatch_data(&mut heard);
         assert!(heard.news.is_empty(), "a withdrawn watch was sent news: {:?}", heard.news);
         assert_eq!(heard.models, [(7, 53)], "only the explicitly addressed answer is owed");
+    }
+
+    /// What the venue says on its own account reaches the caller under the
+    /// venue's own code.
+    ///
+    /// It belongs to no request, so it is reported against none. The number is
+    /// not a stand-in for "something went wrong": the venue sends this message
+    /// on its own subtype and every client is told it under this code, so a
+    /// caller matching on the number reads nothing where another number is
+    /// reported in its place.
+    #[test]
+    fn a_message_the_venue_sends_on_its_own_account_keeps_the_venues_code() {
+        #[derive(Default)]
+        struct Heard(Vec<(i64, i64, String)>);
+        impl Wrapper for Heard {
+            fn error(&mut self, req_id: i64, code: i64, msg: &str, _: &str) {
+                self.0.push((req_id, code, msg.to_string()));
+            }
+        }
+        let (client, _rx, shared) = crate::api::client::tests::test_client();
+        shared.market.push_venue_error("the venue is going down at 17:00".to_string());
+        let mut heard = Heard::default();
+        client.dispatch_data(&mut heard);
+        assert_eq!(
+            heard.0,
+            [(-1, 2148, "the venue is going down at 17:00".to_string())],
+            "against no request, under the venue's own code",
+        );
     }
 
     #[derive(Default)]

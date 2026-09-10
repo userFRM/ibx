@@ -572,7 +572,7 @@ impl EClient {
         }
 
         for text in shared.market.drain_venue_errors() {
-            call_wrapper!(self, py, shared, "error", (-1i64, super::raised_now(), 321i64, text, ""));
+            call_wrapper!(self, py, shared, "error", (-1i64, super::raised_now(), 2148i64, text, ""));
         }
 
         // A lookup that named a contract another slot already holds. One

@@ -20,6 +20,16 @@ fn note_sent(shared: &SharedState, fields: &[(u32, &str)]) {
     }
 }
 
+/// Whether an account's model is one the venue is told about on tag 6700.
+///
+/// The default model is not. The venue's own gate is a non-empty test that
+/// also excludes the default sleeve by name, so an order that names it states
+/// no model at all — and this client, stating it, put a tag on the wire that
+/// the venue is never sent.
+fn states_a_model(code: &str) -> bool {
+    !code.is_empty() && code != "Core"
+}
+
 /// Say that a change did not go, on the channel a refusal already travels on.
 ///
 /// The surfaces restate their record before the command is queued, because the
@@ -938,7 +948,7 @@ fn send_cancel(
         .submitted
         .get(&order_id)
         .map(|spec| spec.attrs.model_code.clone())
-        .filter(|code| !code.is_empty());
+        .filter(|code| states_a_model(code));
     let mut fields = vec![
         (fix::TAG_MSG_TYPE, fix::MSG_ORDER_CANCEL),
         (fix::TAG_SENDING_TIME, &now),
@@ -1904,7 +1914,7 @@ fn push_order_attrs(
     // The account names where the order goes and this names which sleeve of
     // it: an order placed for a model and sent without this trades the
     // account at large, which is a different position from the one asked for.
-    if !attrs.model_code.is_empty() {
+    if states_a_model(&attrs.model_code) {
         fields.push((6700, attrs.model_code.clone()));
     }
     // How an advisor's order is split across the accounts it is placed for.

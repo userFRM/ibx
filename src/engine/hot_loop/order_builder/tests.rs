@@ -4566,3 +4566,39 @@ fn an_order_for_a_model_names_it_on_the_order_and_on_the_cancel() {
         "and the cancel names it too: {msg}",
     );
 }
+
+/// The default sleeve is not a model, and naming it states nothing.
+///
+/// The venue's own gate on this tag is a non-empty test that also excludes the
+/// default sleeve by name. An order that named it and stated the tag anyway put
+/// a field on the wire that the venue is never sent.
+#[test]
+fn an_order_for_the_default_sleeve_names_no_model() {
+    use std::io::Read;
+    let (mut conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut context = Context::new();
+    let instrument = context.register_instrument(756733);
+    context.set_symbol(instrument, "SPY".to_string());
+    let asked = crate::api::Order { model_code: "Core".to_string(), ..Default::default() };
+    send_order_ex(
+        &mut conn, &mut context, &shared_for_test(), "DU123456", 80, instrument, Side::Buy, 1,
+        crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+        b'0', &asked.attrs(),
+    )
+    .unwrap();
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(
+        !msg.split('\u{1}').any(|field| field.starts_with("6700=")),
+        "no model tag at all: {msg}",
+    );
+
+    send_cancel(&mut conn, &mut context, "DU123456", 80).unwrap();
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(
+        !msg.split('\u{1}').any(|field| field.starts_with("6700=")),
+        "and the cancel states none either: {msg}",
+    );
+}

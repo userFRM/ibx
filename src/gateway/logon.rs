@@ -76,8 +76,16 @@ pub(super) struct LogonAck {
 }
 
 pub(super) fn market_data_allowance(fields: &std::collections::HashMap<u32, String>) -> usize {
-    let preferred = if fields.contains_key(&8421) && fields.contains_key(&8422) { 8421 } else { 6083 };
-    [preferred, 6847, 6846].into_iter()
+    // In the order the venue itself takes them, which is not the order they
+    // appear in on the logon: the last two are consulted first, and the pair
+    // at the front is the fallback. Taking the front one first allowed the
+    // smaller of two stated numbers and refused a subscription the venue would
+    // have served.
+    //
+    // The 8421 figure only stands in for 6083 when its companion 8422 is
+    // stated beside it; alone it is not the allowance.
+    let fallback = if fields.contains_key(&8421) && fields.contains_key(&8422) { 8421 } else { 6083 };
+    [6847, 6846, fallback].into_iter()
         .filter_map(|tag| fields.get(&tag)?.parse::<i32>().ok())
         .find(|&stated| stated > 0)
         .map_or(40, |stated| stated as usize)
@@ -1291,13 +1299,27 @@ mod tests {
     #[test]
     fn the_logon_states_the_market_data_allowance() {
         let cases: &[(&[(u32, &str)], usize)] = &[
+            // What a paper session actually states: all three agree.
             (&[(8421, "100"), (6846, "100"), (6847, "100")], 100),
-            (&[(8421, "75"), (8422, "1"), (6083, "60"), (6846, "150"), (6847, "100")], 75),
-            (&[(8421, "75"), (6083, "60"), (6846, "150"), (6847, "100")], 60),
-            (&[(6083, "60"), (6846, "150"), (6847, "100")], 60),
-            (&[(6083, "0"), (6846, "150"), (6847, "100")], 100),
+            // The three that only differ once the numbers differ. The last of
+            // them wins, not the first — taking 8421 here allowed 75 and
+            // refused a 76th subscription the venue would have served.
+            (&[(8421, "75"), (8422, "1"), (6083, "60"), (6846, "150"), (6847, "100")], 100),
+            (&[(8421, "75"), (6083, "60"), (6846, "150"), (6847, "100")], 100),
+            (&[(6083, "60"), (6846, "150"), (6847, "100")], 100),
+            // Then the middle one, when the first is absent or states nothing.
+            (&[(8421, "75"), (8422, "1"), (6083, "60"), (6846, "150")], 150),
             (&[(6083, "-1"), (6846, "150"), (6847, "0")], 150),
-            (&[(8421, "0"), (8422, "1"), (6083, "60"), (6846, "150"), (6847, "100")], 100),
+            // Only then the pair at the front, and 8421 only stands in for
+            // 6083 when 8422 is stated beside it.
+            (&[(8421, "75"), (8422, "1"), (6083, "60")], 75),
+            (&[(8421, "75"), (6083, "60")], 60),
+            // The choice between them is exclusive, not a chain: 8421 stated
+            // beside 8422 IS the figure, and a zero there leaves the default
+            // rather than falling through to 6083.
+            (&[(8421, "0"), (8422, "1"), (6083, "60")], 40),
+            // Nothing positive anywhere leaves the venue's own default.
+            (&[(6083, "0"), (6846, "0"), (6847, "0")], 40),
             (&[(6847, "1")], 1),
         ];
         for &(stated, expected) in cases {
