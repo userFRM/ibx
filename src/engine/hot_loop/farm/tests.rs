@@ -519,6 +519,80 @@ mod news_tests {
         );
     }
 
+    /// The mark the venue keeps for a contract reaches the caller.
+    ///
+    /// It arrives as a record of the venue's own fields — no length of its
+    /// own, the record saying where it ends — and this client abandoned the
+    /// message rather than read one, so the mark arrived and reached nobody.
+    #[test]
+    fn the_mark_the_venue_keeps_reaches_the_caller() {
+        use crate::types::SeriesValue;
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        // A penny a tick, which is what the raw count is counted in.
+        context.market.set_min_tick(instrument, 0.01);
+
+        // One record: the price, then the word of flags that ends it.
+        let record = |price: i64, flags: i64| {
+            let mut bits: Vec<u8> = Vec::new();
+            let mut push = |value: u64, width: usize| {
+                for i in (0..width).rev() {
+                    bits.push(((value >> i) & 1) as u8);
+                }
+            };
+            for (id, more, value) in [(2u64, 1u64, price), (13, 0, flags)] {
+                push(id, 5);
+                push(more, 1);
+                push(3, 2); // four bytes wide
+                push(u64::from(value < 0), 1);
+                push(value.unsigned_abs(), 31);
+            }
+            let mut bytes = vec![0u8; bits.len().div_ceil(8)];
+            for (i, &b) in bits.iter().enumerate() {
+                if b == 1 {
+                    bytes[i >> 3] |= 1 << (7 - (i & 7));
+                }
+            }
+            bytes
+        };
+
+        farm.generic_tick_tags.push((70, 220, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(70, 220, &record(10_125, 0))]),
+            &mut context, &shared, &None,
+        );
+        let said = shared.market.drain_series_ticks(instrument);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert_eq!(said[0].tick_type, 78);
+        assert!(
+            matches!(said[0].value, SeriesValue::Price(p) if (p - 101.25).abs() < 1e-9),
+            "a hundred and one and a quarter: {:?}", said[0].value,
+        );
+
+        // The venue saying the mark does not stand.
+        farm.generic_tick_tags.push((71, 220, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(71, 220, &record(10_125, 16))]),
+            &mut context, &shared, &None,
+        );
+        assert!(
+            shared.market.drain_series_ticks(instrument).is_empty(),
+            "a mark the venue says does not stand is not a mark",
+        );
+
+        // The slow one answers on its own number.
+        farm.generic_tick_tags.push((72, 619, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(72, 619, &record(10_100, 0))]),
+            &mut context, &shared, &None,
+        );
+        let said = shared.market.drain_series_ticks(instrument);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert_eq!(said[0].tick_type, 79);
+    }
+
     /// The two running series keep their own baselines.
     ///
     /// Everything that traded is one series; what traded on a trade report is

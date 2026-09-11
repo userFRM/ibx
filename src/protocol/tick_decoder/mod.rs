@@ -27,6 +27,14 @@ impl<'a> BitReader<'a> {
         }
     }
 
+    /// How far into the bytes the reader has got, in bits.
+    ///
+    /// A record that states no length of its own ends where its own last field
+    /// ends, so whoever handed it the bytes is told how many it used.
+    pub fn bits_read(&self) -> usize {
+        self.bit_pos
+    }
+
     /// How many bytes are left unread.
     pub fn remaining(&self) -> usize {
         self.total_bits.saturating_sub(self.bit_pos)
@@ -248,104 +256,138 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
             None => break,
         };
 
-        let mut has_more = 1u64;
-        while has_more == 1 && reader.remaining() >= 8 {
-            let raw_tick_type = match reader.read_unsigned(5) {
-                Some(v) => v,
-                None => break,
-            };
-            has_more = match reader.read_unsigned(1) {
-                Some(v) => v,
-                None => break,
-            };
-            let raw_width = match reader.read_unsigned(2) {
-                Some(v) => v + 1,
-                None => break,
-            };
-
-            // An entry whose number does not fit five bits states it in a
-            // byte, and then states how far to move the decimal point in four
-            // bits and how wide the value is in four more.
-            //
-            // Read as one byte of width, the two nibbles multiply: a value two
-            // places out and four bytes wide read as thirty-six bytes wide,
-            // which is wider than this decoder takes — so the entry was
-            // stepped over by two hundred and eighty-eight bits instead of
-            // thirty-two, and every tick behind it in the message was decoded
-            // out of step.
-            let (tick_type, byte_width, decimal_shift) = if raw_tick_type == 31 {
-                if reader.remaining() < 16 {
-                    return;
-                }
-                let Some(tick_type) = reader.read_unsigned(8) else {
-                    return;
-                };
-                let Some(decimal_shift) = reader.read_unsigned(4) else {
-                    return;
-                };
-                let Some(byte_width) = reader.read_unsigned(4) else {
-                    return;
-                };
-                (tick_type, byte_width, decimal_shift as u8)
-            } else {
-                (raw_tick_type, raw_width, 0)
-            };
-
-            let total_value_bits = (8 * byte_width) as usize;
-            if reader.remaining() < total_value_bits {
-                return;
-            }
-
-            // A value of no width has no sign bit either. Read as though it
-            // had one, the entry took a bit belonging to whatever followed it
-            // and published a zero of its own: the tick behind it was decoded
-            // a bit out of step, so a bid arrived as some other number and
-            // every tick after it in the message was lost.
-            if total_value_bits == 0 {
-                continue;
-            }
-
-            // An extended entry states its width in a full byte, so it can name
-            // a value wider than this decoder reads. That entry is lost either
-            // way; abandoning the message threw away every tick after it as
-            // well, including the other server tags in the same 35=P.
-            // Stepping over it keeps the rest.
-            if total_value_bits > 64 {
-                log::debug!("35=P: skipping a {byte_width}-byte tick value");
-                if !reader.skip(total_value_bits) {
-                    return;
-                }
-                continue;
-            }
-
-            let sign = match reader.read_unsigned(1) {
-                Some(v) => v,
-                None => return,
-            };
-            let magnitude_unsigned = if total_value_bits > 1 {
-                match reader.read_unsigned(total_value_bits - 1) {
-                    Some(v) => v as i64,
-                    None => return,
-                }
-            } else {
-                0i64
-            };
-
-            let magnitude = if sign == 1 {
-                -magnitude_unsigned
-            } else {
-                magnitude_unsigned
-            };
-
+        for field in decode_record(&mut reader) {
             ticks.push(RawTick {
                 server_tag,
-                tick_type,
-                magnitude,
-                decimal_shift,
+                tick_type: field.id,
+                magnitude: field.magnitude,
+                decimal_shift: field.decimal_shift,
             });
         }
     }
 }
+
+/// One field of a record, as the venue writes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawField {
+    /// Which field this is, as the wire numbers it.
+    pub id: u64,
+    /// Its value, before any scale is applied.
+    pub magnitude: i64,
+    /// How far to move the decimal point, where the field states one.
+    pub decimal_shift: u8,
+}
+
+/// Read one record — every field up to and including the one that says no more
+/// follows — off a reader already positioned at its first field.
+///
+/// The same grammar carries the quote stream and the series a caller asks for
+/// beside it, so it is read in one place: five bits of number, a flag saying
+/// whether another field follows, two bits of width. A number that does not fit
+/// five bits is stated as thirty-one and then in a byte of its own, with four
+/// bits saying how far the decimal point moves and four more giving the width.
+/// Values are sign and magnitude, not two's complement.
+pub fn decode_record(reader: &mut BitReader<'_>) -> Vec<RawField> {
+    let mut fields = Vec::new();
+    decode_record_into(reader, &mut fields);
+    fields
+}
+
+/// The same, into a buffer the caller keeps.
+pub fn decode_record_into(reader: &mut BitReader<'_>, fields: &mut Vec<RawField>) {
+let mut has_more = 1u64;
+while has_more == 1 && reader.remaining() >= 8 {
+        let raw_tick_type = match reader.read_unsigned(5) {
+            Some(v) => v,
+            None => break,
+        };
+        has_more = match reader.read_unsigned(1) {
+            Some(v) => v,
+            None => break,
+        };
+        let raw_width = match reader.read_unsigned(2) {
+            Some(v) => v + 1,
+            None => break,
+        };
+
+        // An entry whose number does not fit five bits states it in a
+        // byte, and then states how far to move the decimal point in four
+        // bits and how wide the value is in four more.
+        //
+        // Read as one byte of width, the two nibbles multiply: a value two
+        // places out and four bytes wide read as thirty-six bytes wide,
+        // which is wider than this decoder takes — so the entry was
+        // stepped over by two hundred and eighty-eight bits instead of
+        // thirty-two, and every tick behind it in the message was decoded
+        // out of step.
+        let (tick_type, byte_width, decimal_shift) = if raw_tick_type == 31 {
+            if reader.remaining() < 16 {
+                return;
+            }
+            let Some(tick_type) = reader.read_unsigned(8) else {
+                return;
+            };
+            let Some(decimal_shift) = reader.read_unsigned(4) else {
+                return;
+            };
+            let Some(byte_width) = reader.read_unsigned(4) else {
+                return;
+            };
+            (tick_type, byte_width, decimal_shift as u8)
+        } else {
+            (raw_tick_type, raw_width, 0)
+        };
+
+        let total_value_bits = (8 * byte_width) as usize;
+        if reader.remaining() < total_value_bits {
+            return;
+        }
+
+        // A value of no width has no sign bit either. Read as though it
+        // had one, the entry took a bit belonging to whatever followed it
+        // and published a zero of its own: the tick behind it was decoded
+        // a bit out of step, so a bid arrived as some other number and
+        // every tick after it in the message was lost.
+        if total_value_bits == 0 {
+            continue;
+        }
+
+        // An extended entry states its width in a full byte, so it can name
+        // a value wider than this decoder reads. That entry is lost either
+        // way; abandoning the message threw away every tick after it as
+        // well, including the other server tags in the same 35=P.
+        // Stepping over it keeps the rest.
+        if total_value_bits > 64 {
+            log::debug!("35=P: skipping a {byte_width}-byte tick value");
+            if !reader.skip(total_value_bits) {
+                return;
+            }
+            continue;
+        }
+
+        let sign = match reader.read_unsigned(1) {
+            Some(v) => v,
+            None => return,
+        };
+        let magnitude_unsigned = if total_value_bits > 1 {
+            match reader.read_unsigned(total_value_bits - 1) {
+                Some(v) => v as i64,
+                None => return,
+            }
+        } else {
+            0i64
+        };
+
+        let magnitude = if sign == 1 {
+            -magnitude_unsigned
+        } else {
+            magnitude_unsigned
+        };
+
+        fields.push(RawField { id: tick_type, magnitude, decimal_shift });
+    }
+}
+
 
 /// Read a VLQ-encoded unsigned integer (hi-bit terminated).
 ///
