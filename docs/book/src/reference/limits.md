@@ -128,17 +128,6 @@ the venue takes the replace and the order goes on working, and sometimes
 neither the replace nor a withdrawal after it draws any answer at all. A modify
 that strands the order some of the time is worse than one that is refused.
 
-## Order fields the protocol has nowhere to put
-
-An order carries 154 fields. 114 go out under a tag. 35 have no field in this
-protocol to carry them, and each says so on itself rather than being quietly
-dropped. 5 more are what the venue fills in on the way back, which an order
-being placed does not carry out.
-
-None is silently dropped, and that is checked rather than claimed:
-`python scripts/gen_order_field_reach.py` recounts all four figures from the
-order builders and exits non-zero if any field becomes settable and unread.
-
 ## Implied volatility and option price
 
 The venue computes its option model and publishes it per option, on a
@@ -185,6 +174,31 @@ and runs. No message reaches either of them.
 
 Every other call in the reference client's surface is served on both languages.
 The call-by-call matrix is [generated from the source](./coverage.md).
+
+## Order fields the protocol has nowhere to put
+
+An order carries 154 fields. 118 go out under a tag. 29 have no field in this
+protocol to carry them, and each says so on itself rather than being quietly
+dropped. 6 more are what the venue fills in on the way back, which an order
+being placed does not carry out.
+
+The 29 are not a gap in this client. The protocol numbers 288 order fields, and
+not one of them carries a basis-point offset, a bond's accrued interest, an
+auction strategy, an origin, a shareholder, a smart-combo routing parameter, a
+scale table, a price randomisation, a what-if kind, a parent's permanent id, a
+bracket preset's legs, the hedging leg's clearing, settling, short-sale or
+designated location, or the percentage constraints an order would set aside.
+They are fields a caller can state and nothing on the other side can receive,
+which is the same answer a gateway gives.
+
+One of them was settled the other way round, on a session rather than on the
+vocabulary: a caller's own name for an algo has a number in the protocol, and
+the venue refuses an order carrying it — *"Invalid value in field # 8016"* —
+whether or not the order runs an algo.
+
+None is silently dropped, and that is checked rather than claimed:
+`python scripts/gen_order_field_reach.py` recounts all four figures from the
+order builders and exits non-zero if any field becomes settable and unread.
 
 ## Executions and fills are the day's, not the account's
 
