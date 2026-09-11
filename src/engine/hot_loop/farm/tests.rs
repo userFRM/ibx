@@ -1115,6 +1115,73 @@ mod decode_publish_tests {
         msg
     }
 
+    /// The same, with the last field still saying another one follows.
+    ///
+    /// Which is what a record the venue did not finish sending looks like:
+    /// the fields before it read perfectly well, and nothing in them says the
+    /// record is short.
+    pub(super) fn framed_35p_unterminated(server_tag: u32, ticks: &[(u64, u64, u64)]) -> Vec<u8> {
+        let mut bits: Vec<u8> = Vec::new();
+        push_bits(&mut bits, 0, 1);
+        push_bits(&mut bits, server_tag as u64, 31);
+        for &(tick_type, width, value) in ticks {
+            push_bits(&mut bits, tick_type, 5);
+            push_bits(&mut bits, 1, 1); // another follows, and none does
+            push_bits(&mut bits, width - 1, 2);
+            push_bits(&mut bits, 0, 1);
+            push_bits(&mut bits, value, (width * 8 - 1) as usize);
+        }
+        let byte_count = bits.len().div_ceil(8);
+        let mut payload = vec![0u8; byte_count];
+        for (i, &b) in bits.iter().enumerate() {
+            if b == 1 {
+                payload[i >> 3] |= 1 << (7 - (i & 7));
+            }
+        }
+        let mut tick_payload = Vec::with_capacity(2 + byte_count);
+        tick_payload.push((bits.len() >> 8) as u8);
+        tick_payload.push((bits.len() & 0xFF) as u8);
+        tick_payload.extend_from_slice(&payload);
+
+        let body_len = 5 + tick_payload.len() + 15;
+        let mut msg = format!("8=O\x019={body_len}\x01").into_bytes();
+        msg.extend_from_slice(b"35=P\x01");
+        msg.extend_from_slice(&tick_payload);
+        msg.extend_from_slice(b"\x018349=AABBCCDD\x01");
+        msg
+    }
+
+    /// A record the venue did not finish sending is not a record.
+    ///
+    /// Running out of bits is not the same as a field saying no more follows,
+    /// and the two were told apart by nobody: whatever had been read was
+    /// handed over as a whole record. A sidecar cut off before the field that
+    /// says what its numbers mean therefore read as the top of the book, and
+    /// the day's volume was published as a bid.
+    #[test]
+    fn a_record_that_ends_early_publishes_nothing() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let id = context.market.register(756733);
+        context.market.register_server_tag(9, id);
+        context.market.set_min_tick(id, 0.01);
+
+        // Field zero, and then the record stops with more still promised. Under
+        // the ordinary layout that number is the bid; under the layout the
+        // missing field would have stated, it is not.
+        farm.handle_tick_data(
+            &framed_35p_unterminated(9, &[(0, 2, 601)]),
+            &mut context, &shared, &None,
+        );
+
+        assert_eq!(context.market.quote(id).bid, 0, "a number from a record that never ended");
+        assert!(
+            shared.market.drain_series_ticks(id).is_empty(),
+            "and nothing was published beside it either",
+        );
+    }
+
     /// A record says what its own fields mean, and this client reads it.
     ///
     /// Field eighteen is a discriminator rather than a value. Absent, the

@@ -366,7 +366,15 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
             None => break,
         };
 
-        let fields = decode_record(&mut reader);
+        // A record the venue did not finish sending says nothing about what
+        // its numbers mean, and where this one ends is where the next one
+        // starts — so the fields read so far are dropped and the walk stops
+        // here rather than reading the next record's header as more of this
+        // one.
+        let Some(fields) = decode_record(&mut reader) else {
+            log::debug!("35=P: a record under server tag {server_tag} ended before it said it had");
+            break;
+        };
         let layout = RecordLayout::of(&fields);
         for field in fields {
             ticks.push(RawTick {
@@ -400,27 +408,41 @@ pub struct RawField {
 /// five bits is stated as thirty-one and then in a byte of its own, with four
 /// bits saying how far the decimal point moves and four more giving the width.
 /// Values are sign and magnitude, not two's complement.
-pub fn decode_record(reader: &mut BitReader<'_>) -> Vec<RawField> {
+/// Nothing where the record did not end: see [`decode_record_into`].
+pub fn decode_record(reader: &mut BitReader<'_>) -> Option<Vec<RawField>> {
     let mut fields = Vec::new();
-    decode_record_into(reader, &mut fields);
-    fields
+    decode_record_into(reader, &mut fields).then_some(fields)
 }
 
-/// The same, into a buffer the caller keeps.
-pub fn decode_record_into(reader: &mut BitReader<'_>, fields: &mut Vec<RawField>) {
+/// The same, into a buffer the caller keeps, stating whether the record ended.
+///
+/// A record ends at the field that says no more follows. Running out of bits
+/// before that is not the same thing, and the two were told apart by nobody:
+/// the fields read so far were handed over as a whole record, so a truncated
+/// quote sidecar missing the field that says what its numbers mean was read
+/// under the ordinary layout and its volume published as a bid. Where the
+/// record's own length is what says where the next one starts, the missing
+/// end also meant the next record's header was read as fields of this one and
+/// every record behind it in the message was lost.
+///
+/// False where it ran out. What was read is left in the buffer for a caller
+/// that wants to see it; a caller that publishes it anyway is publishing a
+/// record the venue did not finish sending.
+#[must_use]
+pub fn decode_record_into(reader: &mut BitReader<'_>, fields: &mut Vec<RawField>) -> bool {
 let mut has_more = 1u64;
 while has_more == 1 && reader.remaining() >= 8 {
         let raw_tick_type = match reader.read_unsigned(5) {
             Some(v) => v,
-            None => break,
+            None => return false,
         };
         has_more = match reader.read_unsigned(1) {
             Some(v) => v,
-            None => break,
+            None => return false,
         };
         let raw_width = match reader.read_unsigned(2) {
             Some(v) => v + 1,
-            None => break,
+            None => return false,
         };
 
         // An entry whose number does not fit five bits states it in a
@@ -435,16 +457,16 @@ while has_more == 1 && reader.remaining() >= 8 {
         // out of step.
         let (tick_type, byte_width, decimal_shift) = if raw_tick_type == 31 {
             if reader.remaining() < 16 {
-                return;
+                return false;
             }
             let Some(tick_type) = reader.read_unsigned(8) else {
-                return;
+                return false;
             };
             let Some(decimal_shift) = reader.read_unsigned(4) else {
-                return;
+                return false;
             };
             let Some(byte_width) = reader.read_unsigned(4) else {
-                return;
+                return false;
             };
             (tick_type, byte_width, decimal_shift as u8)
         } else {
@@ -453,7 +475,7 @@ while has_more == 1 && reader.remaining() >= 8 {
 
         let total_value_bits = (8 * byte_width) as usize;
         if reader.remaining() < total_value_bits {
-            return;
+            return false;
         }
 
         // A value of no width has no sign bit either. Read as though it
@@ -473,19 +495,19 @@ while has_more == 1 && reader.remaining() >= 8 {
         if total_value_bits > 64 {
             log::debug!("35=P: skipping a {byte_width}-byte tick value");
             if !reader.skip(total_value_bits) {
-                return;
+                return false;
             }
             continue;
         }
 
         let sign = match reader.read_unsigned(1) {
             Some(v) => v,
-            None => return,
+            None => return false,
         };
         let magnitude_unsigned = if total_value_bits > 1 {
             match reader.read_unsigned(total_value_bits - 1) {
                 Some(v) => v as i64,
-                None => return,
+                None => return false,
             }
         } else {
             0i64
@@ -499,6 +521,9 @@ while has_more == 1 && reader.remaining() >= 8 {
 
         fields.push(RawField { id: tick_type, magnitude, decimal_shift });
     }
+    // The loop leaves only two ways: a field said no more follows, or the bits
+    // ran out before one did.
+    has_more == 0
 }
 
 

@@ -1040,12 +1040,17 @@ fn read_generic_ticks<'a>(
                 let Some(rest) = frame.get(from..) else { return };
                 let mut reader = crate::protocol::tick_decoder::BitReader::new(rest, 0);
                 fields.clear();
-                crate::protocol::tick_decoder::decode_record_into(&mut reader, &mut fields);
+                let ended =
+                    crate::protocol::tick_decoder::decode_record_into(&mut reader, &mut fields);
                 // Every field is a whole number of bytes, so a record that
                 // does not end on one was not read to its end and where the
-                // next one starts is not known.
+                // next one starts is not known. Nor is a record that ran out
+                // of bits before a field said it was the last: landing on a
+                // byte boundary is not the same as having ended, and the
+                // length taken from one that had not is short by whatever the
+                // venue did not send.
                 let read = reader.bits_read();
-                if read == 0 || !read.is_multiple_of(8) {
+                if !ended || read == 0 || !read.is_multiple_of(8) {
                     log::debug!(
                         "A generic tick {tick} under server tag {server_tag} does not say where \
                          its record ends; the rest of the message goes unread",
@@ -3355,7 +3360,7 @@ impl FarmState {
         shared: &SharedState,
     ) {
         use crate::protocol::tick_decoder::{BitReader, decode_record};
-        let fields = decode_record(&mut BitReader::new(payload, 0));
+        let Some(fields) = decode_record(&mut BitReader::new(payload, 0)) else { return };
         let stated = |id: u64| {
             fields.iter().find(|f| f.id == id).filter(|f| f.decimal_shift == 0)
         };
@@ -3429,7 +3434,7 @@ impl FarmState {
         /// What the price field counts in, against the contract's increment.
         const TENTHS_OF_AN_INCREMENT: f64 = 10.0;
 
-        let fields = decode_record(&mut BitReader::new(payload, 0));
+        let Some(fields) = decode_record(&mut BitReader::new(payload, 0)) else { return };
         // A word of flags that never arrived says nothing against the price.
         // Read as nought it would say the opposite of nothing, and a mark the
         // venue never questioned would still be published — the same either
