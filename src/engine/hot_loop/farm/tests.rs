@@ -519,6 +519,76 @@ mod news_tests {
         );
     }
 
+    /// The odd lot reaches the caller: both prices, both sizes, both venues.
+    ///
+    /// It arrives on a record that says where it ends, which this client
+    /// abandoned rather than read, so a caller who asked what nobody has to
+    /// deal in round lots at was told nothing at all.
+    #[test]
+    fn the_odd_lot_reaches_the_caller() {
+        use crate::types::SeriesValue;
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        context.market.set_min_tick(instrument, 0.01);
+        context.market.set_size_tick(instrument, 1.0);
+        shared.reference.set_smart_components(vec![
+            crate::types::SmartComponent { bit_number: 2, exchange: "NYSE".into(), exchange_letter: "N".into() },
+            crate::types::SmartComponent { bit_number: 5, exchange: "ARCA".into(), exchange_letter: "P".into() },
+        ]);
+
+        let mut bits: Vec<u8> = Vec::new();
+        let push = |value: u64, width: usize, bits: &mut Vec<u8>| {
+            for i in (0..width).rev() {
+                bits.push(((value >> i) & 1) as u8);
+            }
+        };
+        // The two prices, their sizes, and where each is quoted.
+        let record = [
+            (0u64, 10_125i64), (1, 10_150), (4, 30), (5, 70),
+            (16, 0b100), (17, 0b100_000),
+        ];
+        for (n, (id, value)) in record.iter().enumerate() {
+            push(*id, 5, &mut bits);
+            push(u64::from(n + 1 < record.len()), 1, &mut bits);
+            push(3, 2, &mut bits);
+            push(u64::from(*value < 0), 1, &mut bits);
+            push(value.unsigned_abs(), 31, &mut bits);
+        }
+        let mut payload = vec![0u8; bits.len().div_ceil(8)];
+        for (i, &b) in bits.iter().enumerate() {
+            if b == 1 {
+                payload[i >> 3] |= 1 << (7 - (i & 7));
+            }
+        }
+
+        farm.generic_tick_tags.push((80, 787, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(80, 787, &payload)]), &mut context, &shared, &None,
+        );
+        let said: Vec<(i32, String)> = shared.market.drain_series_ticks(instrument)
+            .into_iter()
+            .map(|t| (t.tick_type, match t.value {
+                SeriesValue::Generic(v) => format!("generic {v}"),
+                SeriesValue::Size(v) => format!("size {v}"),
+                SeriesValue::Price(v) => format!("price {v}"),
+                SeriesValue::Text(v) => format!("text {v}"),
+            }))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                (107, "size 30".to_string()),
+                (105, "price 101.25".to_string()),
+                (109, "text N".to_string()),
+                (108, "size 70".to_string()),
+                (106, "price 101.5".to_string()),
+                (110, "text P".to_string()),
+            ],
+        );
+    }
+
     /// The mark the venue keeps for a contract reaches the caller.
     ///
     /// It arrives as a record of the venue's own fields — no length of its

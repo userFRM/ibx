@@ -46,6 +46,8 @@ impl EClient {
     /// * `586` — what a share is expected to open at, and what it did.
     /// * `588` — a future's open interest.
     /// * `595` — what has traded over the last three, five and ten minutes.
+    /// * `787` — the odd lot: the two prices nobody has to deal in round lots
+    ///   at, their sizes, and where each is quoted.
     ///
     /// A code outside that list still goes to the venue, and a reading of it
     /// arrives and is recorded rather than delivered: the shape it is written

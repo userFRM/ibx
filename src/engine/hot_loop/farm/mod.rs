@@ -3233,6 +3233,9 @@ impl FarmState {
                 // fields rather than as a struct: the price is the field
                 // numbered two, and a word of flags numbered thirteen says
                 // whether it stands.
+                // The odd lot: the two prices nobody has to deal in round
+                // lots at, their sizes, and where each is quoted.
+                787 => self.deliver_odd_lot(instrument, payload, context, shared),
                 220 => self.deliver_mark(instrument, 78, payload, context, shared),
                 619 => self.deliver_mark(instrument, 79, payload, context, shared),
                 233 => self.deliver_running_volume(instrument, 48, payload, shared),
@@ -3241,6 +3244,70 @@ impl FarmState {
                     if !deliver_series(other, payload, instrument, shared) {
                         log::debug!("Generic tick {other} arrives and nothing here reads it");
                     }
+                }
+            }
+        }
+    }
+
+    /// The odd lot, off a record of the venue's own fields.
+    ///
+    /// The two prices are the fields numbered nought and one, their sizes four
+    /// and five, and where each is quoted sixteen and seventeen — the same
+    /// bits over the same venue list the ordinary quote's exchanges are read
+    /// from.
+    ///
+    /// A price with no size behind it is not a price the venue is standing
+    /// behind: it states one and withdraws it by leaving the size at nothing,
+    /// so a side is handed over only where its size says there is something to
+    /// deal in.
+    fn deliver_odd_lot(
+        &mut self,
+        instrument: InstrumentId,
+        payload: &[u8],
+        context: &Context,
+        shared: &SharedState,
+    ) {
+        use crate::protocol::tick_decoder::{BitReader, decode_record};
+        let fields = decode_record(&mut BitReader::new(payload, 0));
+        let stated = |id: u64| {
+            fields.iter().find(|f| f.id == id).filter(|f| f.decimal_shift == 0)
+        };
+        let increment = context.market.min_tick_scaled(instrument);
+        let counted_in = context.market.size_tick(instrument);
+        let say = |tick_type: i32, value: crate::types::SeriesValue| {
+            shared.market.push_series_tick(crate::types::SeriesTick {
+                instrument, tick_type, value,
+            });
+        };
+        // (price, size, where) for each side, and the numbers each is read
+        // under.
+        for (price_id, size_id, venue_id, price_tick, size_tick, venue_tick) in
+            [(0u64, 4u64, 16u64, 105, 107, 109), (1, 5, 17, 106, 108, 110)]
+        {
+            let size = stated(size_id).map(|f| f.magnitude).filter(|n| *n != 0);
+            if let Some(size) = size {
+                say(size_tick, crate::types::SeriesValue::Size(size as f64 * counted_in));
+            }
+            if let Some(price) = stated(price_id)
+                && size.is_some()
+                && increment > 0
+                && let Some(scaled) = price.magnitude.checked_mul(increment)
+            {
+                say(
+                    price_tick,
+                    crate::types::SeriesValue::Price(
+                        scaled as f64 / crate::types::PRICE_SCALE as f64,
+                    ),
+                );
+            }
+            // Where it is quoted, as the letters the venue's own list gives
+            // the bits. A list it has not sent yet renders none, and a side
+            // with nothing to show for its bits states nothing rather than an
+            // empty venue.
+            if let Some(mask) = stated(venue_id).map(|f| f.magnitude).filter(|m| *m > 0) {
+                let letters = crate::client_core::render_exchange_mask(mask, shared);
+                if !letters.is_empty() {
+                    say(venue_tick, crate::types::SeriesValue::Text(letters));
                 }
             }
         }
