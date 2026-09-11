@@ -482,6 +482,17 @@ pub(crate) struct CcpState {
     /// live path never sees them, because through it a report that states a
     /// fill is a fill and a fill moves a position.
     pub(crate) completed_orders_open: bool,
+    /// A caller asked what the venue has finished before the session's own
+    /// replay was over, so the question is held until it is.
+    ///
+    /// The two answers end with the same sentinel and the wire correlates
+    /// neither, so a window opened across the replay is closed by the replay's
+    /// own ending — the caller is told the answer is complete before it has
+    /// begun, and the reports that follow take the live path, where a report
+    /// that states a fill is a fill. Worse, the replayed orders themselves
+    /// arrive inside that window and are filed as history instead of being
+    /// recovered into the book a withdrawal walks.
+    completed_orders_wanted: bool,
     /// In-flight option chain requests: (req_id, symbol, underlying conId,
     /// deadline). The request states no id of its own, so the symbol is what
     /// ties a reply back to it, and the conId is held because the callback
@@ -616,6 +627,7 @@ impl CcpState {
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
             completed_orders_open: false,
+            completed_orders_wanted: false,
             pending_option_params: Vec::new(),
             pending_schedule_pair: Vec::new(),
             pnl_subscriptions: Vec::new(),
@@ -2681,6 +2693,18 @@ impl CcpState {
         hb: &mut HeartbeatState,
         shared: &SharedState,
     ) {
+        // Not while the session's own replay is still running. Both answers
+        // end with the same sentinel and nothing on the wire says which
+        // question a sentinel answers, so a window opened across the replay is
+        // shut by the replay's ending and the history that follows is read as
+        // live. Held instead, and sent the moment the replay is over.
+        if !shared.orders.replay_done() {
+            self.completed_orders_wanted = true;
+            log::debug!(
+                "holding the question of what the venue has finished until the replay is over",
+            );
+            return;
+        }
         let Some(conn) = ccp_conn.as_mut() else {
             shared.orders.note_completed_orders_end();
             return;
@@ -2790,6 +2814,16 @@ impl CcpState {
         self.disconnected = true;
         *ccp_conn = None;
         self.recovery_sweep_at = None;
+        // A question about what the venue has finished dies with the
+        // connection that carried it. The answer ends with a sentinel and no
+        // sentinel is coming, so the caller was left waiting out its whole
+        // deadline — and the window stayed open across the reconnect, where
+        // the replay that follows is read as history rather than recovered.
+        if self.completed_orders_open || self.completed_orders_wanted {
+            self.completed_orders_open = false;
+            self.completed_orders_wanted = false;
+            shared.orders.note_completed_orders_end();
+        }
         // The engine stops believing these statuses here, and said so to
         // nobody — so the API layer went on reporting the pre-disconnect
         // status and `req_open_orders` kept asserting it.
@@ -2877,6 +2911,21 @@ impl CcpState {
         for (req_id, bars) in named {
             super::push_hmds_refusal(shared, req_id, code, WHY.to_string(), bars);
         }
+    }
+
+    /// Send a held question about what the venue has finished, if the
+    /// session's own replay is over by now.
+    pub(crate) fn sweep_completed_orders_request(
+        &mut self,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+        shared: &SharedState,
+    ) {
+        if !self.completed_orders_wanted || !shared.orders.replay_done() {
+            return;
+        }
+        self.completed_orders_wanted = false;
+        self.send_completed_orders_request(ccp_conn, hb, shared);
     }
 
     /// Report the orders the recovery push did not account for.

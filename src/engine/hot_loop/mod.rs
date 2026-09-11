@@ -980,6 +980,9 @@ impl HotLoop {
             self.ccp.sweep_contract_details(&self.shared, &self.event_tx);
             self.ccp.sweep_pending_subscribes(&mut self.context, &self.shared);
             self.ccp.sweep_pending_named(&self.shared);
+            self.ccp.sweep_completed_orders_request(
+                &mut self.ccp_conn, &mut self.hb, &self.shared,
+            );
 
             // 4. Check control_plane_rx (SPSC) for commands
             self.poll_control_commands();

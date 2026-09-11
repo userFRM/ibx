@@ -534,6 +534,28 @@ impl OrderState {
         self.orders_without_a_slot.store(0, Ordering::Release);
     }
 
+    /// File one order the venue has finished, replacing what an earlier event
+    /// of the same order left waiting to be read.
+    ///
+    /// The answer to what the venue has finished states each order's whole
+    /// life, one report per event, in the order they happened — and the last
+    /// of them carries what became of it. Filed as a first sighting each time,
+    /// the second event onwards was refused as a repeat and the caller was
+    /// handed the first: a filled order reported as submitted, short every
+    /// fill that followed. That refusal is for a live replay of an order this
+    /// session already saw finish, which is a different thing from the next
+    /// event of the same history.
+    #[doc(hidden)] pub fn refile_completed_order(&self, order: CompletedOrder) {
+        {
+            let mut queued = self.completed_orders.lock().unwrap();
+            if let Some(waiting) = queued.iter_mut().find(|q| q.order_id == order.order_id) {
+                *waiting = order;
+                return;
+            }
+        }
+        self.push_completed_order(order);
+    }
+
     /// File a completion once. The venue resends terminal reports — a
     /// reconnect replays recent activity, and a report can simply arrive
     /// twice — and a replay finds the order retired, with nothing tracked to

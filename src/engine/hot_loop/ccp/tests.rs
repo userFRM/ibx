@@ -2969,6 +2969,130 @@ fn ord_status_presubmitted_then_routed_advances_to_submitted() {
 // stays on the order snapshot, and nothing is queued for it — the
 // engine still holds the order at this point, so context still knows it
 // as Inactive/reactivatable while a Rejected order is retired below.
+/// A question about what the venue has finished waits for the session's own
+/// replay to be over.
+///
+/// Both answers are a run of ordinary reports ending in the same sentinel, and
+/// nothing on the wire says which question a sentinel answers. Asked across
+/// the replay, the replay's own ending shut the window: the caller was told
+/// the answer was complete before it had begun, and the history that followed
+/// took the live path, where a report that states a fill is a fill.
+#[test]
+fn the_question_waits_for_the_session_s_own_replay() {
+    let (mut ccp, _context, shared) = ord_status_test_state();
+    let mut hb = HeartbeatState::new();
+    let mut conn = None;
+
+    ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
+    assert!(!ccp.completed_orders_open, "nothing was asked yet");
+    assert!(
+        !shared.orders.take_completed_orders_end(),
+        "and the caller was not told the answer is complete",
+    );
+
+    // Nor on a later pass, while the replay is still running.
+    ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
+    assert!(!shared.orders.take_completed_orders_end(), "still waiting");
+
+    // Once the replay is over the question goes out. There is no connection
+    // here to carry it, so what the caller is told is that it cannot be
+    // answered — which is the path a held question joins, not a path of its
+    // own.
+    shared.orders.set_replay_done();
+    ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
+    assert!(
+        shared.orders.take_completed_orders_end(),
+        "the held question was asked once the replay was over",
+    );
+}
+
+/// The question dies with the connection that carried it.
+///
+/// Its answer ends with a sentinel, so a drop mid-answer left the caller
+/// waiting out its whole deadline for a sentinel that was never coming — and
+/// left the window open across the reconnect, where the replay that follows is
+/// filed as history instead of recovered into the book a withdrawal walks.
+#[test]
+fn a_drop_mid_answer_releases_the_caller_and_shuts_the_window() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    ccp.completed_orders_open = true;
+    let mut conn = None;
+
+    ccp.handle_disconnect(&mut conn, &mut context, &shared, &None);
+
+    assert!(!ccp.completed_orders_open, "the window is shut");
+    assert!(
+        shared.orders.take_completed_orders_end(),
+        "and the caller is released rather than left on a sentinel nobody will send",
+    );
+}
+
+/// A correction for an order this session placed is never filed as history.
+///
+/// A fill retires an order from the book, so afterwards the book alone cannot
+/// tell this session's order from a stranger's. Read that way, a bust or a
+/// correction arriving while the window was open was filed as something that
+/// happened days ago: it took back nothing, and the position it was undoing
+/// stayed where it was.
+#[test]
+fn a_correction_for_this_session_s_own_order_is_not_history() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    ccp.completed_orders_open = true;
+    // Placed here, and already gone from the book the way a filled order is.
+    shared.orders.note_the_order_went_out(987_654_321);
+
+    let mut frame = exec_report_frame(&[
+        (39, "2"), (150, "F"), (32, "100"), (31, "150.00"), (14, "100"), (151, "0"),
+        (54, "1"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+        (40, "2"), (44, "150.00"), (1, "DU111111"),
+    ]);
+    frame.insert(11, "987654321".to_string());
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    // The live path registers the contract the report names. Filing as history
+    // registers nothing, which is how the two are told apart from outside.
+    assert!(
+        context.market.instrument_by_con_id(8314).is_some(),
+        "the report took the live path, where what it says still counts",
+    );
+}
+
+/// The last event of a finished order's life is the one the caller is handed.
+///
+/// The answer states each order's whole life, one report per event, in the
+/// order they happened. Filed as a first sighting each time, the second event
+/// onwards was refused as a repeat of the first — so a filled order was
+/// reported as submitted, short every fill that followed it.
+#[test]
+fn the_last_event_of_a_finished_order_is_the_one_that_stands() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    ccp.completed_orders_open = true;
+
+    // Submitted, then filled — the two events of one order, as they happened.
+    for (status, cum) in [("0", "0"), ("2", "100")] {
+        let mut frame = exec_report_frame(&[
+            (39, status), (150, "0"), (14, cum), (151, "0"),
+            (54, "1"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+            (40, "2"), (44, "150.00"), (1, "DU111111"),
+        ]);
+        frame.insert(11, "987654321".to_string());
+        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+    }
+
+    let finished = shared.orders.drain_completed_orders();
+    assert_eq!(finished.len(), 1, "one order, not one per event: {finished:?}");
+    assert_eq!(
+        finished[0].status,
+        crate::types::OrderStatus::Filled,
+        "what became of it, not what it was doing first",
+    );
+    assert_eq!(
+        finished[0].filled_qty,
+        100 * crate::types::QTY_SCALE,
+        "and everything it filled",
+    );
+}
+
 /// What the venue has finished is filed as history, and moves nothing.
 ///
 /// The answer to that question is a run of ordinary execution reports for

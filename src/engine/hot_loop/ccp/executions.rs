@@ -672,7 +672,7 @@ impl CcpState {
         shared.orders.push_order_info(clord_id, crate::bridge::RichOrderInfo {
             contract, order, order_state, last_exec: Default::default(),
         });
-        shared.orders.push_completed_order(crate::types::CompletedOrder {
+        shared.orders.refile_completed_order(crate::types::CompletedOrder {
             order_id: clord_id,
             instrument: 0,
             status,
@@ -1024,7 +1024,17 @@ impl CcpState {
         // window, so a report on an order this session is working takes its
         // ordinary path whatever else is in flight beside it. The sentinel is
         // let through, because closing the window is its job.
-        if self.completed_orders_open && clord_id != 0 && context.order(clord_id).is_none() {
+        //
+        // And narrowed by what this session put on the wire, not only by what
+        // the book still holds. A fill retires an order from the book, so a
+        // bust or a correction for it afterwards reads as an order nobody here
+        // placed — filed as history, it took back nothing, and the position
+        // the correction was undoing stayed where it was.
+        if self.completed_orders_open
+            && clord_id != 0
+            && context.order(clord_id).is_none()
+            && !shared.orders.the_order_went_out(clord_id)
+        {
             let finished = status_of(
                 parsed.get(&39).map(String::as_str).unwrap_or(""), clord_id, parsed,
             );
