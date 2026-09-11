@@ -3291,6 +3291,36 @@ fn moved_watchers_report_the_destination_subscriptions_type() {
     engine.join().unwrap();
 }
 
+/// A price no carry reproduces leaves nothing to answer against.
+///
+/// Everything here is anchored to the model the venue published: the carry is
+/// the one at which this tree makes the venue's own price of the contract, at
+/// the volatility the venue used. Where no carry in a plausible range does
+/// that, the model is not the venue's — and a figure worked out on it is this
+/// client's own with the venue's name on it. Taken as no carry at all, which
+/// is what it was, that is exactly what was published.
+#[test]
+fn a_model_that_cannot_be_anchored_is_refused_rather_than_answered() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let option = ApiContract {
+        con_id: 101, sec_type: "OPT".into(), strike: 100.0, right: "C".into(),
+        ..Default::default()
+    };
+    core.cache_instrument(option.con_id, 3);
+    // Twice what a month of this volatility can make of this strike, which no
+    // dividend and no rate reaches.
+    shared.market.push_option_computation(crate::types::OptionComputation {
+        instrument: 3, implied_vol: 0.2, opt_price: 5.0, und_price: 100.0,
+        cal_days: 30.0, ..Default::default()
+    });
+    let solve = |terms, model| crate::control::option_model::option_price(terms, model, 0.2, 100.0);
+    assert!(
+        core.solve_option(&shared, &option, None, solve).is_err(),
+        "a model nothing anchors was answered",
+    );
+}
+
 /// A model on a reused slot belongs to its new contract.
 #[test]
 fn an_option_solve_forgets_a_released_contracts_slot() {
@@ -3300,8 +3330,11 @@ fn an_option_solve_forgets_a_released_contracts_slot() {
         con_id: 101, sec_type: "OPT".into(), strike: 100.0, right: "C".into(),
         ..Default::default()
     };
+    // A statement the model can be anchored to: the price a month of this
+    // volatility actually makes of this strike. A figure picked out of the air
+    // is one no carry reproduces, which is refused rather than answered.
     let publish = || shared.market.push_option_computation(crate::types::OptionComputation {
-        instrument: 3, implied_vol: 0.2, opt_price: 5.0, und_price: 100.0,
+        instrument: 3, implied_vol: 0.2, opt_price: 2.28, und_price: 100.0,
         cal_days: 30.0, ..Default::default()
     });
     let solve = |terms, model| crate::control::option_model::option_price(terms, model, 0.2, 100.0);

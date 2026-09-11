@@ -100,7 +100,20 @@ pub fn price(
     terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividends: f64,
     yield_rate: f64,
 ) -> Option<f64> {
-    if !(spot.is_finite() && volatility.is_finite() && rate.is_finite() && dividends.is_finite()) {
+    // Every figure, the contract's own terms included. A strike that is not a
+    // number passes every test written as a comparison — nought is not less
+    // than it and neither is anything else — so the whole tree was walked on
+    // one, every pay-off came out at nothing, and the largest double in the
+    // world for a strike answered as an option worth exactly nothing rather
+    // than as a contract nobody can price.
+    if !(spot.is_finite()
+        && volatility.is_finite()
+        && rate.is_finite()
+        && dividends.is_finite()
+        && yield_rate.is_finite()
+        && terms.strike.is_finite()
+        && terms.years_to_expiry.is_finite())
+    {
         return None;
     }
     if terms.years_to_expiry <= 0.0 || volatility <= 0.0 || terms.strike <= 0.0 {
@@ -190,7 +203,20 @@ fn tree_near_the_root(
     terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividends: f64,
     yield_rate: f64,
 ) -> Option<([f64; 3], f64, f64, f64)> {
-    if !(spot.is_finite() && volatility.is_finite() && rate.is_finite() && dividends.is_finite()) {
+    // Every figure, the contract's own terms included. A strike that is not a
+    // number passes every test written as a comparison — nought is not less
+    // than it and neither is anything else — so the whole tree was walked on
+    // one, every pay-off came out at nothing, and the largest double in the
+    // world for a strike answered as an option worth exactly nothing rather
+    // than as a contract nobody can price.
+    if !(spot.is_finite()
+        && volatility.is_finite()
+        && rate.is_finite()
+        && dividends.is_finite()
+        && yield_rate.is_finite()
+        && terms.strike.is_finite()
+        && terms.years_to_expiry.is_finite())
+    {
         return None;
     }
     if terms.years_to_expiry <= 0.0 || volatility <= 0.0 || terms.strike <= 0.0 {
@@ -792,6 +818,37 @@ mod tests {
                 "a price of {price} was answered with a volatility",
             );
         }
+    }
+
+    /// A contract term that is not a number is not a worthless option.
+    ///
+    /// Every guard on the way into the tree is a comparison, and nothing
+    /// compares true against one of these: nought is not less than it and
+    /// neither is anything else. So the whole tree was walked, every pay-off
+    /// came out at nothing against it, and the answer was a finite zero —
+    /// a price and a full set of greeks for a contract nobody can price.
+    #[test]
+    fn a_term_that_is_not_a_number_has_no_price_and_no_greeks() {
+        for strike in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let terms = call(strike, 0.5);
+            assert_eq!(
+                price(terms, 100.0, 0.2, 0.04, 0.0, 0.0), None,
+                "a strike of {strike} was priced",
+            );
+            let model = VenueModel {
+                volatility: 0.2, option_price: 5.0, underlying_price: 100.0,
+                present_value_of_dividends: 0.0, rate: 0.04, yield_rate: 0.0,
+            };
+            assert_eq!(greeks(terms, model, 0.2, 100.0), None, "and answered greeks");
+        }
+        let terms = call(100.0, f64::NAN);
+        assert_eq!(price(terms, 100.0, 0.2, 0.04, 0.0, 0.0), None, "nor is a life of no length");
+        // A yield that is not a number reaches the carry, where it makes every
+        // node of the tree one too.
+        assert_eq!(
+            price(call(100.0, 0.5), 100.0, 0.2, 0.04, 0.0, f64::NAN), None,
+            "nor is a carry that is not a number",
+        );
     }
 
     /// A contract whose yield had to be recovered is still solvable both ways.

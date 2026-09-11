@@ -5523,8 +5523,16 @@ impl ClientCore {
                  volatility other than the ones it published",
             ));
         }
+        // The strike the same way every other figure here is read: the largest
+        // double is this venue's word for "not stated", and a contract with no
+        // strike is not a contract struck at the largest number a double
+        // carries. Taken for one, a call there is worth nothing and was
+        // answered as exactly that.
+        let strike = stated_or_none(contract.strike)
+            .filter(|k| *k > 0.0)
+            .ok_or_else(|| "the contract states no strike to solve at".to_string())?;
         let terms = crate::control::option_model::OptionTerms {
-            strike: contract.strike,
+            strike,
             years_to_expiry: years,
             is_call: contract.right.eq_ignore_ascii_case("C")
                 || contract.right.eq_ignore_ascii_case("CALL"),
@@ -5551,12 +5559,24 @@ impl ClientCore {
             // of it. Recovered from the price the venue itself published.
             yield_rate: 0.0,
         };
-        let model = crate::control::option_model::VenueModel {
-            yield_rate: crate::control::option_model::recover_yield(terms, model)
-                .unwrap_or(0.0),
-            ..model
+        // On a future there is nothing to recover: the tree prices one on a
+        // price that drifts nowhere, so what the underlying yields does not
+        // enter the arithmetic and nought is what it uses either way.
+        //
+        // On anything else the yield is solved for, and a recovery that fails
+        // is not nought. It means no yield in a plausible range reproduces the
+        // price the venue published — so the model is not anchored to the
+        // venue's statement, and a number worked out on it would be this
+        // client's own with the venue's name on it. Taken as nought, that is
+        // exactly what was published.
+        let solved = if terms.on_a_future {
+            solve(terms, model)
+        } else {
+            crate::control::option_model::recover_yield(terms, model).and_then(|yield_rate| {
+                solve(terms, crate::control::option_model::VenueModel { yield_rate, ..model })
+            })
         };
-        solve(terms, model).ok_or_else(|| {
+        solved.ok_or_else(|| {
             crate::error_codes::Refusal::validation(
             "this contract cannot be solved under the venue's model for it. The model is \
              anchored to the price the venue published, so a figure no rate reproduces leaves \
