@@ -151,13 +151,14 @@ the question waits on the subscription that asking opens.
 ## Numbered ticks this client does not deliver
 
 Ninety-six numbered market-data ticks reach a caller of the reference client.
-Eighty-eight of them reach one here. These eight do not, and each for a reason
+Eighty-seven of them reach one here. These nine do not, and each for a reason
 that can be checked rather than taken on trust.
 
 | Ticks | What | Why not |
 | --- | --- | --- |
 | 10, 11, 12 and the delayed 80, 81, 82 | The option model struck against the bid, the ask and the last | Not sent. The reference terminal solves each of them itself: for a side it takes that side's option price and finds the volatility at which the model prices the option there, then evaluates the greeks at it. The venue sends one model per option and that one is delivered, on 13 and on 83 where the feed is delayed. Published here the other three would be this client's arithmetic wearing the venue's name |
 | The delayed 103, 104 | Bid and ask yield on a delayed feed | The yields themselves arrive and are delivered, on 50, 51 and 52. The delayed feed states its prices under numbers of its own and no session here has seen it state a yield |
+| 85 | The moment a chargeable snapshot was taken | Nobody sends it. The venue states no such figure, and the reference client publishes no tick under this number either: every numbered tick it delivers is one it was told, and this is not among them. A number invented here would be a time nobody recorded |
 
 Everything else the venue publishes and a caller can ask for is delivered, on
 the callback the reference client delivers it on.
