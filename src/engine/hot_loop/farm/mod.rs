@@ -334,11 +334,12 @@ fn deliver_series(
                 }
             }
         }
-        // The mark the venue keeps for a contract, which is not a trade and is
-        // asked for under either of two numbers. A word of flags follows the
-        // price: the lowest bit says the price stands, and one high bit says
-        // it does not whatever the lowest says.
-        221 | 232 => {
+        // The mark the venue keeps for a contract, which is not a trade. A
+        // word of flags follows the price: the lowest bit says the price
+        // stands, and one high bit says it does not whatever the lowest says.
+        // The other number the mark is asked for under states it as a record
+        // of the venue's own fields instead, and is read where those are.
+        232 => {
             let (Some(price), Some(flags)) = (series_f64(payload, 0), series_i32(payload, 8))
             else {
                 return true;
@@ -897,20 +898,10 @@ enum PayloadLength {
     ///
     /// Where nothing here reads one, the rest of the message goes unread
     /// rather than being handed on as this record's payload. Reading one means
-    /// knowing its shape, which is what `Fixed` states.
+    /// knowing its shape, which for every one of these is the venue's own
+    /// field grammar: see `SELF_DESCRIBING_TICKS`.
     ToTheEnd,
-    /// None at all, and this many bytes wide — because the reader for this
-    /// tick knows the shape the venue writes it in. That is exactly what the
-    /// venue relies on for a record that states no length: the mark states a
-    /// price and a word of flags, and is twelve bytes whatever follows it.
-    Fixed(usize),
 }
-
-/// A tick that states no length and whose shape is known here, with its width.
-///
-/// The width is the reader's, not a guess: the mark is a price and a word of
-/// flags beside it.
-const FIXED_WIDTH_TICKS: [(u32, usize); 1] = [(221, 12)];
 
 /// The ticks that state their payload's length in two bytes.
 const TWO_BYTE_LENGTH_TICKS: [u32; 28] = [
@@ -919,20 +910,24 @@ const TWO_BYTE_LENGTH_TICKS: [u32; 28] = [
 ];
 
 /// The ticks that state no length of their own.
-const NO_LENGTH_TICKS: [u32; 6] = [320, 376, 530, 532, 619, 787];
+const NO_LENGTH_TICKS: [u32; 7] = [221, 320, 376, 530, 532, 619, 787];
 
 /// The ticks that state no length and whose record says where it ends.
 ///
 /// Their payload is the venue's own field grammar — a run of fields, the last
 /// of which says no more follows — so the record ends itself and the length
 /// the framing does not state is not needed to read one.
-const SELF_DESCRIBING_TICKS: [u32; 3] = [220, 619, 787];
+///
+/// Nor is a record like this the last thing in its message. Measured on a
+/// front-month future: the mark arrived as four bytes at one moment and twelve
+/// at the next, and behind it in the same message came the venue list and the
+/// option parameters. Every field is a whole number of bytes wide, so where
+/// the record ends is where the next one starts.
+const SELF_DESCRIBING_TICKS: [u32; 4] = [220, 221, 619, 787];
 
 impl PayloadLength {
     fn of(tick: u32) -> Self {
-        if let Some((_, width)) = FIXED_WIDTH_TICKS.iter().find(|(t, _)| *t == tick) {
-            Self::Fixed(*width)
-        } else if TWO_BYTE_LENGTH_TICKS.contains(&tick) {
+        if TWO_BYTE_LENGTH_TICKS.contains(&tick) {
             Self::TwoBytes
         } else if NO_LENGTH_TICKS.contains(&tick) {
             Self::ToTheEnd
@@ -944,7 +939,7 @@ impl PayloadLength {
     /// How many bytes stand between the start of a record and its payload.
     fn header(self) -> usize {
         match self {
-            Self::ToTheEnd | Self::Fixed(_) => 4,
+            Self::ToTheEnd => 4,
             Self::OneByte => 5,
             Self::TwoBytes => 6,
         }
@@ -1001,6 +996,7 @@ fn read_generic_ticks<'a>(
     let Some(frame) = body.get(2..2 + length) else { return };
 
     let mut at = 0usize;
+    let mut fields = Vec::new();
     while at + 4 <= frame.len() {
         let server_tag =
             u32::from_be_bytes([frame[at], frame[at + 1], frame[at + 2], frame[at + 3]]);
@@ -1027,16 +1023,33 @@ fn read_generic_ticks<'a>(
                     );
                     return;
                 }
-                // The record says where it ends, so the rest of the message is
-                // handed over as its payload and the walk stops here. Anything
-                // behind it goes unread either way; abandoning this one as well
-                // threw away a record this client can read.
-                if let Some(payload) = frame.get(at + form.header()..) {
-                    each(tick, GenericTickRecord { server_tag, payload });
+                // The record says where it ends, so reading it is what states
+                // its length — and the next record starts where it stops.
+                // Handing over the rest of the message instead read the record
+                // behind it as part of this one, and stopping at this one threw
+                // every record behind it away.
+                let from = at + form.header();
+                let Some(rest) = frame.get(from..) else { return };
+                let mut reader = crate::protocol::tick_decoder::BitReader::new(rest, 0);
+                fields.clear();
+                crate::protocol::tick_decoder::decode_record_into(&mut reader, &mut fields);
+                // Every field is a whole number of bytes, so a record that
+                // does not end on one was not read to its end and where the
+                // next one starts is not known.
+                let read = reader.bits_read();
+                if read == 0 || !read.is_multiple_of(8) {
+                    log::debug!(
+                        "A generic tick {tick} under server tag {server_tag} does not say where \
+                         its record ends; the rest of the message goes unread",
+                    );
+                    return;
                 }
-                return;
+                let width = read / 8;
+                let Some(payload) = rest.get(..width) else { return };
+                each(tick, GenericTickRecord { server_tag, payload });
+                at = from + width;
+                continue;
             }
-            PayloadLength::Fixed(width) => width,
             PayloadLength::OneByte => match frame.get(at + 4) {
                 Some(&n) => n as usize,
                 None => return,
@@ -3264,6 +3277,7 @@ impl FarmState {
                 // The odd lot: the two prices nobody has to deal in round
                 // lots at, their sizes, and where each is quoted.
                 787 => self.deliver_odd_lot(instrument, payload, context, shared),
+                221 => self.deliver_mark(instrument, 37, payload, context, shared),
                 220 => self.deliver_mark(instrument, 78, payload, context, shared),
                 619 => self.deliver_mark(instrument, 79, payload, context, shared),
                 233 => self.deliver_running_volume(instrument, 48, payload, shared),
@@ -3344,10 +3358,17 @@ impl FarmState {
     /// The mark the venue keeps for a contract, off a record of its own
     /// fields.
     ///
-    /// The price is the field numbered two. A word of flags numbered thirteen
-    /// carries, on the fifth bit up, the venue saying the price does not
-    /// stand; absent, nothing is said against it. A negative mark is the
-    /// venue's to state and is passed on as stated.
+    /// The price is the field numbered two, counted in tenths of the
+    /// contract's minimum increment rather than whole ones. Measured against
+    /// the mark the venue also states as a plain number, on three contracts
+    /// whose increments differ by two orders of magnitude: a share on a
+    /// hundredth, gold on a tenth and the index future on a quarter all read
+    /// back the same price only on tenths. Taken as whole increments every
+    /// mark this client published was ten times the price.
+    ///
+    /// A word of flags numbered thirteen carries, on the fifth bit up, the
+    /// venue saying the price does not stand; absent, nothing is said against
+    /// it. A negative mark is the venue's to state and is passed on as stated.
     fn deliver_mark(
         &mut self,
         instrument: InstrumentId,
@@ -3360,6 +3381,8 @@ impl FarmState {
         const MARK_PRICE: u64 = 2;
         const FLAGS: u64 = 13;
         const DOES_NOT_STAND: i64 = 16;
+        /// What the price field counts in, against the contract's increment.
+        const TENTHS_OF_AN_INCREMENT: f64 = 10.0;
 
         let fields = decode_record(&mut BitReader::new(payload, 0));
         // A word of flags that never arrived says nothing against the price.
@@ -3386,7 +3409,7 @@ impl FarmState {
             instrument,
             tick_type,
             value: crate::types::SeriesValue::Price(
-                scaled as f64 / crate::types::PRICE_SCALE as f64,
+                scaled as f64 / (crate::types::PRICE_SCALE as f64 * TENTHS_OF_AN_INCREMENT),
             ),
         });
     }

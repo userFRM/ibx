@@ -59,7 +59,7 @@ mod news_tests {
                 PayloadLength::TwoBytes => {
                     body.extend_from_slice(&(payload.len() as u16).to_be_bytes())
                 }
-                PayloadLength::ToTheEnd | PayloadLength::Fixed(_) => {}
+                PayloadLength::ToTheEnd => {}
             }
             body.extend_from_slice(payload);
         }
@@ -455,13 +455,15 @@ mod news_tests {
             "each extreme under its own number, and nothing for the rest",
         );
 
-        // The mark, with the flags that say whether it stands.
+        // The mark, with the flags that say whether it stands. The venue
+        // states it this way under one of its two numbers; under the other it
+        // is a record of the venue's own fields, read where those are.
         let mark = |price: f64, flags: i32| {
             let mut p = price.to_be_bytes().to_vec();
             p.extend_from_slice(&flags.to_be_bytes());
             p
         };
-        serve(&mut farm, 33, 221, &mark(101.5, 1), &mut context);
+        serve(&mut farm, 33, 232, &mark(101.5, 1), &mut context);
         assert_eq!(said(&shared), [(37, "price 101.5".to_string())]);
         serve(&mut farm, 34, 232, &mark(101.5, 0), &mut context);
         assert!(said(&shared).is_empty(), "the lowest bit unset is no mark");
@@ -623,7 +625,7 @@ mod news_tests {
         let mut context = Context::new();
         let shared = SharedState::new();
         let instrument = context.market.register(756733);
-        // A penny a tick, which is what the raw count is counted in.
+        // A penny a tick. The raw count is in tenths of one.
         context.market.set_min_tick(instrument, 0.01);
 
         // One record: the price, then the word of flags that ends it.
@@ -652,7 +654,7 @@ mod news_tests {
 
         farm.generic_tick_tags.push((70, 220, instrument));
         farm.handle_generic_tick(
-            &framed_generic_ticks(&[(70, 220, &record(10_125, 0))]),
+            &framed_generic_ticks(&[(70, 220, &record(101_250, 0))]),
             &mut context, &shared, &None,
         );
         let said = shared.market.drain_series_ticks(instrument);
@@ -666,7 +668,7 @@ mod news_tests {
         // The venue saying the mark does not stand.
         farm.generic_tick_tags.push((71, 220, instrument));
         farm.handle_generic_tick(
-            &framed_generic_ticks(&[(71, 220, &record(10_125, 16))]),
+            &framed_generic_ticks(&[(71, 220, &record(101_250, 16))]),
             &mut context, &shared, &None,
         );
         assert!(
@@ -677,12 +679,99 @@ mod news_tests {
         // The slow one answers on its own number.
         farm.generic_tick_tags.push((72, 619, instrument));
         farm.handle_generic_tick(
-            &framed_generic_ticks(&[(72, 619, &record(10_100, 0))]),
+            &framed_generic_ticks(&[(72, 619, &record(101_000, 0))]),
             &mut context, &shared, &None,
         );
         let said = shared.market.drain_series_ticks(instrument);
         assert_eq!(said.len(), 1, "{said:?}");
         assert_eq!(said[0].tick_type, 79);
+        assert!(
+            matches!(said[0].value, SeriesValue::Price(p) if (p - 101.0).abs() < 1e-9),
+            "a hundred and one on the tenths the venue counts in: {:?}", said[0].value,
+        );
+
+        // And the number the mark is also asked for under, which states the
+        // same record and reaches the caller on the number the plain one does.
+        farm.generic_tick_tags.push((73, 221, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(73, 221, &record(101_250, 0))]),
+            &mut context, &shared, &None,
+        );
+        let said = shared.market.drain_series_ticks(instrument);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert_eq!(said[0].tick_type, 37);
+        assert!(
+            matches!(said[0].value, SeriesValue::Price(p) if (p - 101.25).abs() < 1e-9),
+            "the mark, on its other number: {:?}", said[0].value,
+        );
+    }
+
+    /// A record that states its own length is not the last thing in its
+    /// message.
+    ///
+    /// The venue writes the mark as a run of its own fields, four bytes of it
+    /// at one moment and twelve at the next, and puts the venue list behind it
+    /// in the same message. Handing the rest of the message over as the mark's
+    /// payload and stopping there read one record and threw the other away.
+    #[test]
+    fn a_record_that_states_its_own_length_is_followed_by_the_next_one() {
+        use crate::types::SeriesValue;
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        context.market.set_min_tick(instrument, 0.01);
+
+        // The mark, as one field that says nothing follows it: five bits of
+        // number, one that says no more, two of width and a sign, and then the
+        // count. Four bytes, whatever comes after them in the message.
+        let mark = |price: u64| {
+            // Number two in the top five bits, nothing saying more follows,
+            // three bytes of width, no sign, and the count in what is left.
+            let word: u64 = (2 << 27) | (2 << 24) | price;
+            (word as u32).to_be_bytes().to_vec()
+        };
+
+        farm.generic_tick_reqs.push((80, 233));
+        farm.generic_tick_tags.push((80, 233, instrument));
+        farm.generic_tick_tags.push((81, 221, instrument));
+
+        // The mark first, and a second record behind it in the same message.
+        let totals = |value: f64, shares: i64, count: i32| {
+            let mut bytes = value.to_be_bytes().to_vec();
+            bytes.extend_from_slice(&shares.to_be_bytes());
+            bytes.extend_from_slice(&count.to_be_bytes());
+            bytes
+        };
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[
+                (81, 221, &mark(101_250)),
+                (80, 233, &totals(10_000.0, 100, 1)),
+            ]),
+            &mut context, &shared, &None,
+        );
+        let said = shared.market.drain_series_ticks(instrument);
+        assert_eq!(said.len(), 1, "the mark: {said:?}");
+        assert_eq!(said[0].tick_type, 37);
+        assert!(
+            matches!(said[0].value, SeriesValue::Price(p) if (p - 101.25).abs() < 1e-9),
+            "{:?}", said[0].value,
+        );
+
+        // The record behind it sets the running series' baseline, which says
+        // nothing of its own — so a second reading is what shows it arrived.
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[
+                (81, 221, &mark(101_250)),
+                (80, 233, &totals(11_010.0, 110, 2)),
+            ]),
+            &mut context, &shared, &None,
+        );
+        let said = shared.market.drain_series_ticks(instrument);
+        assert!(
+            said.iter().any(|t| t.tick_type == 48),
+            "the record behind the mark was read too: {said:?}",
+        );
     }
 
     /// The two running series keep their own baselines.
