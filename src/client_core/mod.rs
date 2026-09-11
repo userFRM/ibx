@@ -1705,6 +1705,36 @@ impl ClientCore {
         self.last_quotes.lock().unwrap().remove(&instrument);
     }
 
+    /// Forget everyone recorded as watching a slot the engine has taken back.
+    ///
+    /// The slot goes to the next contract that needs one, and the requests
+    /// that named it went on naming it — so the next contract found one of
+    /// them already holding its slot: it arrived as that request's follower,
+    /// and its quotes went to a caller whose own subscription was over.
+    ///
+    /// Called only from [`ClientCore::forget_released_slots`], because the
+    /// engine giving the slot back is the one thing that means this. A
+    /// subscription can be refused and stand — one acknowledged with an
+    /// increment prices cannot be counted in is refused to its caller and
+    /// keeps its slot — and forgetting on the refusal would strand it.
+    fn forget_watchers_of(&self, instrument: InstrumentId) {
+        self.mdt_by_instrument.lock().unwrap().remove(&instrument);
+        let held = self.instrument_to_req.lock().unwrap().remove(&instrument);
+        let following =
+            self.instrument_followers.lock().unwrap().remove(&instrument).unwrap_or_default();
+        for req_id in held.into_iter().chain(following) {
+            // Only where it still points here. A request that has since been
+            // pointed somewhere else is watching that, not this.
+            let mut by_req = self.req_to_instrument.lock().unwrap();
+            if by_req.get(&req_id) == Some(&instrument) {
+                by_req.remove(&req_id);
+            }
+            drop(by_req);
+            self.mdt_sent.lock().unwrap().remove(&req_id);
+        }
+        self.last_quotes.lock().unwrap().remove(&instrument);
+    }
+
     /// Every other request watching a contract, so one quote reaches them all.
     pub fn followers_of(&self, instrument: InstrumentId) -> Vec<i64> {
         self.instrument_followers
@@ -1730,8 +1760,16 @@ impl ClientCore {
         }
         // By the slot, so a contract the venue has not named — which holds a
         // slot under no id at all — is forgotten with the rest.
-        let mut cache = self.con_id_to_instrument.lock().unwrap();
-        cache.retain(|_, held| !released.contains(held));
+        {
+            let mut cache = self.con_id_to_instrument.lock().unwrap();
+            cache.retain(|_, held| !released.contains(held));
+        }
+        // And everything else that named the slot. The cache alone was
+        // forgotten, so the requests that had been watching it were still
+        // recorded against it when the next contract took it.
+        for slot in released {
+            self.forget_watchers_of(slot);
+        }
     }
 
     /// Find instrument ID for a contract, registering if needed.

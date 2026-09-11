@@ -230,11 +230,18 @@ fn known_unread(subtype: &str) -> Option<&'static str> {
 /// Read by walking the tags in the order the message states them rather than
 /// by looking each up, because three of them repeat and a keyed read answers
 /// with whichever came last.
-fn parse_order_presets(msg: &[u8]) -> Vec<(String, String)> {
+///
+/// Nothing where the venue's own count and what arrived disagree. The count is
+/// what says the message is whole, and read without it a truncated answer
+/// published however many pairs happened to parse — as the account's defaults,
+/// beside a number the venue itself said was larger.
+fn parse_order_presets(msg: &[u8]) -> Option<Vec<(String, String)>> {
     let mut out = Vec::new();
     let mut key: Option<String> = None;
+    let mut stated: Option<usize> = None;
     for (tag, value) in crate::control::contracts::tag_sequence(msg) {
         match tag {
+            8167 => stated = value.parse().ok(),
             8168 => key = Some(value),
             8169 => {
                 if let Some(k) = key.take() {
@@ -244,7 +251,10 @@ fn parse_order_presets(msg: &[u8]) -> Vec<(String, String)> {
             _ => {}
         }
     }
-    out
+    match stated {
+        Some(n) if n != out.len() => None,
+        _ => Some(out),
+    }
 }
 
 /// The algorithms the venue offers, keyed `PROVIDER/SECTYPE`.
@@ -933,16 +943,23 @@ impl CcpState {
                         // the values in them: asking for those is a request of
                         // its own, and nothing on the reference client's
                         // surface makes it.
-                        "194" => {
-                            let presets = parse_order_presets(msg);
-                            if !presets.is_empty() {
+                        "194" => match parse_order_presets(msg) {
+                            // Stored whether or not any came. An account that
+                            // holds none says so, and refusing to store that
+                            // left the last account's sets published for the
+                            // life of the session.
+                            Some(presets) => {
                                 log::info!(
                                     "the account holds {} sets of order defaults",
                                     presets.len(),
                                 );
                                 shared.reference.set_order_presets(presets);
                             }
-                        }
+                            None => log::debug!(
+                                "the order defaults did not arrive whole, so what was published \
+                                 before them stands",
+                            ),
+                        },
                         // Something the venue said that nothing here reads.
                         // Dropped in silence it is indistinguishable from the
                         // venue saying nothing, which is how an answer that had
@@ -2698,10 +2715,16 @@ impl CcpState {
         // question a sentinel answers, so a window opened across the replay is
         // shut by the replay's ending and the history that follows is read as
         // live. Held instead, and sent the moment the replay is over.
-        if !shared.orders.replay_done() {
+        //
+        // Nor while an earlier question is still being answered. Two of them
+        // at once share one window and one sentinel: the first sentinel to
+        // arrive shuts the window on both, so the second answer took the live
+        // path and only one of the two callers was ever released. Asked one at
+        // a time, each has a sentinel of its own.
+        if !shared.orders.replay_done() || self.completed_orders_open {
             self.completed_orders_wanted = true;
             log::debug!(
-                "holding the question of what the venue has finished until the replay is over",
+                "holding the question of what the venue has finished until the one before it                  is answered",
             );
             return;
         }
@@ -2921,7 +2944,10 @@ impl CcpState {
         hb: &mut HeartbeatState,
         shared: &SharedState,
     ) {
-        if !self.completed_orders_wanted || !shared.orders.replay_done() {
+        if !self.completed_orders_wanted
+            || !shared.orders.replay_done()
+            || self.completed_orders_open
+        {
             return;
         }
         self.completed_orders_wanted = false;

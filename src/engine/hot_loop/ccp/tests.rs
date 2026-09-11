@@ -2994,11 +2994,18 @@ fn the_question_waits_for_the_session_s_own_replay() {
     ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
     assert!(!shared.orders.take_completed_orders_end(), "still waiting");
 
-    // Once the replay is over the question goes out. There is no connection
-    // here to carry it, so what the caller is told is that it cannot be
-    // answered — which is the path a held question joins, not a path of its
-    // own.
+    // Nor while an earlier question is still being answered: two of them share
+    // one window and one sentinel, so the first sentinel would shut the window
+    // on both and only one caller would ever be released.
     shared.orders.set_replay_done();
+    ccp.completed_orders_open = true;
+    ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
+    assert!(!shared.orders.take_completed_orders_end(), "one at a time");
+    ccp.completed_orders_open = false;
+
+    // Once the way is clear the question goes out. There is no connection here
+    // to carry it, so what the caller is told is that it cannot be answered —
+    // which is the path a held question joins, not a path of its own.
     ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
     assert!(
         shared.orders.take_completed_orders_end(),
@@ -4699,13 +4706,34 @@ fn the_order_defaults_the_account_holds_are_read() {
     let held = super::parse_order_presets(&msg);
     assert_eq!(
         held,
-        vec![
+        Some(vec![
             ("s=CASH".to_string(), "v=1&a=1".to_string()),
             ("s=FUT".to_string(), "v=1&a=1".to_string()),
             ("s=STK".to_string(), "v=2".to_string()),
-        ],
+        ]),
         "every set, in the order the venue states them",
     );
+
+    // An account that holds none says so, and that is an answer.
+    let none = crate::protocol::fix::fix_build(
+        &[(35, "U"), (6040, "194"), (6556, "OPR.2"), (8166, "L"), (8167, "0")],
+        1,
+    );
+    assert_eq!(super::parse_order_presets(&none), Some(Vec::new()), "none is a number of sets");
+
+    // And where the venue's own count and what arrived disagree, the message
+    // did not arrive whole: published anyway, however many pairs happened to
+    // parse would stand as the account's defaults beside a count saying there
+    // were more.
+    let short = crate::protocol::fix::fix_build(
+        &[
+            (35, "U"), (6040, "194"), (6556, "OPR.2"), (8166, "L"),
+            (8167, "3"),
+            (8168, "s=CASH"), (8169, "v=1&a=1"), (8170, "1782492079.182"),
+        ],
+        1,
+    );
+    assert_eq!(super::parse_order_presets(&short), None, "one of three is not the answer");
 }
 
 /// A message nobody has looked at and a message deliberately not read are

@@ -3291,6 +3291,31 @@ fn moved_watchers_report_the_destination_subscriptions_type() {
     engine.join().unwrap();
 }
 
+/// A request lets go of a slot the engine has taken back.
+///
+/// The slot goes to the next contract that needs one, and only the contract
+/// cache was forgetting it. The request that had been watching it still named
+/// it, so the next contract found that request holding its slot: it arrived as
+/// a follower, and its quotes went to a caller whose own subscription was
+/// already over.
+#[test]
+fn a_refused_subscription_does_not_go_on_holding_the_slot_it_was_given() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    assert!(!core.take_or_follow(7, 100), "the first request held the slot");
+
+    shared.market.note_released_slot(7);
+    core.forget_released_slots(&shared);
+
+    assert_eq!(core.watching(100), None, "it is not watching anything now");
+    assert!(
+        !core.take_or_follow(7, 200),
+        "the contract that took the slot next holds it outright, rather than following a \
+         request the venue already refused",
+    );
+    assert!(core.followers_of(7).is_empty(), "and nothing is following it");
+}
+
 /// A price no carry reproduces leaves nothing to answer against.
 ///
 /// Everything here is anchored to the model the venue published: the carry is
