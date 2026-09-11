@@ -638,6 +638,13 @@ pub(crate) struct FarmState {
     /// way to tell a venue that stopped sending from one still sending under a
     /// number nobody here holds.
     quotes_for_no_one: std::collections::HashSet<u32>,
+    /// The slots whose chargeable snapshot has already been stamped.
+    ///
+    /// The moment a snapshot was taken is not a figure the venue sends. It is
+    /// the reader's own clock, read where the snapshot's first payload reaches
+    /// it and before any of that payload is decoded, so it says when the
+    /// answer arrived rather than when any price in it was made.
+    snapshot_stamped: std::collections::HashSet<InstrumentId>,
     /// Active depth subscriptions: (req_id, is_smart_depth).
     pub(crate) depth_subs: Vec<(u32, bool)>,
     /// How deep each caller asked its book to be, by the caller's own id.
@@ -1221,6 +1228,17 @@ impl FarmState {
             || self.replay_queue.iter().any(|r| r.0 == instrument)
     }
 
+    /// Whether this slot is held by the chargeable snapshot rather than by a
+    /// stream.
+    pub(crate) fn holds_a_snapshot(&self, instrument: InstrumentId) -> bool {
+        self.instrument_md_reqs.iter().any(|(id, record)| {
+            *id == instrument
+                && record.entries.iter().any(|e| {
+                    e.request_type == REGULATORY_SNAPSHOT_REQUEST_TYPE
+                })
+        })
+    }
+
     /// Whether this instrument has a subscription a second caller can be given
     /// instead of one of its own.
     ///
@@ -1254,6 +1272,7 @@ impl FarmState {
             md_req_to_instrument: Vec::new(),
             instrument_md_reqs: Vec::new(),
             quotes_for_no_one: std::collections::HashSet::new(),
+            snapshot_stamped: std::collections::HashSet::new(),
             depth_subs: Vec::new(),
             depth_rows: Vec::new(),
             depth_tag_to_req: Vec::new(),
@@ -1499,6 +1518,22 @@ impl FarmState {
                     continue;
                 }
             };
+
+            // The moment the answer to a chargeable snapshot reached this
+            // client, read before any of it is decoded and once per snapshot.
+            // The venue sends no such figure; the reference terminal reads its
+            // own clock at exactly this point, so this is that same moment.
+            if self.holds_a_snapshot(instrument) && self.snapshot_stamped.insert(instrument) {
+                let taken = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                shared.market.push_series_tick(crate::types::SeriesTick {
+                    instrument,
+                    tick_type: 85,
+                    value: crate::types::SeriesValue::Text(taken.to_string()),
+                });
+            }
 
             // A yield is stated on the numbers a price is stated on, and the
             // record says which by its layout. It is counted in ten
@@ -2437,6 +2472,9 @@ impl FarmState {
         // print for everything that traded in between, or for a negative
         // number of shares where the venue has started its day over.
         self.rt_volume_totals.retain(|(watched, _), _| *watched != instrument);
+        // And the stamp, so the next snapshot on this slot is stamped when it
+        // arrives rather than reading as one already answered.
+        self.snapshot_stamped.remove(&instrument);
         let record = match self.instrument_md_reqs.iter()
             .position(|(id, _)| *id == instrument)
         {
