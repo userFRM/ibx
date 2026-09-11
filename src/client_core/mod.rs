@@ -2958,11 +2958,16 @@ impl ClientCore {
     /// refused on the same reading until a session placed each and the venue
     /// took the replace — the strategy asked was the adaptive one, and the
     /// block that carries it is restated by the same path for every strategy.
+    ///
+    /// The adjustable stop was refused here for the same reason and is not any
+    /// more. The replace states the whole adjustable block, the same six
+    /// numbers the placement states and in the same order: the marker, the type
+    /// it adjusts to, the trigger, the adjusted stop, its limit and the
+    /// trailing amount. This client's replace is built by the path that writes
+    /// them, so a caller stating a new price on such an order has it restated
+    /// rather than dropped — and a rule here refusing what the venue was never
+    /// asked is the thing this client does not do.
     pub fn replace_cannot_restate(order: &ApiOrder, restating_itself: bool) -> Option<String> {
-        if !order.adjusted_order_type.is_empty() {
-            return Some(format!("an order that adjusts to {}", order.adjusted_order_type));
-        }
-
         // A what-if is a margin preview, not a resting order, so there is
         // nothing on the book for a replace to act on.
         if order.what_if {

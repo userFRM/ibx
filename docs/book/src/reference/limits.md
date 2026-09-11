@@ -95,20 +95,21 @@ Something the protocol may well carry, which no session has established. Each
 says what would settle it. None of them is a call that returns as though it
 acted: a request this client will not send says so.
 
-## Two orders a modify cannot restate
+## One order a modify cannot restate
 
-A modify is a full statement of the order, rebuilt from what was placed. Two
-kinds cannot be stated that way and the call is refused rather than sent:
-
-| Order | Why |
-| --- | --- |
-| An adjustable stop | It is an ordinary stop defined by the conversion it carries, and no session has established that a replace keeps it |
-| A what-if preview | It is a margin preview, not a resting order, so there is nothing on the book for a replace to act on |
+A modify is a full statement of the order, rebuilt from what was placed. One
+kind cannot be stated that way and the call is refused rather than sent: a
+what-if preview, which is a margin preview rather than a resting order, so
+there is nothing on the book for a replace to act on.
 
 Everything else is replaced as itself, including the ones that carry more than
 a type and a price: hidden, all-or-none, iceberg, discretionary, sweep-to-fill,
 an OCA group, a good-till date, a bracket child, an algo, a conditional order,
-and the trailing, pegged, midpoint and limit-if-touched types. A modify of one
+an adjustable stop, and the trailing, pegged, midpoint and limit-if-touched
+types. An adjustable stop is an ordinary stop defined by what it becomes, and
+the replace states that conversion again: the marker, the type it adjusts to,
+the trigger, the adjusted stop, its limit and the trailing amount, the same
+numbers the placement wrote and in the same order. A modify of one
 of those names its defining number in the field the placement used: a trail, a
 peg offset or a snap offset on the auxiliary price, a cap on the limit price, a
 trailing stop limit's limit offset on `lmtPriceOffset`. The one number a modify

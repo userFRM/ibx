@@ -890,11 +890,11 @@ fn a_type_the_replace_cannot_restate_is_not_modified() {
 #[test]
 fn an_order_defined_by_more_than_its_type_is_not_modified() {
     let cases: Vec<OrderCase> = vec![
-        ("adjustable stop", |o| o.adjusted_order_type = "TRAIL".into()),
         // What is left of the attributes: the minimum quantity, which this
         // venue refuses as an order on the security type asked, so what a
         // replace would do to one cannot be put to it. Everything else came off
-        // this list when a session placed it and the venue took the replace.
+        // this list when a session placed it and the venue took the replace,
+        // the adjustable stop last: its replace states the whole conversion.
         ("minimum quantity", |o| o.min_qty = 50),
     ];
     for (name, set) in cases {

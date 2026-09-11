@@ -1611,6 +1611,43 @@ mod modify_wire_tests {
         String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|")
     }
 
+    /// A replace of an adjustable stop restates the conversion it carries.
+    ///
+    /// The order is an ordinary stop defined by what it becomes, and a replace
+    /// that states only the type leaves that behind. It was refused here for
+    /// that reason. The replace does carry it: the marker, the type it adjusts
+    /// to, the trigger, the adjusted stop and the trailing amount, the same
+    /// numbers the placement wrote.
+    #[test]
+    fn a_replace_restates_what_an_adjustable_stop_adjusts_to() {
+        let mut context = Context::new();
+        let instrument = context.register_instrument(756733);
+        context.insert_order(crate::types::Order::new(
+            7, instrument, Side::Sell, crate::types::QTY_SCALE,
+            0, b'3', b'0', 11 * crate::types::PRICE_SCALE,
+        ));
+        context.submitted.insert(7, Box::new(crate::types::OrderSpec {
+            kind: crate::types::OrderKind::AdjustableStop {
+                stop_price: 11 * crate::types::PRICE_SCALE,
+                trigger_price: 12 * crate::types::PRICE_SCALE,
+                adjusted_order_type: crate::types::AdjustedOrderType::Trail,
+                adjusted_stop_price: 115 * crate::types::PRICE_SCALE / 10,
+                adjusted_stop_limit_price: 0,
+                adjusted_trailing_amount: crate::types::PRICE_SCALE / 2,
+                adjustable_trailing_unit: 0,
+            },
+            attrs: crate::types::OrderAttrs::default(),
+        }));
+        context.modify(7, 105 * crate::types::PRICE_SCALE / 10, 1, false);
+        let wire = drain(&mut context);
+
+        assert!(wire.contains("|6257=1|"), "the marker: {wire}");
+        assert!(wire.contains("|6261="), "what it adjusts to: {wire}");
+        assert!(wire.contains("|6258=12|"), "the trigger: {wire}");
+        assert!(wire.contains("|6259=11.5|"), "the stop it takes on: {wire}");
+        assert!(wire.contains("|6260=0.5|"), "and the trailing amount: {wire}");
+    }
+
     /// A plain limit modified with the flag in each polarity.
     fn replace_bytes(outside_rth: bool) -> String {
         let mut context = Context::new();
