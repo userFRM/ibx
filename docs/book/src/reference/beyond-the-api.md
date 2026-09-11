@@ -51,6 +51,21 @@ client.algorithms_for("STK")                 # ['FOXRIVER-AE', 'IBALGO-AE', 'JON
 
 An algorithm absent here is one an order naming it is refused for.
 
+## Which order defaults the account holds
+
+The venue keeps a set of order defaults per security type and fills parts of an
+order the caller left unstated from them: the size a compete order competes
+with and the offset it competes by, where neither was named. So the same call
+on two accounts is not the same order.
+
+```python
+client.order_presets()      # [('s=CASH', 'v=1&a=1'), ('s=FUT', 'v=1&a=1'), ('s=STK', 'v=1&a=1'), …]
+```
+
+The key is the venue's own, and a currency can split one: `s=CASH&tc=EUR` sits
+beside `s=CASH`. The version is what that set is on. The values inside a set
+are asked for separately and are not carried here.
+
 ## What the session itself is
 
 ```python

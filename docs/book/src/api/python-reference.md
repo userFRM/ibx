@@ -1460,6 +1460,16 @@ def algorithms_for(sec_type)
 
 ---
 
+#### `order_presets`
+
+The sets of order defaults this account holds, as `(key, version)`.  The venue keeps one per security type and fills parts of an order the caller left unstated from them, so the same call on two accounts is not the same order. The key is the venue's own and the version is what that set is on; the values in a set are asked for separately.
+
+```python
+def order_presets()
+```
+
+---
+
 #### `calculate_implied_volatility`
 
 What volatility a price implies for an option, under the model the venue publishes for that contract. Answered on `tick_option_computation`.  `implied_vol_options` is taken and not applied. This protocol's request carries no free-form option list, so what a caller puts in one cannot be sent. The reference client's own list is empty on every ordinary call.

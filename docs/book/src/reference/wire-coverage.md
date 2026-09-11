@@ -124,6 +124,7 @@ A user message carries what it is for on tag 6040.
 | `152` |
 | `186` |
 | `192` |
+| `194` |
 | `210` |
 | `278` |
 

@@ -1564,7 +1564,7 @@ pub struct ContractSchedule {
 
 /// Tag/value pairs in the order the message states them. Repeating groups are
 /// told apart by where a tag sits, which a keyed parse cannot express.
-fn tag_sequence(data: &[u8]) -> Vec<(u32, String)> {
+pub(crate) fn tag_sequence(data: &[u8]) -> Vec<(u32, String)> {
     let mut tags: Vec<(u32, String)> = Vec::new();
     for part in data.split(|&b| b == fix::SOH) {
         if part.is_empty() { continue; }

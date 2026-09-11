@@ -904,6 +904,18 @@ pub fn algorithms_for(&self, sec_type: &str) -> Vec<String>
 
 ---
 
+#### `order_presets`
+
+The sets of order defaults this account holds, as `(key, version)`. The venue keeps one per security type and fills parts of an order the caller left unstated from them: the size a compete order competes with and the offset it competes by, where neither was named. So the same call on two accounts is not the same order, and the reference client's surface has no way to say which sets are in force. The key is the venue's own — `s=STK`, or `s=CASH&tc=EUR` where a currency splits it — and the version is what that set is on. The values in a set are asked for separately and are not carried here.
+
+```rust
+pub fn order_presets(&self) -> Vec<(String, String)>
+```
+
+**Returns:** `Vec<(String, String)>`
+
+---
+
 #### `place_order`
 
 Place an order. An order names its contract by the venue's id. A caller who states a description instead of an id — which every example written against the reference client does — has it resolved here, once the order itself is known to be one the venue would take: an order that names no contract is one the venue has nothing to match, and answers with nothing at all. Resolving it costs a request and an answer the first time, so this call does not return until the venue has named the contract — up to the answer timeout. Once per description: the answer is kept, and later orders on the same contract are sent without asking again. The reference client never waits here, because a gateway resolved the contract before the order reached it; this client is the gateway, so the work happens somewhere, and today it happens on the caller's thread. A caller placing orders from inside a callback stalls its own dispatch loop for that time. Pass a contract carrying `con_id` — from `qualify_contract`, or from any contract-details answer — and nothing is resolved and nothing waits.

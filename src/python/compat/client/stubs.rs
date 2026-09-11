@@ -41,6 +41,16 @@ impl EClient {
         Ok(self.shared_state().map(|s| s.reference.algorithms_for(sec_type)).unwrap_or_default())
     }
 
+    /// The sets of order defaults this account holds, as `(key, version)`.
+    ///
+    /// The venue keeps one per security type and fills parts of an order the
+    /// caller left unstated from them, so the same call on two accounts is not
+    /// the same order. The key is the venue's own and the version is what that
+    /// set is on; the values in a set are asked for separately.
+    fn order_presets(&self) -> PyResult<Vec<(String, String)>> {
+        Ok(self.shared_state().map(|s| s.reference.order_presets()).unwrap_or_default())
+    }
+
     // ── Option calculations ──
     //
     // A volatility inverted from a price, and a price implied by a volatility.

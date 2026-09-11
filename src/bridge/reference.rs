@@ -149,6 +149,9 @@ pub struct ReferenceState {
     island_granted: AtomicBool,
     /// Which algorithms the venue offers, by provider and security type.
     algorithms: Mutex<HashMap<String, Vec<String>>>,
+    /// The order presets the account holds, by the key the venue names each
+    /// set under, with the version it is on.
+    order_presets: Mutex<Vec<(String, String)>>,
 }
 
 impl ReferenceState {
@@ -197,6 +200,7 @@ impl ReferenceState {
             enabled_features: Mutex::new(Vec::new()),
             island_granted: AtomicBool::new(false),
             algorithms: Mutex::new(HashMap::new()),
+            order_presets: Mutex::new(Vec::new()),
         }
     }
 
@@ -1116,6 +1120,25 @@ impl ReferenceState {
         out.sort();
         out.dedup();
         out
+    }
+
+    /// The order presets the account holds, as `(key, version)`.
+    ///
+    /// The venue keeps a set of order defaults per security type and fills
+    /// parts of an order the caller left unstated from them — the size a
+    /// compete order competes with and the offset it competes by, where the
+    /// caller named neither. So two identical calls on two accounts are not
+    /// the same order, and nothing in the reference client's surface says so.
+    ///
+    /// The key is the venue's own, `s=STK` or `s=CASH&tc=EUR`. The version is
+    /// what that set is on; the values behind it are asked for separately and
+    /// are not carried here.
+    pub fn order_presets(&self) -> Vec<(String, String)> {
+        self.order_presets.lock().unwrap().clone()
+    }
+
+    #[doc(hidden)] pub fn set_order_presets(&self, presets: Vec<(String, String)>) {
+        *self.order_presets.lock().unwrap() = presets;
     }
 
     #[doc(hidden)] pub fn set_algorithms(&self, algorithms: HashMap<String, Vec<String>>) {

@@ -220,6 +220,33 @@ fn known_unread(subtype: &str) -> Option<&'static str> {
     }
 }
 
+/// The order presets a session is told about, as `(key, version)`.
+///
+/// The venue states how many follow on 8167 and then repeats three fields for
+/// each: the key it names the set by on 8168, the version on 8169, and the
+/// moment it last changed on 8170. The values in a set are not here; asking
+/// for those is a request of its own.
+///
+/// Read by walking the tags in the order the message states them rather than
+/// by looking each up, because three of them repeat and a keyed read answers
+/// with whichever came last.
+fn parse_order_presets(msg: &[u8]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut key: Option<String> = None;
+    for (tag, value) in crate::control::contracts::tag_sequence(msg) {
+        match tag {
+            8168 => key = Some(value),
+            8169 => {
+                if let Some(k) = key.take() {
+                    out.push((k, value));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// The algorithms the venue offers, keyed `PROVIDER/SECTYPE`.
 ///
 /// Stated once, unasked, after logon. Nothing here read it, so a caller had no
@@ -881,6 +908,27 @@ impl CcpState {
                                 // the product wrapped to a clock a thousand
                                 // years behind the one the venue stated.
                                 shared.market.note_venue_millis(seconds.saturating_mul(1_000));
+                            }
+                        }
+                        // The order presets this account holds, which this
+                        // session asks for at logon and then threw away. The
+                        // venue keeps a set of order defaults per security
+                        // type and fills parts of an order the caller left
+                        // unstated from them, so what sets exist is a fact
+                        // about every order placed from here.
+                        //
+                        // It states the sets and their versions rather than
+                        // the values in them: asking for those is a request of
+                        // its own, and nothing on the reference client's
+                        // surface makes it.
+                        "194" => {
+                            let presets = parse_order_presets(msg);
+                            if !presets.is_empty() {
+                                log::info!(
+                                    "the account holds {} sets of order defaults",
+                                    presets.len(),
+                                );
+                                shared.reference.set_order_presets(presets);
                             }
                         }
                         // Something the venue said that nothing here reads.

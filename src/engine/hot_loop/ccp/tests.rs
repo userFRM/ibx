@@ -4551,6 +4551,39 @@ fn the_venue_states_which_algorithms_it_offers() {
     );
 }
 
+/// The order defaults the account holds are read, not discarded.
+///
+/// This session asks for them at logon and threw the answer away. The venue
+/// keeps a set of order defaults per security type and fills parts of an order
+/// the caller left unstated from them, so which sets exist is a fact about
+/// every order placed from here.
+///
+/// The answer repeats three fields per set, so it is read by walking the tags
+/// in order. Read by looking each up, five sets would answer as one.
+#[test]
+fn the_order_defaults_the_account_holds_are_read() {
+    let msg = crate::protocol::fix::fix_build(
+        &[
+            (35, "U"), (6040, "194"), (6556, "OPR.2"), (8166, "L"), (8176, "1"),
+            (8167, "3"),
+            (8168, "s=CASH"), (8169, "v=1&a=1"), (8170, "1782492079.182"),
+            (8168, "s=FUT"), (8169, "v=1&a=1"), (8170, "1782488506.813"),
+            (8168, "s=STK"), (8169, "v=2"), (8170, "1782488429.956"),
+        ],
+        1,
+    );
+    let held = super::parse_order_presets(&msg);
+    assert_eq!(
+        held,
+        vec![
+            ("s=CASH".to_string(), "v=1&a=1".to_string()),
+            ("s=FUT".to_string(), "v=1&a=1".to_string()),
+            ("s=STK".to_string(), "v=2".to_string()),
+        ],
+        "every set, in the order the venue states them",
+    );
+}
+
 /// A message nobody has looked at and a message deliberately not read are
 /// both discarded, but only one is a gap.
 #[test]
