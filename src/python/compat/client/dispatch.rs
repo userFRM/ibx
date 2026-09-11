@@ -1051,6 +1051,12 @@ impl EClient {
                         sec_type: m.sec_type.to_api_str().to_string(),
                         currency: m.currency.clone(),
                         primary_exchange: m.primary_exchange.clone(),
+                        // The venue's own words, and the id it gives an issuer
+                        // — which is all a match naming an issuer rather than
+                        // a contract carries, and what a lookup for that
+                        // issuer's fixed income is made under.
+                        description: m.description.clone(),
+                        issuer_id: m.issuer_id.clone(),
                         ..Default::default()
                     }).unwrap(),
                     derivative_sec_types: crate::python::compat::class_contracts::ListField::of(py, m.derivative_types.clone()).unwrap_or_default(),

@@ -6568,6 +6568,7 @@ fn process_msgs_dispatches_symbol_samples() {
             con_id: 265598, symbol: "AAPL".into(), sec_type: SecurityType::Stock,
             currency: "USD".into(), primary_exchange: "NASDAQ".into(),
             description: "Apple Inc".into(), derivative_types: vec!["OPT".into()],
+            issuer_id: String::new(),
         },
     ]);
     let mut w = RecordingWrapper::default();

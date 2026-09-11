@@ -681,6 +681,55 @@ fn build_matching_symbols_request_structure() {
     assert_eq!(tags[&TAG_MATCH_PATTERN], "APP");
 }
 
+/// A search answers with issuers as well as contracts, and an issuer is what
+/// a lookup for fixed income is made under.
+///
+/// The venue writes one after the listings: an empty ticker, its own id for
+/// the issuer, what that issuer issues and the issuer's name. Read as a
+/// contract and dropped for having no contract id, every bond a company has
+/// listed was out of reach — the lookup that would name one is made under the
+/// issuer's id, and nothing here ever saw one.
+///
+/// Taken from a live search on a company with nine of them.
+#[test]
+fn a_search_hands_back_the_issuers_as_well_as_the_contracts() {
+    let msg = fix::fix_build(
+        &[
+            (TAG_MSG_TYPE, "U"),
+            (TAG_SUB_PROTOCOL, "186"),
+            (TAG_SECURITY_REQ_ID, "R1"),
+            (TAG_MATCH_COUNT, "2"),
+            // The listing.
+            (TAG_SYMBOL, "IBM"),
+            (TAG_SECURITY_TYPE, "CS"),
+            (TAG_CURRENCY, "USD"),
+            (TAG_IB_CON_ID, "8314"),
+            (TAG_MATCH_PRIMARY_EXCHANGE, "NYSE"),
+            (TAG_MATCH_DESCRIPTION, "INTL BUSINESS MACHINES CORP"),
+            (TAG_MATCH_DERIVATIVE_TYPES, "BAG,CFD,IOPT,OPT,WAR"),
+            // And the issuer, which carries neither a ticker nor a contract id.
+            (TAG_SYMBOL, ""),
+            (TAG_ISSUER_ID, "e1400789"),
+            (TAG_UNDERLYING_SEC_TYPE, "BOND"),
+            (TAG_MATCH_DESCRIPTION, "International Business Machines Corp"),
+        ],
+        1,
+    );
+    let matches = parse_matching_symbols_response(&msg).unwrap();
+    assert_eq!(matches.len(), 2, "{matches:?}");
+    assert_eq!(matches[0].con_id, 8314);
+    assert!(matches[0].issuer_id.is_empty(), "a listing names no issuer");
+
+    let issuer = &matches[1];
+    assert_eq!(issuer.issuer_id, "e1400789");
+    assert_eq!(issuer.con_id, 0, "an issuer is not a contract");
+    assert_eq!(issuer.description, "International Business Machines Corp");
+    assert_eq!(
+        crate::types::model::ContractDescription::from(issuer).sec_type, "BOND",
+        "and what it issues is what it is handed over as",
+    );
+}
+
 #[test]
 fn parse_matching_symbols_response_basic() {
     let msg = fix::fix_build(
@@ -910,6 +959,7 @@ fn a_symbol_search_states_the_type_a_request_takes() {
         currency: "USD".into(),
         primary_exchange: "ARCA".into(),
         derivative_types: vec![],
+        issuer_id: String::new(),
     };
     let described = crate::types::model::ContractDescription::from(&m);
     assert_eq!(described.sec_type, "STK");

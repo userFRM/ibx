@@ -1798,6 +1798,12 @@ pub struct SymbolMatch {
     pub description: String,
     /// Which kinds of derivative it lists on it.
     pub derivative_types: Vec<String>,
+    /// The venue's id for an issuer, where the match names one rather than a
+    /// contract. A search on a company answers with its listings and then with
+    /// the issuers whose fixed income the venue lists, and an issuer is how
+    /// that fixed income is asked for: it has no ticker and no contract id of
+    /// its own, so a match holding one holds nothing else.
+    pub issuer_id: String,
 }
 
 /// Build a matching symbols request.
@@ -1833,7 +1839,7 @@ pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> 
         match *tag {
             TAG_SYMBOL => {
                 if let Some(m) = current.take()
-                    && m.con_id > 0 { matches.push(m); }
+                    && (m.con_id > 0 || !m.issuer_id.is_empty()) { matches.push(m); }
                 current = Some(SymbolMatch {
                     con_id: 0,
                     symbol: val.clone(),
@@ -1844,6 +1850,7 @@ pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> 
                     primary_exchange: String::new(),
                     description: String::new(),
                     derivative_types: Vec::new(),
+                    issuer_id: String::new(),
                 });
             }
             TAG_SECURITY_TYPE => {
@@ -1876,12 +1883,32 @@ pub fn parse_matching_symbols_response(data: &[u8]) -> Option<Vec<SymbolMatch>> 
                     m.derivative_types = val.split(',').map(|s| s.to_string()).collect();
                 }
             }
+            // An issuer, which is the other kind of thing a search answers
+            // with. It carries no ticker and no contract id, so it opens its
+            // match on an empty symbol and states its own id and what it
+            // issues instead. Dropped for want of a contract id, the fixed
+            // income a company has listed could not be reached at all: an
+            // issuer is what a lookup for it is made under.
+            TAG_ISSUER_ID => {
+                if let Some(ref mut m) = current {
+                    m.issuer_id = val.clone();
+                }
+            }
+            // What the issuer issues, where the match is an issuer's. A
+            // contract states its own type under another number.
+            TAG_UNDERLYING_SEC_TYPE => {
+                if let Some(ref mut m) = current
+                    && !m.issuer_id.is_empty()
+                {
+                    m.sec_type = SecurityType::from_fix(val);
+                }
+            }
             _ => {}
         }
     }
     // Flush last match
     if let Some(m) = current
-        && m.con_id > 0 { matches.push(m); }
+        && (m.con_id > 0 || !m.issuer_id.is_empty()) { matches.push(m); }
 
     Some(matches)
 }
@@ -2183,6 +2210,8 @@ impl From<&SymbolMatch> for crate::types::model::ContractDescription {
             currency: m.currency.clone(),
             primary_exchange: m.primary_exchange.clone(),
             derivative_sec_types: m.derivative_types.clone(),
+            description: m.description.clone(),
+            issuer_id: m.issuer_id.clone(),
         }
     }
 }

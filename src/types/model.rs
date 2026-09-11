@@ -1827,6 +1827,13 @@ pub struct ContractDescription {
     pub primary_exchange: String,
     /// Which kinds of derivative the venue lists on it.
     pub derivative_sec_types: Vec<String>,
+    /// The venue's own words for it.
+    pub description: String,
+    /// The venue's id for an issuer, where the match names one rather than a
+    /// contract. Empty on a contract; on an issuer it is the only thing that
+    /// identifies it, and it is what a lookup for that issuer's fixed income
+    /// is made under.
+    pub issuer_id: String,
 }
 
 

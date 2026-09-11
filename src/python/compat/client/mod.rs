@@ -2565,6 +2565,7 @@ assert [(c[1], c[2]) for c in w.calls if c[0] in ('tickOptionComputation', 'tick
                     sec_type: crate::control::contracts::SecurityType::Stock,
                     currency: "USD".into(), primary_exchange: "NASDAQ".into(),
                     description: "Apple Inc".into(), derivative_types: vec!["OPT".into()],
+                    issuer_id: String::new(),
                 },
             ]);
             client.borrow(py).dispatch_once(py, &shared).unwrap();
@@ -2595,6 +2596,7 @@ assert [(c[1], c[2]) for c in w.calls if c[0] in ('tickOptionComputation', 'tick
                     sec_type: crate::control::contracts::SecurityType::Stock,
                     currency: "USD".into(), primary_exchange: "NASDAQ".into(),
                     description: "Apple Inc".into(), derivative_types: vec!["OPT".into()],
+                    issuer_id: String::new(),
                 },
             ]);
             client.borrow(py).dispatch_once(py, &shared).unwrap();
