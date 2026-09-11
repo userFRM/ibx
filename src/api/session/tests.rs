@@ -154,7 +154,7 @@ fn quotes_for_described_contracts_follow_their_request_ids() {
                     quoted.market.push_quote(slot, &crate::types::Quote {
                         last: price * crate::types::PRICE_SCALE, ..Default::default()
                     });
-                    reply.send(Ok(slot)).unwrap();
+                    let _ = reply.send(Ok(slot));
                 }
                 crate::types::ControlCommand::Unsubscribe { instrument } => withdrawn.push(instrument),
                 _ => {}

@@ -1856,6 +1856,11 @@ w = W()",
         *client.control_tx.lock().unwrap() = Some(tx);
         *client.account_id.lock().unwrap() = Some("DU123".into());
         client.connected.store(true, Ordering::Release);
+        // A registration answered from another thread has to outlast being
+        // scheduled. The millisecond a test states when it WANTS the wait to
+        // fire is a race a loaded suite loses, and losing it reads as an
+        // engine that went away; a test that wants the short one says so.
+        client.core.set_registration_timeout(std::time::Duration::from_secs(30));
         (Py::new(py, client).unwrap(), rx, shared, w)
     }
 
@@ -2839,7 +2844,7 @@ assert [(c[1], c[2]) for c in w.calls if c[0] in ('tickOptionComputation', 'tick
                     ControlCommand::SubscribeTbt { reply_tx: Some(reply), .. } => {
                         seen_tx.send(()).unwrap();
                         go_rx.recv().unwrap();
-                        reply.send(Ok(0)).unwrap();
+                        let _ = reply.send(Ok(0));
                     }
                     other => panic!("expected a tick subscription: {other:?}"),
                 }
@@ -3025,7 +3030,7 @@ assert [(c[1], c[2]) for c in w.calls if c[0] in ('tickOptionComputation', 'tick
                 while let Ok(cmd) = rx.recv() {
                     match cmd {
                         ControlCommand::Subscribe { reply_tx: Some(reply), .. } => {
-                            reply.send(Ok(0)).unwrap();
+                            let _ = reply.send(Ok(0));
                         }
                         ControlCommand::Shutdown => break,
                         _ => {}
@@ -3274,7 +3279,7 @@ w.openOrder = preview
             let engine = thread::spawn(move || {
                 while let Ok(cmd) = rx.recv() {
                     if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
-                        reply.send(Ok(0)).unwrap();
+                        let _ = reply.send(Ok(0));
                         return rx;
                     }
                 }
@@ -3330,7 +3335,7 @@ w.error = lambda *a: errors.append(a)
                     let engine = thread::spawn(move || {
                         while let Ok(cmd) = rx.recv() {
                             if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
-                                reply.send(Ok(0)).unwrap();
+                                let _ = reply.send(Ok(0));
                                 return rx;
                             }
                         }

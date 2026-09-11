@@ -835,6 +835,10 @@ mod option_model_watch_tests {
         *client.shared.lock().unwrap() = Some(shared);
         *client.control_tx.lock().unwrap() = Some(tx);
         client.connected.store(true, Ordering::Release);
+        // A registration answered from another thread has to outlast being
+        // scheduled; see the same note beside the client this file's
+        // neighbours build.
+        client.core.set_registration_timeout(std::time::Duration::from_secs(30));
         (client, rx, wrapper)
     }
 
@@ -847,7 +851,7 @@ mod option_model_watch_tests {
         std::thread::spawn(move || {
             while let Ok(cmd) = rx.recv() {
                 if let ControlCommand::Subscribe { reply_tx: Some(reply), .. } = cmd {
-                    reply.send(Ok(slot)).unwrap();
+                    let _ = reply.send(Ok(slot));
                     return rx;
                 }
             }

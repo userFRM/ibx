@@ -606,7 +606,7 @@ mod expiry_tests {
         assert!(matches!(rx.recv_timeout(wait), Ok(ControlCommand::RegisterInstrument { .. })));
         match rx.recv_timeout(wait).expect("the subscription") {
             ControlCommand::Subscribe { reply_tx: Some(reply), .. } => {
-                reply.send(Ok(instrument)).unwrap();
+                let _ = reply.send(Ok(instrument));
             }
             other => panic!("expected a subscription, got {other:?}"),
         }
