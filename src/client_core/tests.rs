@@ -1571,7 +1571,7 @@ fn news_is_asked_for_from_the_providers_the_logon_named() {
         let con_id = next.get();
         next.set(con_id + 1);
         let _ = core.register_mkt_data(
-            &shared, &tx, con_id, con_id, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+            &shared, &tx, con_id, con_id, "SPY", "SMART", "STK", "USD", &Default::default(),
             false, false, tick_list, 0,
         );
         let mut named = None;
@@ -2624,7 +2624,7 @@ fn a_forgotten_baseline_states_the_quote_as_it_stands() {
     // is forgotten. Doing that here instead would prove only that a cleared
     // baseline restates, which the two lines above already say.
     let joined = core.register_mkt_data(
-        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", &Default::default(),
         false, false, "", 0,
     ).expect("the second request joins it");
     assert_eq!(joined, iid, "the same contract, so it followed rather than took one");
@@ -2664,7 +2664,7 @@ fn a_request_joining_a_refused_subscription_is_told_the_same_reason() {
     // A second request joins the same contract — through the register, which is
     // where the kept reason is handed to it.
     core.register_mkt_data(
-        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", &Default::default(),
         false, false, "", 0,
     ).expect("the second request joins it");
     let direct = shared.market.drain_subscription_failures_direct();
@@ -2781,13 +2781,13 @@ fn no_subscription_is_taken_on_a_feed_that_is_over_for_the_session() {
     shared.market.set_market_data_over("the venue would not take the connection back");
 
     let joining = core.register_mkt_data(
-        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", &Default::default(),
         false, false, "", 0,
     );
     assert!(joining.is_err(), "the joiner is refused: {joining:?}");
 
     let fresh = core.register_mkt_data(
-        &shared, &tx, 3, 272093, "MSFT", "SMART", "STK", "USD", "", 0.0, "", "",
+        &shared, &tx, 3, 272093, "MSFT", "SMART", "STK", "USD", &Default::default(),
         false, false, "", 0,
     );
     assert!(fresh.is_err(), "and so is a contract nobody is watching: {fresh:?}");
@@ -2865,7 +2865,7 @@ fn news_the_engine_never_heard_is_not_reported_as_asked_for() {
     core.req_to_instrument.lock().unwrap().insert(1, iid);
 
     let asked = core.register_mkt_data(
-        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", &Default::default(),
         false, false, "292", 0,
     );
     assert!(asked.is_err(), "the caller is told: {asked:?}");
@@ -2919,7 +2919,7 @@ fn one_number_cannot_be_registered_twice_at_once() {
         let (core, shared, tx) = (Arc::clone(&core), Arc::clone(&shared), tx.clone());
         std::thread::spawn(move || {
             core.register_mkt_data(
-                &shared, &tx, 7, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+                &shared, &tx, 7, 756733, "SPY", "SMART", "STK", "USD", &Default::default(),
                 false, false, "", 0,
             )
         })
@@ -2927,7 +2927,7 @@ fn one_number_cannot_be_registered_twice_at_once() {
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     let second = core.register_mkt_data(
-        &shared, &tx, 7, 272093, "MSFT", "SMART", "STK", "USD", "", 0.0, "", "",
+        &shared, &tx, 7, 272093, "MSFT", "SMART", "STK", "USD", &Default::default(),
         false, false, "", 0,
     );
     let refusal = second.expect_err("the second is refused, not admitted");
@@ -2981,7 +2981,7 @@ fn a_request_the_engine_names_the_slot_for_is_paid_like_any_joiner() {
 
     // Named by symbol, so this side holds no identity for it.
     core.register_mkt_data(
-        &shared, &tx, 2, 0, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        &shared, &tx, 2, 0, "SPY", "SMART", "STK", "USD", &Default::default(),
         false, false, "", 0,
     ).expect("the second request joins the one that is up");
     let _ = engine.join();
@@ -3076,7 +3076,7 @@ fn a_registration_that_fails_withdraws_the_headlines_it_asked_for() {
     });
 
     let refused = core.register_mkt_data(
-        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+        &shared, &tx, 2, 756733, "SPY", "SMART", "STK", "USD", &Default::default(),
         false, false, "292", 0,
     );
     assert_eq!(refused.unwrap_err().code, 101, "the subscription keeps the engine's refusal code");
@@ -3134,7 +3134,7 @@ fn a_withdrawal_during_registration_takes_down_what_it_opened() {
     let tx_ref = &tx;
     std::thread::scope(|scope| {
         let taking = scope.spawn(move || core_ref.register_mkt_data(
-            shared_ref, tx_ref, 2, 756733, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+            shared_ref, tx_ref, 2, 756733, "SPY", "SMART", "STK", "USD", &Default::default(),
             false, false, "", 0,
         ));
         seen_rx.recv().expect("the registration reached the engine");
@@ -3223,7 +3223,7 @@ fn followers_keep_the_subscriptions_market_data_type() {
             }
         });
         let subscribe = |req_id| core.register_mkt_data(
-            &shared, &tx, req_id, con_id, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+            &shared, &tx, req_id, con_id, "SPY", "SMART", "STK", "USD", &Default::default(),
             false, false, "", core.subscription_mode(),
         ).unwrap();
 
@@ -3272,7 +3272,7 @@ fn moved_watchers_report_the_destination_subscriptions_type() {
     });
     for (req_id, con_id, mode) in [(10, 1, 0), (20, 2, 1)] {
         core.register_mkt_data(
-            &shared, &tx, req_id, con_id, "SPY", "SMART", "STK", "USD", "", 0.0, "", "",
+            &shared, &tx, req_id, con_id, "SPY", "SMART", "STK", "USD", &Default::default(),
             false, false, "", mode,
         ).unwrap();
     }

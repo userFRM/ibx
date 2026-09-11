@@ -132,6 +132,11 @@ pub enum ControlCommand {
     Subscribe {
         /// The contract this names.
         contract: ContractRef,
+        /// What narrows the lookup that names it, where the caller described
+        /// the contract rather than numbering it. What identifies a contract
+        /// and what filters for it are separate here, as they are on every
+        /// other request that names one by description.
+        filters: SecDefFilters,
         /// Which feed to serve the subscription from: live, delayed or frozen.
         mode_9887: i32,
         /// Ask for the venue's chargeable one-shot snapshot rather than a

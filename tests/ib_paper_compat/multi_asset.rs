@@ -397,7 +397,7 @@ pub(super) fn phase_concurrent_orders(conns: Conns) -> Conns {
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: oid2, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
     control_tx.send(ControlCommand::Order(OrderRequest::SubmitEx { con_id: 0, order_id: oid3, instrument: 0, side: Side::Buy, qty: ibx::types::QTY_SCALE, kind: OrderKind::Limit { price: 1_00_000_000 }, tif: b'1', attrs: OrderAttrs { outside_rth: true, ..Default::default() } })).unwrap();
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, regulatory_snapshot: false, reply_tx: None,
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 756733, symbol: "SPY".into(), exchange: String::new(), sec_type: "STK".into(), currency: String::new(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, filters: Default::default(), mode_9887: 0, regulatory_snapshot: false, reply_tx: None,
         generic_ticks: Vec::new(),
     }).unwrap();
     let join = run_hot_loop(hot_loop);
@@ -892,7 +892,7 @@ pub(super) fn phase_crypto_fill(conns: Conns) -> Conns {
     hot_loop.context_mut().set_symbol(inst, "BTC".to_string());
     hot_loop.context_mut().set_routing(inst, "CRYPTO", "PAXOS");
 
-    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 479624278, symbol: "BTC".into(), exchange: "PAXOS".into(), sec_type: "CRYPTO".into(), currency: "USD".into(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, mode_9887: 0, regulatory_snapshot: false, reply_tx: None,
+    control_tx.send(ControlCommand::Subscribe { contract: ibx::types::ContractRef { con_id: 479624278, symbol: "BTC".into(), exchange: "PAXOS".into(), sec_type: "CRYPTO".into(), currency: "USD".into(), last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new() }, filters: Default::default(), mode_9887: 0, regulatory_snapshot: false, reply_tx: None,
         generic_ticks: Vec::new(),
     }).unwrap();
     let join = run_hot_loop(hot_loop);

@@ -299,10 +299,12 @@ pub(crate) struct PendingSubscribe {
     pub(crate) exchange: String,
     pub(crate) sec_type: String,
     pub(crate) currency: String,
-    pub(crate) last_trade_date: String,
-    pub(crate) strike: f64,
-    pub(crate) right: String,
-    pub(crate) multiplier: String,
+    /// What narrows the lookup that names the contract: the month, the strike,
+    /// the right, the multiplier, and the class, the local name and the
+    /// listing venue that tell one listing of a symbol from another. Carried
+    /// whole rather than field by field, so that what a caller states is what
+    /// the lookup asks.
+    pub(crate) filters: crate::types::SecDefFilters,
     pub(crate) mode_9887: i32,
     /// Whether the caller asked for the venue's chargeable one-shot snapshot.
     pub(crate) regulatory_snapshot: bool,
@@ -2068,13 +2070,7 @@ impl CcpState {
     ) {
         let req_id = self.next_internal_secdef_id;
         self.next_internal_secdef_id = self.next_internal_secdef_id.wrapping_add(1);
-        let filters = crate::types::SecDefFilters {
-            last_trade_date_or_contract_month: pending.last_trade_date.clone(),
-            strike: pending.strike,
-            right: pending.right.clone(),
-            multiplier: pending.multiplier.clone(),
-            ..Default::default()
-        };
+        let filters = pending.filters.clone();
         let (symbol, sec_type, exchange, currency) = (
             pending.symbol.clone(), pending.sec_type.clone(),
             pending.exchange.clone(), pending.currency.clone(),

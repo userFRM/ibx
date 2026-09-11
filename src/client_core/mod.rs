@@ -1825,10 +1825,7 @@ impl ClientCore {
         exchange: &str,
         sec_type: &str,
         currency: &str,
-        last_trade_date: &str,
-        strike: f64,
-        right: &str,
-        multiplier: &str,
+        filters: &crate::types::SecDefFilters,
         snapshot: bool,
         regulatory_snapshot: bool,
         generic_tick_list: &str,
@@ -1994,7 +1991,14 @@ impl ClientCore {
             reply_tx: None,
         }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
         control_tx.send(ControlCommand::Subscribe {
-            contract: ContractRef { con_id, symbol: symbol.to_string(), exchange: exchange.to_string(), sec_type: sec_type.to_string(), currency: currency.to_string(), last_trade_date: last_trade_date.to_string(), strike, right: right.to_string(), multiplier: multiplier.to_string() },
+            contract: ContractRef {
+                con_id, symbol: symbol.to_string(), exchange: exchange.to_string(),
+                sec_type: sec_type.to_string(), currency: currency.to_string(),
+                last_trade_date: filters.last_trade_date_or_contract_month.clone(),
+                strike: filters.strike, right: filters.right.clone(),
+                multiplier: filters.multiplier.clone(),
+            },
+            filters: filters.clone(),
             mode_9887,
             regulatory_snapshot,
             generic_ticks,

@@ -110,15 +110,17 @@ impl EClient {
         let exchange = contract.exchange.clone();
         let sec_type = contract.sec_type.clone();
         let currency = contract.currency.clone();
-        let last_trade_date = contract.last_trade_date_or_contract_month.clone();
-        let strike = contract.strike;
-        let right = contract.right.clone();
-        let multiplier = contract.multiplier.clone();
+        // What tells two listings of one symbol apart, taken whole. A caller
+        // who names an option's class, its local name or where it is listed
+        // states it here the way every other request that names a contract by
+        // description does; dropped, the lookup behind the subscription asks a
+        // wider question than the caller put and is answered with several
+        // contracts, which names none.
+        let filters = contract.lookup_filters();
         let generic_tick_list = generic_tick_list.to_string();
         if let Err(why) = py.detach(|| self.core.register_mkt_data(
             &shared, &tx, req_id,
-            con_id, &symbol, &exchange, &sec_type, &currency,
-            &last_trade_date, strike, &right, &multiplier,
+            con_id, &symbol, &exchange, &sec_type, &currency, &filters,
             snapshot, regulatory_snapshot, &generic_tick_list, mode_9887,
         )) {
             return self.report_refusal(py, req_id, why);

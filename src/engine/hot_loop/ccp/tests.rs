@@ -3518,16 +3518,13 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
 fn a_subscription_the_venue_never_names_is_reported() {
     let (mut ccp, mut context, shared) = u186_test_state();
     let parked = PendingSubscribe {
+        filters: Default::default(),
         con_id: 0,
         instrument: 4,
         symbol: "NOSUCH".into(),
         exchange: "SMART".into(),
         sec_type: "STK".into(),
         currency: "USD".into(),
-        last_trade_date: String::new(),
-        strike: 0.0,
-        right: String::new(),
-        multiplier: String::new(),
         mode_9887: 0, regulatory_snapshot: false,
     };
     ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new(), &shared);
@@ -3556,16 +3553,13 @@ fn a_subscription_the_venue_never_names_is_reported() {
 fn a_subscription_waits_for_the_lookup_that_names_its_contract() {
     let (mut ccp, mut context, shared) = u186_test_state();
     let parked = PendingSubscribe {
+        filters: Default::default(),
         con_id: 0,
         instrument: 3,
         symbol: "SPY".into(),
         exchange: "SMART".into(),
         sec_type: "STK".into(),
         currency: "USD".into(),
-        last_trade_date: String::new(),
-        strike: 0.0,
-        right: String::new(),
-        multiplier: String::new(),
         mode_9887: 0, regulatory_snapshot: false,
     };
     ccp.resolve_for_subscribe(parked, &mut None, &mut HeartbeatState::new(), &shared);
@@ -7077,9 +7071,9 @@ fn a_connection_that_dies_takes_the_lookups_waiting_on_it_with_it() {
         deadline: later,
     });
     ccp.resolve_for_subscribe(PendingSubscribe {
+        filters: Default::default(),
         con_id: 0, instrument: 4, symbol: "SPY".into(), exchange: "SMART".into(),
-        sec_type: "STK".into(), currency: "USD".into(), last_trade_date: String::new(),
-        strike: 0.0, right: String::new(), multiplier: String::new(),
+        sec_type: "STK".into(), currency: "USD".into(),
         mode_9887: 0, regulatory_snapshot: false,
     }, &mut None, &mut HeartbeatState::new(), &shared);
     let bars = crate::types::ControlCommand::FetchHistorical {
@@ -7367,11 +7361,56 @@ fn a_holding_the_venue_closes_keeps_no_value_and_no_profit() {
 // Lookups the engine makes on its own account, and lookups that did not
 // reach the venue.
 
+/// The lookup a subscription makes asks what the caller named the contract by.
+///
+/// A symbol, a month, a strike and a right name three contracts on an index
+/// future's options and one of them once the class is stated. Every other
+/// request that names a contract by description carries what narrows it; this
+/// one dropped the class, the local name and the listing venue on the way to
+/// the lookup, so the caller was told its contract matched several and no
+/// stream could be opened for it.
+#[test]
+fn a_subscription_looks_up_the_listing_the_caller_named() {
+    use std::io::Read;
+    let (conn, mut peer) = crate::protocol::connection::Connection::for_test();
+    let mut ccp = CcpState::new();
+    let shared = SharedState::new();
+    let mut hb = HeartbeatState::new();
+    let mut conn = Some(conn);
+    ccp.resolve_for_subscribe(
+        PendingSubscribe {
+            con_id: 0,
+            instrument: 5,
+            symbol: "ES".into(),
+            exchange: "CME".into(),
+            sec_type: "FOP".into(),
+            currency: "USD".into(),
+            filters: crate::types::SecDefFilters {
+                last_trade_date_or_contract_month: "202612".into(),
+                strike: 7700.0,
+                right: "C".into(),
+                trading_class: "ES".into(),
+                ..Default::default()
+            },
+            mode_9887: 0,
+            regulatory_snapshot: false,
+        },
+        &mut conn, &mut hb, &shared,
+    );
+
+    let mut buf = [0u8; 4096];
+    let n = peer.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]).replace('\u{1}', "|");
+    assert!(msg.contains("|6058=ES|"), "the class the caller named: {msg}");
+    assert!(msg.contains("|201=1|"), "and that it is a call: {msg}");
+    assert!(msg.contains("|202=7700"), "and what it may be exercised at: {msg}");
+}
+
 fn spy_by_symbol(instrument: crate::types::InstrumentId) -> PendingSubscribe {
     PendingSubscribe {
+        filters: Default::default(),
         con_id: 0, instrument,
         symbol: "SPY".into(), exchange: "SMART".into(), sec_type: "STK".into(), currency: "USD".into(),
-        last_trade_date: String::new(), strike: 0.0, right: String::new(), multiplier: String::new(),
         mode_9887: 0, regulatory_snapshot: false,
     }
 }

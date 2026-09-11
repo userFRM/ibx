@@ -660,7 +660,8 @@ impl HotLoop {
                     self.described_as(con_id, &p.sec_type, &p.exchange);
                 self.farm.send_mktdata_subscribe(
                     con_id, &p.symbol, &exchange, &sec_type,
-                    &p.last_trade_date, p.strike, &p.right, &p.multiplier,
+                    &p.filters.last_trade_date_or_contract_month, p.filters.strike,
+                    &p.filters.right, &p.filters.multiplier,
                     instrument, p.mode_9887, p.regulatory_snapshot,
                     &mut self.farm_conn,
                     &mut self.hb,
@@ -1261,7 +1262,7 @@ impl HotLoop {
                 continue;
             }
             match cmd {
-                ControlCommand::Subscribe { contract, mode_9887, regulatory_snapshot, generic_ticks, reply_tx } => {
+                ControlCommand::Subscribe { contract, filters, mode_9887, regulatory_snapshot, generic_ticks, reply_tx } => {
                     let ContractRef { con_id, symbol, exchange, sec_type, currency, last_trade_date, strike, right, multiplier } = contract;
                     // What tells two conId-less contracts on one underlying apart.
                     // Built by the same function an order uses, or the two
@@ -1397,10 +1398,7 @@ impl HotLoop {
                                         exchange: exchange.clone(),
                                         sec_type: sec_type.clone(),
                                         currency: currency.clone(),
-                                        last_trade_date: last_trade_date.clone(),
-                                        strike,
-                                        right: right.clone(),
-                                        multiplier: multiplier.clone(),
+                                        filters: filters.clone(),
                                         mode_9887,
                                         regulatory_snapshot,
                                     },
@@ -4429,6 +4427,7 @@ mod tests {
         // An id and nothing beside it: no security type stated here, and no
         // definition cached for the engine to read one off.
         tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
             contract: ContractRef { con_id: 893091670, ..Default::default() },
             mode_9887: 0,
             regulatory_snapshot: false,
@@ -4464,6 +4463,7 @@ mod tests {
             let subscribe = |hl: &mut HotLoop, con_id| {
                 let (reply_tx, reply_rx) = sync_channel(1);
                 tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
                     contract: ContractRef {
                         con_id, sec_type: sec_type.into(), exchange: "SMART".into(),
                         ..Default::default()
@@ -4817,16 +4817,13 @@ mod tests {
             let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
             let instrument = hl.context.market.register(0);
             let pending = crate::engine::hot_loop::ccp::PendingSubscribe {
+                filters: Default::default(),
                 con_id: 0,
                 instrument,
                 symbol: "SPY".into(),
                 exchange: "SMART".into(),
                 sec_type: "STK".into(),
                 currency: "USD".into(),
-                last_trade_date: String::new(),
-                strike: 0.0,
-                right: String::new(),
-                multiplier: String::new(),
                 mode_9887: 0, regulatory_snapshot: false,
             };
             match stage {
@@ -4864,16 +4861,13 @@ mod tests {
         let mut hl = HotLoop::new(shared.clone(), None, None);
         let instrument = hl.context.market.register(0);
         hl.ccp.resolved_md_subscribe.push((756733, crate::engine::hot_loop::ccp::PendingSubscribe {
+            filters: Default::default(),
             con_id: 0,
             instrument,
             symbol: "SPY".into(),
             exchange: "SMART".into(),
             sec_type: "STK".into(),
             currency: "USD".into(),
-            last_trade_date: String::new(),
-            strike: 0.0,
-            right: String::new(),
-            multiplier: String::new(),
             mode_9887: 0, regulatory_snapshot: false,
         }));
         hl.farm_halted = Some(retry::DisconnectReason::RecoveryExhausted);
@@ -4915,16 +4909,13 @@ mod tests {
         assert_ne!(holds_it, followed, "two slots to begin with");
 
         hl.ccp.resolved_md_subscribe.push((756733, crate::engine::hot_loop::ccp::PendingSubscribe {
+            filters: Default::default(),
             con_id: 0,
             instrument: followed,
             symbol: "SPY".into(),
             exchange: "SMART".into(),
             sec_type: "STK".into(),
             currency: "USD".into(),
-            last_trade_date: String::new(),
-            strike: 0.0,
-            right: String::new(),
-            multiplier: String::new(),
             mode_9887: 0, regulatory_snapshot: false,
         }));
         hl.send_resolved_subscriptions();
@@ -5023,16 +5014,13 @@ mod tests {
             instrument: InstrumentId, regulatory_snapshot: bool,
         ) -> crate::engine::hot_loop::ccp::PendingSubscribe {
             crate::engine::hot_loop::ccp::PendingSubscribe {
+                filters: Default::default(),
                 con_id: 756733,
                 instrument,
                 symbol: "SPY".into(),
                 exchange: "SMART".into(),
                 sec_type: "STK".into(),
                 currency: "USD".into(),
-                last_trade_date: String::new(),
-                strike: 0.0,
-                right: String::new(),
-                multiplier: String::new(),
                 mode_9887: 0,
                 regulatory_snapshot,
             }
@@ -5108,6 +5096,7 @@ mod tests {
         hl.farm.handle_disconnect_for_test();
 
         tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
             contract: ContractRef {
                 con_id: 756733,
                 sec_type: "STK".into(),
@@ -5152,6 +5141,7 @@ mod tests {
         hl.farm.handle_disconnect_for_test();
 
         tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
             contract: ContractRef {
                 con_id: 756733,
                 sec_type: "STK".into(),
@@ -5318,6 +5308,7 @@ mod tests {
         // The caller gave up before the answer reached it.
         drop(reply_rx);
         tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
             contract: ContractRef {
                 con_id: 756733,
                 sec_type: "STK".into(),
@@ -5363,6 +5354,7 @@ mod tests {
 
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
             contract: ContractRef {
                 con_id: 756733,
                 sec_type: "STK".into(),
@@ -6993,16 +6985,13 @@ mod tests {
         hl.ccp.resolved_md_subscribe.push((
             756733,
             crate::engine::hot_loop::ccp::PendingSubscribe {
+                filters: Default::default(),
                 instrument: by_name,
                 con_id: 0,
                 symbol: "SPY".into(),
                 exchange: "SMART".into(),
                 sec_type: "STK".into(),
                 currency: "USD".into(),
-                last_trade_date: String::new(),
-                strike: 0.0,
-                right: String::new(),
-                multiplier: String::new(),
                 mode_9887: 0,
                 regulatory_snapshot: false,
             },
@@ -7068,6 +7057,7 @@ mod tests {
 
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
             contract: ContractRef {
                 con_id: PAST_THE_WIRE,
                 sec_type: "STK".into(),
@@ -8055,6 +8045,7 @@ mod tests {
         // One caller streams the contract; another asks for the one-shot on it.
         for chargeable in [false, true] {
             tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
                 contract: contract(),
                 mode_9887: 0,
                 regulatory_snapshot: chargeable,
@@ -8331,10 +8322,10 @@ mod slot_aliasing_tests {
         hl.ccp.pending_md_subscribe.push((
             1,
             crate::engine::hot_loop::ccp::PendingSubscribe {
+                filters: Default::default(),
                 con_id: 0, instrument,
                 symbol: "SPY".into(), exchange: "SMART".into(), sec_type: "STK".into(),
-                currency: "USD".into(), last_trade_date: String::new(), strike: 0.0,
-                right: String::new(), multiplier: String::new(),
+                currency: "USD".into(),
                 mode_9887: 0, regulatory_snapshot: false,
             },
             Instant::now() - std::time::Duration::from_secs(3600),
