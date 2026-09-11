@@ -480,6 +480,14 @@ impl MarketDataState {
         self.subscription_moves.lock().unwrap().iter().any(|(from, _)| *from == instrument)
     }
 
+    /// Whether a reason this slot's subscription could not be made is still
+    /// waiting to be read. Asked for the same cause a pending move is: giving
+    /// the slot back drops it, and it is the only thing the caller who asked
+    /// will ever be told.
+    pub fn a_failure_is_pending_from(&self, instrument: crate::types::InstrumentId) -> bool {
+        self.subscription_failures.lock().unwrap().iter().any(|(at, _)| *at == instrument)
+    }
+
     /// Where a caller's slot has to follow, because the contract it named is
     /// already held by another. Read the way a refusal is.
     pub fn drain_subscription_moves(

@@ -125,7 +125,7 @@ pub struct HotLoop {
     reconnect_auth: Option<ReconnectAuth>,
     /// Slots whose watchers were sent to another slot, waiting to be given
     /// back once the move saying so has been read.
-    slots_awaiting_their_move: Vec<InstrumentId>,
+    slots_awaiting_their_word: Vec<InstrumentId>,
     pending_farm_reconnect: Option<Receiver<io::Result<Connection>>>,
     farm_reconnect_attempt: u32,
     pending_ccp_reconnect: Option<Receiver<io::Result<Connection>>>,
@@ -439,7 +439,7 @@ impl HotLoop {
             ccp: CcpState::new(),
             hmds: HmdsState::new(),
             reconnect_auth: None,
-            slots_awaiting_their_move: Vec::new(),
+            slots_awaiting_their_word: Vec::new(),
             pending_farm_reconnect: None,
             ccp_next_attempt_at: None,
             farm_next_attempt_at: None,
@@ -540,19 +540,23 @@ impl HotLoop {
     /// for want of a slot.
     ///
     /// Not given back at the moment of the move, because giving a slot back
-    /// purges the moves that name it and that move is the only thing telling
-    /// its watchers where to follow. Once the move has been read, both hold.
-    fn give_back_slots_their_move_has_left(&mut self) {
-        if self.slots_awaiting_their_move.is_empty() {
+    /// purges what names it — the move telling its watchers where to follow,
+    /// or the reason no subscription could be made — and that is the only
+    /// thing its reader will ever be told. Once it has been read, both hold.
+    fn give_back_slots_their_word_has_left(&mut self) {
+        if self.slots_awaiting_their_word.is_empty() {
             return;
         }
         let ready: Vec<InstrumentId> = self
-            .slots_awaiting_their_move
+            .slots_awaiting_their_word
             .iter()
             .copied()
-            .filter(|slot| !self.shared.market.a_move_is_pending_from(*slot))
+            .filter(|slot| {
+                !self.shared.market.a_move_is_pending_from(*slot)
+                    && !self.shared.market.a_failure_is_pending_from(*slot)
+            })
             .collect();
-        self.slots_awaiting_their_move.retain(|slot| !ready.contains(slot));
+        self.slots_awaiting_their_word.retain(|slot| !ready.contains(slot));
         for slot in ready {
             self.try_reclaim_instrument(slot);
         }
@@ -561,7 +565,7 @@ impl HotLoop {
     /// Subscriptions the venue can now be asked for: named by symbol, and the
     /// lookup has come back with the contract's own id.
     fn send_resolved_subscriptions(&mut self) {
-        self.give_back_slots_their_move_has_left();
+        self.give_back_slots_their_word_has_left();
         for (con_id, p) in std::mem::take(&mut self.ccp.resolved_md_subscribe) {
                 // The slot keeps the id so a reconnect resubscribes by it
                 // rather than starting the lookup again. Where another slot
@@ -589,8 +593,8 @@ impl HotLoop {
                             // that name this slot, and that move is the only
                             // thing telling its watchers where to follow. It is
                             // given back once the move has been read.
-                            if !self.slots_awaiting_their_move.contains(&p.instrument) {
-                                self.slots_awaiting_their_move.push(p.instrument);
+                            if !self.slots_awaiting_their_word.contains(&p.instrument) {
+                                self.slots_awaiting_their_word.push(p.instrument);
                             }
                             owner
                         }
@@ -781,11 +785,17 @@ impl HotLoop {
             return;
         }
         self.pinned_by_position.retain(|id| *id != instrument);
-        // Releasing a slot purges the move that tells its watchers where the
-        // contract went. Keep it until they have read that move.
-        if self.shared.market.a_move_is_pending_from(instrument) {
-            if !self.slots_awaiting_their_move.contains(&instrument) {
-                self.slots_awaiting_their_move.push(instrument);
+        // Releasing a slot purges what is queued under it: the move that tells
+        // its watchers where the contract went, and the reason no subscription
+        // could be made for it at all. Both name the slot, both are the only
+        // thing their reader will ever be told, and a subscription the venue
+        // refused asks for its slot back in the same breath as it states the
+        // reason. Keep the slot until they have been read.
+        if self.shared.market.a_move_is_pending_from(instrument)
+            || self.shared.market.a_failure_is_pending_from(instrument)
+        {
+            if !self.slots_awaiting_their_word.contains(&instrument) {
+                self.slots_awaiting_their_word.push(instrument);
             }
             return;
         }
@@ -4925,14 +4935,14 @@ mod tests {
             "the watchers are sent to the slot the contract lives in: {moves:?}",
         );
         assert!(
-            !hl.slots_awaiting_their_move.is_empty(),
+            !hl.slots_awaiting_their_word.is_empty(),
             "and the slot they left is owed back rather than dropped",
         );
 
         // Read, so the watchers know where to follow. Only now is it safe.
         hl.send_resolved_subscriptions();
         assert!(
-            hl.slots_awaiting_their_move.is_empty(),
+            hl.slots_awaiting_their_word.is_empty(),
             "the slot was owed back and never given",
         );
     }
@@ -4955,12 +4965,46 @@ mod tests {
         hl.try_reclaim_instrument(source);
 
         assert_eq!(hl.context.market.con_id(source), Some(0), "the source still holds its slot");
-        assert_eq!(hl.slots_awaiting_their_move, vec![source], "queued once for release after the move");
+        assert_eq!(hl.slots_awaiting_their_word, vec![source], "queued once for release after the move");
         assert_eq!(shared.market.drain_subscription_moves(), vec![(source, destination)]);
-        hl.give_back_slots_their_move_has_left();
-        assert!(hl.slots_awaiting_their_move.is_empty());
+        hl.give_back_slots_their_word_has_left();
+        assert!(hl.slots_awaiting_their_word.is_empty());
         assert!(hl.context.market.con_id(source).is_none());
         assert_eq!(hl.context.register_instrument(265598), source, "the slot is reusable after the move");
+    }
+
+    /// A slot whose subscription the venue refused keeps it until the reason
+    /// has been read.
+    ///
+    /// Nothing will ever withdraw a subscription that never opened, so the
+    /// slot is asked for back in the same breath as the reason is stated — and
+    /// giving a slot back drops what is queued under it, so that the next
+    /// contract to take the slot is not handed the last one's reasons. The two
+    /// together left every caller who named a contract the venue does not know
+    /// waiting on a stream that could not arrive, told nothing, for ever.
+    #[test]
+    fn a_slot_with_an_unread_refusal_survives_reclamation() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let refused = hl.context.register_instrument(0);
+        shared.market.push_subscription_failure(
+            refused, "no security definition has been found".to_string(),
+        );
+        hl.try_reclaim_instrument(refused);
+
+        assert_eq!(
+            hl.context.market.con_id(refused), Some(0),
+            "the slot is still held, so the reason under it still stands",
+        );
+        assert_eq!(
+            shared.market.drain_subscription_failures().len(), 1,
+            "and the caller is told why",
+        );
+
+        // Read, so the slot is owed back and nothing is lost by giving it.
+        hl.give_back_slots_their_word_has_left();
+        assert!(hl.slots_awaiting_their_word.is_empty());
+        assert!(hl.context.market.con_id(refused).is_none());
     }
 
     /// A request answered by what is already up, and only where it can be.
@@ -8277,6 +8321,9 @@ mod slot_aliasing_tests {
     /// withdraw a subscription that never opened, and nothing else asked. A
     /// chain naming a few dead strikes spent one slot on each until the table
     /// ran out — the failure reclaiming exists to prevent.
+    ///
+    /// Not before the reason has been read, though: it is queued under the
+    /// slot, and giving the slot back is what drops it.
     #[test]
     fn a_lookup_the_venue_never_answers_gives_its_slot_back() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
@@ -8295,6 +8342,12 @@ mod slot_aliasing_tests {
 
         hl.ccp.sweep_pending_subscribes(&mut hl.context, &hl.shared);
         hl.reclaim_slots_no_order_holds();
+
+        assert_eq!(
+            hl.shared.market.drain_subscription_failures().len(), 1,
+            "the caller is told why before the slot goes anywhere",
+        );
+        hl.give_back_slots_their_word_has_left();
 
         assert_eq!(
             hl.context.market.register(265598), instrument,
