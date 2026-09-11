@@ -1,41 +1,17 @@
 # Limits
 
-What this client does not do, and what it does differently enough that a
-program relying on the other behaviour will be wrong.
+What a caller has to know before writing against this client, sorted by what
+kind of thing it is — because most of what lands on a page like this is not a
+limit of the client at all.
 
 Nothing here is a call that returns as though it acted. A call this protocol
-cannot carry reports why. The list below is the part a caller has to know
-before writing against it.
+cannot carry reports why.
 
-## Callbacks nothing fires
+# The venue's answer, not this client's
 
-Two callbacks exist so a program written against the reference client compiles
-and runs. No message reaches either of them.
-
-| Callback | Why |
-| --- | --- |
-| `order_bound` | It follows asking for the open orders. The reference architecture partitions an account's orders by the client that placed them and, on being asked, claims the unowned ones for client nought — the venue's answer to that claim is what this carries. There is no such partition here: every session is told about every order on the account, so there is nothing to claim, and claiming it would change who owns an order at the venue to no end |
-| `delta_neutral_validation` | Nothing on this client's connections produces it |
-
-Every other call in the reference client's surface is served on both languages.
-The call-by-call matrix is [generated from the source](./coverage.md).
-
-## Executions and fills are the day's, not the account's
-
-`fills()`, `executions()` and `reqExecutions()` answer with the executions this
-session has seen **and the ones the venue restated when the session opened**.
-
-The venue restates the day's executions at every logon. Those are filed for a
-caller that asks and announced to nobody — a restarted program is answered with
-the fills it made before it restarted, including fills on orders that had
-already completed, which it never tracked and knows nothing else about.
-
-What is still absent is anything the venue does not restate. The wrapper this
-follows asks the venue for the account's executions, whoever made them and
-whenever; this protocol carries no such question. So an answer holds today's
-executions on this account, not its history. A program reconciling against more
-than a day needs another source for it, and an empty answer means the venue
-restated none and this session has seen none.
+A gateway answers every one of these the same way. They are written down
+because a program meeting one for the first time reads it as a fault in the
+client, and checking the wrong thing costs a session.
 
 ## A bid of -1 is the venue saying there is none
 
@@ -81,19 +57,6 @@ from. Which venues answer is the account's entitlement, not this client's:
 Check what came back rather than assuming a subscription that was accepted is a
 subscription that will deliver.
 
-## 4,096 instruments at a time
-
-The engine holds a slot for 4,096 distinct contracts concurrently. Registering
-one past that is refused with a message naming the limit.
-
-Concurrent, not cumulative: cancelling a market-data subscription frees its slot
-and the slot is reused. A long-running process that subscribes and never cancels
-will reach it; one that cancels what it is done with will not.
-
-The number is this client's own allocation, not a limit the venue states. One
-option chain asked for at once is 282 live subscriptions on a single
-underlying, and the venue served all of them.
-
 ## A broad lookup takes longer than one contract
 
 A lookup naming a whole class is a different question from one naming a single
@@ -106,6 +69,31 @@ off part-way through. A lookup that does run out says how many definitions
 arrived before it did, since a partial answer and no answer are different facts
 and only the first says to ask a narrower question — by naming an expiry, or a
 single venue.
+
+## What a crypto order needs
+
+A crypto is quoted around the clock and priced and sized differently from a
+share.
+
+| | |
+| --- | --- |
+| Time in force | Immediate-or-cancel, or the one measured in minutes. A day order is refused: *"The crypto buy order must be Minutes or IOC"* |
+| Price | On the venue's grid. One that is not is refused as a price, *"Invalid Price"*, rather than rounded — this client sends prices as they were given |
+| Quantity | A fraction, counted in hundred-millionths. A thousandth of a coin is an ordinary size |
+
+## Things an entitlement decides, not this client
+
+* **News headlines** need a news subscription. Without one, the providers list
+  is returned and every query comes back empty.
+* **Corporate events content** needs a Wall Street Horizon subscription. The
+  calendar's schema and event types are delivered either way; the events
+  themselves come back empty without it.
+
+# Not settled here yet
+
+Something the protocol may well carry, which no session has established. Each
+says what would settle it. None of them is a call that returns as though it
+acted: a request this client will not send says so.
 
 ## Two orders a modify cannot restate
 
@@ -139,17 +127,6 @@ A relative order is refused a modify as well. It answers both ways: sometimes
 the venue takes the replace and the order goes on working, and sometimes
 neither the replace nor a withdrawal after it draws any answer at all. A modify
 that strands the order some of the time is worse than one that is refused.
-
-## What a crypto order needs
-
-A crypto is quoted around the clock and priced and sized differently from a
-share.
-
-| | |
-| --- | --- |
-| Time in force | Immediate-or-cancel, or the one measured in minutes. A day order is refused: *"The crypto buy order must be Minutes or IOC"* |
-| Price | On the venue's grid. One that is not is refused as a price, *"Invalid Price"*, rather than rounded — this client sends prices as they were given |
-| Quantity | A fraction, counted in hundred-millionths. A thousandth of a coin is an ordinary size |
 
 ## Order fields the protocol has nowhere to put
 
@@ -191,31 +168,95 @@ that can be checked rather than taken on trust.
 Everything else the venue publishes and a caller can ask for is delivered, on
 the callback the reference client delivers it on.
 
-## Things an entitlement decides, not this client
+# Where this client behaves differently
 
-* **News headlines** need a news subscription. Without one, the providers list
-  is returned and every query comes back empty.
-* **Corporate events content** needs a Wall Street Horizon subscription. The
-  calendar's schema and event types are delivered either way; the events
-  themselves come back empty without it.
+Not a gap in what it can ask for. A program written against the other
+behaviour will still be wrong, which is why they are here.
 
-## A reconnect already under way outlives the call that stops it
+## Callbacks nothing fires
+
+Two callbacks exist so a program written against the reference client compiles
+and runs. No message reaches either of them.
+
+| Callback | Why |
+| --- | --- |
+| `order_bound` | It follows asking for the open orders. The reference architecture partitions an account's orders by the client that placed them and, on being asked, claims the unowned ones for client nought — the venue's answer to that claim is what this carries. There is no such partition here: every session is told about every order on the account, so there is nothing to claim, and claiming it would change who owns an order at the venue to no end |
+| `delta_neutral_validation` | Nothing on this client's connections produces it |
+
+Every other call in the reference client's surface is served on both languages.
+The call-by-call matrix is [generated from the source](./coverage.md).
+
+## Executions and fills are the day's, not the account's
+
+`fills()`, `executions()` and `reqExecutions()` answer with the executions this
+session has seen **and the ones the venue restated when the session opened**.
+
+The venue restates the day's executions at every logon. Those are filed for a
+caller that asks and announced to nobody — a restarted program is answered with
+the fills it made before it restarted, including fills on orders that had
+already completed, which it never tracked and knows nothing else about.
+
+What is still absent is anything the venue does not restate. The wrapper this
+follows asks the venue for the account's executions, whoever made them and
+whenever; this protocol carries no such question. So an answer holds today's
+executions on this account, not its history. A program reconciling against more
+than a day needs another source for it, and an empty answer means the venue
+restated none and this session has seen none.
+
+## 4,096 instruments at a time
+
+The engine holds a slot for 4,096 distinct contracts concurrently. Registering
+one past that is refused with a message naming the limit.
+
+Concurrent, not cumulative: cancelling a market-data subscription frees its slot
+and the slot is reused. A long-running process that subscribes and never cancels
+will reach it; one that cancels what it is done with will not.
+
+The number is this client's own allocation, not a limit the venue states, and
+it is not the one a caller meets first. The venue states how many quote lines
+the account may hold on the logon, and this client counts its open streams
+against that allowance: a subscription past it is refused for want of a line,
+which happens well before a slot runs out.
+
+The slot table is sized well clear of it. One option chain asked for at once is
+282 live subscriptions on a single underlying, and the venue served all of
+them.
+
+## A recovery attempt outlives the call that stops it, and opens nothing
 
 `disconnect` stops the engine and returns. An attempt to reopen a connection
-that was already in flight when it did is not stopped: it runs to its own end
-on a thread of its own.
+that was already dialling when it did is told to stop — a flag every worker
+reads between the phases of a handshake — but it is not interrupted inside one,
+so it finishes whatever call it is in before it reads the flag.
 
-Nothing it opens is used. The engine refuses to install a connection that
-arrives after the stop — installed, it would be a freshly authenticated session
-at the venue opened after the caller was told the engine had stopped — and the
-socket closes when the engine goes.
+Nothing it opens is used. The trading connection's attempt is waited for, and a
+session that landed after the stop is logged out rather than dropped: on this
+protocol an authenticated session is a session open at the venue, and somebody
+may have approved a second factor for it. The other three are not waited for.
+Their socket closes when the receiver that would have taken it is gone, and the
+engine refuses to install a connection that arrives after the stop.
 
-The attempt is not stopped: the thread is started without a handle kept on it,
-and nothing carries the stop into the handshake it is running. It finishes on
-its own and its result is discarded.
+What the window costs a live login has not been measured. A paper session
+presents no second factor, so nothing on this account reaches the case where it
+would.
 
-What that costs a live login has not been measured. A paper session presents no
-second factor, so nothing on this account reaches the case where it would.
+# What this client has that a gateway does not
+
+## Calls with nowhere to go on a gateway
+
+The session data on [what the API does not forward](./beyond-the-api.md) — the
+account's grants, the order types the venue will take, its algorithms, the
+round-trip time — reaches this client because it is on the wire the venue
+speaks, and has no message in the API a gateway offers.
+
+It is a superset, not a gap: nothing a program asks a gateway for is missing
+here for this reason. What it costs is the other direction. A program that
+calls one of these runs here and does not run against a gateway, so a program
+that has to run against both leaves them alone.
+
+# Not possible from here
+
+Two, and neither is a matter of work left to do.
 
 ## What authenticates a farm connection
 
@@ -235,14 +276,6 @@ party that answered the logon. The logon runs beside the channel rather than
 inside it, so a peer that relays it to the venue in real time collects a proof
 it did not compute. Binding the two needs the venue to state something over
 both, and nothing on this wire does.
-
-## Not portable
-
-The session data on [what the API does not forward](./beyond-the-api.md) —
-the account's grants, the order types the venue will take, its algorithms, the
-round-trip time — has no message in the API a gateway offers. A program using
-those calls runs here and does not run against a gateway. They are the part of
-this client that is not a drop-in.
 
 ## The protocol is not published
 
