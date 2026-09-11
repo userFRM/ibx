@@ -174,8 +174,8 @@ and runs. No message reaches either of them.
 
 | Callback | Why |
 | --- | --- |
-| `order_bound` | It follows asking for the open orders. The reference architecture partitions an account's orders by the client that placed them and, on being asked, claims the unowned ones for client nought — the venue's answer to that claim is what this carries. There is no such partition here: every session is told about every order on the account, so there is nothing to claim, and claiming it would change who owns an order at the venue to no end |
-| `delta_neutral_validation` | Nothing on this client's connections produces it |
+| `order_bound` | It follows asking for the open orders, and what it carries is an order the caller did not place becoming reachable under a number of its own. The protocol makes that an alias rather than a change of ownership, so it costs the venue nothing — and this client already assigns such orders a number when the venue names them at connect. What is missing is telling the caller, and that is work rather than an impossibility |
+| `delta_neutral_validation` | Nothing produces it. Not "nothing on this client's connections": nothing in the protocol at all reaches the sender, neither a market-data request nor a placed order carrying a hedge, so there is no first request after which it could honestly be fired |
 
 Every other call in the reference client's surface is served on both languages.
 The call-by-call matrix is [generated from the source](./coverage.md).
