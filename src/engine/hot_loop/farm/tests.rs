@@ -2459,9 +2459,15 @@ mod exchange_map_tests {
     /// a four-byte boundary after it. Read end to end as text, the length
     /// bytes join the first name and the padding joins the last, so the mask's
     /// bits are reported against names that do not exist.
+    ///
+    /// Each entry names the bit it answers to, then the single letter it is
+    /// shown as, then its name. Read as a name and a letter, with the bit
+    /// taken from where the entry sat, a bid on two venues rendered
+    /// `J/EDGEAY/BYX` — every letter run together with its own name — and a
+    /// list that numbers its own bits was renumbered by position.
     #[test]
     fn the_exchange_map_reads_the_text_its_payload_states() {
-        let text = b"NYSE/N;NASDAQ/Q;ARCA/P";
+        let text = b"9/J/EDGEA;10/Y/BYX;12/P/ARCA";
         let mut payload = Vec::new();
         payload.extend_from_slice(&(text.len() as u32).to_be_bytes());
         payload.extend_from_slice(text);
@@ -2488,10 +2494,51 @@ mod exchange_map_tests {
 
         let named = shared.reference.smart_components();
         assert_eq!(named.len(), 3, "every venue the map names: {named:?}");
-        assert_eq!(named[0].exchange, "NYSE", "and the first one is its own name: {named:?}");
-        assert_eq!(named[0].exchange_letter, "N");
-        assert_eq!(named[2].exchange, "ARCA", "as is the last: {named:?}");
+        assert_eq!(named[0].bit_number, 9, "the bit the entry states, not where it sat");
+        assert_eq!(named[0].exchange, "EDGEA", "and its own name: {named:?}");
+        assert_eq!(named[0].exchange_letter, "J", "the letter alone");
+        assert_eq!(named[2].bit_number, 12, "and the last states its own too: {named:?}");
+        assert_eq!(named[2].exchange, "ARCA");
         assert_eq!(named[2].exchange_letter, "P");
+
+        // Rendered against a mask, the letters are letters.
+        assert_eq!(
+            crate::client_core::render_exchange_mask((1 << 9) | (1 << 10), &shared),
+            "JY",
+            "two venues, two letters",
+        );
+    }
+
+    /// An entry that does not name a bit, a letter and a venue is not an
+    /// entry. Read as one, whatever it does carry stands in for a letter.
+    #[test]
+    fn an_entry_short_of_its_three_parts_names_no_venue() {
+        let text = b"NYSE/N;NASDAQ/Q";
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(text.len() as u32).to_be_bytes());
+        payload.extend_from_slice(text);
+        while (payload.len() - 4) % 4 != 0 {
+            payload.push(0);
+        }
+        let mut body = Vec::new();
+        body.extend_from_slice(&7u32.to_be_bytes());
+        body.push(payload.len() as u8);
+        body.extend_from_slice(&payload);
+        let mut msg = b"35=G\x01".to_vec();
+        msg.extend_from_slice(&(((body.len() * 8) % 65_536) as u16).to_be_bytes());
+        msg.extend_from_slice(&body);
+
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+        farm.generic_tick_tags.push((7, BBO_EXCHANGE_MAP_REQUEST_TYPE, instrument));
+        farm.handle_generic_tick(&msg, &mut context, &shared, &None);
+
+        assert!(
+            shared.reference.smart_components().is_empty(),
+            "nothing the mask's bits could be read against",
+        );
     }
 }
 

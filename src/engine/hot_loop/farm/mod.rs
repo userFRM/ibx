@@ -3185,8 +3185,15 @@ impl FarmState {
                     }
                 }
                 BBO_EXCHANGE_MAP_REQUEST_TYPE => {
-                    // Every venue, in the order the mask's bits refer to:
-                    // `NAME/LETTER` per venue, one after another.
+                    // The venues the exchange masks are written over, one per
+                    // entry: the bit it answers to, the single letter it is
+                    // shown as, and its name, in that order.
+                    //
+                    // Read as a name and a letter, with the bit taken from
+                    // where the entry sat in the list, every letter came out
+                    // as the letter and the name run together — a bid on two
+                    // venues rendered `J/EDGEAY/BYX` — and a list that numbers
+                    // its own bits was renumbered by position.
                     let Some(stated) = length_prefixed_text(payload) else {
                         // An empty payload states no length at all, which is
                         // the venue naming no venues rather than a message
@@ -3204,16 +3211,22 @@ impl FarmState {
                     };
                     let venues: Vec<crate::types::SmartComponent> = stated
                         .split(';')
-                        .filter(|entry| !entry.trim().is_empty())
-                        .enumerate()
-                        .map(|(bit, entry)| {
-                            let (exchange, letter) =
-                                entry.split_once('/').unwrap_or((entry, ""));
-                            crate::types::SmartComponent {
-                                bit_number: bit as i32,
-                                exchange: exchange.trim().to_string(),
-                                exchange_letter: letter.trim().to_string(),
+                        .filter_map(|entry| {
+                            // Three parts or it is not an entry. A shorter one
+                            // read as a venue puts whatever it does carry in
+                            // the place of a letter.
+                            let mut parts = entry.trim().split('/');
+                            let bit = parts.next()?.trim().parse::<i32>().ok()?;
+                            let letter = parts.next()?.trim();
+                            let name = parts.next()?.trim();
+                            if parts.next().is_some() {
+                                return None;
                             }
+                            Some(crate::types::SmartComponent {
+                                bit_number: bit,
+                                exchange: name.to_string(),
+                                exchange_letter: letter.to_string(),
+                            })
                         })
                         .collect();
                     if !venues.is_empty() {

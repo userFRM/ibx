@@ -152,8 +152,14 @@ pub const O_ELIGIBLE: u64 = 7;
 /// One mask covering both sides: bit 0 says both sides are pre-open, bit 1
 /// that the bid is past its limit, bit 2 that the ask is.
 pub const O_QUOTE_STATE: u64 = 11;
-/// Tick type 13 on the wire: the last exch.
-pub const O_LAST_EXCH: u64 = 13;
+/// The venue this last traded on, as bits over its own venue list.
+///
+/// Read from field 13 for a long time, which carries nought on every quote
+/// measured — so the last exchange was never delivered at all while the bid's
+/// and the ask's were. Measured premarket on a share with a live tape: field
+/// 13 nought throughout, field 27 a small mask, and no tick 84 reaching the
+/// caller.
+pub const O_LAST_EXCH: u64 = 27;
 /// Tick type 16 on the wire: the bid exch.
 pub const O_BID_EXCH: u64 = 16;
 /// Tick type 17 on the wire: the ask exch.
