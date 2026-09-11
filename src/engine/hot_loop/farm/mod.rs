@@ -299,8 +299,10 @@ fn deliver_series(
                 };
                 at += 8;
                 // What trades in an ordinary day. The rest of this table is
-                // the venue's own and reaches no caller.
-                if named == 768 {
+                // the venue's own and reaches no caller. A figure it does not
+                // hold is stated as the largest the type carries, which is not
+                // two billion shares.
+                if named == 768 && value != i32::MAX {
                     say(21, SeriesValue::Size(f64::from(value)));
                 }
             }
@@ -326,7 +328,10 @@ fn deliver_series(
                     206 => 19,
                     _ => continue,
                 };
-                say(tick, SeriesValue::Price(f64::from(value)));
+                // And a fractional figure it does not hold, the same way.
+                if value.is_finite() && value != f32::MAX {
+                    say(tick, SeriesValue::Price(f64::from(value)));
+                }
             }
         }
         // The mark the venue keeps for a contract, which is not a trade and is
@@ -339,8 +344,14 @@ fn deliver_series(
                 return true;
             };
             // And minus one is the venue holding none, not a price of minus
-            // one: taken as a price it marks the position at a negative.
-            if flags & 1 == 1 && flags & 0x0800_0000 == 0 && price != -1.0 {
+            // one: taken as a price it marks the position at a negative. Nor
+            // is the largest a double carries, or a number that is no number.
+            if flags & 1 == 1
+                && flags & 0x0800_0000 == 0
+                && price != -1.0
+                && price.is_finite()
+                && price != f64::MAX
+            {
                 say(37, SeriesValue::Price(price));
             }
         }
@@ -403,7 +414,11 @@ fn deliver_series(
                     10 => 65,
                     _ => continue,
                 };
-                say(tick, SeriesValue::Size(f64::from(volume)));
+                // A span the venue holds nothing for states the largest the
+                // type carries rather than nought.
+                if volume != i32::MAX {
+                    say(tick, SeriesValue::Size(f64::from(volume)));
+                }
             }
         }
         // What it costs to borrow, which the venue states as a price.

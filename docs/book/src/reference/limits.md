@@ -177,6 +177,21 @@ Where the venue has published no model, nothing is answered — rather than a
 number derived from a rate nobody stated. Asked before the model has arrived,
 the question waits on the subscription that asking opens.
 
+## Numbered ticks this client does not deliver
+
+Ninety-six numbered market-data ticks reach a caller of the reference client.
+Eighty-four of them reach one here. These twelve do not, and each for a reason
+that can be checked rather than taken on trust.
+
+| Ticks | What | Why not |
+| --- | --- | --- |
+| 10, 11, 12 and the delayed 80, 81, 82 | The option model struck against the bid, the ask and the last | The venue publishes one model per option and does not send these. The reference terminal computes them itself, from its own model and those three prices. Published here they would be this client's numbers wearing the venue's name; the one model the venue does send is delivered, on 13 and on 83 where the feed is delayed |
+| 50, 51, 52 and the delayed 103, 104 | Bid, ask and last yield | Held back deliberately. The venue's field grammar carries two different messages, and the field numbers that mean "yield" in one are the numbers this client reads as the last price and the close in the other. Publishing a yield as a last price is worse than publishing nothing, so nothing is published until a session on the wire says which numbering this stream uses |
+| 85 | The moment a chargeable snapshot was taken | Not a figure the venue sends: the reference terminal stamps it from its own clock while parsing the snapshot. Where exactly that falls on this client's path is not settled, and a stamp taken at a moment chosen here would be a time nobody recorded |
+
+Everything else the venue publishes and a caller can ask for is delivered, on
+the callback the reference client delivers it on.
+
 ## Things an entitlement decides, not this client
 
 * **News headlines** need a news subscription. Without one, the providers list

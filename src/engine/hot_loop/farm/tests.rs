@@ -497,6 +497,28 @@ mod news_tests {
         serve(&mut farm, 41, 614, &backwards, &mut context);
         assert!(said(&shared).is_empty(), "a high under its own low states neither");
 
+        // A figure the venue does not hold is not a figure: the largest the
+        // type carries is how it says so, and two billion shares is not a
+        // day's volume.
+        let mut unheld = Vec::new();
+        unheld.extend_from_slice(&1i32.to_be_bytes());
+        unheld.extend_from_slice(&768i32.to_be_bytes());
+        unheld.extend_from_slice(&i32::MAX.to_be_bytes());
+        unheld.extend_from_slice(&1i32.to_be_bytes());
+        unheld.extend_from_slice(&201i32.to_be_bytes());
+        unheld.extend_from_slice(&f32::MAX.to_be_bytes());
+        serve(&mut farm, 44, 165, &unheld, &mut context);
+        assert!(said(&shared).is_empty(), "neither of them is a reading");
+
+        let mut unheld_span = 1i32.to_be_bytes().to_vec();
+        unheld_span.extend_from_slice(&5i32.to_be_bytes());
+        unheld_span.extend_from_slice(&i32::MAX.to_be_bytes());
+        serve(&mut farm, 45, 595, &unheld_span, &mut context);
+        assert!(said(&shared).is_empty(), "nor is a span it holds nothing for");
+
+        serve(&mut farm, 46, 232, &mark(f64::MAX, 1), &mut context);
+        assert!(said(&shared).is_empty(), "nor is a mark it does not hold");
+
         // A dividend line with nothing on it is not a reading.
         serve(&mut farm, 43, 456, &[0u8, 0, 0, 0, b'\n'], &mut context);
         assert!(said(&shared).is_empty(), "an empty line says nothing");
