@@ -939,8 +939,16 @@ impl EClient {
     /// them or not — and this surface names no client, so there is nothing to
     /// refuse and nothing left to do.
     ///
-    /// [`Wrapper::order_bound`] is never fired here: the permanent id an order
-    /// was given arrives on its status and its fills.
+    /// [`Wrapper::order_bound`] is never fired here, and not because of this
+    /// call: it follows asking for the open orders, not asking to bind them.
+    /// The reference architecture partitions an account's orders by the client
+    /// that placed them, and on being asked for the open ones it claims those
+    /// that belong to no client for client nought — a control message to the
+    /// venue, whose answer is what that callback carries. There is no such
+    /// partition here: every session is told about every order on the account,
+    /// so there is nothing to claim, and claiming it would change who owns an
+    /// order at the venue to no end. The permanent id the callback pairs with
+    /// arrives on the order's status and on its fills.
     ///
     /// `b_auto_bind` is taken and not applied. Whether it asks to bind or to
     /// stop binding, the answer is the same: this session hears about every
