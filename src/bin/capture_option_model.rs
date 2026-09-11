@@ -88,6 +88,10 @@ fn main() {
         present_value_of_dividends: if stated.pv_dividend.is_finite()
             && stated.pv_dividend != f64::MAX { stated.pv_dividend } else { 0.0 },
             rate: stated.rate,
+            // Recovered below, where the venue states a price to recover it
+            // from; nought until then, which is what a contract with no
+            // dividend carries anyway.
+            yield_rate: 0.0,
     };
 
     match option_price(terms, model, stated.implied_vol, stated.und_price) {
@@ -105,7 +109,7 @@ fn main() {
     let floor = (rate.abs() * step.sqrt() * 1.02).max(1e-4);
     println!("  rate={rate:.6} years={:.4} floor={floor:.6}", terms.years_to_expiry);
     for v in [floor, 0.01, 0.018692, 0.05, 1.0, 5.0] {
-        match ibx::control::option_model::price(terms, stated.und_price, v, rate, 0.0) {
+        match ibx::control::option_model::price(terms, stated.und_price, v, rate, 0.0, model.yield_rate) {
             Some(p) => println!("    vol={v:.6} -> {p:.4}"),
             None => println!("    vol={v:.6} -> the tree does not hold"),
         }

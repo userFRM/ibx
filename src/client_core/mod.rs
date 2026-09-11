@@ -5545,6 +5545,16 @@ impl ClientCore {
             // No rate stated is no discount, which over the days one of these
             // has left moves the price by less than it is quoted in.
             rate: stated_or_none(stated.rate).unwrap_or(0.0),
+            // The venue states no yield, and on an underlying whose dividends
+            // it carries as one rather than as a present value, leaving it at
+            // nothing prices every call dear and every put cheap by the whole
+            // of it. Recovered from the price the venue itself published.
+            yield_rate: 0.0,
+        };
+        let model = crate::control::option_model::VenueModel {
+            yield_rate: crate::control::option_model::recover_yield(terms, model)
+                .unwrap_or(0.0),
+            ..model
         };
         solve(terms, model).ok_or_else(|| {
             crate::error_codes::Refusal::validation(

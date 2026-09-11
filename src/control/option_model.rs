@@ -45,6 +45,15 @@ pub struct VenueModel {
     pub present_value_of_dividends: f64,
     /// The rate it discounted at, over a year.
     pub rate: f64,
+    /// What the underlying yields over the life of the option, continuously
+    /// compounded.
+    ///
+    /// The venue does not state this. It states a present value of dividends,
+    /// and on an underlying whose dividends it carries as a yield instead that
+    /// present value arrives unstated — so the yield has to be recovered from
+    /// the price the venue published, which [`recover_yield`] does. Nought is
+    /// the ordinary case and leaves every figure here as it was.
+    pub yield_rate: f64,
 }
 
 
@@ -87,7 +96,10 @@ const STEPS: usize = 256;
 ///
 /// Dividends are taken off the underlying rather than modelled as a yield,
 /// which is what the venue states — a present value, not a rate.
-pub fn price(terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividends: f64) -> Option<f64> {
+pub fn price(
+    terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividends: f64,
+    yield_rate: f64,
+) -> Option<f64> {
     if !(spot.is_finite() && volatility.is_finite() && rate.is_finite() && dividends.is_finite()) {
         return None;
     }
@@ -104,7 +116,7 @@ pub fn price(terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividend
     let down = 1.0 / up;
     // A future drifts nowhere: it is already the price agreed for delivery,
     // and holding it costs nothing. A share grows at the rate.
-    let growth = if terms.on_a_future { 1.0 } else { (rate * dt).exp() };
+    let growth = if terms.on_a_future { 1.0 } else { ((rate - yield_rate) * dt).exp() };
     if !(up.is_finite() && growth.is_finite()) || (up - down).abs() < f64::EPSILON {
         return None;
     }
@@ -176,6 +188,7 @@ pub struct Greeks {
 /// stops at step two and hands those five values back.
 fn tree_near_the_root(
     terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividends: f64,
+    yield_rate: f64,
 ) -> Option<([f64; 3], f64, f64, f64)> {
     if !(spot.is_finite() && volatility.is_finite() && rate.is_finite() && dividends.is_finite()) {
         return None;
@@ -190,7 +203,7 @@ fn tree_near_the_root(
     let dt = terms.years_to_expiry / STEPS as f64;
     let up = (volatility * dt.sqrt()).exp();
     let down = 1.0 / up;
-    let growth = if terms.on_a_future { 1.0 } else { (rate * dt).exp() };
+    let growth = if terms.on_a_future { 1.0 } else { ((rate - yield_rate) * dt).exp() };
     if !(up.is_finite() && growth.is_finite()) || (up - down).abs() < f64::EPSILON {
         return None;
     }
@@ -242,6 +255,56 @@ fn tree_near_the_root(
     None
 }
 
+/// What the underlying yields, recovered from the model the venue published.
+///
+/// The venue states a rate and a present value of dividends, and on an
+/// underlying whose dividends it carries as a continuous yield instead, that
+/// present value arrives unstated. Left at nothing the forward is too high:
+/// measured against ten of the venue's own models on one underlying, every
+/// call came out dear and every put cheap by the same amount, which is what a
+/// missing yield looks like and nothing else does.
+///
+/// So it is solved for rather than assumed — the yield at which this tree
+/// reproduces the price the venue published, at the volatility the venue
+/// published it against. One unknown against one statement, and the price
+/// falls as the yield rises, so it is bracketed and bisected.
+///
+/// Nothing is returned where the venue stated no price to solve against, or
+/// where no yield in a plausible range reproduces it. A yield this client
+/// made up would move every figure that follows from it.
+pub fn recover_yield(terms: OptionTerms, model: VenueModel) -> Option<f64> {
+    if !(model.option_price.is_finite() && model.option_price > 0.0) {
+        return None;
+    }
+    if !(model.volatility.is_finite() && model.volatility > 0.0) {
+        return None;
+    }
+    // A call falls as the yield rises and a put climbs, so the residual is
+    // written to fall either way and one bisection serves both.
+    let miss = |q: f64| {
+        price(
+            terms, model.underlying_price, model.volatility, model.rate,
+            model.present_value_of_dividends, q,
+        )
+        .map(|p| if terms.is_call { p - model.option_price } else { model.option_price - p })
+    };
+    // Beyond a quarter either way is not a dividend, it is a different model.
+    let (mut low, mut high) = (-0.25_f64, 0.25_f64);
+    let (lo, hi) = (miss(low)?, miss(high)?);
+    if !(lo > 0.0 && hi < 0.0) {
+        return None;
+    }
+    for _ in 0..80 {
+        let mid = 0.5 * (low + high);
+        match miss(mid) {
+            Some(v) if v > 0.0 => low = mid,
+            Some(_) => high = mid,
+            None => return None,
+        }
+    }
+    Some(0.5 * (low + high))
+}
+
 /// The model struck at one volatility, with what it is doing.
 ///
 /// Taken off the same tree the price comes from rather than by moving the
@@ -254,7 +317,7 @@ pub fn greeks(
 ) -> Option<Greeks> {
     let dividends = model.present_value_of_dividends;
     let (two, one_down, one_up, root) =
-        tree_near_the_root(terms, underlying_price, volatility, model.rate, dividends)?;
+        tree_near_the_root(terms, underlying_price, volatility, model.rate, dividends, model.yield_rate)?;
     let adjusted = underlying_price - dividends;
     let dt = terms.years_to_expiry / STEPS as f64;
     let up = (volatility * dt.sqrt()).exp();
@@ -266,7 +329,9 @@ pub fn greeks(
     let gamma = (delta_up - delta_down) / (0.5 * adjusted * (up * up - down * down));
     let theta = (two[1] - root) / (2.0 * dt * 365.0);
     // A percentage point of volatility, valued on the same tree.
-    let bumped = price(terms, underlying_price, volatility + 0.01, model.rate, dividends)?;
+    let bumped = price(
+        terms, underlying_price, volatility + 0.01, model.rate, dividends, model.yield_rate,
+    )?;
     let vega = bumped - root;
 
     let all = Greeks { price: root, delta, gamma, vega, theta };
@@ -308,11 +373,19 @@ pub fn implied_volatility(
     // leave nought-to-one — so the smallest volatility worth trying is set by
     // the rate and the step, not by a number picked here.
     let step = terms.years_to_expiry / STEPS as f64;
+    // What the underlying does over a step is the rate less what it yields,
+    // and it is that which a step up has to outrun — not the rate on its own.
+    // Measured against the rate alone, a contract whose yield was recovered
+    // from the venue's own price starts its search below where the tree holds
+    // together: the first bound prices at nothing, and a search with a bound
+    // that is not a price has nowhere to go, so a contract the venue had
+    // already published a price for came back unsolvable.
+    let drift = rate - model.yield_rate;
     // Just inside where the tree holds, not comfortably inside it: a real
     // contract deep in the money carries a volatility of under two per cent,
     // and a floor set with room to spare sits above the answer and finds
     // nothing.
-    let smallest = (rate.abs() * step.sqrt() * 1.02).max(1e-4);
+    let smallest = (drift.abs() * step.sqrt() * 1.02).max(1e-4);
     solve(smallest, 5.0, |volatility| {
         price(
             terms,
@@ -320,6 +393,7 @@ pub fn implied_volatility(
             volatility,
             rate,
             model.present_value_of_dividends,
+            model.yield_rate,
         )
         .map(|p| p - option_price)
     })
@@ -338,6 +412,7 @@ pub fn option_price(
         volatility,
         model.rate,
         model.present_value_of_dividends,
+        model.yield_rate,
     )
 }
 
@@ -424,12 +499,12 @@ mod tests {
         };
         let model = VenueModel {
             volatility: 0.25, option_price: 0.0, underlying_price: 100.0,
-            present_value_of_dividends: 0.0, rate: 0.04,
+            present_value_of_dividends: 0.0, rate: 0.04, yield_rate: 0.0,
         };
         let sigma = 0.25;
         let all = greeks(terms, model, sigma, 100.0).expect("a tree this ordinary walks");
 
-        let priced = |s: f64| price(terms, s, sigma, model.rate, 0.0).unwrap();
+        let priced = |s: f64| price(terms, s, sigma, model.rate, 0.0, 0.0).unwrap();
         assert!((all.price - priced(100.0)).abs() < 1e-9, "the price is the tree's");
 
         // The bump has to clear the lattice's own node spacing, or the
@@ -445,13 +520,13 @@ mod tests {
         assert!((all.gamma - curve).abs() < 5e-3, "gamma {} against {curve}", all.gamma);
 
         // A percentage point of volatility, which is the unit this reports in.
-        let by_vol = price(terms, 100.0, sigma + 0.01, model.rate, 0.0).unwrap() - all.price;
+        let by_vol = price(terms, 100.0, sigma + 0.01, model.rate, 0.0, 0.0).unwrap() - all.price;
         assert!((all.vega - by_vol).abs() < 1e-9, "vega {}", all.vega);
 
         // And one calendar day, which for a half-year call is a few cents.
         assert!(all.theta < 0.0 && all.theta > -0.5, "theta {}", all.theta);
         let shorter = OptionTerms { years_to_expiry: 0.5 - 1.0 / 365.0, ..terms };
-        let tomorrow = price(shorter, 100.0, sigma, model.rate, 0.0).unwrap();
+        let tomorrow = price(shorter, 100.0, sigma, model.rate, 0.0, 0.0).unwrap();
         assert!(
             (all.theta - (tomorrow - all.price)).abs() < 5e-3,
             "theta {} against a day of it {}", all.theta, tomorrow - all.price,
@@ -466,7 +541,7 @@ mod tests {
         };
         let model = VenueModel {
             volatility: 0.3, option_price: 0.0, underlying_price: 100.0,
-            present_value_of_dividends: 0.0, rate: 0.03,
+            present_value_of_dividends: 0.0, rate: 0.03, yield_rate: 0.0,
         };
         let all = greeks(terms, model, 0.3, 100.0).expect("walks");
         assert!(all.delta < 0.0 && all.delta > -1.0, "a put falls as the underlying rises: {}", all.delta);
@@ -482,9 +557,78 @@ mod tests {
         };
         let model = VenueModel {
             volatility: 0.2, option_price: 0.0, underlying_price: 100.0,
-            present_value_of_dividends: 0.0, rate: 0.04,
+            present_value_of_dividends: 0.0, rate: 0.04, yield_rate: 0.0,
         };
         assert_eq!(greeks(terms, model, 0.2, 100.0), None, "an option with no time left");
+    }
+
+    /// The venue's own models, reproduced from the venue's own statement.
+    ///
+    /// Ten contracts on one underlying and one expiry, captured from a live
+    /// session: the volatility the venue used, the price it made of it, the
+    /// rate it discounted at, the days it counted, and the greeks it published.
+    /// The venue states no yield, and this underlying's dividends are carried
+    /// as one — so the yield is recovered from the price and everything else is
+    /// then out of sample.
+    ///
+    /// Before the yield was recovered, every call here priced dear and every
+    /// put cheap by the whole of the dividend: the eight-hundred-and-fortieth
+    /// of a per cent a day it pays comes to two per cent over these ninety-eight
+    /// days, and the seven hundred call came out at 79.38 against the venue's
+    /// 77.58.
+    #[test]
+    fn the_venues_own_models_are_reproduced_from_its_own_statement() {
+        let und = 764.3305053710938;
+        let years = 98.04166666666667 / 365.0;
+        let rate = 0.043_307_335_714_285_716;
+        // strike, call, volatility, delta, gamma, price
+        let stated: &[(f64, bool, f64, f64, f64, f64)] = &[
+            (700.0, true, 0.201_911_942_347_409, 0.837_389_304_885_677_8,
+             0.003_112_535_866_936_207_3, 77.581_852_456_929_61),
+            (700.0, false, 0.201_911_942_347_409, -0.168_080_170_653_972_04,
+             0.003_210_275_309_540_352, 7.435_576_976_171_44),
+            (680.0, false, 0.220_396_670_859_121_1, -0.125_892_506_307_687_6,
+             0.002_408_220_071_537_325, 5.706_707_158_586_713),
+            (660.0, false, 0.239_136_958_577_290_73, -0.095_831_415_150_120_24,
+             0.001_815_375_484_790_229_4, 4.477_610_625_571_742),
+            (720.0, false, 0.183_176_422_118_252_83, -0.227_444_965_342_154_55,
+             0.004_276_482_263_373_885, 9.884_257_686_751_454),
+            (640.0, true, 0.257_866_932_158_309, 0.928_913_376_934_181_2,
+             0.001_341_902_860_274_951, 133.120_981_857_757_53),
+        ];
+        for &(strike, is_call, volatility, delta, gamma, option_price) in stated {
+            let terms = OptionTerms {
+                strike, years_to_expiry: years, is_call, on_a_future: false,
+            };
+            let bare = VenueModel {
+                volatility, option_price, underlying_price: und,
+                present_value_of_dividends: 0.0, rate, yield_rate: 0.0,
+            };
+            let q = recover_yield(terms, bare)
+                .unwrap_or_else(|| panic!("{strike} states a price to solve against"));
+            // A dividend, not a different model: this underlying pays about
+            // one and a bit per cent.
+            assert!((0.005..0.02).contains(&q), "{strike} recovered a yield of {q}");
+
+            let model = VenueModel { yield_rate: q, ..bare };
+            let ours = greeks(terms, model, volatility, und)
+                .unwrap_or_else(|| panic!("{strike} walks"));
+
+            assert!(
+                (ours.price - option_price).abs() < 1e-3,
+                "{strike}: {} against the venue's {option_price}", ours.price,
+            );
+            // Neither of these was used to recover the yield, so they are the
+            // model being right rather than the recovery being circular.
+            assert!(
+                ((ours.delta - delta) / delta).abs() < 0.01,
+                "{strike}: delta {} against {delta}", ours.delta,
+            );
+            assert!(
+                ((ours.gamma - gamma) / gamma).abs() < 0.02,
+                "{strike}: gamma {} against {gamma}", ours.gamma,
+            );
+        }
     }
 
     /// A call with no dividends and no rate is worth what the tree says, and
@@ -495,7 +639,7 @@ mod tests {
     /// per cent.
     #[test]
     fn the_tree_agrees_with_the_closed_form() {
-        let price = price(call(100.0, 1.0), 100.0, 0.2, 0.05, 0.0).expect("it prices");
+        let price = price(call(100.0, 1.0), 100.0, 0.2, 0.05, 0.0, 0.0).expect("it prices");
         assert!((price - 10.4506).abs() < 0.05, "the tree says {price}");
     }
 
@@ -513,7 +657,7 @@ mod tests {
         assert!(!ratio.powi(super::STEPS as i32).is_finite(), "and the tree still overflows");
 
         assert_eq!(
-            price(call(100.0, 1.0), 100.0, 80.0, 0.05, 0.0),
+            price(call(100.0, 1.0), 100.0, 80.0, 0.05, 0.0, 0.0),
             None,
             "an infinity was handed back as a price",
         );
@@ -522,7 +666,7 @@ mod tests {
     /// An option worth nothing at expiry is worth nothing.
     #[test]
     fn a_worthless_call_is_worth_nothing() {
-        let price = price(call(200.0, 0.5), 100.0, 0.2, 0.05, 0.0).expect("it prices");
+        let price = price(call(200.0, 0.5), 100.0, 0.2, 0.05, 0.0, 0.0).expect("it prices");
         assert!(price < 0.01, "{price}");
     }
 
@@ -533,7 +677,7 @@ mod tests {
     #[test]
     fn a_deep_put_is_worth_at_least_exercising_it() {
         let terms = OptionTerms { strike: 200.0, years_to_expiry: 1.0, is_call: false, on_a_future: false };
-        let price = price(terms, 100.0, 0.2, 0.05, 0.0).expect("it prices");
+        let price = price(terms, 100.0, 0.2, 0.05, 0.0, 0.0).expect("it prices");
         assert!(price >= 100.0 - 0.01, "an American put worth less than exercising it: {price}");
     }
 
@@ -560,6 +704,7 @@ mod tests {
             underlying_price: 7676.90,
             present_value_of_dividends: 0.0,
             rate: 0.00011 * 365.0,
+            yield_rate: 0.0,
         };
         let ours = option_price(terms, model, model.volatility, model.underlying_price)
             .expect("it prices");
@@ -568,7 +713,7 @@ mod tests {
         // The venue's figures taken for a year's without carrying them over,
         // which is how they were read before and what priced the contract at
         // nothing.
-        let uncarried = price(terms, model.underlying_price, 0.00561, 0.00011, 0.0)
+        let uncarried = price(terms, model.underlying_price, 0.00561, 0.00011, 0.0, 0.0)
             .expect("it prices");
         assert!(uncarried < 0.01, "taken for a year's the contract was worth {uncarried}");
     }
@@ -578,13 +723,13 @@ mod tests {
     #[test]
     fn a_price_gives_back_its_volatility() {
         let terms = call(100.0, 1.0);
-        let venue_price = price(terms, 100.0, 0.25, 0.04, 1.5).expect("it prices");
+        let venue_price = price(terms, 100.0, 0.25, 0.04, 1.5, 0.0).expect("it prices");
         let model = VenueModel {
             volatility: 0.25,
             option_price: venue_price,
             underlying_price: 100.0,
             present_value_of_dividends: 1.5,
-            rate: 0.04,
+            rate: 0.04, yield_rate: 0.0,
         };
         let same = implied_volatility(terms, model, venue_price, 100.0).expect("it solves");
         assert!((same - 0.25).abs() < 1e-3, "the venue's price gave {same}");
@@ -598,13 +743,13 @@ mod tests {
     #[test]
     fn a_volatility_gives_back_its_price() {
         let terms = call(100.0, 1.0);
-        let venue_price = price(terms, 100.0, 0.25, 0.04, 1.5).expect("it prices");
+        let venue_price = price(terms, 100.0, 0.25, 0.04, 1.5, 0.0).expect("it prices");
         let model = VenueModel {
             volatility: 0.25,
             option_price: venue_price,
             underlying_price: 100.0,
             present_value_of_dividends: 1.5,
-            rate: 0.04,
+            rate: 0.04, yield_rate: 0.0,
         };
         let same = option_price(terms, model, 0.25, 100.0).expect("it prices");
         assert!((same - venue_price).abs() < 0.01, "{same} against {venue_price}");
@@ -614,10 +759,10 @@ mod tests {
     /// of nothing, an underlying worth less than its own dividends.
     #[test]
     fn nonsense_is_not_answered() {
-        assert!(price(call(100.0, 0.0), 100.0, 0.2, 0.05, 0.0).is_none());
-        assert!(price(call(100.0, 1.0), 100.0, 0.0, 0.05, 0.0).is_none());
-        assert!(price(call(100.0, 1.0), 1.0, 0.2, 0.05, 5.0).is_none());
-        assert!(price(call(100.0, 1.0), f64::NAN, 0.2, 0.05, 0.0).is_none());
+        assert!(price(call(100.0, 0.0), 100.0, 0.2, 0.05, 0.0, 0.0).is_none());
+        assert!(price(call(100.0, 1.0), 100.0, 0.0, 0.05, 0.0, 0.0).is_none());
+        assert!(price(call(100.0, 1.0), 1.0, 0.2, 0.05, 5.0, 0.0).is_none());
+        assert!(price(call(100.0, 1.0), f64::NAN, 0.2, 0.05, 0.0, 0.0).is_none());
     }
 
     /// A price that is not a number has no volatility, and is told so.
@@ -638,13 +783,50 @@ mod tests {
             option_price: 5.0,
             underlying_price: 100.0,
             present_value_of_dividends: 0.0,
-            rate: 0.02,
+            rate: 0.02, yield_rate: 0.0,
         };
         for price in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert_eq!(
                 implied_volatility(terms, model, price, 100.0),
                 None,
                 "a price of {price} was answered with a volatility",
+            );
+        }
+    }
+
+    /// A contract whose yield had to be recovered is still solvable both ways.
+    ///
+    /// The search for a volatility starts where the tree holds together, and
+    /// where that is depends on what the underlying does over a step — the
+    /// rate less the yield. Measured against the rate alone, a recovered yield
+    /// puts the first bound outside the tree, it prices at nothing, and the
+    /// search hands back no answer for a contract the venue had already priced.
+    #[test]
+    fn a_recovered_yield_does_not_put_the_search_outside_the_tree() {
+        let terms = call(500.0, 0.3452054794520548);
+        let stated = VenueModel {
+            volatility: 0.20,
+            option_price: 30.0,
+            underlying_price: 505.0,
+            present_value_of_dividends: 0.0,
+            rate: 0.0,
+            yield_rate: 0.0,
+        };
+        let recovered = recover_yield(terms, stated).expect("the price is reachable");
+        assert!(recovered < 0.0, "this price is above the one no yield reaches: {recovered}");
+        let model = VenueModel { yield_rate: recovered, ..stated };
+
+        // The volatility that reproduces the venue's own price is the one the
+        // venue stated, which is what anchoring to its statement means.
+        let back = implied_volatility(terms, model, stated.option_price, stated.underlying_price)
+            .expect("the venue's own price is solvable under the venue's own model");
+        assert!((back - stated.volatility).abs() < 1e-4, "solved back to {back}");
+
+        // And a price either side of it is answered too, rather than refused.
+        for price in [stated.option_price - 2.0, stated.option_price + 2.0] {
+            assert!(
+                implied_volatility(terms, model, price, stated.underlying_price).is_some(),
+                "a price of {price} was refused",
             );
         }
     }
