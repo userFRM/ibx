@@ -1506,10 +1506,18 @@ impl FarmState {
             // path the venue reads it back on does not use them — and it is
             // published beside the quote rather than in it, the way every
             // other series is.
+            //
+            // As a price, which is the callback these three belong on. The
+            // reference client tells a caller what a bond's bid, ask and last
+            // imply the same way it tells them the bid, the ask and the last:
+            // the yield is a member of that family and travels with it, not
+            // with the numbers that have no price behind them. Delivered as
+            // one of those instead, a caller reading prices the way the
+            // reference client's callers read them never saw the yield at all.
             if let Some(tick_type) = tick.layout.yield_tick(tick.tick_type) {
                 let value = tick.magnitude as f64 * tick_decoder::YIELD_SCALE;
                 shared.market.push_series_tick(crate::types::SeriesTick {
-                    instrument, tick_type, value: crate::types::SeriesValue::Generic(value),
+                    instrument, tick_type, value: crate::types::SeriesValue::Price(value),
                 });
                 continue;
             }

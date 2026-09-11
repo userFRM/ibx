@@ -1152,13 +1152,19 @@ mod decode_publish_tests {
         assert_eq!(q.ask, 602 * mts, "and the ask with it");
         assert_eq!(q.last, 0, "neither of them is the last price");
         let said = shared.market.drain_series_ticks(id);
+        // As prices, which is the family these belong to and the callback a
+        // caller of the reference client reads them on.
         let yields: Vec<(i32, f64)> = said.iter().filter_map(|t| match t.value {
-            crate::types::SeriesValue::Generic(v) => Some((t.tick_type, v)),
+            crate::types::SeriesValue::Price(v) => Some((t.tick_type, v)),
             _ => None,
         }).collect();
         assert!(
             yields.contains(&(50, 0.45)) && yields.contains(&(51, 0.46)),
             "the two yields, counted in ten thousandths: {yields:?}",
+        );
+        assert!(
+            !said.iter().any(|t| matches!(t.value, crate::types::SeriesValue::Generic(_))),
+            "a yield reached the callback the reference client puts no yield on: {said:?}",
         );
 
         // The day's extremes, on the same numbers.
