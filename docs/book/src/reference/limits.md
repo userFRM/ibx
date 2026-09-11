@@ -146,13 +146,13 @@ the question waits on the subscription that asking opens.
 ## Numbered ticks this client does not deliver
 
 Ninety-six numbered market-data ticks reach a caller of the reference client.
-Eighty-four of them reach one here. These twelve do not, and each for a reason
+Eighty-seven of them reach one here. These nine do not, and each for a reason
 that can be checked rather than taken on trust.
 
 | Ticks | What | Why not |
 | --- | --- | --- |
-| 10, 11, 12 and the delayed 80, 81, 82 | The option model struck against the bid, the ask and the last | The venue publishes one model per option and does not send these. The reference terminal computes them itself, from its own model and those three prices. Published here they would be this client's numbers wearing the venue's name; the one model the venue does send is delivered, on 13 and on 83 where the feed is delayed |
-| 50, 51, 52 and the delayed 103, 104 | Bid, ask and last yield | No field on this stream has been seen carrying one. The numbering that would is the terminal's own internal record, which is a different message written in the same grammar — on the wire this client reads, the two fields that mean "yield" there carry the last price and the close, which is what this client already delivers them as |
+| 10, 11, 12 and the delayed 80, 81, 82 | The option model struck against the bid, the ask and the last | Not sent. The reference terminal solves each of them itself: for a side it takes that side's option price and finds the volatility at which the model prices the option there, then evaluates the greeks at it. The venue sends one model per option and that one is delivered, on 13 and on 83 where the feed is delayed. Published here the other three would be this client's arithmetic wearing the venue's name |
+| The delayed 103, 104 | Bid and ask yield on a delayed feed | The yields themselves arrive and are delivered, on 50, 51 and 52. The delayed feed states its prices under numbers of its own and no session here has seen it state a yield |
 | 85 | The moment a chargeable snapshot was taken | Not a figure the venue sends: the reference terminal stamps it from its own clock while parsing the snapshot. Where exactly that falls on this client's path is not settled, and a stamp taken at a moment chosen here would be a time nobody recorded |
 
 Everything else the venue publishes and a caller can ask for is delivered, on

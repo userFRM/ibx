@@ -1115,6 +1115,77 @@ mod decode_publish_tests {
         msg
     }
 
+    /// A record says what its own fields mean, and this client reads it.
+    ///
+    /// Field eighteen is a discriminator rather than a value. Absent, the
+    /// record is the top of the book. Stating one, the same numbers that are
+    /// the last price and the close are the bid's yield and the ask's, and the
+    /// two sides move up a place. Stating two, they are the day's volume, its
+    /// high, its low and its close.
+    ///
+    /// Read as the ordinary layout — which is what this client did — a sidecar
+    /// published the day's volume as a bid and its high as an ask, and the
+    /// yields reached nobody at all.
+    #[test]
+    fn a_record_is_read_under_the_layout_it_states() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let id = context.market.register(756733);
+        context.market.register_server_tag(9, id);
+        context.market.set_min_tick(id, 0.01);
+        let mts = context.market.min_tick_scaled(id);
+
+        // The two sides and their yields.
+        farm.handle_tick_data(
+            &framed_35p(9, &[
+                (tick_decoder::O_LAYOUT, 1, 1),
+                (0, 2, 601),
+                (1, 2, 602),
+                (2, 2, 4_500),
+                (3, 2, 4_600),
+            ]),
+            &mut context, &shared, &None,
+        );
+        let q = context.market.quote(id);
+        assert_eq!(q.bid, 601 * mts, "the bid moved up a place");
+        assert_eq!(q.ask, 602 * mts, "and the ask with it");
+        assert_eq!(q.last, 0, "neither of them is the last price");
+        let said = shared.market.drain_series_ticks(id);
+        let yields: Vec<(i32, f64)> = said.iter().filter_map(|t| match t.value {
+            crate::types::SeriesValue::Generic(v) => Some((t.tick_type, v)),
+            _ => None,
+        }).collect();
+        assert!(
+            yields.contains(&(50, 0.45)) && yields.contains(&(51, 0.46)),
+            "the two yields, counted in ten thousandths: {yields:?}",
+        );
+
+        // The day's extremes, on the same numbers.
+        farm.handle_tick_data(
+            &framed_35p(9, &[
+                (tick_decoder::O_LAYOUT, 1, 2),
+                (0, 2, 7_000),
+                (1, 2, 701),
+                (2, 2, 702),
+                (3, 2, 703),
+            ]),
+            &mut context, &shared, &None,
+        );
+        let q = context.market.quote(id);
+        assert_eq!(q.high, 701 * mts, "the high");
+        assert_eq!(q.low, 702 * mts, "the low");
+        assert_eq!(q.close, 703 * mts, "the close");
+        assert_eq!(q.bid, 601 * mts, "and the bid is untouched by a record that states none");
+
+        // And an ordinary record still reads as one.
+        farm.handle_tick_data(
+            &framed_35p(9, &[(tick_decoder::O_LAST_PRICE, 2, 801)]),
+            &mut context, &shared, &None,
+        );
+        assert_eq!(context.market.quote(id).last, 801 * mts, "the last price");
+    }
+
     /// The constants table says which wire type is which; this says where each
     /// one lands. Nothing else pins that: swapping the open and close arms with
     /// the table intact passes the whole suite, and that is precisely the

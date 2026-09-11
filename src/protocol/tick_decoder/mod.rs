@@ -194,6 +194,104 @@ pub const O_OPEN_PRICE: u64 = 22;
 /// this feed. Retained under its old name until that something is identified.
 pub const O_LAST_TS: u64 = 23;
 
+/// Field eighteen, which is not a value but says what the rest of the record
+/// means.
+pub const O_LAYOUT: u64 = 18;
+
+/// What the fields of one record carry.
+///
+/// A record states the top of the book unless field eighteen says otherwise,
+/// and then the low-numbered fields carry something else entirely: the same
+/// number that is the bid on an ordinary record is the day's volume on one
+/// kind of sidecar and the size of the last trade on another. Read as the
+/// ordinary layout, a sidecar publishes its own numbers under the wrong names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RecordLayout {
+    /// No field eighteen: the top of the book.
+    #[default]
+    Ordinary,
+    /// Field eighteen stating nought: what the last trade did.
+    Last,
+    /// Field eighteen stating one: the two sides, and their yields.
+    BidAsk,
+    /// Field eighteen stating two: the day's extremes and its volume.
+    Extremes,
+    /// Field eighteen stating something else.
+    Unknown,
+}
+
+impl RecordLayout {
+    /// What a record says it is, off its own fields.
+    pub fn of(fields: &[RawField]) -> Self {
+        match fields.iter().find(|f| f.id == O_LAYOUT).map(|f| f.magnitude) {
+            Some(0) => Self::Last,
+            Some(1) => Self::BidAsk,
+            Some(2) => Self::Extremes,
+            // A record naming a layout this client does not know is not read
+            // as the ordinary one: its low-numbered fields would be published
+            // under names the venue did not give them. Nothing is taken from
+            // it beyond the fields that mean the same whatever the layout.
+            Some(_) => Self::Unknown,
+            None => Self::Ordinary,
+        }
+    }
+
+    /// The ordinary number a field carries here, where this layout states the
+    /// same thing under a different one.
+    ///
+    /// `None` where the field is something the ordinary record has no number
+    /// for — a yield, or one of the slots this client does not read.
+    pub fn as_ordinary(self, id: u64) -> Option<u64> {
+        // The same wherever they appear: where the sides are quoted, the
+        // stamp's two halves, the open, and the layout marker itself.
+        if matches!(id, O_BID_EXCH | O_ASK_EXCH | 19 | O_TS_BASE | O_TS_OFFSET | O_OPEN_PRICE) {
+            return Some(id);
+        }
+        match self {
+            Self::Ordinary => Some(id),
+            Self::Last => match id {
+                0 => Some(O_LAST_SIZE),
+                1 => Some(O_LAST_PRICE),
+                _ => None,
+            },
+            Self::BidAsk => match id {
+                0 => Some(O_BID_PRICE),
+                1 => Some(O_ASK_PRICE),
+                4 => Some(O_BID_SIZE),
+                5 => Some(O_ASK_SIZE),
+                _ => None,
+            },
+            Self::Extremes => match id {
+                0 => Some(O_VOLUME),
+                1 => Some(O_HIGH_PRICE),
+                2 => Some(O_LOW_PRICE),
+                3 => Some(O_CLOSE_PRICE),
+                _ => None,
+            },
+            Self::Unknown => None,
+        }
+    }
+
+    /// Which yield, where this layout carries one under that number.
+    ///
+    /// The venue states a yield on the same numbers the ordinary record states
+    /// a price on, and says which by the layout. The numbers are the reference
+    /// client's: 50 the bid's, 51 the ask's, 52 the last's.
+    pub fn yield_tick(self, id: u64) -> Option<i32> {
+        match (self, id) {
+            (Self::Last, 2) => Some(52),
+            (Self::BidAsk, 2) => Some(50),
+            (Self::BidAsk, 3) => Some(51),
+            _ => None,
+        }
+    }
+}
+
+/// What a yield is counted in: ten thousandths, wherever the record does not
+/// state a divisor of its own. Not the contract's own increment — the path
+/// that reads a yield does not use it.
+pub const YIELD_SCALE: f64 = 1.0E-4;
+
 // Type 12 was read as the last size, which type 6 carries. Left undecoded
 // rather than remapped, since nothing in the captures says what it is.
 
@@ -213,6 +311,12 @@ pub struct RawTick {
     /// instead of counting the contract's own increments. Nought — every
     /// ordinary entry — means the value is counted in increments as usual.
     pub decimal_shift: u8,
+    /// What this record's fields mean, which its own field eighteen says.
+    ///
+    /// Carried per entry rather than worked out by the reader: one message
+    /// carries several records, each with its own layout, and a reader that
+    /// took the last one it saw would read an ordinary record as a sidecar.
+    pub layout: RecordLayout,
 }
 
 /// Decode all ticks from a 35=P binary payload.
@@ -262,12 +366,15 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
             None => break,
         };
 
-        for field in decode_record(&mut reader) {
+        let fields = decode_record(&mut reader);
+        let layout = RecordLayout::of(&fields);
+        for field in fields {
             ticks.push(RawTick {
                 server_tag,
                 tick_type: field.id,
                 magnitude: field.magnitude,
                 decimal_shift: field.decimal_shift,
+                layout,
             });
         }
     }

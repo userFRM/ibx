@@ -1500,6 +1500,35 @@ impl FarmState {
                 }
             };
 
+            // A yield is stated on the numbers a price is stated on, and the
+            // record says which by its layout. It is counted in ten
+            // thousandths rather than in the contract's own increments — the
+            // path the venue reads it back on does not use them — and it is
+            // published beside the quote rather than in it, the way every
+            // other series is.
+            if let Some(tick_type) = tick.layout.yield_tick(tick.tick_type) {
+                let value = tick.magnitude as f64 * tick_decoder::YIELD_SCALE;
+                shared.market.push_series_tick(crate::types::SeriesTick {
+                    instrument, tick_type, value: crate::types::SeriesValue::Generic(value),
+                });
+                continue;
+            }
+            // And what this number means under this record's layout. A sidecar
+            // states the day's volume, the size of the last trade or the two
+            // sides under the numbers an ordinary record states the bid, the
+            // ask and the last under; read as ordinary, every one of them was
+            // published as a price it is not.
+            let Some(tick_type) = tick.layout.as_ordinary(tick.tick_type) else {
+                if self.unread_types.insert(format!("35=P {:?} field {}", tick.layout, tick.tick_type)) {
+                    log::debug!(
+                        "a quote record of the {:?} kind states field {}, which nothing here \
+                         reads",
+                        tick.layout, tick.tick_type,
+                    );
+                }
+                continue;
+            };
+
             let mts = context.market.min_tick_scaled(instrument);
             // A size is a count of what the venue said sizes move in for this
             // contract, the same way a price is a count of what prices move in.
@@ -1526,7 +1555,7 @@ impl FarmState {
             // A price too large to scale is refused above, leaving the quote
             // unchanged, so it does not mark the instrument notified either.
             let mut applied = true;
-            match tick.tick_type {
+            match tick_type {
                 // Opcode 18 is deliberately not read as a halt. It was named
                 // for one on no evidence, and the venue states a halt
                 // elsewhere — as a generic tick carrying a status mask. A
