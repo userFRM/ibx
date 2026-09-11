@@ -419,6 +419,17 @@ mod news_tests {
             );
         };
 
+        // The historical volatility, under each of the two numbers the series
+        // answers to. A caller who named the second was acknowledged and then
+        // handed nothing, for the life of the subscription.
+        serve(&mut farm, 28, 104, &0.1725f64.to_be_bytes(), &mut context);
+        assert_eq!(said(&shared), [(23, "generic 0.1725".to_string())]);
+        serve(&mut farm, 29, 512, &0.1725f64.to_be_bytes(), &mut context);
+        assert_eq!(
+            said(&shared), [(23, "generic 0.1725".to_string())],
+            "the same series, on the number a caller is likelier to have named",
+        );
+
         // The premium of an index over the future written on it.
         serve(&mut farm, 30, 162, &2.75f64.to_be_bytes(), &mut context);
         assert_eq!(said(&shared), [(31, "generic 2.75".to_string())]);

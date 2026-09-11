@@ -243,7 +243,15 @@ fn deliver_series(
         // Volatility, historical and implied. The venue states a figure it
         // does not hold as the largest a double carries, which is not a
         // volatility of nearly two hundred undecillion — it is silence.
-        104 => {
+        //
+        // The historical one answers to two numbers, and the one a caller is
+        // likelier to have read somewhere is the second of them. The protocol
+        // registers this series under both and resolves either to the same
+        // subscription, which is why the reading is the same: one double, on
+        // the number the series has always been delivered under. Read under
+        // one number only, a caller who named the other was acknowledged and
+        // then handed nothing for the life of the subscription.
+        104 | 512 => {
             let Some(vol) = series_f64(payload, 0) else { return true };
             say(23, SeriesValue::Generic(vol));
         }

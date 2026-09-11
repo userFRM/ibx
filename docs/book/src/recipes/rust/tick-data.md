@@ -32,33 +32,43 @@ beside the prices. The number you state is the number the venue knows the series
 by, so there is nothing to translate. `"292"` additionally subscribes to news for
 that contract; an entry that is not a number is reported rather than sent.
 
-These are read and delivered today, each under the number the reference client
-publishes it under:
+Every number the protocol will accept in that list is read here, and each
+arrives under the number the reference client publishes it under:
 
 | you ask for | you receive |
 |---|---|
 | `100` | call and put option volume, on `tick_size` 29 and 30 |
 | `101` | call and put open interest, on `tick_size` 27 and 28 |
-| `104` | historical volatility, on `tick_generic` 23 |
-| `106` | option implied volatility, on `tick_generic` 24 |
-| `236` | shortability on `tick_generic` 46, and the borrowable share count on `tick_size` 89 |
-| `292` | news, on `tick_news` |
+| `104` `512` | historical volatility, on `tick_generic` 23 |
 | `105` | average option volume, the two sides added, on `tick_size` 87 |
-| `225` | auction volume and imbalance on `tick_size` 34 and 36, auction price on `tick_price` 35 |
+| `106` | option implied volatility, on `tick_generic` 24 |
+| `162` | the premium of an index over the future written on it, on `tick_generic` 31 |
+| `165` | the day's volume and the 13, 26 and 52-week extremes, on `tick_size` 21 and `tick_price` 15 to 20 |
+| `220` | the mark the venue keeps, on `tick_price` 78 |
+| `221` `232` | the mark, on `tick_price` 37 |
+| `225` | auction volume and imbalance on `tick_size` 34 and 36, auction price on `tick_price` 35, the regulatory imbalance on `tick_size` 61 |
 | `233` | the trade tape, on `tick_string` 48: `price;size;time;volume;vwap;single` |
+| `236` | shortability on `tick_generic` 46, and the borrowable share count on `tick_size` 89 |
 | `258` | company ratios, on `tick_string` 47 |
+| `292` | news, on `tick_news` |
 | `293` `294` `295` | trade count, trade rate and volume rate, on `tick_generic` 54, 55 and 56 |
 | `318` | last regular-session trade, on `tick_price` 57 |
+| `375` | the trade-report tape, on `tick_string` 77 |
 | `411` | real-time historical volatility, on `tick_generic` 58 |
+| `456` | what the contract pays out, on `tick_string` 59 |
 | `460` | bond factor multiplier, on `tick_generic` 60 |
 | `499` | borrow fee rate, on `tick_price` 111 |
+| `577` `623` | an ETF's net asset value, last and frozen, on `tick_price` 96 and 97 |
 | `586` | the estimated IPO midpoint on `tick_generic` 101, and what it opened at on 102 |
 | `588` | futures open interest, on `tick_size` 86 |
+| `595` | the 3, 5 and 10-minute volumes, on `tick_size` 63, 64 and 65 |
+| `614` | an ETF's net asset value high and low, on `tick_price` 98 and 99 |
+| `619` | the slow mark, on `tick_price` 79 |
+| `787` | the odd lot: both prices on `tick_price` 105 and 106, their sizes on `tick_size` 107 and 108, where each is quoted on `tick_string` 109 and 110 |
 
-Any other number is still requested and the venue still serves it, but nothing
-here decodes that payload yet, so no tick arrives for it. Those are stepped over
-rather than guessed at, which is why the prices and the series beside them keep
-arriving normally. The rest land series by series.
+Numbers outside that set exist, and the protocol will not take them: the series
+they name are the terminal's own, and stating one is refused rather than served.
+An entry that is not a number is reported rather than sent.
 
 One subscription per contract. To change the mode on a contract, cancel first.
 
