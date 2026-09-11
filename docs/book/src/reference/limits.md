@@ -200,6 +200,22 @@ None is silently dropped, and that is checked rather than claimed:
 `python scripts/gen_order_field_reach.py` recounts all four figures from the
 order builders and exits non-zero if any field becomes settable and unread.
 
+## An account summary is this session's account, whatever group is named
+
+`reqAccountSummary` takes a group. The venue selects which accounts a summary
+covers from that group and from the model code beside it, and answers with the
+rows it picked. This client does neither: it filters the account stream it is
+already receiving for the tags the caller asked for, and the group and the
+model are taken and not applied.
+
+For a login holding one account and no model that is the same answer, which is
+the case this was written and measured against. For an advisor login where a
+group names accounts beyond the one this session holds, it is not: the summary
+covers the session's account rather than the group's members.
+
+The rows themselves are encoded the same way either way. What differs is which
+accounts they are for.
+
 ## Executions and fills are the day's, not the account's
 
 `fills()`, `executions()` and `reqExecutions()` answer with the executions this
