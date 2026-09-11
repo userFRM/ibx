@@ -1269,11 +1269,6 @@ STUB_METHODS: set[str] = {
 STUB_CALLBACKS = {
     "delta_neutral_validation",
     "order_bound",
-    # A tick-by-tick subscription is asked for by name and the venue names
-    # three: all-last, last, and bid-ask. There is no name for a midpoint
-    # stream to ask under, and a midpoint record arriving anyway is recorded as
-    # a frame nothing reads — so the callback exists and nothing reaches it.
-    "tick_by_tick_mid_point",
 }
 
 

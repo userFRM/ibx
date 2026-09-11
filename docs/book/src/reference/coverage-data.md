@@ -23,7 +23,7 @@ that did not run.
 | | IB API | Rust | Python |
 |---|:---:|:---:|:---:|
 | **EClient methods** | 78 | 77 impl, 1 stub | 77 impl, 1 stub |
-| **EWrapper callbacks** | 85 | 79 impl, 3 stub | 79 impl, 3 stub |
+| **EWrapper callbacks** | 85 | 80 impl, 2 stub | 80 impl, 2 stub |
 
 ## EClient Methods
 
@@ -165,7 +165,7 @@ that did not run.
 |  | `mkt_depth_exchanges` | Y | Y |
 | Tick-by-Tick | `tick_by_tick_all_last` | Y | Y |
 |  | `tick_by_tick_bid_ask` | Y | Y |
-|  | `tick_by_tick_mid_point` | STUB | STUB |
+|  | `tick_by_tick_mid_point` | Y | Y |
 | Scanner | `scanner_data` | Y | Y |
 |  | `scanner_data_end` | Y | Y |
 |  | `scanner_parameters` | Y | Y |

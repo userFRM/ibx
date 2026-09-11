@@ -1454,7 +1454,7 @@ impl HmdsState {
     }
 
     fn handle_tbt_data(&mut self, msg: &[u8], shared: &SharedState, event_tx: &Option<EventSink>) {
-        use crate::protocol::tbt_stream::{self, TbtKind, TbtRecord};
+        use crate::protocol::tbt_stream::{self, TbtRecord};
 
         let body = match find_body_after_tag(msg, b"35=E\x01") {
             Some(b) => b,
@@ -1517,10 +1517,7 @@ impl HmdsState {
             let caller_req_id = self.tbt_subscriptions[at].caller_req_id;
             // The layout of a record is the layout of the stream it arrived on,
             // which is a property of the subscription and not of the contract.
-            let kind = match self.tbt_subscriptions[at].kind {
-                TbtType::BidAsk => TbtKind::BidAsk,
-                _ => TbtKind::AllLast,
-            };
+            let kind = frame_kind(self.tbt_subscriptions[at].kind);
 
             // A move is stated in whole increments of the contract's own smallest
             // one, so without that increment a move cannot be turned into a price.
@@ -1589,12 +1586,16 @@ impl HmdsState {
                         shared.market.push_tbt_quote(quote);
                         emit(event_tx, Event::TbtQuote(quote));
                     }
-                    // A midpoint has no place on either of the two shapes a caller
-                    // reads, so no record is synthesised. Recorded as unread:
-                    // nothing here subscribes to this stream.
-                    TbtRecord::MidPoint { .. } => shared
-                        .market
-                        .note_unread_wire("tbt-frame", "MidPoint record".to_string()),
+                    TbtRecord::MidPoint { ticks } => {
+                        let mid = crate::types::TbtMid {
+                            instrument,
+                            req_id: caller_req_id,
+                            price: ticks.saturating_mul(mts),
+                            timestamp: stamped.seconds,
+                        };
+                        shared.market.push_tbt_mid(mid);
+                        emit(event_tx, Event::TbtMid(mid));
+                    }
                 }
             }
         }
@@ -1702,6 +1703,7 @@ fn build_tbt_query(
         match tbt_type {
             TbtType::AllLast | TbtType::Last => "AllLast",
             TbtType::BidAsk => "BidAsk",
+            TbtType::MidPoint => "MidPoint",
         }
     }
 
@@ -3073,5 +3075,23 @@ fn states(stated: &str, qid: &str) -> bool {
         Some("") => true,
         Some(rest) => !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'),
         None => false,
+    }
+}
+
+/// The shape a stream's records are written in, from the kind it was asked
+/// for under.
+///
+/// A stream's layout belongs to the subscription, not to the contract: the
+/// same contract can carry trades, quotes and the point between them at once,
+/// and a record read under the wrong one is decoded field by field into
+/// something nobody sent. `Last` and `AllLast` share a layout and are told
+/// apart inside it.
+pub(crate) fn frame_kind(asked_for: crate::types::TbtType) -> crate::protocol::tbt_stream::TbtKind {
+    use crate::protocol::tbt_stream::TbtKind;
+    use crate::types::TbtType;
+    match asked_for {
+        TbtType::BidAsk => TbtKind::BidAsk,
+        TbtType::MidPoint => TbtKind::MidPoint,
+        TbtType::AllLast | TbtType::Last => TbtKind::AllLast,
     }
 }

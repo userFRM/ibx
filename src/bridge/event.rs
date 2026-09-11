@@ -70,6 +70,8 @@ pub enum Event {
     TbtTrade(TbtTrade),
     /// Tick-by-tick bid/ask quote.
     TbtQuote(TbtQuote),
+    /// The point between the two moved.
+    TbtMid(TbtMid),
     /// What-if order response (margin/commission preview).
     WhatIf(WhatIfResponse),
     /// Real-time news headline.

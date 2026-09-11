@@ -420,6 +420,8 @@ pub enum TbtType {
     Last,
     /// Bid/ask quote ticks (BidAsk).
     BidAsk,
+    /// The point between the two, each time it moves.
+    MidPoint,
 }
 
 impl TbtType {
@@ -433,9 +435,23 @@ impl TbtType {
             "AllLast" => Ok(Self::AllLast),
             "Last" => Ok(Self::Last),
             "BidAsk" => Ok(Self::BidAsk),
+            "MidPoint" => Ok(Self::MidPoint),
             other => Err(format!("no such kind of tick: {other}")),
         }
     }
+}
+
+/// One reading of the point between the bid and the ask.
+#[derive(Debug, Clone, Copy)]
+pub struct TbtMid {
+    /// The contract.
+    pub instrument: InstrumentId,
+    /// The request this arrived under, as the caller numbered it.
+    pub req_id: i64,
+    /// The point between the two.
+    pub price: Price,
+    /// When, in seconds since the epoch, as the venue states it.
+    pub timestamp: u64,
 }
 
 /// A single tick-by-tick trade (AllLast) from 35=E.

@@ -64,6 +64,8 @@ pub struct MarketDataState {
     released_slots: Mutex<Vec<crate::types::InstrumentId>>,
     tbt_trades: Mutex<Vec<TbtTrade>>,
     tbt_quotes: Mutex<Vec<TbtQuote>>,
+    /// The point between the two, each time it moved.
+    tbt_mids: Mutex<Vec<TbtMid>>,
     real_time_bars: Mutex<Vec<(u32, RealTimeBar)>>,
     depth_updates: Mutex<Vec<DepthUpdate>>,
     /// Books that were dropped for running away unread, and have not been
@@ -152,6 +154,7 @@ impl MarketDataState {
             released_slots: Mutex::new(Vec::new()),
             tbt_trades: Mutex::new(Vec::with_capacity(256)),
             tbt_quotes: Mutex::new(Vec::with_capacity(256)),
+            tbt_mids: Mutex::new(Vec::with_capacity(256)),
             real_time_bars: Mutex::new(Vec::with_capacity(64)),
             depth_updates: Mutex::new(Vec::with_capacity(64)),
             depth_dropped: Mutex::new(std::collections::HashSet::new()),
@@ -274,6 +277,11 @@ impl MarketDataState {
     /// Take every tbt quotes waiting, leaving none.
     pub fn drain_tbt_quotes(&self) -> Vec<TbtQuote> {
         self.tbt_quotes.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take every midpoint waiting, leaving none.
+    pub fn drain_tbt_mids(&self) -> Vec<TbtMid> {
+        self.tbt_mids.lock().unwrap().drain(..).collect()
     }
 
     /// Take every real time bars waiting, leaving none.
@@ -519,6 +527,10 @@ impl MarketDataState {
 
     #[doc(hidden)] pub fn push_tbt_quote(&self, quote: TbtQuote) {
         push_bounded(&self.tbt_quotes, quote, STREAM_BACKLOG_LIMIT, "tbt_quotes");
+    }
+
+    #[doc(hidden)] pub fn push_tbt_mid(&self, mid: TbtMid) {
+        push_bounded(&self.tbt_mids, mid, STREAM_BACKLOG_LIMIT, "tbt_mids");
     }
 
 
@@ -1123,4 +1135,18 @@ mod venue_clock_tests {
             "the clock ran on though the venue stated nothing further",
         );
     }
+    /// The point between the two goes in and comes out, like every other
+    /// stream beside it.
+    #[test]
+    fn a_midpoint_pushed_is_a_midpoint_drained() {
+        let market = MarketDataState::new();
+        market.push_tbt_mid(crate::types::TbtMid {
+            instrument: 0, req_id: 7, price: 150_250_000_000, timestamp: 1,
+        });
+        let out = market.drain_tbt_mids();
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].req_id, 7);
+        assert!(market.drain_tbt_mids().is_empty(), "and only once");
+    }
+
 }

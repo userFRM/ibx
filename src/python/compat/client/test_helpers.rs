@@ -599,6 +599,19 @@ impl EClient {
         Ok(())
     }
 
+    /// Push one reading of the point between the two into SharedState.
+    #[doc(hidden)]
+    fn _test_push_tbt_mid(&self, instrument: u32, price: f64) -> PyResult<()> {
+        let shared = self.shared_state()?;
+        shared.market.push_tbt_mid(crate::types::TbtMid {
+            req_id: instrument as i64,
+            instrument,
+            price: (price * PRICE_SCALE as f64) as i64,
+            timestamp: a_recent_second(),
+        });
+        Ok(())
+    }
+
     /// Push a level of a book into SharedState.
     ///
     /// A book is the one stream whose delivery to a caller was never checked

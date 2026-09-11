@@ -197,8 +197,10 @@ pub enum TbtRecord {
     Quote(TbtQuoteRecord),
     /// Changes to the midpoint.
     MidPoint {
-        /// The midpoint now.
-        price: f64,
+        /// The midpoint now, counted in the contract's own smallest step —
+        /// the same form the two shapes beside it state their prices in, so
+        /// one scale turns any of them into money.
+        ticks: i64,
     },
 }
 
@@ -404,9 +406,7 @@ fn read_record(
             // Two fields: the move, and a flag word. No size, no venue, no text.
             let _flags = bits.unsigned()?;
             running.mid_ticks = mid_ticks;
-            Some(TbtRecord::MidPoint {
-                price: mid_ticks as f64 * min_tick,
-            })
+            Some(TbtRecord::MidPoint { ticks: mid_ticks })
         }
     }
 }

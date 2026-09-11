@@ -75,6 +75,10 @@ class RecordingWrapper(EWrapper):
         _a_moment(time, "tick_by_tick_bid_ask")
         self.events.append(("tick_by_tick_bid_ask", req_id, bid_price, ask_price, bid_size, ask_size))
 
+    def tick_by_tick_mid_point(self, req_id, time, mid_point):
+        _a_moment(time, "tick_by_tick_mid_point")
+        self.events.append(("tick_by_tick_mid_point", req_id, time, mid_point))
+
     def update_account_value(self, key, value, currency, account_name):
         self.events.append(("update_account_value", key, value, currency, account_name))
 
@@ -800,6 +804,22 @@ class TestTbtDispatch:
         assert abs(events[0][3] - 150.50) < 0.01  # ask
         assert events[0][4] == 100.0               # bid_size
         assert events[0][5] == 200.0               # ask_size
+
+    def test_tbt_mid_point(self):
+        """The point between the two is a stream of its own, asked for by name.
+
+        It arrived and was recorded as a frame nothing reads, so a caller who
+        asked for it was told nothing at all.
+        """
+        w, c = make_test_client()
+        c._test_set_instrument_count(1)
+        c._test_map_instrument(1, 0)
+        c._test_push_tbt_mid(0, price=150.25)
+        c._test_dispatch_once()
+
+        events = [e for e in w.events if e[0] == "tick_by_tick_mid_point"]
+        assert len(events) == 1, w.events
+        assert abs(events[0][3] - 150.25) < 0.01
 
 
 class TestHistoricalDispatch:

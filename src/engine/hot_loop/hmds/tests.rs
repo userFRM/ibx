@@ -2652,3 +2652,19 @@ fn a_refused_tick_stream_is_matched_the_way_every_other_refusal_is() {
         "the refusal named this stream and was read as naming none",
     );
 }
+
+/// A stream's records are read in the shape the stream was asked for.
+///
+/// The same contract can carry trades, quotes and the point between them at
+/// once, and a record read under the wrong shape is decoded field by field
+/// into something nobody sent — a midpoint read as a trade states a size and
+/// a venue the venue never wrote.
+#[test]
+fn a_stream_is_read_in_the_shape_it_was_asked_for() {
+    use crate::protocol::tbt_stream::TbtKind;
+    use crate::types::TbtType;
+    assert_eq!(super::frame_kind(TbtType::MidPoint), TbtKind::MidPoint);
+    assert_eq!(super::frame_kind(TbtType::BidAsk), TbtKind::BidAsk);
+    assert_eq!(super::frame_kind(TbtType::Last), TbtKind::AllLast);
+    assert_eq!(super::frame_kind(TbtType::AllLast), TbtKind::AllLast);
+}

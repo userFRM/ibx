@@ -875,6 +875,12 @@ impl EClient {
                  quote.ask_size as f64 / crate::types::QTY_SCALE as f64, &attrib_obj));
         }
 
+        // The point between the two, each time it moved.
+        for mid in shared.market.drain_tbt_mids() {
+            call_wrapper!(self, py, shared, "tick_by_tick_mid_point",
+                (mid.req_id, mid.timestamp as i64, mid.price as f64 / PRICE_SCALE_F));
+        }
+
         // The refusal queue, before the book levels below. A reset (317) is
         // queued and then the venue's first new levels land; levels drained
         // first, a pass that ran after both had arrived delivered the new book

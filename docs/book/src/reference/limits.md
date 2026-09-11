@@ -9,14 +9,13 @@ before writing against it.
 
 ## Callbacks nothing fires
 
-Three callbacks exist so a program written against the reference client compiles
-and runs. No message reaches any of them.
+Two callbacks exist so a program written against the reference client compiles
+and runs. No message reaches either of them.
 
 | Callback | Why |
 | --- | --- |
 | `order_bound` | It follows asking for the open orders. The reference architecture partitions an account's orders by the client that placed them and, on being asked, claims the unowned ones for client nought — the venue's answer to that claim is what this carries. There is no such partition here: every session is told about every order on the account, so there is nothing to claim, and claiming it would change who owns an order at the venue to no end |
 | `delta_neutral_validation` | Nothing on this client's connections produces it |
-| `tick_by_tick_mid_point` | A tick-by-tick stream is asked for by name and the venue names three: all-last, last and bid-ask. There is no name for a midpoint stream to ask under, and a midpoint record arriving anyway is kept as a frame nothing reads |
 
 Every other call in the reference client's surface is served on both languages.
 The call-by-call matrix is [generated from the source](./coverage.md).
