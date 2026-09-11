@@ -55,7 +55,12 @@ from. Which venues answer is the account's entitlement, not this client's:
   with. It does not error.
 
 Check what came back rather than assuming a subscription that was accepted is a
-subscription that will deliver.
+subscription that will deliver. Measured on one account with the market open:
+a share on ARCA, a share on ISLAND and a future on CME are each refused by
+name, while `EUR.USD`, `GBP.USD` and `USD.JPY` on `IDEALPRO` all deliver, and
+a twenty-level book delivers as readily as a five-level one. Smart depth on a
+currency produces nothing, which is the venue saying a currency has one venue
+and nothing to aggregate.
 
 ## A broad lookup takes longer than one contract
 

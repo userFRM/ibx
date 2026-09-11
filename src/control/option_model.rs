@@ -147,6 +147,135 @@ pub fn price(terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividend
     value[0].is_finite().then_some(value[0])
 }
 
+/// What an option is worth, and what its worth is doing.
+///
+/// The venue publishes one of these per option, struck against the price it
+/// considers the option's. It does not publish the three struck against the
+/// bid, the ask and the last trade — the protocol's own terminal works those
+/// out, and a caller of the reference client is handed all four.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Greeks {
+    /// What the model says the option is worth.
+    pub price: f64,
+    /// How much it moves with the underlying.
+    pub delta: f64,
+    /// How much the delta moves with it.
+    pub gamma: f64,
+    /// What one percentage point of volatility is worth, which is the unit
+    /// this is reported in rather than a whole unit of volatility.
+    pub vega: f64,
+    /// What one calendar day costs.
+    pub theta: f64,
+}
+
+/// The tree, kept far enough back from the root to differentiate on.
+///
+/// The root alone gives a price and nothing else. Delta is the spread across
+/// the two nodes one step in, gamma the spread of that spread across the three
+/// nodes two steps in, and theta what two steps of time cost — so the walk
+/// stops at step two and hands those five values back.
+fn tree_near_the_root(
+    terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividends: f64,
+) -> Option<([f64; 3], f64, f64, f64)> {
+    if !(spot.is_finite() && volatility.is_finite() && rate.is_finite() && dividends.is_finite()) {
+        return None;
+    }
+    if terms.years_to_expiry <= 0.0 || volatility <= 0.0 || terms.strike <= 0.0 {
+        return None;
+    }
+    let adjusted = spot - dividends;
+    if adjusted <= 0.0 {
+        return None;
+    }
+    let dt = terms.years_to_expiry / STEPS as f64;
+    let up = (volatility * dt.sqrt()).exp();
+    let down = 1.0 / up;
+    let growth = if terms.on_a_future { 1.0 } else { (rate * dt).exp() };
+    if !(up.is_finite() && growth.is_finite()) || (up - down).abs() < f64::EPSILON {
+        return None;
+    }
+    let up_chance = (growth - down) / (up - down);
+    if !(0.0..=1.0).contains(&up_chance) {
+        return None;
+    }
+    let discount = (-rate * dt).exp();
+    let mut value = Vec::with_capacity(STEPS + 1);
+    for i in 0..=STEPS {
+        let underlying = adjusted * up.powi(i as i32) * down.powi((STEPS - i) as i32);
+        value.push(exercise_value(terms, underlying));
+    }
+    for step in (0..STEPS).rev() {
+        for i in 0..=step {
+            let held = discount * (up_chance * value[i + 1] + (1.0 - up_chance) * value[i]);
+            let underlying = adjusted * up.powi(i as i32) * down.powi((step - i) as i32);
+            value[i] = if terms.on_a_future {
+                held
+            } else {
+                held.max(exercise_value(terms, underlying))
+            };
+        }
+        // Two steps from the root is as far back as anything here needs.
+        if step == 2 {
+            let two = [value[0], value[1], value[2]];
+            // And one more step for the pair the delta spans, then the root.
+            let mut one = [0.0f64; 2];
+            for i in 0..=1usize {
+                let held = discount * (up_chance * value[i + 1] + (1.0 - up_chance) * value[i]);
+                let underlying = adjusted * up.powi(i as i32) * down.powi((1 - i) as i32);
+                one[i] = if terms.on_a_future {
+                    held
+                } else {
+                    held.max(exercise_value(terms, underlying))
+                };
+            }
+            let root = {
+                let held = discount * (up_chance * one[1] + (1.0 - up_chance) * one[0]);
+                if terms.on_a_future {
+                    held
+                } else {
+                    held.max(exercise_value(terms, adjusted))
+                }
+            };
+            return root.is_finite().then_some((two, one[0], one[1], root));
+        }
+    }
+    None
+}
+
+/// The model struck at one volatility, with what it is doing.
+///
+/// Taken off the same tree the price comes from rather than by moving the
+/// inputs and pricing again: the spread across the nodes one step in is the
+/// delta, the spread of that across the three two steps in is the gamma, and
+/// what two steps of time cost is the theta. Only vega is a second valuation,
+/// because volatility is not a direction the tree already branches in.
+pub fn greeks(
+    terms: OptionTerms, model: VenueModel, volatility: f64, underlying_price: f64,
+) -> Option<Greeks> {
+    let dividends = model.present_value_of_dividends;
+    let (two, one_down, one_up, root) =
+        tree_near_the_root(terms, underlying_price, volatility, model.rate, dividends)?;
+    let adjusted = underlying_price - dividends;
+    let dt = terms.years_to_expiry / STEPS as f64;
+    let up = (volatility * dt.sqrt()).exp();
+    let down = 1.0 / up;
+
+    let delta = (one_up - one_down) / (adjusted * (up - down));
+    let delta_up = (two[2] - two[1]) / (adjusted * (up * up - 1.0));
+    let delta_down = (two[1] - two[0]) / (adjusted * (1.0 - down * down));
+    let gamma = (delta_up - delta_down) / (0.5 * adjusted * (up * up - down * down));
+    let theta = (two[1] - root) / (2.0 * dt * 365.0);
+    // A percentage point of volatility, valued on the same tree.
+    let bumped = price(terms, underlying_price, volatility + 0.01, model.rate, dividends)?;
+    let vega = bumped - root;
+
+    let all = Greeks { price: root, delta, gamma, vega, theta };
+    [all.price, all.delta, all.gamma, all.vega, all.theta]
+        .iter()
+        .all(|v| v.is_finite())
+        .then_some(all)
+}
+
 fn exercise_value(terms: OptionTerms, underlying: f64) -> f64 {
     if terms.is_call {
         (underlying - terms.strike).max(0.0)
@@ -279,6 +408,83 @@ mod tests {
 
     fn call(strike: f64, years: f64) -> OptionTerms {
         OptionTerms { strike, years_to_expiry: years, is_call: true, on_a_future: false }
+    }
+
+    /// The greeks are the slopes of the price this same tree gives.
+    ///
+    /// Checked against the tree rather than against a table: a delta that is
+    /// not the slope of this model's own price is wrong however plausible it
+    /// looks, and the same reading catches a sign or a discount in any of the
+    /// four. The tolerances are a tree's, not a closed form's — a hundred and
+    /// more steps of a lattice do not agree with a derivative to twelve places.
+    #[test]
+    fn the_greeks_are_the_slopes_of_the_tree() {
+        let terms = OptionTerms {
+            strike: 100.0, years_to_expiry: 0.5, is_call: true, on_a_future: false,
+        };
+        let model = VenueModel {
+            volatility: 0.25, option_price: 0.0, underlying_price: 100.0,
+            present_value_of_dividends: 0.0, rate: 0.04,
+        };
+        let sigma = 0.25;
+        let all = greeks(terms, model, sigma, 100.0).expect("a tree this ordinary walks");
+
+        let priced = |s: f64| price(terms, s, sigma, model.rate, 0.0).unwrap();
+        assert!((all.price - priced(100.0)).abs() < 1e-9, "the price is the tree's");
+
+        // The bump has to clear the lattice's own node spacing, or the
+        // difference measures where the nodes fall rather than what the price
+        // does: at this volatility the nodes are about a point apart, and a
+        // second difference taken inside one came out forty times the gamma.
+        let bump = 4.0;
+        let slope = (priced(100.0 + bump) - priced(100.0 - bump)) / (2.0 * bump);
+        assert!((all.delta - slope).abs() < 1e-2, "delta {} against {slope}", all.delta);
+
+        let curve = (priced(100.0 + bump) - 2.0 * all.price + priced(100.0 - bump))
+            / (bump * bump);
+        assert!((all.gamma - curve).abs() < 5e-3, "gamma {} against {curve}", all.gamma);
+
+        // A percentage point of volatility, which is the unit this reports in.
+        let by_vol = price(terms, 100.0, sigma + 0.01, model.rate, 0.0).unwrap() - all.price;
+        assert!((all.vega - by_vol).abs() < 1e-9, "vega {}", all.vega);
+
+        // And one calendar day, which for a half-year call is a few cents.
+        assert!(all.theta < 0.0 && all.theta > -0.5, "theta {}", all.theta);
+        let shorter = OptionTerms { years_to_expiry: 0.5 - 1.0 / 365.0, ..terms };
+        let tomorrow = price(shorter, 100.0, sigma, model.rate, 0.0).unwrap();
+        assert!(
+            (all.theta - (tomorrow - all.price)).abs() < 5e-3,
+            "theta {} against a day of it {}", all.theta, tomorrow - all.price,
+        );
+    }
+
+    /// A put's greeks point the other way, and its gamma does not.
+    #[test]
+    fn a_put_carries_the_signs_a_put_carries() {
+        let terms = OptionTerms {
+            strike: 100.0, years_to_expiry: 0.4, is_call: false, on_a_future: false,
+        };
+        let model = VenueModel {
+            volatility: 0.3, option_price: 0.0, underlying_price: 100.0,
+            present_value_of_dividends: 0.0, rate: 0.03,
+        };
+        let all = greeks(terms, model, 0.3, 100.0).expect("walks");
+        assert!(all.delta < 0.0 && all.delta > -1.0, "a put falls as the underlying rises: {}", all.delta);
+        assert!(all.gamma > 0.0, "and curves the same way a call does: {}", all.gamma);
+        assert!(all.vega > 0.0, "and is worth more the wilder it is: {}", all.vega);
+    }
+
+    /// Nothing is stated for a contract the tree cannot walk.
+    #[test]
+    fn a_contract_the_tree_cannot_walk_states_no_greeks() {
+        let terms = OptionTerms {
+            strike: 100.0, years_to_expiry: 0.0, is_call: true, on_a_future: false,
+        };
+        let model = VenueModel {
+            volatility: 0.2, option_price: 0.0, underlying_price: 100.0,
+            present_value_of_dividends: 0.0, rate: 0.04,
+        };
+        assert_eq!(greeks(terms, model, 0.2, 100.0), None, "an option with no time left");
     }
 
     /// A call with no dividends and no rate is worth what the tree says, and
