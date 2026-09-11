@@ -849,6 +849,24 @@ impl EClient {
     pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper) {
         let _ = api_only;
         if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
+        // Asked of the venue, not only of this session. What finished while
+        // this program was watching is a fraction of what the account has
+        // done. The answer is a run of ordinary reports ending in a sentinel,
+        // so the wait is on that end rather than on a clock.
+        if self.control_tx.send(crate::types::ControlCommand::FetchCompletedOrders).is_ok() {
+            let until = std::time::Instant::now()
+                + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
+            while !self.shared.orders.take_completed_orders_end() {
+                if std::time::Instant::now() >= until {
+                    log::warn!(
+                        "the venue did not finish stating what it has finished; answering with \
+                         what arrived",
+                    );
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
         // Drained once and retained. The queue empties on read and the venue does
         // not resend completed orders, so later calls answer from this archive.
         {

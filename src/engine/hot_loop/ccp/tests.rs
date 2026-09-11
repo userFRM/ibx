@@ -2969,6 +2969,56 @@ fn ord_status_presubmitted_then_routed_advances_to_submitted() {
 // stays on the order snapshot, and nothing is queued for it — the
 // engine still holds the order at this point, so context still knows it
 // as Inactive/reactivatable while a Rejected order is retired below.
+/// What the venue has finished is filed as history, and moves nothing.
+///
+/// The answer to that question is a run of ordinary execution reports for
+/// orders this session never placed. Through the path a live report takes,
+/// each one is a fill, and a fill registers a contract, opens an order in the
+/// engine's book and moves a position. None of that may happen for an order
+/// that finished days ago.
+///
+/// The window is narrowed to what that path would otherwise have recovered,
+/// so a report for an order this session is working is never diverted by it.
+#[test]
+fn what_the_venue_has_finished_is_filed_rather_than_worked() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    ccp.completed_orders_open = true;
+
+    // An order this session never placed, finished, on a contract it has
+    // never seen.
+    let mut frame = exec_report_frame(&[
+        (39, "2"), (150, "F"), (32, "100"), (31, "150.00"), (14, "100"), (151, "0"),
+        (54, "1"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+        (40, "2"), (44, "150.00"), (1, "DU111111"),
+    ]);
+    frame.insert(11, "987654321".to_string());
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    assert!(
+        context.market.instrument_by_con_id(8314).is_none(),
+        "a finished order registers no contract",
+    );
+    assert!(
+        context.order(987_654_321).is_none(),
+        "and opens no order in the book a withdrawal walks",
+    );
+    let finished = shared.orders.drain_completed_orders();
+    assert_eq!(finished.len(), 1, "it is filed as finished: {finished:?}");
+    assert_eq!(finished[0].order_id, 987_654_321);
+    let info = shared.orders.get_order_info(987_654_321).expect("with what it was");
+    assert_eq!(info.contract.symbol, "IBM");
+    assert_eq!(info.order.action, "BUY");
+    assert_eq!(info.order.total_quantity, 100.0);
+
+    // And the sentinel says the venue has said everything.
+    assert!(!shared.orders.take_completed_orders_end(), "not yet");
+    let mut end = exec_report_frame(&[(39, "2"), (55, "*")]);
+    end.insert(11, "0".to_string());
+    ccp.handle_exec_report(&end, b"", &mut context, &shared, &None, "");
+    assert!(!ccp.completed_orders_open, "the window is shut");
+    assert!(shared.orders.take_completed_orders_end(), "and the caller is released");
+}
+
 /// The report that fills an order states its new status on the same
 /// report. Announcing the execution and withholding the status left a
 /// caller watching order status believing the order was still working,

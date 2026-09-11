@@ -213,10 +213,15 @@ already completed, which it never tracked and knows nothing else about.
 
 What is still absent is anything the venue does not restate. The wrapper this
 follows asks the venue for the account's executions, whoever made them and
-whenever; this protocol carries no such question. So an answer holds today's
-executions on this account, not its history. A program reconciling against more
-than a day needs another source for it, and an empty answer means the venue
-restated none and this session has seen none.
+whenever; this protocol carries no such question, and the filter's time is a
+test applied here rather than a question put to the venue. So an answer holds
+today's executions on this account, not its history. A program reconciling
+against more than a day needs another source for it, and an empty answer means
+the venue restated none and this session has seen none.
+
+`reqCompletedOrders` is not in that position. It asks the venue, which answers
+with what it has finished rather than with what this session watched finish,
+and the call waits for that answer before handing it back.
 
 ## 4,096 instruments at a time
 

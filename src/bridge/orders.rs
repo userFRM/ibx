@@ -64,6 +64,8 @@ pub struct OrderState {
     restated_executions: Mutex<Vec<(api::Contract, api::Execution)>>,
     what_if_responses: Mutex<Vec<WhatIfResponse>>,
     completed_orders: Mutex<Vec<CompletedOrder>>,
+    /// Whether the venue has said it has stated every finished order it holds.
+    completed_orders_ended: std::sync::atomic::AtomicBool,
     /// Orders the venue has taken back after reporting them finished.
     ///
     /// The completion queue empties on read, and what is read out of it is
@@ -161,6 +163,7 @@ impl OrderState {
             restated_executions: Mutex::new(Vec::new()),
             what_if_responses: Mutex::new(Vec::with_capacity(8)),
             completed_orders: Mutex::new(Vec::with_capacity(64)),
+            completed_orders_ended: std::sync::atomic::AtomicBool::new(false),
             order_corrections: Mutex::new(Vec::new()),
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
@@ -239,6 +242,20 @@ impl OrderState {
     }
 
     /// Take every completed orders waiting, leaving none.
+    /// Say that the venue has finished stating what it has finished.
+    ///
+    /// A caller asking for those waits on this rather than on a clock: the
+    /// answer is a run of ordinary reports and its end is the only thing that
+    /// says the run is over.
+    #[doc(hidden)] pub fn note_completed_orders_end(&self) {
+        self.completed_orders_ended.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether that end has been said, taking it if so.
+    pub fn take_completed_orders_end(&self) -> bool {
+        self.completed_orders_ended.swap(false, std::sync::atomic::Ordering::AcqRel)
+    }
+
     pub fn drain_completed_orders(&self) -> Vec<CompletedOrder> {
         self.completed_orders.lock().unwrap().drain(..).collect()
     }

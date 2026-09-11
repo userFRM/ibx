@@ -608,6 +608,79 @@ impl CcpState {
         None
     }
 
+    /// One order the venue has finished, filed for a caller that asked.
+    ///
+    /// Built from the report and nothing else: no slot is registered, no order
+    /// is put in the engine's book and no position moves. What the venue is
+    /// telling us is what it did, not what it is doing, and the two are read
+    /// from the same message — so the difference has to be made here.
+    ///
+    /// Every event in an order's life arrives as its own report, so the same
+    /// order arrives several times. The last one wins, which is the one
+    /// carrying its final state.
+    fn file_finished_order(
+        &mut self,
+        parsed: &std::collections::HashMap<u32, String>,
+        clord_id: u64,
+        status: crate::types::OrderStatus,
+        shared: &SharedState,
+    ) {
+        let con_id: i64 = parsed.get(&6008).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let side = match parsed.get(&54).map(String::as_str) {
+            Some("2") => "SELL",
+            Some("5") => "SSHORT",
+            _ => "BUY",
+        };
+        let qty = parse_qty_tag(parsed.get(&38)).unwrap_or(0);
+        // What it filled, off the cumulative figure the report carries.
+        let filled = parse_qty_tag(parsed.get(&14)).unwrap_or(0);
+        let contract = api::Contract {
+            con_id,
+            symbol: parsed.get(&55).cloned().unwrap_or_default(),
+            sec_type: parsed.get(&167).cloned().unwrap_or_default(),
+            currency: parsed.get(&15).cloned().unwrap_or_default(),
+            exchange: parsed.get(&100).cloned().unwrap_or_default(),
+            local_symbol: parsed.get(&6035).cloned().unwrap_or_default(),
+            last_trade_date_or_contract_month: parsed.get(&541)
+                .or_else(|| parsed.get(&200))
+                .cloned()
+                .unwrap_or_default(),
+            strike: parsed.get(&202).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+            right: parsed.get(&201).cloned().unwrap_or_default(),
+            ..Default::default()
+        };
+        let order = api::Order {
+            // The venue's own number for the order where it states one, and
+            // the number it is known by here either way.
+            order_id: parsed.get(&6121).and_then(|s| s.parse().ok()).unwrap_or(clord_id as i64),
+            client_id: parsed.get(&6119).and_then(|s| s.parse().ok()).unwrap_or(0),
+            perm_id: clord_id as i64,
+            action: side.to_string(),
+            total_quantity: qty_to_f64(qty),
+            filled_quantity: qty_to_f64(filled),
+            order_type: parsed.get(&40).cloned().unwrap_or_default(),
+            lmt_price: parsed.get(&44).and_then(|s| s.parse().ok()).unwrap_or(f64::MAX),
+            aux_price: parsed.get(&99).and_then(|s| s.parse().ok()).unwrap_or(f64::MAX),
+            account: parsed.get(&1).cloned().unwrap_or_default(),
+            model_code: parsed.get(&6700).cloned().unwrap_or_default(),
+            ..Default::default()
+        };
+        let order_state = api::OrderState {
+            status: crate::types::order_status::order_status_str(status).to_string(),
+            ..Default::default()
+        };
+        shared.orders.push_order_info(clord_id, crate::bridge::RichOrderInfo {
+            contract, order, order_state, last_exec: Default::default(),
+        });
+        shared.orders.push_completed_order(crate::types::CompletedOrder {
+            order_id: clord_id,
+            instrument: 0,
+            status,
+            filled_qty: filled,
+            timestamp_ns: 0,
+        });
+    }
+
     /// Build an order this session never saw from the venue's account of it.
     ///
     /// At session start the venue replays what it holds as ordinary
@@ -939,6 +1012,26 @@ impl CcpState {
             }).unwrap_or(0)
         });
 
+        // A report that arrived because a caller asked what the venue has
+        // finished. Every event in such an order's life arrives as its own
+        // ordinary report, so through the path below each one is a fill: it
+        // registers the contract, opens the order in the book a withdrawal
+        // walks, and moves a position. None of that may happen for an order
+        // that finished days ago.
+        //
+        // Filed as history instead and gone no further. Narrowed to an order
+        // this session does not hold rather than to everything arriving in the
+        // window, so a report on an order this session is working takes its
+        // ordinary path whatever else is in flight beside it. The sentinel is
+        // let through, because closing the window is its job.
+        if self.completed_orders_open && clord_id != 0 && context.order(clord_id).is_none() {
+            let finished = status_of(
+                parsed.get(&39).map(String::as_str).unwrap_or(""), clord_id, parsed,
+            );
+            self.file_finished_order(parsed, clord_id, finished, shared);
+            return;
+        }
+
         // Recovery insert: a 35=8 with exec type New (150=0) for an order
         // that is NOT in this session's context is a cross-session recovery entry
         // pushed by CCP on session establishment. Insert into context.open_orders
@@ -1045,6 +1138,14 @@ impl CcpState {
         if clord_id == 0 {
             log::debug!("ExecReport: dropping sentinel record (ClOrdID=0/*) sym={:?} status={:?}",
                 parsed.get(&55), parsed.get(&39));
+            // The same sentinel ends the answer to what the venue has
+            // finished. A caller waiting on that waits on this: the answer is
+            // a run of ordinary reports and nothing else says it is over.
+            if self.completed_orders_open {
+                self.completed_orders_open = false;
+                shared.orders.note_completed_orders_end();
+                log::info!("The venue has stated everything it has finished");
+            }
             // Everything already working has now been named. The same record
             // shape also carries a mass-status echo that arrives before any
             // order, so this only counts once at least one has come through —

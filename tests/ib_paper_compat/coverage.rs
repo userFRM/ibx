@@ -97,6 +97,13 @@ const KNOWN_CONTROL_COMMAND_GAPS: &[(&str, &str)] = &[
         "No phase asks for an option chain",
     ),
     (
+        "FetchCompletedOrders",
+        "Answered by a run of ordinary execution reports for orders placed before this \
+         session, ending in the same sentinel the opening replay ends with. A phase \
+         places and finishes its own orders within one session, so the window it opens \
+         has nothing in it that the phase itself did not already watch finish",
+    ),
+    (
         "FetchMktDepthExchanges",
         "Exchange list is cached once from the 6040=102 init burst into a per-session \
          SharedState, consumed before any phase's hot loop runs — not re-requestable, \

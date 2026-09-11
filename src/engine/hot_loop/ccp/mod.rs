@@ -447,6 +447,14 @@ pub(crate) struct CcpState {
     /// which one is given up on. Recorded only for a request that actually went
     /// out, and expired so a stale head cannot absorb a later reply.
     pub(crate) pending_matching_symbols: Vec<(u32, Instant)>,
+    /// Whether the venue is in the middle of stating what it has finished.
+    ///
+    /// The answer to that question is a run of ordinary execution reports for
+    /// orders this session never placed, ending with the sentinel that ends
+    /// the opening replay. Inside the window they are filed as history; the
+    /// live path never sees them, because through it a report that states a
+    /// fill is a fill and a fill moves a position.
+    pub(crate) completed_orders_open: bool,
     /// In-flight option chain requests: (req_id, symbol, underlying conId,
     /// deadline). The request states no id of its own, so the symbol is what
     /// ties a reply back to it, and the conId is held because the callback
@@ -580,6 +588,7 @@ impl CcpState {
             hydrated_any: false,
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
+            completed_orders_open: false,
             pending_option_params: Vec::new(),
             pending_schedule_pair: Vec::new(),
             pnl_subscriptions: Vec::new(),
@@ -2605,6 +2614,54 @@ impl CcpState {
         // No separate server request needed — just signal the shared state to deliver
         // cached data.
         shared.reference.notify_depth_exchanges();
+    }
+
+    /// Ask the venue for the orders it has finished.
+    ///
+    /// The same message the session opens with — the mass status request,
+    /// which asks for everything still working — with the mode that asks for
+    /// what is done instead, and the window it covers. There is no request of
+    /// its own for this: one tag turns the one already being sent into it.
+    ///
+    /// What comes back is not a document. It is a run of ordinary execution
+    /// reports, one per event in each order's life, ending with the sentinel
+    /// that ends the opening replay. So the window between the ask and that
+    /// sentinel is the whole mechanism, and it is held here.
+    pub(crate) fn send_completed_orders_request(
+        &mut self,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+        shared: &SharedState,
+    ) {
+        let Some(conn) = ccp_conn.as_mut() else {
+            shared.orders.note_completed_orders_end();
+            return;
+        };
+        let ts = chrono_free_timestamp();
+        // The day the venue keeps, stated as it states every other time. Its
+        // own cutoff decides what falls inside, so the window runs from the
+        // start of yesterday to the start of tomorrow: that covers the day
+        // whichever side of the cutoff this session is on.
+        let from = crate::protocol::datetime::midnight_days_away(-1);
+        let to = crate::protocol::datetime::midnight_days_away(1);
+        let (from, to) = (from.to_string(), to.to_string());
+        let sent = conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "H"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (11, "*"), (55, "*"), (54, "*"),
+            (6533, "1"), (6536, &from), (6537, &to),
+        ]);
+        match sent {
+            Ok(()) => {
+                hb.last_ccp_sent = Instant::now();
+                self.completed_orders_open = true;
+                log::info!("Asked the venue for what it has finished, {from} to {to}");
+            }
+            Err(e) => {
+                log::warn!("the request for finished orders could not be sent: {e}");
+                shared.orders.note_completed_orders_end();
+            }
+        }
     }
 
     /// The exchange directory the session opens with, as the rows a caller

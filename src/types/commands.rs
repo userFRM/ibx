@@ -378,6 +378,13 @@ pub enum ControlCommand {
     },
     /// Request available exchanges for market depth.
     FetchMktDepthExchanges,
+    /// Ask the venue for the orders it has finished, rather than answering
+    /// from what this session watched finish.
+    ///
+    /// The venue states them as ordinary execution reports, ending with the
+    /// same sentinel the opening replay ends with, so what this carries is the
+    /// window they are read in rather than any payload of its own.
+    FetchCompletedOrders,
     /// Request scanner parameter XML via historical data connection.
     FetchScannerParams,
     /// Subscribe to a scanner scan via historical data connection.

@@ -990,7 +990,34 @@ impl EClient {
     #[pyo3(signature = (api_only=false))]
     fn req_completed_orders(&self, py: Python<'_>, api_only: bool) -> PyResult<()> {
         let _ = api_only;
-        let Some(_tx) = self.tx_or_report(-1)? else { return Ok(()) };
+        let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
+        // Asked of the venue, not only of this session. What finished while
+        // this program was watching is a fraction of what the account has
+        // done, and the rest is one request away. The answer is a run of
+        // ordinary reports ending in a sentinel, so the wait below is on that
+        // end rather than on a clock.
+        let asked = tx.send(crate::types::ControlCommand::FetchCompletedOrders).is_ok();
+        if asked {
+            let until = std::time::Instant::now()
+                + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
+            let ended = loop {
+                if let Some(shared) = self.shared.lock().unwrap().clone()
+                    && shared.orders.take_completed_orders_end()
+                {
+                    break true;
+                }
+                if std::time::Instant::now() >= until {
+                    break false;
+                }
+                py.detach(|| std::thread::sleep(std::time::Duration::from_millis(20)));
+            };
+            if !ended {
+                log::warn!(
+                    "the venue did not finish stating what it has finished; answering with \
+                     what arrived",
+                );
+            }
+        }
         // Bind the clone out of the guard first. A MutexGuard temporary in an
         // if-let scrutinee lives to the end of the body, so cloning alone does
         // not release it — a callback re-entering disconnect() would deadlock

@@ -74,6 +74,25 @@ pub fn midnight_days_ago(days: u64) -> TimestampBuf {
     stamp
 }
 
+/// Midnight this many days from today, before it or after it.
+///
+/// The sibling above only looks back, and a window has two ends.
+pub fn midnight_days_away(days: i64) -> TimestampBuf {
+    let mut stamp = chrono_free_timestamp();
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let today = (secs / 86400) as i64;
+    let (year, month, day) = days_to_ymd(today.saturating_add(days).max(0) as u64);
+    write_u2(&mut stamp.buf[0..], (year / 100) as u8);
+    write_u2(&mut stamp.buf[2..], (year % 100) as u8);
+    write_u2(&mut stamp.buf[4..], month as u8);
+    write_u2(&mut stamp.buf[6..], day as u8);
+    stamp.buf[9..].copy_from_slice(b"00:00:00");
+    stamp
+}
+
 /// Write a u8 as 2 zero-padded decimal digits into a byte slice.
 #[inline]
 fn write_u2(buf: &mut [u8], val: u8) {
