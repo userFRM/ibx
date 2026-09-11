@@ -681,6 +681,11 @@ impl HotLoop {
         sec_type: &str,
         exchange: &str,
         option_key: &str,
+        // What narrows the lookup that will name a contract stated by
+        // description. Not part of what the contract is, and still what
+        // decides which listing the venue answers with — so two descriptions
+        // narrowed differently do not share a slot before either is answered.
+        narrowing: &str,
         // Answered without blocking: this runs on the thread driving all
         // three transports, and a caller's channel is the caller's to drain.
         // A reply that cannot be delivered is a caller that stopped listening.
@@ -693,7 +698,9 @@ impl HotLoop {
         let is_new_slot = self.context.market.con_id(
             self.context.market.instrument_by_con_id(con_id).unwrap_or(0),
         ) != Some(con_id);
-        match self.context.market.try_register_contract(con_id, &symbol, sec_type, exchange, option_key) {
+        match self.context.market.try_register_described(
+            con_id, &symbol, sec_type, exchange, option_key, narrowing,
+        ) {
             Some(id) => {
                 // The symbol is written by the registration itself, under a
                 // guard that keeps the one the slot has. Written again here
@@ -1284,7 +1291,21 @@ impl HotLoop {
                     // left the caller told it failed while a live subscription
                     // bound the second contract's tag and minTick onto the first,
                     // with no id to cancel it by.
-                    let registered = self.register_or_reject(con_id, symbol.clone(), &sec_type, &exchange, &option_key, &None);
+                    // And what narrows the lookup that will name it. None of
+                    // these says what the contract is, so none of them belongs
+                    // in the identity — and each of them decides which listing
+                    // the venue answers with, so two descriptions the venue
+                    // would answer differently are not one contract. Left out,
+                    // the second description followed the first one's
+                    // subscription and was served the other listing's prices
+                    // under its own number.
+                    let narrowing = format!(
+                        "{}|{}|{}|{}|{}|{}",
+                        filters.primary_exchange, filters.local_symbol, filters.trading_class,
+                        filters.sec_id_type, filters.sec_id, filters.issuer_id,
+                    );
+                    let narrowing = if narrowing.chars().all(|c| c == '|') { String::new() } else { narrowing };
+                    let registered = self.register_or_reject(con_id, symbol.clone(), &sec_type, &exchange, &option_key, &narrowing, &None);
                     // Held against the slot before the subscription goes out,
                     // so the frame that carries them is built from them and the
                     // rebuild after a reconnect asks for them again.
@@ -1495,7 +1516,7 @@ impl HotLoop {
                     }
                     // Registered with what the contract is, so the slot carries
                     // it and the subscription can state it.
-                    if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, &exchange, "", &reply_tx) {
+                    if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, &exchange, "", "", &reply_tx) {
                         let mts = self.context.market.min_tick_scaled(id);
                         self.hmds.send_tbt_subscribe(
                             req_id, con_id, id, tbt_type, number_of_ticks, ignore_size,
@@ -1517,7 +1538,7 @@ impl HotLoop {
                     // type in that slot instead, it was recorded as where the
                     // contract trades, and every order on the contract went
                     // out routed to a destination of that name.
-                    if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, "", "", &reply_tx) {
+                    if let Some(id) = self.register_or_reject(con_id, symbol, &sec_type, "", "", "", &reply_tx) {
                         // Allocate req_id from farm's counter (shared ID space)
                         let req_id = self.farm.next_md_req_id;
                         self.farm.next_md_req_id += 1;
@@ -1570,7 +1591,7 @@ impl HotLoop {
                 }
                 ControlCommand::RegisterInstrument { contract, identity, reply_tx } => {
                     let ContractRef { con_id, symbol, sec_type, exchange, .. } = contract;
-                    self.register_or_reject(con_id, symbol, &sec_type, &exchange, &identity, &reply_tx);
+                    self.register_or_reject(con_id, symbol, &sec_type, &exchange, &identity, "", &reply_tx);
                 }
                 ControlCommand::FetchHistorical { contract, req_id, end_date_time, duration, bar_size, what_to_show, use_rth, keep_up_to_date, include_expired, .. } => {
                     let ContractRef { con_id, symbol, sec_type, exchange, .. } = contract;
@@ -6957,10 +6978,10 @@ mod tests {
     fn a_registration_naming_no_symbol_keeps_the_one_the_slot_has() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         let id = hl
-            .register_or_reject(756733, "SPY".into(), "STK", "SMART", "", &None)
+            .register_or_reject(756733, "SPY".into(), "STK", "SMART", "", "", &None)
             .expect("registered under its name");
         assert_eq!(
-            hl.register_or_reject(756733, String::new(), "", "", "", &None),
+            hl.register_or_reject(756733, String::new(), "", "", "", "", &None),
             Some(id),
             "the same contract is the same slot",
         );
@@ -7159,14 +7180,14 @@ mod tests {
     fn two_conid_less_options_on_one_underlying_do_not_share_a_slot() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
         let call = hl.register_or_reject(
-            0, "AAPL".into(), "OPT", "SMART", "20260619|230|C|100", &None).expect("call");
+            0, "AAPL".into(), "OPT", "SMART", "20260619|230|C|100", "", &None).expect("call");
         let put = hl.register_or_reject(
-            0, "AAPL".into(), "OPT", "SMART", "20260619|240|P|100", &None).expect("put");
+            0, "AAPL".into(), "OPT", "SMART", "20260619|240|P|100", "", &None).expect("put");
         assert_ne!(call, put, "the call and the put must not resolve to one slot");
 
         // The same option still resolves to its own slot rather than a third.
         assert_eq!(
-            hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "20260619|230|C|100", &None),
+            hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "20260619|230|C|100", "", &None),
             Some(call), "the same contract keeps its slot",
         );
     }
@@ -7178,14 +7199,14 @@ mod tests {
     #[test]
     fn a_slot_with_no_identity_is_adopted_by_the_first_that_states_one() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
-        let pre = hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "", &None).expect("pre");
+        let pre = hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "", "", &None).expect("pre");
         assert_eq!(
-            hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "20260619|230|C|100", &None),
+            hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "20260619|230|C|100", "", &None),
             Some(pre), "the identity-less slot is adopted, not stranded",
         );
         // And once adopted it belongs to that contract alone.
         assert_ne!(
-            hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "20260619|240|P|100", &None),
+            hl.register_or_reject(0, "AAPL".into(), "OPT", "SMART", "20260619|240|P|100", "", &None),
             Some(pre), "a different contract does not inherit it",
         );
     }
@@ -7193,8 +7214,8 @@ mod tests {
     #[test]
     fn con_id_less_contracts_do_not_share_one_slot() {
         let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
-        let aapl = hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", "", &None).expect("AAPL");
-        let qqq = hl.register_or_reject(0, "QQQ".into(), "STK", "SMART", "", &None).expect("QQQ");
+        let aapl = hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", "", "", &None).expect("AAPL");
+        let qqq = hl.register_or_reject(0, "QQQ".into(), "STK", "SMART", "", "", &None).expect("QQQ");
 
         assert_ne!(aapl, qqq, "two symbols must not resolve to one instrument");
         assert_eq!(hl.context.market.symbol(aapl), "AAPL");
@@ -7202,10 +7223,10 @@ mod tests {
 
         // The same contract again is the same slot, or every re-registration
         // burns another one.
-        assert_eq!(hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", "", &None), Some(aapl));
+        assert_eq!(hl.register_or_reject(0, "AAPL".into(), "STK", "SMART", "", "", &None), Some(aapl));
         // Tick-by-tick and news register with neither secType nor exchange,
         // and must land on the slot the L1 subscription already has.
-        assert_eq!(hl.register_or_reject(0, "QQQ".into(), "", "", "", &None), Some(qqq));
+        assert_eq!(hl.register_or_reject(0, "QQQ".into(), "", "", "", "", &None), Some(qqq));
     }
 
     // F64::from_str accepts "nan"/"inf", so a not-available sentinel

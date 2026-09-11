@@ -90,6 +90,16 @@ pub struct MarketState {
     /// its minTick landed on the first, and minTick is what snaps an order's
     /// price. Empty for anything that carries no such identity.
     option_keys: Box<[Option<String>]>,
+    /// What narrowed the lookup that will name a conId-less contract, where
+    /// the caller stated anything: where it is listed, the venue's own name
+    /// for it, which class of the chain, the identifier it was asked for by.
+    ///
+    /// None of these is part of what the contract is, so none belongs in the
+    /// identity beside it — but each of them decides which listing the venue
+    /// answers with, and two descriptions the venue would answer differently
+    /// are not one contract. Left out, the second description followed the
+    /// first one's subscription and was served the other listing's prices.
+    narrowings: Box<[Option<String>]>,
 }
 
 impl Default for MarketState {
@@ -116,6 +126,7 @@ impl MarketState {
             sec_types: vec![None; MAX_INSTRUMENTS].into(),
             exchanges: vec![None; MAX_INSTRUMENTS].into(),
             option_keys: vec![None; MAX_INSTRUMENTS].into(),
+            narrowings: vec![None; MAX_INSTRUMENTS].into(),
         }
     }
 
@@ -173,6 +184,15 @@ impl MarketState {
     pub fn try_register_contract(
         &mut self, con_id: i64, symbol: &str, sec_type: &str, exchange: &str, option_key: &str,
     ) -> Option<InstrumentId> {
+        self.try_register_described(con_id, symbol, sec_type, exchange, option_key, "")
+    }
+
+    /// The same, for a caller that also stated what narrows the lookup naming
+    /// the contract — see [`MarketState::narrowings`].
+    pub fn try_register_described(
+        &mut self, con_id: i64, symbol: &str, sec_type: &str, exchange: &str, option_key: &str,
+        narrowing: &str,
+    ) -> Option<InstrumentId> {
         if con_id != 0 {
             let id = self.try_register(con_id)?;
             // The caller stated what this contract is; recording only its
@@ -194,11 +214,16 @@ impl MarketState {
             }
             return Some(id);
         }
-        if let Some(id) = self.instrument_by_descriptor(symbol, sec_type, exchange, option_key) {
+        if let Some(id) =
+            self.instrument_by_descriptor(symbol, sec_type, exchange, option_key, narrowing)
+        {
             // First caller to state an identity fixes it, so the next contract
             // on the same underlying no longer matches this slot.
             if !option_key.is_empty() && self.option_keys[id as usize].is_none() {
                 self.option_keys[id as usize] = Some(option_key.to_string());
+            }
+            if !narrowing.is_empty() && self.narrowings[id as usize].is_none() {
+                self.narrowings[id as usize] = Some(narrowing.to_string());
             }
             return Some(id);
         }
@@ -206,6 +231,8 @@ impl MarketState {
         self.instrument_to_con_id[id as usize] = 0;
         self.option_keys[id as usize] =
             if option_key.is_empty() { None } else { Some(option_key.to_string()) };
+        self.narrowings[id as usize] =
+            if narrowing.is_empty() { None } else { Some(narrowing.to_string()) };
         // The descriptor this slot holds. Without it the slot matches no
         // descriptor and the same contract requested twice takes two slots.
         if !symbol.is_empty() {
@@ -219,7 +246,7 @@ impl MarketState {
     /// by MAX_INSTRUMENTS and only ever reached from a control command, so a
     /// scan costs less than the map it would otherwise need.
     fn instrument_by_descriptor(
-        &self, symbol: &str, sec_type: &str, exchange: &str, option_key: &str,
+        &self, symbol: &str, sec_type: &str, exchange: &str, option_key: &str, narrowing: &str,
     ) -> Option<InstrumentId> {
         (0..self.active_count).find(|&id| {
             let i = id as usize;
@@ -236,6 +263,13 @@ impl MarketState {
                 && match self.option_keys[i].as_deref() {
                     None | Some("") => true,
                     Some(k) => k == option_key,
+                }
+                // And what narrowed the lookup, on the same terms. A slot that
+                // states none adopts the caller's; a slot that states one is
+                // the answer to that description and to no other.
+                && match self.narrowings[i].as_deref() {
+                    None | Some("") => true,
+                    Some(n) => n == narrowing,
                 }
         })
     }
@@ -290,6 +324,7 @@ impl MarketState {
         // The contract identity goes with the rest of the slot: a call left
         // behind here would match the put that reused it.
         self.option_keys[instrument as usize] = None;
+        self.narrowings[instrument as usize] = None;
         self.clear_server_tags_for(instrument);
         self.free_ids.push(instrument);
         Some(con_id)
@@ -1181,6 +1216,49 @@ mod tests {
             "a slot nobody holds adopts nothing",
         );
         assert_eq!(m.instrument_by_con_id(111_111), None, "and nothing points at it");
+    }
+
+    /// Two descriptions the venue would answer differently are not one
+    /// contract.
+    ///
+    /// Symbol, security type and exchange are equal for one ticker listed on
+    /// two venues, or asked for by two identifiers, and none of what tells
+    /// them apart is part of what a contract is. Matched on the rest alone,
+    /// the second description followed the first one's subscription: it was
+    /// never looked up, and the other listing's prices arrived under its
+    /// number.
+    #[test]
+    fn two_descriptions_the_venue_would_answer_differently_do_not_share_a_slot() {
+        let mut m = MarketState::new();
+        let on_one = m
+            .try_register_described(0, "ABC", "STK", "SMART", "", "NASDAQ|||||")
+            .expect("the first");
+        let on_another = m
+            .try_register_described(0, "ABC", "STK", "SMART", "", "NYSE|||||")
+            .expect("the second");
+        assert_ne!(on_one, on_another, "one listing's prices would arrive for both");
+
+        // The same description finds the slot it took.
+        assert_eq!(
+            m.try_register_described(0, "ABC", "STK", "SMART", "", "NASDAQ|||||"),
+            Some(on_one),
+        );
+
+        // A slot that narrows nothing adopts the caller's, the way one with no
+        // identity adopts that: the pre-flight registration carries neither,
+        // and stranding its slot would take a second one for the same
+        // contract.
+        let plain = m.try_register_contract(0, "XYZ", "STK", "SMART", "").expect("pre-flight");
+        assert_eq!(
+            m.try_register_described(0, "XYZ", "STK", "SMART", "", "ARCA|||||"),
+            Some(plain),
+            "the description the pre-flight registration stood in for",
+        );
+        assert_ne!(
+            m.try_register_described(0, "XYZ", "STK", "SMART", "", "BATS|||||"),
+            Some(plain),
+            "and having adopted one, it is that description's slot and no other's",
+        );
     }
 
     /// A slot taken for a descriptor is matched by that descriptor. Without
