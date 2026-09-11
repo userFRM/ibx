@@ -172,11 +172,25 @@ impl PayloadBuilder {
         value: u64,
         negative: bool,
     ) {
+        self.tick_shifted(has_more, ext_tick_type, 0, ext_byte_width, value, negative);
+    }
+
+    /// The same, stating how far the decimal point moves.
+    pub(super) fn tick_shifted(
+        &mut self,
+        has_more: u64,
+        ext_tick_type: u64,
+        decimal_shift: u64,
+        ext_byte_width: u64,
+        value: u64,
+        negative: bool,
+    ) {
         self.push(31, 5); // sentinel
         self.push(has_more, 1);
         self.push(0, 2); // raw_width (ignored for extended)
         self.push(ext_tick_type, 8);
-        self.push(ext_byte_width, 8);
+        self.push(decimal_shift, 4);
+        self.push(ext_byte_width, 4);
         let total_value_bits = (ext_byte_width * 8) as usize;
         self.push(if negative { 1 } else { 0 }, 1);
         self.push(value, total_value_bits - 1);
@@ -854,4 +868,27 @@ fn a_value_of_no_width_does_not_take_the_next_ticks_sign_bit() {
         ticks.iter().any(|t| t.magnitude == 42),
         "the entry stating no width took the following tick's sign bit: {ticks:?}",
     );
+}
+
+/// An entry states how far the decimal point moves in four bits and its width
+/// in four more, not the width in a byte.
+///
+/// Read as one byte, the two multiply: two places out and four bytes wide read
+/// as thirty-six bytes, which is wider than this decoder takes — so the entry
+/// was stepped over by two hundred and eighty-eight bits instead of thirty-two
+/// and every tick behind it was decoded out of step.
+#[test]
+fn a_shifted_entry_states_its_width_in_four_bits() {
+    let mut b = PayloadBuilder::new();
+    b.server_tag(0, 42);
+    b.tick_shifted(1, O_CLOSE_PRICE, 2, 4, 1_250, false);
+    b.tick(0, O_BID_PRICE, 4, 99, false);
+    let ticks = decode_ticks_35p(&b.build());
+    assert_eq!(ticks.len(), 2, "the entry behind it is still in step: {ticks:?}");
+    assert_eq!(ticks[0].tick_type, O_CLOSE_PRICE);
+    assert_eq!(ticks[0].magnitude, 1_250);
+    assert_eq!(ticks[0].decimal_shift, 2, "and says how far out it is");
+    assert_eq!(ticks[1].tick_type, O_BID_PRICE);
+    assert_eq!(ticks[1].magnitude, 99);
+    assert_eq!(ticks[1].decimal_shift, 0, "an ordinary entry states none");
 }

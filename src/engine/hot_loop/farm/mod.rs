@@ -1411,6 +1411,21 @@ impl FarmState {
 
         // Phase 1: Apply all ticks to internal quotes before publishing.
         for tick in &ticks {
+            // An entry stating a decimal shift is not counted in the
+            // contract's increments at all: the venue divides by ten to that
+            // power instead. Applied as increments it would be wrong by
+            // whatever the contract's increment happens to be, so it is left
+            // out rather than published as a number nobody sent.
+            if tick.decimal_shift != 0 {
+                if self.unread_types.insert(format!("35=P shifted tick {}", tick.tick_type)) {
+                    log::info!(
+                        "a quote entry states its value {} places out, which this client \
+                         counts in the contract's own increments and cannot state; dropped",
+                        tick.decimal_shift,
+                    );
+                }
+                continue;
+            }
             let instrument = match context.market.instrument_by_server_tag(tick.server_tag) {
                 Some(id) => id,
                 None => {

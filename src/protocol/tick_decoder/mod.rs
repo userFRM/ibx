@@ -192,6 +192,13 @@ pub struct RawTick {
     pub tick_type: u64,
     /// Its value, before the contract's own scale is applied.
     pub magnitude: i64,
+    /// How far to move the decimal point, where the entry states one.
+    ///
+    /// Only an entry that states its number in a byte can carry this, and it
+    /// changes what the value means: the venue divides by ten to this power
+    /// instead of counting the contract's own increments. Nought — every
+    /// ordinary entry — means the value is counted in increments as usual.
+    pub decimal_shift: u8,
 }
 
 /// Decode all ticks from a 35=P binary payload.
@@ -256,20 +263,32 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
                 None => break,
             };
 
-            let (tick_type, byte_width) = if raw_tick_type == 31 {
-                // Extended format
+            // An entry whose number does not fit five bits states it in a
+            // byte, and then states how far to move the decimal point in four
+            // bits and how wide the value is in four more.
+            //
+            // Read as one byte of width, the two nibbles multiply: a value two
+            // places out and four bytes wide read as thirty-six bytes wide,
+            // which is wider than this decoder takes — so the entry was
+            // stepped over by two hundred and eighty-eight bits instead of
+            // thirty-two, and every tick behind it in the message was decoded
+            // out of step.
+            let (tick_type, byte_width, decimal_shift) = if raw_tick_type == 31 {
                 if reader.remaining() < 16 {
                     return;
                 }
                 let Some(tick_type) = reader.read_unsigned(8) else {
                     return;
                 };
-                let Some(byte_width) = reader.read_unsigned(8) else {
+                let Some(decimal_shift) = reader.read_unsigned(4) else {
                     return;
                 };
-                (tick_type, byte_width)
+                let Some(byte_width) = reader.read_unsigned(4) else {
+                    return;
+                };
+                (tick_type, byte_width, decimal_shift as u8)
             } else {
-                (raw_tick_type, raw_width)
+                (raw_tick_type, raw_width, 0)
             };
 
             let total_value_bits = (8 * byte_width) as usize;
@@ -322,6 +341,7 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
                 server_tag,
                 tick_type,
                 magnitude,
+                decimal_shift,
             });
         }
     }
