@@ -595,12 +595,7 @@ impl EClient {
         // refuse — so it was told nothing and waited for ticks that could not
         // arrive. Where nobody holds it, there is nobody to tell.
         for (instrument, reason) in shared.market.drain_subscription_failures() {
-            let held_by = self.core.req_id_for_instrument(instrument);
-            let watching: Vec<i64> = std::iter::once(held_by)
-                .filter(|id| *id >= 0)
-                .chain(self.core.followers_of(instrument))
-                .collect();
-            for req_id in watching {
+            for req_id in self.core.watchers_of(instrument) {
                 call_wrapper!(self, py, shared, "error",
                     (req_id, 0i64, 200i64, reason.as_str(), ""));
             }
@@ -636,12 +631,8 @@ impl EClient {
             let (to, tick_type): (Vec<i64>, i32) = match comp.answers {
                 Some(asked) => (vec![asked], ASKED_OPTION_COMPUTATION),
                 None => {
-                    let owner = self.core.req_id_for_instrument(comp.instrument);
                     (
-                        std::iter::once(owner)
-                            .filter(|id| *id >= 0)
-                            .chain(self.core.followers_of(comp.instrument))
-                            .collect(),
+                        self.core.watchers_of(comp.instrument),
                         if self.core.feed_is_delayed(comp.instrument) {
                             DELAYED_MODEL_OPTION_COMPUTATION
                         } else {
@@ -700,12 +691,7 @@ impl EClient {
                 (req_id, 0i64, 200i64, reason.as_str(), ""));
         }
         for (instrument, min_tick) in shared.market.drain_tick_req_params() {
-            let held_by = self.core.req_id_for_instrument(instrument);
-            let watching: Vec<i64> = std::iter::once(held_by)
-                .filter(|id| *id >= 0)
-                .chain(self.core.followers_of(instrument))
-                .collect();
-            for req_id in watching {
+            for req_id in self.core.watchers_of(instrument) {
                 call_wrapper!(self, py, shared, "tick_req_params", (req_id, min_tick, "", 0i64));
             }
         }
@@ -713,12 +699,11 @@ impl EClient {
         // Poll quotes via shared ClientCore (same logic as Rust dispatch)
         let instruments = self.core.snapshot_instruments();
         let mut snapshot_done: Vec<(i64, Option<u64>)> = Vec::new();
-        for (iid, req_id) in instruments {
-            let result = self.core.poll_instrument_ticks(shared, iid, req_id);
+        for (iid, req_id, watchers) in instruments {
             // The same quote, once per caller watching this contract. One
             // contract holds one subscription on the wire, and everyone who
             // asked for it hears it under their own request.
-            let watchers = self.core.followers_of(iid);
+            let result = self.core.poll_instrument_ticks(shared, iid, req_id);
 
             // Ahead of everything this pass delivers, and to everyone it
             // delivers to. The type a caller is served under is stated before
@@ -913,12 +898,10 @@ impl EClient {
         // Drain news -> tickNews
         let news_items = shared.market.drain_tick_news();
         for news in news_items {
-            let req_id = self.core.req_id_for_instrument(news.instrument);
             // Once per caller watching the contract, as its quotes already
             // are. The owner alone was told, so a second subscription on the
             // same contract heard no news at all.
-            let watchers = self.core.followers_of(news.instrument);
-            for id in std::iter::once(req_id).filter(|id| *id >= 0).chain(watchers.iter().copied()) {
+            for id in self.core.watchers_of(news.instrument) {
                 call_wrapper!(self, py, shared, "tick_news", (id, news.timestamp as i64, news.provider_code.as_str(),
                      news.article_id.as_str(), news.headline.as_str(), ""));
             }

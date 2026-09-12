@@ -819,6 +819,8 @@ struct Ownership<'a> {
     by_req: std::sync::MutexGuard<'a, HashMap<i64, InstrumentId>>,
     /// The requests that asked for the venue's chargeable one-shot.
     one_shot: std::sync::MutexGuard<'a, HashSet<i64>>,
+    /// What each request asked for beyond the quote.
+    series: std::sync::MutexGuard<'a, HashMap<i64, Vec<u32>>>,
 }
 
 impl Ownership<'_> {
@@ -841,7 +843,16 @@ impl Ownership<'_> {
     /// Either way both are recorded as watching, because what is watching is
     /// what a reading is delivered to: recorded as neither, the caller that
     /// asked for the one-shot was sent nothing at all.
-    fn take_or_follow(&mut self, instrument: InstrumentId, req_id: i64) -> Joined {
+    fn take_or_follow(&mut self, instrument: InstrumentId, req_id: i64, series: &[u32]) -> Joined {
+        // What this request asked for, written down as it becomes one of the
+        // watchers rather than before. Written first, a withdrawal deciding
+        // which series nobody asks for any more read a list belonging to a
+        // request that was not watching anything yet, and either kept a series
+        // for a caller that never arrived or withdrew one the arriving caller
+        // had just asked for.
+        if !series.is_empty() {
+            self.series.insert(req_id, series.to_vec());
+        }
         let held = self.holders.get(&instrument).copied();
         if !self.one_shot.contains(&req_id)
             && held.is_some_and(|existing| self.one_shot.contains(&existing))
@@ -861,6 +872,12 @@ impl Ownership<'_> {
             }
             _ => {
                 self.holders.insert(instrument, req_id);
+                // Under the same acquisition as the holder map, not after it.
+                // Written by the caller once this returned, a slot given back
+                // in between was forgotten while this request pointed at
+                // nothing — and the mapping landed afterwards, naming a slot
+                // whose next contract this caller never asked about.
+                self.by_req.insert(req_id, instrument);
                 Joined::Took
             }
         }
@@ -1670,7 +1687,9 @@ impl ClientCore {
     /// fail would leave a holder recorded for a request that never started —
     /// which nothing then cancels. [`take_or_follow`](Self::take_or_follow) is
     /// where it is taken.
-    pub(crate) fn follows_existing_subscription(&self, instrument: InstrumentId, req_id: i64) -> bool {
+    pub(crate) fn follows_existing_subscription(
+        &self, instrument: InstrumentId, req_id: i64, series: &[u32],
+    ) -> bool {
         let mut own = self.ownership();
         let held = own.holders.get(&instrument).copied();
         match held {
@@ -1682,6 +1701,10 @@ impl ClientCore {
             Some(existing) if existing != req_id => {
                 own.watches(instrument, req_id);
                 own.by_req.insert(req_id, instrument);
+                // With the join, not before it. See `take_or_follow`.
+                if !series.is_empty() {
+                    own.series.insert(req_id, series.to_vec());
+                }
                 drop(own);
                 self.stamp_registration(req_id);
                 true
@@ -1708,6 +1731,7 @@ impl ClientCore {
             following: self.instrument_followers.lock().unwrap(),
             by_req: self.req_to_instrument.lock().unwrap(),
             one_shot: self.chargeable_snapshot_reqs.lock().unwrap(),
+            series: self.series_by_req.lock().unwrap(),
         }
     }
 
@@ -1720,8 +1744,10 @@ impl ClientCore {
     /// and leave the loser cancelling the winner's feed.
     ///
     /// Answers whether this request ended up a follower.
-    pub(crate) fn take_or_follow(&self, instrument: InstrumentId, req_id: i64) -> bool {
-        let joined = self.ownership().take_or_follow(instrument, req_id);
+    pub(crate) fn take_or_follow(
+        &self, instrument: InstrumentId, req_id: i64, series: &[u32],
+    ) -> bool {
+        let joined = self.ownership().take_or_follow(instrument, req_id, series);
         // The request that takes a slot nobody held is written down by whoever
         // asked for it, once the venue has answered; the other two are already
         // watching something and are stamped here.
@@ -1763,7 +1789,7 @@ impl ClientCore {
                 if own.by_req.get(&req_id) != Some(&from) {
                     continue;
                 }
-                own.take_or_follow(into, req_id);
+                own.take_or_follow(into, req_id, &[]);
                 own.by_req.insert(req_id, into);
                 moved.push(req_id);
             }
@@ -1849,13 +1875,42 @@ impl ClientCore {
                 if own.by_req.get(req_id) == Some(&instrument) {
                     own.by_req.remove(req_id);
                 }
+                own.one_shot.remove(req_id);
+                own.series.remove(req_id);
             }
             watching
         };
         for req_id in forgotten {
             self.mdt_sent.lock().unwrap().remove(&req_id);
+            // And everything else filed under that number. The slot going back
+            // ends the request, and a number that outlives its request with
+            // its marks still standing is read as the request it was: reused
+            // for an ordinary stream it was withdrawn as a snapshot the moment
+            // it had both sides of a quote, or read as the venue's one-shot by
+            // every later join, or counted as still asking for a series its
+            // caller has no subscription to hear.
+            self.snapshot_reqs.lock().unwrap().remove(&req_id);
+            self.registration_epoch.lock().unwrap().remove(&req_id);
         }
         self.last_quotes.lock().unwrap().remove(&instrument);
+    }
+
+    /// Every request watching a contract, the one holding the subscription
+    /// first.
+    ///
+    /// Read under one acquisition, because the holder and the watchers are one
+    /// answer. Read separately, a withdrawal running between the two left a
+    /// list that never existed: the request that had just handed the
+    /// subscription on was told what the venue said and the request that had
+    /// just taken it was not.
+    pub fn watchers_of(&self, instrument: InstrumentId) -> Vec<i64> {
+        let own = self.ownership();
+        own.holders
+            .get(&instrument)
+            .copied()
+            .into_iter()
+            .chain(own.following.get(&instrument).cloned().unwrap_or_default())
+            .collect()
     }
 
     /// Every other request watching a contract, so one quote reaches them all.
@@ -2109,13 +2164,6 @@ impl ClientCore {
                 unread.join(", "),
             );
         }
-        // What this caller asked for, so that it goes with this caller.
-        // Recorded for every request, not only a joiner's: which of them holds
-        // the subscription is not this request's to know, and the holder is a
-        // caller that can withdraw while another watches.
-        if !generic_ticks.is_empty() {
-            self.series_by_req.lock().unwrap().insert(req_id, generic_ticks.clone());
-        }
         // Asked for once per contract, whoever asks. Recorded as the decision
         // is made, so two callers racing for one contract cannot both find
         // that nobody has asked.
@@ -2160,7 +2208,7 @@ impl ClientCore {
         // it was never refused — off a stream it did not ask for.
         if !regulatory_snapshot
             && let Some(instrument) = self.cached_instrument(shared, con_id)
-            && self.follows_existing_subscription(instrument, req_id)
+            && self.follows_existing_subscription(instrument, req_id, &generic_ticks)
         {
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
@@ -2249,12 +2297,15 @@ impl ClientCore {
                 {
                     let _ = control_tx.send(ControlCommand::UnsubscribeNews { subject });
                 }
-                // And what this request was marked as, because no record of it
-                // remains for a withdrawal to clean up. Left behind, the
-                // number reused for an ordinary stream read as the venue's
-                // one-shot and the callers on that contract were served as
-                // though it were one.
+                // And what this request was marked as and what it had asked
+                // for, because no record of it remains for a withdrawal to
+                // clean up. Left behind, the number reused for an ordinary
+                // stream read as the venue's one-shot and the callers on that
+                // contract were served as though it were one — and a series
+                // this request never got went on being served because a
+                // number nobody holds was still counted as asking for it.
                 self.chargeable_snapshot_reqs.lock().unwrap().remove(&req_id);
+                self.series_by_req.lock().unwrap().remove(&req_id);
                 return Err(refused);
             }
         };
@@ -2264,7 +2315,9 @@ impl ClientCore {
         // be watched. This caller watches it too rather than taking it over —
         // unless it asked for the chargeable snapshot, which is its own
         // request and was already sent above.
-        if !regulatory_snapshot && self.follows_existing_subscription(instrument_id, req_id) {
+        if !regulatory_snapshot
+            && self.follows_existing_subscription(instrument_id, req_id, &generic_ticks)
+        {
             if snapshot {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
@@ -2282,9 +2335,10 @@ impl ClientCore {
             return self.settle_registration(shared, control_tx, &claim, req_id, instrument_id);
         }
         // Somebody may have taken this contract while this request was being
-        // registered, in which case this one watches theirs.
-        let _ = self.take_or_follow(instrument_id, req_id);
-        self.req_to_instrument.lock().unwrap().insert(req_id, instrument_id);
+        // registered, in which case this one watches theirs. Either way the
+        // record of what it is watching is written there, under the maps that
+        // decide it.
+        let _ = self.take_or_follow(instrument_id, req_id, &generic_ticks);
         self.stamp_registration(req_id);
         // A concurrent registration may already hold the subscription. Its
         // mode still describes the feed everyone on this instrument receives.
@@ -2513,7 +2567,7 @@ impl ClientCore {
             let mut own = self.ownership();
             own.one_shot.remove(&req_id);
             let Some(instrument) = own.by_req.remove(&req_id) else {
-                self.series_by_req.lock().unwrap().remove(&req_id);
+                own.series.remove(&req_id);
                 return (None, None, None);
             };
             // A caller that was watching someone else's subscription stops
@@ -2547,8 +2601,7 @@ impl ClientCore {
             // behind, the venue served them for as long as that subscription
             // outlived this caller, and every rebuild after a reconnect asked
             // for them again.
-            let mut asked = self.series_by_req.lock().unwrap();
-            let mine = asked.remove(&req_id).unwrap_or_default();
+            let mine = own.series.remove(&req_id).unwrap_or_default();
             let mut series_gone: Vec<u32> = Vec::new();
             if !take_it_down && !mine.is_empty() {
                 let watching: Vec<i64> = own.holders.get(&instrument).copied()
@@ -2558,11 +2611,10 @@ impl ClientCore {
                 series_gone = mine.into_iter()
                     .filter(|tick| {
                         !watching.iter()
-                            .any(|other| asked.get(other).is_some_and(|s| s.contains(tick)))
+                            .any(|other| own.series.get(other).is_some_and(|s| s.contains(tick)))
                     })
                     .collect();
             }
-            drop(asked);
             (instrument, take_it_down, series_gone)
         };
         self.mdt_sent.lock().unwrap().remove(&req_id);
@@ -4091,10 +4143,21 @@ impl ClientCore {
         false
     }
 
-    /// Snapshot the current instrument→req_id mapping.
-    pub fn snapshot_instruments(&self) -> Vec<(InstrumentId, i64)> {
-        let map = self.instrument_to_req.lock().unwrap();
-        map.iter().map(|(&iid, &req_id)| (iid, req_id)).collect()
+    /// Snapshot the current instrument→req_id mapping, each with every other
+    /// request watching that contract.
+    ///
+    /// Both under one acquisition. Read apart — the holders here, the watchers
+    /// again per contract as each quote is delivered — a withdrawal running in
+    /// between left a quote going to the request that had just handed the
+    /// subscription on and not to the one that had just taken it.
+    pub fn snapshot_instruments(&self) -> Vec<(InstrumentId, i64, Vec<i64>)> {
+        let own = self.ownership();
+        own.holders
+            .iter()
+            .map(|(&iid, &req_id)| {
+                (iid, req_id, own.following.get(&iid).cloned().unwrap_or_default())
+            })
+            .collect()
     }
 
     /// What the venue last marked a contract at, which is its price at

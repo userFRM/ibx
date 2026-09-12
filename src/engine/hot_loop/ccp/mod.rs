@@ -657,6 +657,16 @@ pub(crate) struct CcpState {
     /// states about an order the answer does not already hold is left out of
     /// it, and that is one thing that happened, not thousands.
     the_answer_is_full: bool,
+    /// Every order this answer has taken, handed over or still being
+    /// assembled.
+    ///
+    /// The bound is on the answer, not on what is waiting to be handed over: a
+    /// handover empties the records and the next order was taken beside them,
+    /// so an answer with no end in sight grew without limit however often it
+    /// was handed over. Kept here, an order already taken is still merged as
+    /// the venue states more about it, and only an order the answer has never
+    /// seen is left out.
+    orders_in_this_answer: std::collections::HashSet<u64>,
     /// A caller asked what the venue has finished before the session's own
     /// replay was over, so the question is held until it is.
     ///
@@ -866,6 +876,7 @@ impl CcpState {
             wire_names_learned: VecDeque::new(),
             completed_orders_answered: false,
             the_answer_is_full: false,
+            orders_in_this_answer: std::collections::HashSet::new(),
             completed_orders_wanted: None,
             replay_hold_until: None,
             completed_orders_asked_on: 0,
@@ -974,6 +985,7 @@ impl CcpState {
     pub(crate) fn hold_a_finished_order_for_test(
         &mut self, order_id: u64, status: crate::types::OrderStatus,
     ) {
+        self.orders_in_this_answer.insert(order_id);
         self.finished_orders.push(FinishedOrder {
             order_id,
             contract: Default::default(),
@@ -3217,6 +3229,10 @@ impl CcpState {
         match sent {
             Ok(()) => {
                 hb.last_ccp_sent = Instant::now();
+                // A new question, so a new answer: what the one before it took
+                // is not counted against this one's bound.
+                self.orders_in_this_answer.clear();
+                self.the_answer_is_full = false;
                 self.completed_orders_open = true;
                 self.completed_orders_deadline = Some(Instant::now() + COMPLETED_ORDERS_TIMEOUT);
                 log::info!("Asked the venue for what it has finished, {from} to {to}");

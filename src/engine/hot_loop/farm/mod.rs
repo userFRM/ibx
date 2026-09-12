@@ -2956,17 +2956,27 @@ impl FarmState {
         if new_ones.is_empty() {
             return;
         }
-        let Some((_, symbol, exchange, sec_type, .., mode_9887)) = self
-            .md_resub_info
+        // What the subscription this joins was asked for, from the record the
+        // rebuild reads — or from the queue, where a reconnect that is still
+        // pacing its way through has put it. Looked for in the record alone, a
+        // caller joining between the reconnect and the burst that carries this
+        // contract was answered while its series went nowhere: the queue holds
+        // what will be sent, and the list below is what is sent with it.
+        let known = self.md_resub_info
             .iter()
             .find(|(id, ..)| *id == instrument)
-            .cloned()
-        else {
+            .map(|(_, _, exchange, sec_type, .., mode)| (exchange.clone(), sec_type.clone(), *mode))
+            .or_else(|| self.replay_queue
+                .iter()
+                .find(|(id, ..)| *id == instrument)
+                .map(|(_, _, _, exchange, sec_type, .., mode)| {
+                    (exchange.clone(), sec_type.clone(), *mode)
+                }));
+        let Some((exchange, sec_type, mode_9887)) = known else {
             // Nothing here says what contract that slot holds, so there is
             // nothing to ask on and nothing for a rebuild to ask on either.
             return;
         };
-        let _ = symbol;
         // The record the rebuild reads is what the caller asked for, so it is
         // written the moment the subscription this joins is found — before the
         // checks below, which are about what can be sent now. Written after
@@ -3042,9 +3052,26 @@ impl FarmState {
         hb: &mut HeartbeatState,
     ) {
         // The headlines are asked for under a request of their own and
-        // withdrawn under it, so they are not this withdrawal's to take.
-        let unwanted: Vec<u32> =
-            unwanted.iter().copied().filter(|tick| *tick != NEWS_REQUEST_TYPE).collect();
+        // withdrawn under it, so they are not this withdrawal's to take. Nor
+        // are the entries every subscription opens for itself — the trading
+        // status, the venue map and, on a contract that has one, the option
+        // model: a caller naming one of those is not asked for a second
+        // subscription to it, so it is not that caller's to withdraw either.
+        // Withdrawn here, a caller that named the trading status took the
+        // trading status off a subscription that goes on running, and nothing
+        // asks for it again until a reconnect.
+        let unwanted: Vec<u32> = unwanted.iter()
+            .copied()
+            .filter(|tick| {
+                ![
+                    NEWS_REQUEST_TYPE,
+                    TRADING_STATUS_REQUEST_TYPE,
+                    BBO_EXCHANGE_MAP_REQUEST_TYPE,
+                    GREEKS_REQUEST_TYPE,
+                ]
+                .contains(tick)
+            })
+            .collect();
         if unwanted.is_empty() {
             return;
         }
@@ -3086,6 +3113,16 @@ impl FarmState {
         self.generic_tick_tags
             .retain(|(_, tick, held)| *held != instrument || !unwanted.contains(tick));
         self.greeks_subs.retain(|(id, ..)| !reqs.contains(id));
+        // And the totals a running series was being read against, as the
+        // withdrawal of a whole subscription drops them. Kept, the first
+        // reading after somebody asks for that series again is measured from
+        // the total the venue stated before it stopped — a print for
+        // everything that traded while nobody was asking.
+        for (tick, counted) in [(233u32, 48i32), (375, 77)] {
+            if unwanted.contains(&tick) {
+                self.rt_volume_totals.remove(&(instrument, counted));
+            }
+        }
         let Some(conn) = farm_conn.as_mut() else { return };
         let mode_str = mode_9887.to_string();
         for (req_id, request_type, venue) in &going {

@@ -575,12 +575,23 @@ impl HotLoop {
                 // number it is already streaming under, which lands on the
                 // first slot and freezes it. So the caller follows the slot
                 // the contract lives in, and nothing is asked for twice.
+                // What the caller named beyond the quote, where the slot it
+                // was given turns out not to be the slot the contract lives
+                // in. Recorded against the slot it was given, and that slot is
+                // about to be handed back: the caller was moved onto the
+                // contract's own slot and published as watching it, while the
+                // series it asked for went back with the slot it left.
+                let mut carried: Vec<u32> = Vec::new();
                 let instrument = if self.context.market.adopt_con_id(p.instrument, con_id) {
                     p.instrument
                 } else {
                     match self.context.market.instrument_by_con_id(con_id) {
                         Some(owner) if owner != p.instrument => {
                             self.shared.market.push_subscription_move(p.instrument, owner);
+                            carried = self.farm
+                                .asked_generic_ticks
+                                .remove(&p.instrument)
+                                .unwrap_or_default();
                             // And the slot this request took is owed back. It
                             // holds nothing now — its watchers follow the move
                             // to the slot the contract lives in, and nothing
@@ -609,6 +620,29 @@ impl HotLoop {
                 // caller heard the end of it off ticks it did not ask for,
                 // while a stream skipped for a snapshot in flight was dropped
                 // when the snapshot completed and withdrew.
+                // Carried onto the slot the contract lives in: asked for now
+                // where a stream is already up there, and added to what that
+                // slot asks for where the subscription below is the one that
+                // will carry them.
+                if !carried.is_empty() {
+                    if self.farm.holds_a_stream(instrument) {
+                        self.farm.also_ask_for_series(
+                            instrument,
+                            con_id,
+                            &carried,
+                            &self.context,
+                            &mut self.farm_conn,
+                            &mut self.hb,
+                        );
+                    } else {
+                        let held = self.farm.asked_generic_ticks.entry(instrument).or_default();
+                        for tick in &carried {
+                            if !held.contains(tick) {
+                                held.push(*tick);
+                            }
+                        }
+                    }
+                }
                 if !p.regulatory_snapshot && self.farm.holds_a_stream(instrument) {
                     continue;
                 }
@@ -7089,6 +7123,55 @@ mod tests {
             shared.market.drain_subscription_moves(),
             vec![(by_name, by_id)],
             "the caller given the second slot is told to read the first",
+        );
+    }
+
+    /// And the series it named follow it there.
+    ///
+    /// What a caller asks for beyond the quote is recorded against the slot it
+    /// was given, and a lookup naming a contract another slot holds gives that
+    /// slot back. Left behind, the caller was published as watching the
+    /// contract's own slot while the series it asked for went back with the
+    /// slot it left: nothing asked the venue for them, and the rebuild after a
+    /// reconnect did not either.
+    #[test]
+    fn the_series_a_moved_caller_named_follow_it_to_the_slot_it_moves_to() {
+        let shared = Arc::new(SharedState::new());
+        let mut hl = HotLoop::new(shared.clone(), None, None);
+        let by_id = hl.context.market.register(756733);
+        let by_name = hl
+            .context
+            .market
+            .try_register_contract(0, "SPY", "STK", "SMART", "")
+            .expect("a slot for the contract named by symbol");
+
+        // The caller named by symbol asked for a series, recorded against the
+        // slot it was given.
+        hl.farm.asked_generic_ticks.insert(by_name, vec![236]);
+        hl.ccp.resolved_md_subscribe.push((
+            756733,
+            crate::engine::hot_loop::ccp::PendingSubscribe {
+                filters: Default::default(),
+                instrument: by_name,
+                con_id: 0,
+                symbol: "SPY".into(),
+                exchange: "SMART".into(),
+                sec_type: "STK".into(),
+                currency: "USD".into(),
+                mode_9887: 0,
+                regulatory_snapshot: false,
+            },
+        ));
+        hl.send_resolved_subscriptions();
+
+        assert_eq!(
+            hl.farm.asked_generic_ticks.get(&by_id).map(Vec::as_slice),
+            Some([236u32].as_slice()),
+            "the subscription that goes out on the contract's own slot asks for it",
+        );
+        assert!(
+            !hl.farm.asked_generic_ticks.contains_key(&by_name),
+            "and nothing is left on the slot that was given back",
         );
     }
 

@@ -24,7 +24,7 @@ fn nothing_follows_a_chargeable_snapshot() {
     // An ordinary stream is followed, which is the whole point of the map.
     core.instrument_to_req.lock().unwrap().insert(instrument, 10);
     assert!(
-        core.follows_existing_subscription(instrument, 11),
+        core.follows_existing_subscription(instrument, 11, &[]),
         "a second caller watches the stream that is up",
     );
 
@@ -33,7 +33,7 @@ fn nothing_follows_a_chargeable_snapshot() {
     one_shot.instrument_to_req.lock().unwrap().insert(instrument, 20);
     one_shot.chargeable_snapshot_reqs.lock().unwrap().insert(20);
     assert!(
-        !one_shot.follows_existing_subscription(instrument, 21),
+        !one_shot.follows_existing_subscription(instrument, 21, &[]),
         "a stream does not follow the one-shot",
     );
 }
@@ -55,7 +55,7 @@ fn a_stream_is_never_served_off_the_one_shot() {
     core.instrument_to_req.lock().unwrap().insert(instrument, 30);
     core.chargeable_snapshot_reqs.lock().unwrap().insert(31);
     assert!(
-        core.take_or_follow(instrument, 31),
+        core.take_or_follow(instrument, 31, &[]),
         "the one-shot watches the slot the stream holds",
     );
     assert!(
@@ -69,7 +69,7 @@ fn a_stream_is_never_served_off_the_one_shot() {
     other.instrument_to_req.lock().unwrap().insert(instrument, 40);
     other.chargeable_snapshot_reqs.lock().unwrap().insert(40);
     assert!(
-        !other.take_or_follow(instrument, 41),
+        !other.take_or_follow(instrument, 41, &[]),
         "the stream is sent rather than served off the one-shot",
     );
     assert_eq!(
@@ -201,6 +201,86 @@ fn a_caller_takes_the_series_it_brought_with_it() {
     let (down, _news, series_gone) = core.unregister_mkt_data(&shared, 1);
     assert_eq!(down, Some(iid), "the subscription goes");
     assert_eq!(series_gone, None, "whole, with its entries");
+}
+
+/// A request is watching the slot it took from the moment it takes it.
+///
+/// Which slot a number is watching is written under the maps that decide it,
+/// not by whoever asked once they came back. Written after, a slot given back
+/// in between was forgotten while this number pointed at nothing — and the
+/// record landed afterwards, naming a slot whose next contract this caller
+/// never asked about.
+#[test]
+fn a_request_watches_the_slot_it_took_from_the_moment_it_takes_it() {
+    let core = ClientCore::new();
+    let iid: InstrumentId = 4;
+
+    assert!(!core.take_or_follow(iid, 9, &[]), "nobody held it, so this one does");
+    assert_eq!(
+        core.watching(9), Some(iid),
+        "and it is watching it without anything else being said",
+    );
+}
+
+/// What a caller asked for is written down as it joins, not before.
+///
+/// A withdrawal decides which series nobody asks for any more from the
+/// requests watching the contract. Written before the join, a list belonged to
+/// a request that was watching nothing yet: the withdrawal running in between
+/// read it as nobody's, and took the series the arriving caller had asked for.
+#[test]
+fn what_a_joining_caller_asked_for_is_written_down_as_it_joins() {
+    let core = ClientCore::new();
+    let iid: InstrumentId = 6;
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, iid);
+
+    assert!(
+        core.follows_existing_subscription(iid, 2, &[236]),
+        "the second caller watches the subscription that is up",
+    );
+    assert_eq!(
+        core.series_by_req.lock().unwrap().get(&2).map(Vec::as_slice),
+        Some([236u32].as_slice()),
+        "and what it asked for is its own from that moment",
+    );
+}
+
+/// A slot given back takes its requests' marks with it.
+///
+/// The engine reclaims a slot and the requests that were watching it are
+/// forgotten. Their marks were not: reused for an ordinary stream, such a
+/// number was withdrawn as a snapshot the moment it had both sides of a quote,
+/// or read as the venue's one-shot by every later join, or counted as still
+/// asking for a series its caller has no subscription to hear.
+#[test]
+fn a_reclaimed_slot_takes_the_marks_of_what_was_watching_it() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let iid: InstrumentId = 2;
+
+    core.instrument_to_req.lock().unwrap().insert(iid, 5);
+    core.req_to_instrument.lock().unwrap().insert(5, iid);
+    core.chargeable_snapshot_reqs.lock().unwrap().insert(5);
+    core.series_by_req.lock().unwrap().insert(5, vec![236]);
+    core.snapshot_reqs.lock().unwrap().insert(5, (std::time::Instant::now(), 0));
+
+    shared.market.note_released_slot(iid);
+    core.forget_released_slots(&shared);
+
+    assert_eq!(core.watching(5), None, "the request is watching nothing");
+    assert!(
+        !core.chargeable_snapshot_reqs.lock().unwrap().contains(&5),
+        "and is not the venue's one-shot",
+    );
+    assert!(
+        !core.series_by_req.lock().unwrap().contains_key(&5),
+        "and asks for no series",
+    );
+    assert!(
+        !core.snapshot_reqs.lock().unwrap().contains_key(&5),
+        "and is waiting on no snapshot to finish",
+    );
 }
 
 /// A registration the engine never took gives back what it bought.
@@ -3523,14 +3603,14 @@ fn moved_watchers_report_the_destination_subscriptions_type() {
 fn a_refused_subscription_does_not_go_on_holding_the_slot_it_was_given() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    assert!(!core.take_or_follow(7, 100), "the first request held the slot");
+    assert!(!core.take_or_follow(7, 100, &[]), "the first request held the slot");
 
     shared.market.note_released_slot(7);
     core.forget_released_slots(&shared);
 
     assert_eq!(core.watching(100), None, "it is not watching anything now");
     assert!(
-        !core.take_or_follow(7, 200),
+        !core.take_or_follow(7, 200, &[]),
         "the contract that took the slot next holds it outright, rather than following a \
          request the venue already refused",
     );

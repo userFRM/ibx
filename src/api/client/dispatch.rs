@@ -535,11 +535,7 @@ impl EClient {
             wrapper.error(req_id, NO_SECURITY_DEFINITION, &reason, "");
         }
         for (instrument, min_tick) in self.shared.market.drain_tick_req_params() {
-            let held_by = self.core.req_id_for_instrument(instrument);
-            let watching = std::iter::once(held_by)
-                .filter(|id| *id >= 0)
-                .chain(self.core.followers_of(instrument));
-            for req_id in watching {
+            for req_id in self.core.watchers_of(instrument) {
                 wrapper.tick_req_params(req_id, min_tick, "", 0);
             }
         }
@@ -549,10 +545,8 @@ impl EClient {
         // both sides in one mask and a caller is owed an attribute beside each
         // price, so the side is read off the tick the attribute goes out with.
         let mut snapshot_done: Vec<(i64, Option<u64>)> = Vec::new();
-        for (iid, req_id) in instruments {
+        for (iid, req_id, watchers) in instruments {
             let result = self.core.poll_instrument_ticks(&self.shared, iid, req_id);
-            // The same quote, once per caller watching this contract.
-            let watchers = self.core.followers_of(iid);
             // Ahead of everything this pass delivers, and to everyone it
             // delivers to. The type a caller is served under is stated before
             // the data it applies to, which is the order the reference client
@@ -732,10 +726,8 @@ impl EClient {
     fn dispatch_data(&self, wrapper: &mut impl Wrapper) {
         // News → tick_news
         for news in self.shared.market.drain_tick_news() {
-            let req_id = self.core.req_id_for_instrument(news.instrument);
             // News goes to every subscriber of the contract, as its quotes do.
-            let watchers = self.core.followers_of(news.instrument);
-            for id in std::iter::once(req_id).filter(|id| *id >= 0).chain(watchers.iter().copied()) {
+            for id in self.core.watchers_of(news.instrument) {
                 wrapper.tick_news(
                     id, news.timestamp as i64,
                     &news.provider_code, &news.article_id, &news.headline, "",
@@ -760,12 +752,8 @@ impl EClient {
             let (to, tick_type): (Vec<i64>, i32) = match comp.answers {
                 Some(asked) => (vec![asked], ASKED_OPTION_COMPUTATION),
                 None => {
-                    let owner = self.core.req_id_for_instrument(comp.instrument);
                     (
-                        std::iter::once(owner)
-                            .filter(|id| *id >= 0)
-                            .chain(self.core.followers_of(comp.instrument))
-                            .collect(),
+                        self.core.watchers_of(comp.instrument),
                         if self.core.feed_is_delayed(comp.instrument) {
                             DELAYED_MODEL_OPTION_COMPUTATION
                         } else {
@@ -815,11 +803,7 @@ impl EClient {
         // refuse — so it was told nothing and waited for ticks that could not
         // arrive. Where nobody holds it, there is nobody to tell.
         for (instrument, reason) in self.shared.market.drain_subscription_failures() {
-            let held_by = self.core.req_id_for_instrument(instrument);
-            let watching = std::iter::once(held_by)
-                .filter(|id| *id >= 0)
-                .chain(self.core.followers_of(instrument));
-            for req_id in watching {
+            for req_id in self.core.watchers_of(instrument) {
                 wrapper.error(req_id, NO_SECURITY_DEFINITION, &reason, "");
             }
         }

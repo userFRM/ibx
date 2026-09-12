@@ -3501,6 +3501,42 @@ fn an_answer_of_orders_still_being_stated_is_bounded_too() {
     );
 }
 
+/// The bound is on the answer, not on what is waiting to be handed over.
+///
+/// A handover empties the records and lets go of them, so an answer measured
+/// by what is waiting was never bounded at all: every batch handed over made
+/// room for the next, and a window the venue never ends grew for the life of a
+/// connection that never drops — the answer the caller is finally handed as
+/// large as the venue cared to make it.
+#[test]
+fn the_bound_is_on_the_answer_not_on_what_waits_to_be_handed_over() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    ccp.completed_orders_open = true;
+    // A full answer's worth, every one of them finished — so a handover takes
+    // them all and leaves nothing waiting.
+    for order_id in 0..super::FINISHED_ORDERS_HELD as u64 {
+        ccp.hold_a_finished_order_for_test(order_id, crate::types::OrderStatus::Filled);
+    }
+
+    let mut frame = exec_report_frame(&[
+        (39, "2"), (150, "F"), (32, "100"), (31, "150.00"), (14, "100"), (151, "0"),
+        (54, "1"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+        (40, "2"), (44, "150.00"), (1, "DU111111"),
+    ]);
+    frame.insert(11, "424242".to_string());
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    assert!(
+        !ccp.finished_orders.iter().any(|held| held.order_id == 424_242),
+        "the answer has taken every order it can, so this one is not part of it",
+    );
+    let handed_over = shared.orders.drain_completed_orders();
+    assert!(
+        !handed_over.iter().any(|order| order.order_id == 424_242),
+        "and it is not handed to the caller either",
+    );
+}
+
 /// An order the venue numbered is an API order whichever path its report took.
 ///
 /// The number is what tells an order placed through an API from one typed in

@@ -1455,6 +1455,118 @@ mod news_tests {
         );
     }
 
+    /// A caller that named what every subscription already asks for does not
+    /// withdraw it.
+    ///
+    /// The trading status, the venue map and the option model are opened by
+    /// the subscription itself, so a caller naming one of them is not asked
+    /// for a second subscription to it — and it is not that caller's to
+    /// withdraw either. Withdrawn with it, the subscription that goes on
+    /// running lost its trading status, and nothing asked for it again until a
+    /// reconnect.
+    #[test]
+    fn a_caller_does_not_withdraw_what_the_subscription_asks_for_itself() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).expect("a connection over the test pair");
+
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut conn, &mut hb,
+        );
+        let _ = super::drain_inner(&mut peer);
+
+        // A caller that named the trading status withdraws.
+        farm.stop_asking_for_series(
+            instrument, &[TRADING_STATUS_REQUEST_TYPE], &mut conn, &mut hb,
+        );
+
+        let record = farm.instrument_md_reqs.iter()
+            .find(|(id, _)| *id == instrument)
+            .map(|(_, record)| record)
+            .expect("the subscription stands");
+        assert!(
+            record.entries.iter().any(|e| e.request_type == TRADING_STATUS_REQUEST_TYPE),
+            "the subscription still asks for the status it opens with: {:?}",
+            record.entries.iter().map(|e| e.request_type).collect::<Vec<_>>(),
+        );
+        assert!(
+            super::drain_inner(&mut peer).is_empty(),
+            "and nothing was withdrawn on the wire",
+        );
+    }
+
+    /// The total a running series was read against goes with the series.
+    ///
+    /// A running series states a cumulative total and what is published is the
+    /// difference between two of them. Kept after the series is withdrawn, the
+    /// first reading once somebody asks for it again is measured from the
+    /// total the venue stated before it stopped — one print for everything
+    /// that traded while nobody was asking, which the venue never stated.
+    #[test]
+    fn the_total_a_running_series_was_read_against_goes_with_it() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).expect("a connection over the test pair");
+
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut conn, &mut hb,
+        );
+        farm.also_ask_for_series(instrument, 756733, &[233], &context, &mut conn, &mut hb);
+        let _ = super::drain_inner(&mut peer);
+        // What the venue has stated so far, which the next reading is read
+        // against.
+        farm.rt_volume_totals.insert((instrument, 48), (1.0, 100, 3));
+
+        farm.stop_asking_for_series(instrument, &[233], &mut conn, &mut hb);
+
+        assert!(
+            !farm.rt_volume_totals.contains_key(&(instrument, 48)),
+            "nothing is left for a later reading to be measured from",
+        );
+    }
+
+    /// A series named while a reconnect is still pacing its way through is
+    /// what the subscription asks for when its turn comes.
+    ///
+    /// The queue holds what has not been sent yet, and a caller joining a
+    /// contract that is still in it is accepted. Looked for in the record
+    /// alone, its series went nowhere: the call answered, the queued
+    /// subscription went out asking for the list as it stood, and the caller
+    /// watched for a stream nobody had asked the venue for.
+    #[test]
+    fn a_series_named_while_the_replay_is_pacing_is_asked_for_when_its_turn_comes() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+        let mut conn = None;
+
+        // A contract waiting its turn in the paced replay, the way a reconnect
+        // leaves it.
+        farm.replay_queue.push_back((
+            instrument, 756733, "SPY".into(), "SMART".into(), "STK".into(),
+            String::new(), 0.0, String::new(), String::new(), 0,
+        ));
+
+        farm.also_ask_for_series(instrument, 756733, &[236], &context, &mut conn, &mut hb);
+
+        assert_eq!(
+            farm.asked_generic_ticks.get(&instrument).map(Vec::as_slice),
+            Some([236u32].as_slice()),
+            "the subscription asks for it when the replay reaches it",
+        );
+    }
+
     /// Every tick that states no length of its own says where it ends, so a
     /// record of one is read and the records behind it in the same message
     /// survive.
