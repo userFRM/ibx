@@ -225,6 +225,39 @@ fn hw_info_machine_id_is_stable_across_calls() {
         "machine ID must be 8 hex chars, got {machine1:?}");
 }
 
+/// The address the session opened on is the one it presents, and the card is
+/// the one belonging to it.
+///
+/// The client this replaces takes the local address off the socket that
+/// reached the venue and builds the identity from that — the card of the
+/// interface holding that address, and the address itself — once, for the life
+/// of the process. Probed separately, this client could answer with the route
+/// to somewhere else, with nothing at all where that route is blocked, or with
+/// a different answer for the order connection than for each farm.
+#[test]
+fn the_address_the_session_opened_on_is_the_one_it_presents() {
+    // Whatever this process has already noted, if anything: the value is
+    // settled once, as it is there, so this reads it rather than setting it.
+    let noted = get_lan_ip(None);
+    assert!(!noted.is_empty(), "an address is presented either way");
+    // A stated address still wins over it, because a caller inside a
+    // container is telling this client what the machine outside is.
+    assert_eq!(get_lan_ip(Some("10.11.12.13")), "10.11.12.13");
+    // And an address that names no machine does not, whichever it is.
+    for spelling in ["0.0.0.0", "::", "224.0.0.1", "255.255.255.255"] {
+        assert_eq!(
+            get_lan_ip(Some(spelling)), noted,
+            "{spelling} was presented as where this machine is",
+        );
+    }
+    // Six bytes of nothing is not a card: the venue takes the identity and
+    // then refuses the farm logon behind it.
+    assert_eq!(
+        get_hw_info(None, Some("00:00:00:00:00:00")), get_hw_info(None, None),
+        "a card of all zeroes was presented",
+    );
+}
+
 /// A card and an address the caller stated are the ones presented.
 ///
 /// The identity the venue holds a session under is three things and only one

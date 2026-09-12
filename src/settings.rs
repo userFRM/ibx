@@ -194,6 +194,29 @@ impl GatewaySettings {
                 .filter(|v| !v.is_empty())
                 .cloned()
                 .or_else(|| std::env::var(variable).ok().filter(|v| !v.is_empty()))
+                .and_then(|value| one_field(variable, value))
+        }
+        /// A setting is one field, and has to stay one.
+        ///
+        /// Two characters end a field on the wires this client writes: the
+        /// separator a FIX message is written with, and the semicolon the
+        /// connection request is written with. A setting carrying either
+        /// reaches the venue as the fields it was cut into — a zone of
+        /// `UTC<SOH>6900=0` states a zone and then a tag nobody set, and a
+        /// client string with a semicolon in it adds a whole position to the
+        /// request. Refused here rather than at the socket: this is the one
+        /// place every setting passes through, and what the venue is told has
+        /// to be what the caller stated.
+        fn one_field(variable: &str, value: String) -> Option<String> {
+            if value.contains('\u{1}') || value.contains(';') {
+                log::warn!(
+                    "{variable} carries a character that ends a field on the wire, so it \
+                     states more than the one thing it was given as; the default stands \
+                     instead",
+                );
+                return None;
+            }
+            Some(value)
         }
         SessionSettings {
             timezone: stated(self.timezone.as_ref(), "IBX_TZ")
@@ -406,6 +429,32 @@ mod tests {
             );
         }
         unsafe { std::env::remove_var("IBX_ISLAND_FOR_NASDAQ") };
+    }
+
+    /// A setting is one field on the wire, and a value that would end that
+    /// field early does not become one.
+    ///
+    /// Two characters end a field on the wires this client writes: the
+    /// separator FIX is written with, and the semicolon the connection request
+    /// is written with. Carried through, a zone of `UTC<SOH>6900=0` reaches
+    /// the venue as a zone and a tag nobody set, and a client string with a
+    /// semicolon in it adds a position to the request the venue reads
+    /// positionally.
+    #[test]
+    fn a_setting_that_would_cut_itself_into_fields_is_refused() {
+        let cut = GatewaySettings {
+            timezone: Some("UTC\u{1}6900=0".into()),
+            encoded: Some("j/p/en_US/S;extra".into()),
+            build: Some("9999".into()),
+            ..Default::default()
+        };
+        let resolved = cut.resolve();
+        assert_eq!(resolved.timezone, "UTC", "the default zone stands");
+        assert_eq!(
+            resolved.encoded, crate::config::IB_ENCODED,
+            "the client string this session announces is the settled one",
+        );
+        assert_eq!(resolved.build, "9999", "and a value that states one thing is kept");
     }
 
     /// Every field of the stated form reaches the resolved one. A field added

@@ -353,6 +353,7 @@ dependencies = [
  "mac_address",
  "md-5",
  "native-tls",
+ "nix",
  "num-bigint",
  "pyo3",
  "rand",

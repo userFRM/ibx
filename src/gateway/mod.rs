@@ -987,6 +987,14 @@ fn reconnect_ccp_attempt(
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DNS resolution failed"))?;
     let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_SSL_AUTH))?;
+    // Where this machine is, as far as the venue is concerned: the address of
+    // the socket that reached it. The identity announced at logon is built
+    // from this in the client this replaces, rather than from a route probed
+    // separately, and it is settled once — the first socket's address is the
+    // one the venue already has.
+    if let Ok(local) = tcp.local_addr() {
+        session::note_the_socket_we_opened(local.ip());
+    }
     // Bounded from the moment it is open, as the farm connection is. A peer
     // that accepts the socket and then says nothing would otherwise hold the
     // key exchange below for as long as it stays open — and on the reconnect
@@ -1630,6 +1638,14 @@ fn dial_auth_server(
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "DNS resolution failed"))?;
     let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(TIMEOUT_SSL_AUTH))?;
+    // Where this machine is, as far as the venue is concerned: the address of
+    // the socket that reached it. The identity announced at logon is built
+    // from this in the client this replaces, rather than from a route probed
+    // separately, and it is settled once — the first socket's address is the
+    // one the venue already has.
+    if let Ok(local) = tcp.local_addr() {
+        session::note_the_socket_we_opened(local.ip());
+    }
     // Bounded from the moment it is open, as the farm connection is. A
     // peer that accepts the socket and then says nothing would otherwise
     // hold the key exchange below for as long as it stays open, and the
@@ -1862,13 +1878,6 @@ impl Gateway {
             r.username == config.username && r.paper == config.paper
         });
 
-        let hw_info = match resume {
-            Some(r) => r.hw_info.clone(),
-            None => session::get_hw_info(
-                config.settings.hardware_id.as_deref(),
-                config.settings.mac_address.as_deref(),
-            ),
-        };
         // Tag 6266 carries `{jdkVer}/{platform}/{locale}/{dist}`. The locale
         // segment must be a canonical Java `Locale.toString()` value (e.g.
         // `en_US`, `fr`, `ja_JP`); bare `en` is rejected as `invalid twsInfo`.
@@ -1880,6 +1889,19 @@ impl Gateway {
         };
 
         let (mut tls, mut channel) = dial_auth_server(config, host, port)?;
+
+        // Composed behind the dial, not in front of it: the card this machine
+        // names is the card of the interface the session opened on, which is
+        // not known until it has. Read in front of the dial, the identity was
+        // built from whichever card the machine answers with first — a virtual
+        // one on some systems.
+        let hw_info = match resume {
+            Some(r) => r.hw_info.clone(),
+            None => session::get_hw_info(
+                config.settings.hardware_id.as_deref(),
+                config.settings.mac_address.as_deref(),
+            ),
+        };
 
         // Send CONNECT_REQUEST (encrypted)
         let flags = session::FLAG_OK_TO_REDIRECT

@@ -748,11 +748,43 @@ pub fn build_ccp_logon(
 }
 
 /// Build encrypted farm logon message.
+#[allow(clippy::too_many_arguments)]
 pub fn build_farm_encrypted_logon(
     settings: &crate::settings::SessionSettings,
     channel: &mut SecureChannel,
     username: &str,
     _paper: bool,
+    farm_name: &str,
+    session_id: &str,
+    session_token: &BigUint,
+    hw_info: &str,
+    encoded: &str,
+    slot: u32,
+) -> Vec<u8> {
+    let inner = build_farm_logon_fields(
+        settings, username, farm_name, session_id, session_token, hw_info, encoded, slot,
+    );
+
+    log::info!(
+        "{} FIX 35=A pre-encrypt ({} bytes): {}",
+        farm_name,
+        inner.len(),
+        String::from_utf8_lossy(&inner).replace('\x01', "|"),
+    );
+    let encrypted_raw = channel.encrypt(&inner);
+    finish_farm_logon(encrypted_raw)
+}
+
+/// What a farm logon states, before it is enciphered.
+///
+/// Composed apart from the enciphering because the enciphering needs a channel
+/// a key exchange has settled, and what this states is the same either way: a
+/// field missing here is missing from every farm connection, and nothing could
+/// read the message to notice.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_farm_logon_fields(
+    settings: &crate::settings::SessionSettings,
+    username: &str,
     farm_name: &str,
     session_id: &str,
     session_token: &BigUint,
@@ -771,7 +803,7 @@ pub fn build_farm_encrypted_logon(
     let build = settings.build.clone();
     let version = settings.version.clone();
 
-    let inner = fix_build(
+    fix_build(
         &[
             (fix::TAG_MSG_TYPE, fix::MSG_LOGON),
             (fix::TAG_SENDING_TIME, &now),
@@ -782,6 +814,11 @@ pub fn build_farm_encrypted_logon(
             (fix::TAG_IB_BUILD, &build),
             (fix::TAG_IB_VERSION, &version),
             (6351, &hw_field),
+            // The zone, in the place the venue's own farm logon states it:
+            // behind the machine identity and before the longer string. The
+            // order logon states it in was the one this had, and a farm logon
+            // stated no zone at all.
+            (6947, settings.timezone.as_str()),
             (6266, encoded),
             (6903, "1"),
             (8035, session_id),
@@ -789,15 +826,11 @@ pub fn build_farm_encrypted_logon(
             (8483, &token_hash),
         ],
         0,
-    );
+    )
+}
 
-    log::info!(
-        "{} FIX 35=A pre-encrypt ({} bytes): {}",
-        farm_name,
-        inner.len(),
-        String::from_utf8_lossy(&inner).replace('\x01', "|"),
-    );
-    let encrypted_raw = channel.encrypt(&inner);
+/// The enciphered logon inside the wrapper the venue frames it in.
+fn finish_farm_logon(encrypted_raw: Vec<u8>) -> Vec<u8> {
     let b64_str = B64.encode(&encrypted_raw);
 
     // Outer wrapper: 8=FIX.4.1|9=<bodylen>|90=<b64_len>|91=<b64>|10=<cksum>

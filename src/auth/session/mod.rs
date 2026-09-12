@@ -172,6 +172,27 @@ fn read_or_create_hwid() -> String {
 ///
 /// Live data farms validate the MAC field; an all-zero MAC causes the FIX
 /// 35=A logon to be silently rejected (paper farms don't validate).
+/// Where the session actually opened from, once it has.
+///
+/// The venue's own client takes the local address off the socket it connected
+/// with and builds the identity from that, once, for the life of the process.
+/// Probed independently instead, this client could answer with the address of
+/// a route to somewhere else — or with nothing, where the route it probes is
+/// blocked — and could answer differently for the order connection and for
+/// each farm, which is three identities for one machine in one session.
+static FROM_THE_SOCKET: std::sync::OnceLock<std::net::IpAddr> = std::sync::OnceLock::new();
+
+/// Note the local address of the socket this session opened on.
+///
+/// The first one wins, as it does in the client this replaces: a redirect
+/// opens another socket, and the identity the venue already has is the one
+/// from the first.
+pub fn note_the_socket_we_opened(local: std::net::IpAddr) {
+    if is_a_machine(&local) {
+        let _ = FROM_THE_SOCKET.set(local);
+    }
+}
+
 /// `machine_id` is the persistent 8-hex value from `~/hwid`, and
 /// `stated_mac` the card to name where the machine's own is not the one to
 /// name.
@@ -184,6 +205,7 @@ pub fn get_hw_info(stated: Option<&str>, stated_mac: Option<&str>) -> String {
     };
     let mac = stated_mac
         .and_then(stated_card)
+        .or_else(card_on_the_socket_we_opened)
         .or_else(first_real_mac)
         .unwrap_or_else(|| "00:00:00:00:00:00".to_string());
     format!("{machine_id}|{mac}")
@@ -208,11 +230,69 @@ fn stated_card(stated: &str) -> Option<String> {
         );
         return None;
     }
+    // Six bytes of nothing is not a card either. The venue takes the identity
+    // and refuses the farm logon behind it, silently, which reads from here as
+    // a farm that would not talk to this session.
+    if digits.iter().all(|c| *c == '0') {
+        log::warn!(
+            "the network card stated for this machine is all zeroes, which the venue \
+             refuses; reading the machine's own instead",
+        );
+        return None;
+    }
     let pairs: Vec<String> = digits
         .chunks(2)
         .map(|pair| pair.iter().collect::<String>().to_ascii_uppercase())
         .collect();
     Some(pairs.join(":"))
+}
+
+/// The card of the interface the session's own socket was opened on.
+///
+/// Which interface that is, is what the address says, and this is the pairing
+/// the client this replaces makes: it asks the system for the interface
+/// holding the address its socket reported, and reads that interface's card.
+/// The first card a machine answers with is a different question and often a
+/// different answer — a virtual interface on some systems — and the identity
+/// then describes a machine the venue has never seen.
+///
+/// `None` before a socket has been opened, and on a system this cannot ask.
+#[cfg(unix)]
+fn card_on_the_socket_we_opened() -> Option<String> {
+    let local = *FROM_THE_SOCKET.get()?;
+    let interfaces = nix::ifaddrs::getifaddrs().ok()?;
+    let mut named = None;
+    for interface in interfaces {
+        let Some(address) = interface.address else { continue };
+        let holds = match local {
+            std::net::IpAddr::V4(wanted) => address
+                .as_sockaddr_in()
+                .is_some_and(|stated| stated.ip() == wanted),
+            std::net::IpAddr::V6(wanted) => {
+                address.as_sockaddr_in6().is_some_and(|stated| stated.ip() == wanted)
+            }
+        };
+        if holds {
+            named = Some(interface.interface_name);
+            break;
+        }
+    }
+    let card = mac_address::mac_address_by_name(&named?).ok().flatten()?;
+    let bytes = card.bytes();
+    if bytes.iter().all(|b| *b == 0) {
+        return None;
+    }
+    Some(format!(
+        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+    ))
+}
+
+/// Nothing here asks that question on a system with no `getifaddrs`, so the
+/// card is the first the machine answers with, as it was.
+#[cfg(not(unix))]
+fn card_on_the_socket_we_opened() -> Option<String> {
+    None
 }
 
 /// Probe the OS for the first non-zero MAC address. Returns `None` if no NIC
@@ -231,6 +311,22 @@ fn first_real_mac() -> Option<String> {
     None
 }
 
+/// Whether an address is one a machine is reached at.
+///
+/// What the identity carries is where this machine is on its own network, and
+/// three kinds of address are not that: the unspecified address, which names
+/// every interface and none, a multicast group, which names a set of
+/// listeners, and the IPv4 broadcast address.
+fn is_a_machine(address: &std::net::IpAddr) -> bool {
+    if address.is_unspecified() || address.is_multicast() {
+        return false;
+    }
+    match address {
+        std::net::IpAddr::V4(v4) => !v4.is_broadcast(),
+        std::net::IpAddr::V6(_) => true,
+    }
+}
+
 /// Discover the local LAN IP that would route to the public internet, or use
 /// the one the caller stated. Returns "127.0.0.1" if no external route is
 /// configured.
@@ -245,9 +341,26 @@ fn first_real_mac() -> Option<String> {
 /// that is not one names no machine, and is refused so the probe still answers.
 pub fn get_lan_ip(stated: Option<&str>) -> String {
     use std::net::UdpSocket;
+    // What the socket said, where a socket has been opened: that is the
+    // address this machine is at, as far as the venue is concerned, and the
+    // client this replaces uses nothing else.
+    if stated.map(str::trim).is_none_or(str::is_empty)
+        && let Some(local) = FROM_THE_SOCKET.get()
+    {
+        return local.to_string();
+    }
     if let Some(stated) = stated.map(str::trim).filter(|v| !v.is_empty()) {
         match stated.parse::<std::net::IpAddr>() {
-            Ok(address) => return address.to_string(),
+            // An address, and one a machine can be reached at. The unspecified
+            // address, a multicast group and the broadcast address all parse
+            // and none of them is where a machine is: the venue's own client
+            // takes this off the socket it opened, which can only ever answer
+            // with one address of one interface.
+            Ok(address) if is_a_machine(&address) => return address.to_string(),
+            Ok(_) => log::warn!(
+                "the address stated for this machine on its local network is not an \
+                 address a machine is reached at; reading the machine's own instead",
+            ),
             Err(_) => log::warn!(
                 "the address stated for this machine on its local network is not an \
                  address; reading the machine's own instead",

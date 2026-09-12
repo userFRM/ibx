@@ -619,8 +619,53 @@ fn try_frame_farm_msg_with_trailing() {
     assert_eq!(consumed, msg1.len());
 }
 
-// Note: build_farm_encrypted_logon requires a DH-initialized SecureChannel
-// which can't be created in unit tests. Tested via compatibility tests instead.
+/// A farm logon states what an order logon states about the session, and in
+/// the places the venue's own farm logon states them.
+///
+/// The enciphering needs a channel a key exchange has settled, which no unit
+/// test can build — so what the logon says was checked nowhere, and a field
+/// missing from it was missing from every farm connection this client opens.
+/// Composed apart from the enciphering, what it says can be read here.
+#[test]
+fn a_farm_logon_states_the_session_the_way_an_order_logon_does() {
+    let settings = crate::settings::SessionSettings {
+        timezone: "Europe/Zurich".into(),
+        build: "9999".into(),
+        version: "9.9.9".into(),
+        lan_ip: Some("10.11.12.13".into()),
+        ..Default::default()
+    };
+    let inner = crate::gateway::logon::build_farm_logon_fields(
+        &settings,
+        "user",
+        "mdfarm",
+        "SESSION1",
+        &num_bigint::BigUint::from(12345u32),
+        "abc123|AA:BB:CC:DD:EE:FF",
+        "17.0.10.0.101/W/en/G",
+        3,
+    );
+    let fields = fix_parse(&inner);
+    assert_eq!(fields[&35], "A");
+    assert_eq!(fields[&6947], "Europe/Zurich", "the zone, as the venue's own farm logon states it");
+    assert_eq!(fields[&6034], "9999", "the build");
+    assert_eq!(fields[&6968], "9.9.9", "the version");
+    assert_eq!(
+        fields[&6351], "<abc123|AA:BB:CC:DD:EE:FF|10.11.12.13>",
+        "the machine identity",
+    );
+    assert_eq!(fields[&6266], "17.0.10.0.101/W/en/G", "the longer string");
+    assert_eq!(fields[&96], "Suser/3/mdfarm", "which farm, for which session slot");
+    // And in the venue's own order: the identity, then the zone, then the
+    // longer string.
+    let order: Vec<u32> = String::from_utf8_lossy(&inner)
+        .split('\u{1}')
+        .filter_map(|f| f.split_once('='))
+        .filter_map(|(t, _)| t.parse::<u32>().ok())
+        .filter(|t| [6351u32, 6947, 6266].contains(t))
+        .collect();
+    assert_eq!(order, vec![6351, 6947, 6266]);
+}
 
 #[test]
 fn days_to_ymd_leap_year() {
