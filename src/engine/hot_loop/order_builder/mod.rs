@@ -772,7 +772,7 @@ pub(crate) fn drain_and_send_orders(
                          that clears it, so the order goes on working outside regular hours",
                     );
                 }
-                let rest: [(u32, &str); 13] = [
+                let rest: [(u32, &str); 12] = [
                     (100, &destination),  // where the resting order is working
                     (6210, &destination), // and its second statement
                     (38, &qty_str),       // OrderQty
@@ -784,8 +784,7 @@ pub(crate) fn drain_and_send_orders(
                     (59, &tif_str),       // TIF — dropped below when unstated
                     (6008, &con_id_str),  // ConId
                     (6088, "Socket"),     // Connection type
-                    (6211, ""),           // Empty (matches reference)
-                    (6238, ""),           // Empty (matches reference)
+                    (6211, ""),           // Empty where no alert placed it
                 ];
                 fields.extend(rest);
                 if tif == crate::types::TIF_UNSTATED {
@@ -1440,10 +1439,11 @@ fn send_order_ex(
     // emit it, so it reaches the venue some other way there, but what this
     // client sends has to satisfy the venue rather than match the writer.
     fields.push((204, CUSTOMER.to_string()));
-    // Tags 6211 and 6238 name the alert an order came from and what that alert
-    // asked for. Both are stated empty when there is no alert.
+    // Tag 6211 names the alert an order came from, and is stated empty when
+    // there is no alert. Tag 6238 is what that alert asked for, and belongs to
+    // the alert: an order that came from none states it nowhere rather than
+    // stating it empty.
     fields.push((6211, String::new()));
-    fields.push((6238, String::new()));
     // Routed per the instrument's own registration, as every other order type
     // is. A directed exchange is rejected for the midprice, snap and pegged
     // types: "The order type <name> is invalid for this combination of exchange
@@ -2059,28 +2059,47 @@ fn push_order_attrs(
             // Empty where the leg routes with the combination rather than on a
             // venue of its own, which is what the terminal writes for SMART.
             fields.push((616, leg.exchange.clone()));
-            // The position effect rides on 6087. Stated on 654, which is
-            // where the venue counts a leg's place within the short-sale
-            // group and not a position at all, the instruction was not read:
-            // each leg took the account's own default, so a leg meant to
-            // close an option already held opened a second one beside it.
-            if leg.open_close != 0 {
-                fields.push((6087, leg.open_close.to_string()));
-            }
+            // The position effect rides on 6087, and on every leg. Stated on
+            // 654, which is where the venue counts a leg's place within the
+            // short-sale group and not a position at all, the instruction was
+            // not read: each leg took the account's own default, so a leg
+            // meant to close an option already held opened a second one
+            // beside it. Left out where it is nought, a combination states
+            // fewer effects than it has legs and the venue has one fewer to
+            // attach to each of them — nought is a stated effect there, not
+            // an absence.
+            fields.push((6087, leg.open_close.to_string()));
+        }
+        // Whether the combination is a short sale at all: stated once, and as
+        // the one value the venue reads on it. Written per leg and carrying
+        // that leg's own slot, the combination stated a number the venue puts
+        // on this tag for a single order only, and stated it once per short
+        // leg.
+        if attrs.combo_legs.iter().any(|leg| leg.short_sale_slot == 1) {
+            fields.push((6086, "1".to_string()));
+        }
+        // And the short-sale group, which is keyed and of a fixed width: a
+        // number saying which leg each row is about, then the three fields,
+        // empty for a leg that carries no short sale. Written only for the
+        // legs that had one and never keyed, nothing on the wire said which
+        // leg a locate or a borrow location belonged to — so on the ordinary
+        // mixed combination they were stated against a leg the caller never
+        // shorted.
+        for (index, leg) in attrs.combo_legs.iter().enumerate() {
+            fields.push((654, index.to_string()));
             if leg.short_sale_slot != 0 {
-                fields.push((6086, leg.short_sale_slot.to_string()));
-                // Stated on every short leg the venue is given, ahead of
-                // where the borrow is. The value is the same for all of them
-                // — nothing a caller states changes it — and a short leg
-                // that left it out was the one statement of a short sale that
-                // did not carry it.
+                // The value is the same for all of them — nothing a caller
+                // states changes it.
                 fields.push((6215, "N".to_string()));
-                if !leg.designated_location.is_empty() {
-                    fields.push((6216, leg.designated_location.clone()));
-                }
-            }
-            if leg.exempt_code != -1 {
-                fields.push((1689, leg.exempt_code.to_string()));
+                fields.push((6216, leg.designated_location.clone()));
+                fields.push((
+                    1689,
+                    if leg.exempt_code != -1 { leg.exempt_code.to_string() } else { String::new() },
+                ));
+            } else {
+                fields.push((6215, String::new()));
+                fields.push((6216, String::new()));
+                fields.push((1689, String::new()));
             }
         }
         // Where the caller priced the legs separately rather than pricing the
@@ -2093,12 +2112,14 @@ fn push_order_attrs(
         // the order that was placed.
         if attrs.combo_legs.iter().any(|leg| leg.price.is_some()) {
             for leg in &attrs.combo_legs {
-                // A leg the caller left unpriced states nothing, the way a leg
-                // with no venue of its own does.
-                fields.push((
-                    6879,
-                    leg.price.map(|p| format_price(p).to_string()).unwrap_or_default(),
-                ));
+                // A leg the caller left unpriced states nothing at all. Padded
+                // with an empty price tag, the venue was told that leg's price
+                // — as nothing, which is a price it either reads as nought or
+                // refuses, and either way a claim about the leg that was not
+                // made here.
+                if let Some(price) = leg.price {
+                    fields.push((6879, format_price(price).to_string()));
+                }
             }
         }
     }
@@ -2163,9 +2184,12 @@ fn push_order_attrs(
             fields.push((5700, attrs.designated_location.clone()));
         }
         fields.push((6086, attrs.short_sale_slot.to_string()));
-    }
-    if attrs.exempt_code != -1 {
-        fields.push((1688, attrs.exempt_code.to_string()));
+        // An exemption from the short-sale rule is part of the short sale.
+        // Stated outside it, an ordinary buy carried an exemption code for a
+        // sale the venue had been told nothing about.
+        if attrs.exempt_code != -1 {
+            fields.push((1688, attrs.exempt_code.to_string()));
+        }
     }
     // The hedge, as a number rather than the API's letter, with the parameter
     // the chosen kind takes: a beta or a pair ratio. Delta and FX take none.
@@ -2449,7 +2473,7 @@ fn push_order_attrs(
             fields.push((5960, priority.as_str().to_string()));
         }
         K::Algo { algo, .. } => {
-            let (algo_name, param_strs) = build_algo_tags(algo);
+            let (algo_name, mut param_strs) = build_algo_tags(algo);
             fields.push((847, algo_name.to_string()));
             // Tag 849 (maxPctVol) for the algos that use it, in the caller's
             // own spelling: a parameter is text on the wire, and what the
@@ -2476,6 +2500,17 @@ fn push_order_attrs(
             };
             if let Some(max_pct_vol) = max_pct_vol {
                 fields.push((849, max_pct_vol));
+                // And off the list of the rest, because it has a tag of its
+                // own. Left on it, the same instruction went out twice — once
+                // on its own tag and again as a parameter — and the count
+                // ahead of the parameters was one larger than the parameters
+                // the venue reads as generic ones.
+                if let Some(at) = param_strs
+                    .as_chunks::<2>().0.iter()
+                    .position(|[key, _]| key == "maxPctVol")
+                {
+                    param_strs.drain(at * 2..at * 2 + 2);
+                }
             }
             fields.push((5957, (param_strs.len() / 2).to_string()));
             // Key/value pairs: 5958=key, 5960=value, repeated.

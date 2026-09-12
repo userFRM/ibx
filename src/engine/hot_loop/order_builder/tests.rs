@@ -2584,10 +2584,20 @@ mod outside_rth_polarity_tests {
             "a venue only where the leg has its own: {msg}"
         );
         assert!(f.contains(&"6087=1"), "the position effect where set: {msg}");
-        assert!(
-            !f.iter().any(|field| field.starts_with("654=")),
-            "and not on 654, which counts short-sale legs rather than \
-             positioning them: {msg}",
+        // On every leg, including the one whose effect is nought: nought is a
+        // stated effect there, not an absence, and a combination stating fewer
+        // effects than it has legs leaves the venue one short of attaching one
+        // to each.
+        assert_eq!(
+            f.iter().filter(|field| field.starts_with("6087=")).count(), 2,
+            "one effect per leg: {msg}",
+        );
+        // And 654 keys the short-sale group rather than positioning a leg: one
+        // row per leg, so what a locate belongs to is stated rather than
+        // guessed from the order the fields arrive in.
+        assert_eq!(
+            f.iter().filter(|field| field.starts_with("654=")).count(), 2,
+            "a short-sale row per leg: {msg}",
         );
     }
 
@@ -2627,11 +2637,70 @@ mod outside_rth_polarity_tests {
         let n = peer.read(&mut buf).unwrap();
         let msg = String::from_utf8_lossy(&buf[..n]);
         let f: Vec<&str> = msg.split('\u{1}').collect();
-        assert!(f.contains(&"6086=2"), "the slot: {msg}");
+        // The group is keyed by leg, so what belongs to which leg is stated
+        // rather than inferred from the order the fields happen to arrive in.
+        assert!(f.contains(&"654=0"), "the leg the group is about: {msg}");
         assert!(f.contains(&"6215=N"), "the flag every short leg carries: {msg}");
         assert!(f.contains(&"6216=IBKR"), "where the borrow is: {msg}");
         assert!(f.contains(&"1689=3"), "the exemption: {msg}");
         assert!(f.contains(&"6087=2"), "and the leg closes rather than opens: {msg}");
+        // Whether the combination is a short sale at all is stated once, and
+        // only for the slot the venue reads on that tag. A leg on another slot
+        // states none: written per leg with the leg's own slot, the
+        // combination carried a number this tag takes on a single order only.
+        assert!(
+            !f.iter().any(|field| field.starts_with("6086=")),
+            "the combination states no slot of its own: {msg}",
+        );
+    }
+
+    /// And where a leg is shorted out of the borrowable pool, the combination
+    /// says so once, as the one value that tag carries on a combination.
+    #[test]
+    fn a_combination_states_it_is_a_short_sale_once() {
+        use std::io::Read;
+        let (mut conn, mut peer, mut context, instrument) = combo_test_state();
+        let leg = |short_sale_slot: u8| crate::types::ComboLegSpec {
+            con_id: 265598,
+            ratio: 1,
+            is_sell: true,
+            exchange: String::new(),
+            open_close: 0,
+            short_sale_slot,
+            designated_location: String::new(),
+            exempt_code: -1,
+            price: None,
+        };
+        let attrs = crate::types::OrderAttrs {
+            combo_legs: vec![leg(1), leg(1)],
+            ..Default::default()
+        };
+        send_order_ex(
+            &mut conn, &mut context, &shared_for_test(), "DU123456", 33, instrument, Side::Sell,
+            1, crate::types::OrderKind::Limit { price: crate::types::PRICE_SCALE },
+            b'0', &attrs,
+        )
+        .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let n = peer.read(&mut buf).unwrap();
+        let msg = String::from_utf8_lossy(&buf[..n]);
+        let f: Vec<&str> = msg.split('\u{1}').collect();
+        assert_eq!(
+            f.iter().filter(|field| **field == "6086=1").count(), 1,
+            "once for the combination, whatever its legs: {msg}",
+        );
+        // And a row per leg, keyed, each with the three fields the group
+        // carries — the leg that states no short sale states them empty, as a
+        // fixed-width group is written.
+        assert_eq!(
+            f.iter().filter(|field| field.starts_with("654=")).count(), 2,
+            "a key per leg: {msg}",
+        );
+        assert_eq!(
+            f.iter().filter(|field| field.starts_with("6215=")).count(), 2,
+            "and the flag per leg: {msg}",
+        );
     }
 
     /// A ladder can start against a position already held and a first
@@ -2773,9 +2842,11 @@ mod outside_rth_polarity_tests {
         let msg = String::from_utf8_lossy(&buf[..n]);
         let f: Vec<&str> = msg.split('\u{1}').collect();
         let priced: Vec<&&str> = f.iter().filter(|x| x.starts_with("6879=")).collect();
-        assert_eq!(priced.len(), 2, "one price a leg, in leg order: {msg}");
+        // One price for the leg the caller priced, and nothing at all for the
+        // one it left alone: an empty price tag is a statement about that
+        // leg's price, which the caller did not make.
+        assert_eq!(priced.len(), 1, "a price only where the caller gave one: {msg}");
         assert_eq!(*priced[0], "6879=2", "the leg the caller priced: {msg}");
-        assert_eq!(*priced[1], "6879=", "and the one it left alone: {msg}");
     }
 
     /// Nothing goes out where the caller priced the combination itself, which

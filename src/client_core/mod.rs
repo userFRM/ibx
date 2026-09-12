@@ -610,6 +610,17 @@ pub struct TrackedOrder {
     pub filled: f64,
     /// How much has not.
     pub remaining: f64,
+    /// What everything filled so far averaged, as the venue stated it, and
+    /// what the last of it went at.
+    ///
+    /// Nought where the venue has stated nothing — which is what nought means
+    /// on the callback that carries them. Answered as nought on an order the
+    /// venue had stated an average for, a caller read "filled three hundred
+    /// at an average of nothing", which is not a reading it can tell from a
+    /// real one.
+    pub avg_fill_price: f64,
+    /// What the last fill on it went at.
+    pub last_fill_price: f64,
     /// The engine's own slot for the contract.
     pub instrument: InstrumentId,
     /// The terms the venue is known to hold, kept while a replacement of them
@@ -688,6 +699,9 @@ fn tracked_as_placed(
     let remaining = order.total_quantity;
     TrackedOrder {
         contract, order, status: "PendingSubmit".into(), filled: 0.0, remaining, instrument,
+        // Nothing has filled, so there is no price the venue has stated for
+        // one, which is what nought means on the callback that carries them.
+        avg_fill_price: 0.0, last_fill_price: 0.0,
         rejected: false, before_the_replace: None, placed_here: true,
     }
 }
@@ -3269,6 +3283,7 @@ impl ClientCore {
                 let remaining = (order.total_quantity - filled).max(0.0);
                 orders.insert(order_id, TrackedOrder {
                     contract, order, status, filled, remaining,
+                    avg_fill_price: 0.0, last_fill_price: 0.0,
                     instrument, rejected: false, before_the_replace,
                     placed_here: false,
                 });
@@ -3461,6 +3476,7 @@ impl ClientCore {
             };
             TrackedOrder {
                 contract, order, status: String::new(), rejected: false, filled: 0.0, remaining: 0.0,
+                avg_fill_price: 0.0, last_fill_price: 0.0,
                 instrument, before_the_replace: None, placed_here: false,
             }
         });
@@ -3530,6 +3546,12 @@ impl ClientCore {
             let named_client: HashMap<u64, i32> = shared_orders.iter()
                 .map(|(oid, info)| (*oid, info.order.client_id))
                 .collect();
+            // And what the venue said its fills went at, read into the answer
+            // the same way: the record here is what this client sent, and the
+            // prices belong to what the venue did with it.
+            let stated_fills: HashMap<u64, (f64, f64)> = shared_orders.iter()
+                .map(|(oid, info)| (*oid, (info.last_exec.avg_price, info.last_exec.price)))
+                .collect();
             let orders = self.open_orders.lock().unwrap();
             for (&oid, o) in orders.iter() {
                 // A margin preview states what an order would cost; nothing
@@ -3549,12 +3571,16 @@ impl ClientCore {
                     if order.client_id == 0 {
                         order.client_id = named_client.get(&oid).copied().unwrap_or(0);
                     }
+                    let (avg_fill_price, last_fill_price) =
+                        stated_fills.get(&oid).copied().unwrap_or((0.0, 0.0));
                     result.push((oid, TrackedOrder {
                         contract,
                         order,
                         status: o.status.clone(),
                         filled: o.filled,
                         remaining: o.remaining,
+                        avg_fill_price,
+                        last_fill_price,
                         instrument: o.instrument,
                         rejected: o.rejected, before_the_replace: None, placed_here: o.placed_here,
                     }));
@@ -3587,6 +3613,8 @@ impl ClientCore {
                     status: info.order_state.status.clone(),
                     filled,
                     remaining,
+                    avg_fill_price: info.last_exec.avg_price,
+                    last_fill_price: info.last_exec.price,
                     instrument: 0,
                     rejected: false, before_the_replace: None, placed_here: false,
                 }));

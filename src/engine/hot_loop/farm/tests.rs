@@ -3321,8 +3321,10 @@ mod depth_bit_tests {
                     }
                     push_bits(&mut bits, u64::from(f.value < 0), 1);
                     // A magnitude wider than a machine word: the high bits are
-                    // written as zeros, then the word.
-                    let width = 8 * f.len - 1;
+                    // written as zeros, then the word. A field stating a width
+                    // of nothing carries the sign bit and no magnitude, which
+                    // is how the wire writes one.
+                    let width = (8 * f.len).saturating_sub(1);
                     if width > 64 {
                         push_bits(&mut bits, 0, width - 64);
                         push_bits(&mut bits, f.value.unsigned_abs(), 64);
@@ -3350,7 +3352,13 @@ mod depth_bit_tests {
     }
 
     /// A level arrives with the operation and the side the wire states, and
-    /// the maker's name where it states one — the venue where it does not.
+    /// the maker's name as the wire states it.
+    ///
+    /// On an exchange-level book that is the name and nothing else: a book
+    /// quoting no makers states none, and a caller keying its book by maker
+    /// was handed a maker named after the exchange that the venue never named.
+    /// The aggregated book is the one place the exchange stands in, which is
+    /// where the aggregating reader puts it.
     #[test]
     fn a_level_carries_its_operation_its_side_and_its_maker() {
         let (farm, shared) = farm_holding(0x1122, 7, "IEX");
@@ -3363,8 +3371,21 @@ mod depth_bit_tests {
             .collect();
         assert_eq!(got, [
             (0, 1, 0, 100.50, 500.0, "NSDQ".to_string()),
-            (1, 0, 1, 100.75, 300.0, "IEX".to_string()),
+            (1, 0, 1, 100.75, 300.0, String::new()),
         ], "{got:?}");
+
+        // And on the aggregated book, where the venue states no maker, the
+        // exchange the section was asked on stands in.
+        let mut smart = FarmState::new();
+        smart.depth_tag_to_req.push((0x1122, 9, true, 0.01, 1.0, "IEX".to_string()));
+        let aggregated = SharedState::new();
+        smart.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            level(0, "", 0, BID_PX, 10050, BID_SZ, 500),
+        ])]), &aggregated);
+        let got: Vec<String> = aggregated.market.drain_depth_updates().into_iter()
+            .map(|u| u.market_maker)
+            .collect();
+        assert_eq!(got, ["IEX".to_string()], "{got:?}");
     }
 
     /// A delete is an operation of its own, naming its side and no level.
@@ -3420,7 +3441,7 @@ mod depth_bit_tests {
             .map(|u| (u.position, u.price, u.size, u.market_maker)).collect();
         assert_eq!(got, [
             (0, 1.0, 5.0, "TEST".to_string()),
-            (1, 2.0, 7.0, "IEX".to_string()),
+            (1, 2.0, 7.0, String::new()),
         ], "only the held stream's levels: {got:?}");
     }
 
@@ -3491,6 +3512,32 @@ mod depth_bit_tests {
         assert!(
             got.iter().any(|u| u.position == 9 && (u.price - 101.23).abs() < 1e-9),
             "the level past the wrap arrived: {} updates", got.len(),
+        );
+    }
+
+    /// A field stating a width of nothing still costs its sign bit.
+    ///
+    /// Every field carries one, whatever the width says. Skipped by the width
+    /// alone, the walk was left one bit behind the wire and every field and
+    /// entry after it in the frame was read from shifted bits — and handed to
+    /// the caller as a priced, sized level.
+    #[test]
+    fn a_field_stating_no_width_still_costs_its_sign_bit() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            Entry { op: 0, name: "", position: 4, fields: vec![
+                // The extended form, stating a width of nothing: read at all,
+                // it is the sign bit and no magnitude.
+                Field { id: 100, len: 0, value: 0 },
+                Field { id: BID_PX, len: 2, value: 10050 },
+                Field { id: BID_SZ, len: 1, value: 5 },
+            ] },
+        ])]), &shared);
+        let got: Vec<_> = shared.market.drain_depth_updates().into_iter()
+            .map(|u| (u.position, u.price, u.size)).collect();
+        assert_eq!(
+            got, [(4, 100.50, 5.0)],
+            "the fields behind it are read from the bits they were written on: {got:?}",
         );
     }
 

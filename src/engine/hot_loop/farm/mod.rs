@@ -2957,8 +2957,17 @@ impl FarmState {
                         // width, is stepped over: the frame's other fields
                         // still stand. Ended here, every entry after it in the
                         // frame was lost, silently from the caller's side.
+                        //
+                        // The sign bit is part of every field and is consumed
+                        // whatever the width says — a field stating a width of
+                        // nothing still costs it. Skipped by the width alone,
+                        // a stated nought left the walk one bit behind the
+                        // wire, and every field and entry after it in the
+                        // frame was read from shifted bits and handed over as
+                        // a priced, sized level.
                         if width == 0 || width > 64 {
-                            let Some(()) = bits.skip(width) else { return };
+                            let Some(_) = bits.take(1) else { return };
+                            let Some(()) = bits.skip(width.saturating_sub(1)) else { return };
                             if more_fields == 0 {
                                 break;
                             }
@@ -3002,11 +3011,18 @@ impl FarmState {
                 if let Some((operation, side, price, size)) = level {
                     for (req_id, is_smart, venue) in &subscribers {
                         if !self.within_asked_depth(*req_id, position) { continue; }
-                        // The venue's name for the maker where it states one,
-                        // and otherwise the exchange this section of the book
-                        // is from: a level with neither is a level a caller
-                        // cannot place.
-                        let named = if name.trim().is_empty() { venue.clone() } else { name.trim().to_string() };
+                        // The venue's name for the maker, as it states it.
+                        // Where it states none and the book is the aggregated
+                        // one, the exchange stands in — which is what the
+                        // aggregating reader does there and only there.
+                        // Applied to an exchange-level book as well, a caller
+                        // keying its book by maker was given a maker the venue
+                        // never named, on every level of a book that quotes no
+                        // makers at all.
+                        let named = match name.trim() {
+                            "" if *is_smart => venue.clone(),
+                            stated => stated.to_string(),
+                        };
                         shared.market.push_depth_update(DepthUpdate {
                             req_id: *req_id, position, market_maker: named,
                             operation, side, price, size, is_smart_depth: *is_smart,

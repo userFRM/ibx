@@ -818,7 +818,13 @@ impl EClient {
             self.deliver(py, "open_order", (*order_id as i64, &c_py, &o_py, &state_py))?;
             self.deliver(py, "order_status",
                 (*order_id as i64, tracked.status.as_str(), tracked.filled, tracked.remaining,
-                 0.0f64, tracked.order.perm_id, tracked.order.parent_id, 0.0f64,
+                 // What the venue said the fills went at. Answered as nought,
+                 // a caller read "filled three hundred at an average of
+                 // nothing" on an order the venue had stated an average for —
+                 // and the live path on this same surface publishes the stated
+                 // figure, so one order read two ways.
+                 tracked.avg_fill_price, tracked.order.perm_id, tracked.order.parent_id,
+                 tracked.last_fill_price,
                  // The client the order was placed under, as the accompanying
                  // order object already states. Read off this client instead,
                  // the two callbacks for one order disagree and the status
@@ -1904,6 +1910,56 @@ w = W()",
             assert_eq!(*id, 3);
             assert_eq!(*code, Refusal::VALIDATION as i64);
             assert!(message.contains("combo leg 0 has no conId"), "{message}");
+        });
+    }
+
+    /// The working orders carry what the venue said their fills went at.
+    ///
+    /// The venue states an average on every report, and this client holds it.
+    /// Answered as nought, a caller read "filled three hundred at an average
+    /// of nothing" — a reading it cannot tell from a real one — while the live
+    /// path on this same surface publishes the stated figure, so one order read
+    /// two ways depending on which callback the caller happened to see.
+    #[test]
+    fn the_working_orders_carry_what_the_venue_said_their_fills_went_at() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, _wrapper) = wired_client(py);
+            shared.orders.set_replay_done();
+            shared.orders.push_order_info(77, crate::bridge::RichOrderInfo {
+                contract: crate::types::model::Contract {
+                    symbol: "SPY".into(), sec_type: "STK".into(), ..Default::default()
+                },
+                order: crate::types::model::Order {
+                    order_id: 77, action: "BUY".into(), total_quantity: 500.0,
+                    filled_quantity: 300.0, order_type: "LMT".into(), lmt_price: 100.0,
+                    ..Default::default()
+                },
+                order_state: crate::types::model::OrderState {
+                    status: "Submitted".into(), ..Default::default()
+                },
+                last_exec: crate::types::model::Execution {
+                    avg_price: 99.5, price: 99.75, cum_qty: 300.0, ..Default::default()
+                },
+            });
+
+            client.req_open_orders(py).unwrap();
+
+            let said = client.waiting_answers.lock().unwrap()
+                .iter()
+                .find(|(name, _)| *name == "order_status")
+                .map(|(_, args)| {
+                    let args = args.bind(py);
+                    (
+                        args.get_item(4).unwrap().extract::<f64>().unwrap(),
+                        args.get_item(7).unwrap().extract::<f64>().unwrap(),
+                    )
+                })
+                .expect("the order is reported");
+            assert_eq!(
+                said, (99.5, 99.75),
+                "the average of everything filled, and what the last of it went at",
+            );
         });
     }
 
