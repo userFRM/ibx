@@ -5548,11 +5548,28 @@ impl ClientCore {
         let strike = stated_or_none(contract.strike)
             .filter(|k| *k > 0.0)
             .ok_or_else(|| "the contract states no strike to solve at".to_string())?;
+        // A call or a put, and nothing else. Read as "a call if it says call",
+        // an option stating a right this client does not know — or stating
+        // none at all — was priced as a put, and a put's price for a contract
+        // whose pay-off nobody here can name is a number made up about it.
+        enum Right { Call, Put }
+        let right = match contract.right.to_ascii_uppercase().as_str() {
+            "C" | "CALL" => Right::Call,
+            "P" | "PUT" => Right::Put,
+            other => {
+                return Err(crate::error_codes::Refusal::validation(format!(
+                    "this contract states its right as {other:?}, which is neither a call \
+                     nor a put, so there is no pay-off to price"
+                )));
+            }
+        };
         let terms = crate::control::option_model::OptionTerms {
             strike,
             years_to_expiry: years,
-            is_call: contract.right.eq_ignore_ascii_case("C")
-                || contract.right.eq_ignore_ascii_case("CALL"),
+            is_call: match right {
+                Right::Call => true,
+                Right::Put => false,
+            },
             // The venue's own calculator tells these apart, and so must this:
             // an option on a future is priced on one that drifts nowhere and
             // settles at expiry.

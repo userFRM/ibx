@@ -644,8 +644,17 @@ impl OrderState {
     /// some API placed and does not for one typed in. The first is how the
     /// reference client knows its own — it holds the source of every order it
     /// sent — and the second is the only thing the wire says.
+    ///
+    /// Both of the order's numbers are asked, because the record the archive
+    /// holds is built two ways: an order the venue finished long ago is filed
+    /// under the id the report named, and one that finished while this session
+    /// watched keeps the number it was placed under and states no permanent id
+    /// at all. Asked under one of the two, an order another API placed and
+    /// finished live was left out of the answer the venue itself had marked.
     pub fn was_entered_through_an_api(&self, order_id: u64, perm_id: u64) -> bool {
-        self.the_order_went_out(order_id) || self.was_api_numbered(perm_id)
+        self.the_order_went_out(order_id)
+            || self.was_api_numbered(order_id)
+            || self.was_api_numbered(perm_id)
     }
 
     /// The venue has named this id, whatever became of the order under it.

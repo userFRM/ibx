@@ -128,7 +128,9 @@ fn one_payment(entry: &str) -> Option<Payment> {
 /// each ex-date is, in years, and what the underlying drops by.
 ///
 /// In the contract's own currency only. The venue states the currency of each
-/// payment and it need not be the one the contract is quoted in.
+/// payment and it need not be the one the contract is quoted in — and where
+/// the contract's currency is not known, a payment that names one cannot be
+/// shown to be in it, so it is left out.
 ///
 /// Measured from the day the caller names, as a count of days since the epoch
 /// — the same count this library reads a date the venue stated into.
@@ -152,10 +154,12 @@ pub fn over_the_life(
         // a payment in another currency taken at face value is a number of
         // euros subtracted from a price in dollars — a finite answer in no
         // units at all. Converting it needs a rate nothing here states.
-        if !payment.currency.is_empty()
-            && !currency.is_empty()
-            && !payment.currency.eq_ignore_ascii_case(currency)
-        {
+        //
+        // A payment that names a currency is matched against one that is
+        // named. Where the contract's own is not known, no payment naming one
+        // can be shown to be in it — and passing them all through on an empty
+        // string made the guard a guard against nothing at all.
+        if !payment.currency.is_empty() && !payment.currency.eq_ignore_ascii_case(currency) {
             continue;
         }
         let Some(ex) = crate::protocol::datetime::day_number(&payment.ex_date) else { continue };
@@ -163,11 +167,16 @@ pub fn over_the_life(
         if days <= 0 {
             continue;
         }
-        let years = days as f64 / 365.0;
-        if years > years_to_expiry {
+        // Against the same whole days the ex-date is counted in. The venue
+        // states how long the contract has left as a fraction — ninety-eight
+        // and a twenty-fifth of a day — and a payment going ex on the day it
+        // expires is a whole day count one larger than that fraction. Compared
+        // as they stand, such a payment read as falling after expiry and was
+        // dropped, on exactly the contracts where it matters most.
+        if days as f64 > (years_to_expiry * 365.0).ceil() {
             continue;
         }
-        out.push((years, payment.amount));
+        out.push((days as f64 / 365.0, payment.amount));
     }
     out
 }
@@ -273,5 +282,20 @@ mod tests {
         assert_eq!(over[1].1, 1.77);
         // Nineteen days to the first, carried in years on the venue's basis.
         assert!((over[0].0 - 19.0 / 365.0).abs() < 1e-12, "{}", over[0].0);
+
+        // A payment going ex on the day the contract expires is inside its
+        // life. The venue states how long is left as a fraction, and a whole
+        // day count is one larger than that fraction — compared as they
+        // stand, the payment read as falling after expiry and was dropped.
+        let expiring = Schedule {
+            tax_adjustment: 1.0,
+            term_rates: Vec::new(),
+            payments: vec![
+                Payment { ex_date: "20260311".into(), amount: 1.0, ..Default::default() },
+            ],
+        };
+        let nine_and_a_half = 9.5 / 365.0;
+        let over = over_the_life(&expiring, from, nine_and_a_half, "");
+        assert_eq!(over.len(), 1, "the payment on the day it expires: {over:?}");
     }
 }

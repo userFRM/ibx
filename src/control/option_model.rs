@@ -149,7 +149,9 @@ fn payouts_by_step(
     // A future costs nothing to hold and drifts nowhere, so what is owed on it
     // does not grow either.
     let drift = if on_a_future { 0.0 } else { rate - payouts.yield_rate };
-    let life = dt * STEPS as f64;
+    // The same whole-day rounding the schedule is selected on, so a payment
+    // going ex on the day the contract expires is inside its life here too.
+    let life = (dt * STEPS as f64 * 365.0).ceil() / 365.0;
     for &(years_to_ex, amount) in payouts.schedule {
         // A payment the option's life does not cover is not the option's. One
         // after expiry, carried anyway, is owed at every step up to the last
@@ -251,6 +253,14 @@ fn tree_near_the_root(
         return None;
     }
     let discount = (-rate * dt).exp();
+    // A rate large enough to overflow the discount does not make a tree. Left
+    // to run, every node behind it is infinity times a pay-off of nothing,
+    // which is not a number — and the early-exercise comparison takes the
+    // finite side of that, so the root came back as an option worth exactly
+    // nothing rather than as a contract this cannot price.
+    if !discount.is_finite() {
+        return None;
+    }
     // A call is worth more alive than exercised unless a dividend is coming:
     // the holder gives up the interest on the strike and gains nothing but the
     // payment. So the reference model tests a call for early exercise only
@@ -1015,6 +1025,26 @@ mod tests {
         }, dt, false).expect("a present value places");
         assert_eq!(flat_owed[0], today);
         assert!(flat_owed[1..].iter().all(|owed| *owed == 0.0));
+    }
+
+    /// A rate that overflows the discount is refused, not answered.
+    ///
+    /// Every figure here is finite and the odds are a real pair, so the tree
+    /// is walked — and then every node behind the last is infinity times a
+    /// pay-off of nothing, which is not a number. The early-exercise
+    /// comparison takes the finite side of that, so a contract this cannot
+    /// price came back as an option worth exactly nothing.
+    #[test]
+    fn a_rate_the_discount_cannot_hold_is_refused() {
+        let terms = OptionTerms {
+            strike: 1.0, years_to_expiry: 1.0, is_call: false, on_a_future: false,
+        };
+        let huge = -1e308;
+        assert_eq!(
+            price(terms, 100.0, 0.2, huge, Payouts { yield_rate: huge, ..Default::default() }),
+            None,
+            "a discount of infinity answered as a price",
+        );
     }
 
     /// A contract term that is not a number is not a worthless option.

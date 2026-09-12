@@ -9877,6 +9877,30 @@ fn asking_for_the_api_orders_alone_leaves_out_the_ones_typed_in() {
     let mut all_of_them = Heard::default();
     client.req_completed_orders(false, &mut all_of_them);
     assert_eq!(all_of_them.0, [91, 92], "both");
+
+    // And an order that finished while this session watched keeps the number
+    // it was placed under and states no permanent id at all. Asked under the
+    // permanent id alone, one another API placed was left out of an answer
+    // the venue itself had marked.
+    shared.orders.push_order_info(93, crate::bridge::RichOrderInfo {
+        contract: spy(),
+        order: Order {
+            order_id: 93, perm_id: 0,
+            action: "BUY".into(), total_quantity: 1.0, ..Default::default()
+        },
+        order_state: crate::types::model::OrderState {
+            status: "Filled".into(), ..Default::default()
+        },
+        last_exec: Default::default(),
+    });
+    shared.orders.note_api_numbered(93);
+    shared.orders.push_completed_order(crate::types::CompletedOrder {
+        order_id: 93, instrument: 0, status: crate::types::OrderStatus::Filled,
+        filled_qty: crate::types::QTY_SCALE, timestamp_ns: 0,
+    });
+    let mut live_one = Heard::default();
+    client.req_completed_orders(true, &mut live_one);
+    assert!(live_one.0.contains(&93), "the live one the venue numbered: {:?}", live_one.0);
 }
 
 /// A completed order names the client that placed it, on this surface as on

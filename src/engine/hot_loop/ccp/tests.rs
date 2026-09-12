@@ -2969,6 +2969,44 @@ fn ord_status_presubmitted_then_routed_advances_to_submitted() {
 // stays on the order snapshot, and nothing is queued for it — the
 // engine still holds the order at this point, so context still knows it
 // as Inactive/reactivatable while a Rejected order is retired below.
+/// A schedule that arrives after the wait ran out is still filed.
+///
+/// Giving up says this session may ask again. It does not say the venue will
+/// not answer, and the id this session asked under is the only thing that says
+/// which contract an answer is about — forgotten with the entry, a schedule
+/// that came a moment late was thrown away with nothing to attribute it by.
+#[test]
+fn a_schedule_that_comes_late_is_still_filed_against_its_contract() {
+    let (mut ccp, _unused, shared) = ord_status_test_state();
+    let mut hb = HeartbeatState::new();
+
+    // Asked, and given up on before the answer came.
+    let mut conn = None;
+    ccp.give_up_on_a_dividend_query("div_1", 756_733);
+    ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
+    assert!(
+        shared.reference.dividend_schedule(756_733).is_none(),
+        "nothing has been filed yet",
+    );
+
+    // And then the venue answers, under the id it was asked with.
+    let answer = crate::protocol::fix::fix_build(
+        &[
+            (35, "U"), (6040, "20"), (320, "div_1"),
+            (6118, "<dividends><div><date>20260918</date><amt>1.8311</amt>\
+                    <curr>USD</curr></div></dividends>"),
+        ],
+        1,
+    );
+    let mut context = Context::new();
+    ccp.process_ccp_message(
+        &answer, &mut None, &mut context, &shared, &None, &mut hb, "",
+    );
+
+    let filed = shared.reference.dividend_schedule(756_733).expect("filed against its contract");
+    assert_eq!(filed.payments.len(), 1, "{:?}", filed.payments);
+}
+
 /// A question about what the venue has finished waits for the session's own
 /// replay to be over.
 ///
@@ -3039,15 +3077,16 @@ fn a_question_held_for_a_replay_that_names_nothing_is_asked_anyway() {
     );
 }
 
-/// A window nobody ends is shut anyway.
+/// A caller who has waited long enough is told so, and the window is not shut
+/// with them.
 ///
-/// Nothing on the wire obliges the venue to send the sentinel that ends the
-/// answer. With no deadline the window stayed open for the life of a
-/// connection that never dropped: the caller waited out its own clock, every
-/// later question queued behind it for ever, and every report for an order
-/// this session does not hold went on being filed as history.
+/// A clock here says when a caller has waited long enough. It says nothing
+/// about where the venue's answer ends, and that answer is a run of ordinary
+/// reports carrying no mark of which question they answer. Shut on the clock,
+/// the rest of the answer goes to the live path, where a report that states a
+/// fill is a fill and moves a position.
 #[test]
-fn a_window_the_venue_never_ends_is_shut_on_its_own() {
+fn a_caller_who_waited_long_enough_is_answered_without_shutting_the_window() {
     let (mut ccp, _context, shared) = ord_status_test_state();
     let mut hb = HeartbeatState::new();
     let mut conn = None;
@@ -3056,10 +3095,14 @@ fn a_window_the_venue_never_ends_is_shut_on_its_own() {
 
     ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
 
-    assert!(!ccp.completed_orders_open, "the window is shut");
     assert!(
         shared.orders.take_completed_orders_end(),
-        "and the caller is released with what arrived",
+        "the caller is answered with what arrived",
+    );
+    assert!(
+        ccp.completed_orders_open,
+        "and what is still coming is still read as history, because the venue has not \
+         said it has finished",
     );
 }
 
@@ -3166,15 +3209,29 @@ fn the_last_event_of_a_finished_order_is_the_one_that_stands() {
     ccp.completed_orders_open = true;
 
     // Submitted, then filled — the two events of one order, as they happened.
-    for (status, cum) in [("0", "0"), ("2", "100")] {
-        let mut frame = exec_report_frame(&[
-            (39, status), (150, "0"), (14, cum), (151, "0"),
-            (54, "1"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
-            (40, "2"), (44, "150.00"), (1, "DU111111"),
-        ]);
-        frame.insert(11, "987654321".to_string());
-        ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
-    }
+    // The first states the whole order; the second states what changed, which
+    // is what the venue does.
+    let mut first = exec_report_frame(&[
+        (39, "0"), (150, "0"), (14, "0"), (151, "0"),
+        (54, "2"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+        (100, "NYSE"), (40, "2"), (44, "150.00"), (1, "DU111111"),
+    ]);
+    first.insert(11, "987654321".to_string());
+    ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
+
+    let mut last = exec_report_frame(&[
+        (39, "2"), (150, "0"), (14, "100"), (151, "0"), (1, "DU111111"),
+    ]);
+    last.insert(11, "987654321".to_string());
+    ccp.handle_exec_report(&last, b"", &mut context, &shared, &None, "");
+
+    // The later event said nothing about the side, the symbol or the venue.
+    // Rebuilt from nothing, the record kept only what that event repeated —
+    // and a side nobody stated is not a buy.
+    let info = shared.orders.get_order_info(987_654_321).expect("the order is recorded");
+    assert_eq!(info.order.action, "SELL", "the side the first event stated");
+    assert_eq!(info.contract.symbol, "IBM", "and the symbol");
+    assert_eq!(info.contract.exchange, "NYSE", "and where it traded");
 
     let finished = shared.orders.drain_completed_orders();
     assert_eq!(finished.len(), 1, "one order, not one per event: {finished:?}");

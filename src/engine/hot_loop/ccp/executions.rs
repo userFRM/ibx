@@ -625,28 +625,63 @@ impl CcpState {
         status: crate::types::OrderStatus,
         shared: &SharedState,
     ) {
-        let con_id: i64 = parsed.get(&6008).and_then(|s| s.parse().ok()).unwrap_or(0);
+        // What the earlier events of this order's life already said. Each
+        // event states what changed and leaves the rest out, so a record
+        // rebuilt from nothing every time keeps only the last event's fields —
+        // and where the last event states no side, that is not a buy.
+        let earlier = shared.orders.get_order_info(clord_id);
+        let con_id: i64 = parsed
+            .get(&6008)
+            .and_then(|s| s.parse().ok())
+            .or_else(|| earlier.as_ref().map(|was| was.contract.con_id))
+            .unwrap_or(0);
+        // Stated, or what an earlier event stated, and a buy only where
+        // something said so. Read as "a sell if it says sell", an event that
+        // said nothing turned a recovered sell into a buy, which moves the
+        // position the wrong way by twice the fill.
         let side = match parsed.get(&54).map(String::as_str) {
+            Some("1") => "BUY",
             Some("2") => "SELL",
             Some("5") => "SSHORT",
-            _ => "BUY",
+            _ => earlier
+                .as_ref()
+                .map(|was| was.order.action.as_str())
+                .filter(|action| !action.is_empty())
+                .unwrap_or("BUY"),
         };
         let qty = parse_qty_tag(parsed.get(&38)).unwrap_or(0);
         // What it filled, off the cumulative figure the report carries.
         let filled = parse_qty_tag(parsed.get(&14)).unwrap_or(0);
+        // Each field as this event states it, or as an earlier one did. The
+        // venue states what changed; a record rebuilt from nothing drops
+        // everything the last event happened not to repeat, so an order that
+        // finished on a terse report lost its symbol, its venue and its
+        // expiry.
+        let was = earlier.as_ref().map(|was| &was.contract);
+        let kept = |stated: Option<&String>, before: Option<&String>| -> String {
+            stated
+                .filter(|v| !v.is_empty())
+                .or(before.filter(|v| !v.is_empty()))
+                .cloned()
+                .unwrap_or_default()
+        };
         let contract = api::Contract {
             con_id,
-            symbol: parsed.get(&55).cloned().unwrap_or_default(),
-            sec_type: parsed.get(&167).cloned().unwrap_or_default(),
-            currency: parsed.get(&15).cloned().unwrap_or_default(),
-            exchange: parsed.get(&100).cloned().unwrap_or_default(),
-            local_symbol: parsed.get(&6035).cloned().unwrap_or_default(),
-            last_trade_date_or_contract_month: parsed.get(&541)
-                .or_else(|| parsed.get(&200))
-                .cloned()
-                .unwrap_or_default(),
-            strike: parsed.get(&202).and_then(|s| s.parse().ok()).unwrap_or(0.0),
-            right: parsed.get(&201).cloned().unwrap_or_default(),
+            symbol: kept(parsed.get(&55), was.map(|c| &c.symbol)),
+            sec_type: kept(parsed.get(&167), was.map(|c| &c.sec_type)),
+            currency: kept(parsed.get(&15), was.map(|c| &c.currency)),
+            exchange: kept(parsed.get(&100), was.map(|c| &c.exchange)),
+            local_symbol: kept(parsed.get(&6035), was.map(|c| &c.local_symbol)),
+            last_trade_date_or_contract_month: kept(
+                parsed.get(&541).or_else(|| parsed.get(&200)),
+                was.map(|c| &c.last_trade_date_or_contract_month),
+            ),
+            strike: parsed
+                .get(&202)
+                .and_then(|s| s.parse().ok())
+                .or_else(|| was.map(|c| c.strike).filter(|k| *k != 0.0))
+                .unwrap_or(0.0),
+            right: kept(parsed.get(&201), was.map(|c| &c.right)),
             ..Default::default()
         };
         let order = api::Order {

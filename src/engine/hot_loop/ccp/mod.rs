@@ -19,6 +19,10 @@ const MATCHING_SYMBOLS_TIMEOUT: Duration =
 const OPTION_CHAIN_TIMEOUT: Duration =
     Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 3);
 
+/// How many given-up-on dividend queries are remembered, so a late answer can
+/// still be attributed. A second chance for the few most recent, not a record.
+const GIVEN_UP_ON_DIVIDEND_QUERIES: usize = 64;
+
 /// The same again, for the question of what the venue has finished — both
 /// halves of it. A question held for the session's own replay to end waits
 /// this long for that and then goes out anyway, because the replay of an
@@ -557,6 +561,14 @@ pub(crate) struct CcpState {
     /// the same underlying asked the same question again and was answered with
     /// the schedule this session already held.
     dividends_answered: std::collections::HashSet<u32>,
+    /// The ids of queries given up on, and the contract each was about.
+    ///
+    /// Given up on says this session may ask again. It does not say the venue
+    /// will not answer, and the echoed id is the only thing that says which
+    /// contract an answer belongs to — dropped with the entry, a schedule that
+    /// arrived a moment late was thrown away with nothing else to attribute it
+    /// by. Bounded, oldest first: this is a second chance, not a record.
+    dividends_given_up_on: std::collections::VecDeque<(String, u32)>,
     /// The id the next query of this kind goes out under. This client's own
     /// number, distinct from every other request's because the venue echoes
     /// only this one tag back.
@@ -695,6 +707,7 @@ impl CcpState {
             pending_option_params: Vec::new(),
             pending_dividends: Vec::new(),
             dividends_answered: std::collections::HashSet::new(),
+            dividends_given_up_on: std::collections::VecDeque::new(),
             next_xml_query_id: 1,
             pending_schedule_pair: Vec::new(),
             pnl_subscriptions: Vec::new(),
@@ -2682,11 +2695,28 @@ impl CcpState {
         shared: &SharedState,
     ) {
         let Some(query_id) = parsed.get(&320) else { return };
-        let Some(at) = self.pending_dividends.iter().position(|(id, _, _)| id == query_id) else {
-            log::debug!("an answer arrived under {query_id}, which nothing here asked");
-            return;
+        let con_id = match self.pending_dividends.iter().position(|(id, _, _)| id == query_id) {
+            Some(at) => self.pending_dividends.remove(at).1,
+            // Late, and still an answer. The id this session asked under is
+            // the only thing that says which contract it is about, so a
+            // schedule that arrived a moment after the wait ran out is filed
+            // rather than thrown away.
+            None => match self
+                .dividends_given_up_on
+                .iter()
+                .position(|(id, _)| id == query_id)
+            {
+                Some(at) => {
+                    let (_, con_id) = self.dividends_given_up_on.remove(at).expect("just found");
+                    log::debug!("what {con_id} pays out arrived after the wait ran out");
+                    con_id
+                }
+                None => {
+                    log::debug!("an answer arrived under {query_id}, which nothing here asked");
+                    return;
+                }
+            },
         };
-        let (_, con_id, _) = self.pending_dividends.remove(at);
         self.dividends_answered.insert(con_id);
         let Some(body) = parsed.get(&6118) else {
             log::debug!("the answer for {con_id} states no schedule");
@@ -3137,6 +3167,15 @@ impl CcpState {
         self.completed_orders_deadline = Some(Instant::now());
     }
 
+    /// And for every dividend query outstanding.
+    ///
+    /// Takes the query as already sent, because a test has no socket to send
+    /// it down and what is under test is what becomes of the answer.
+    #[cfg(test)]
+    pub(crate) fn give_up_on_a_dividend_query(&mut self, query_id: &str, con_id: u32) {
+        self.pending_dividends.push((query_id.to_string(), con_id, Instant::now()));
+    }
+
     /// Send a held question about what the venue has finished, if the
     /// session's own replay is over by now.
     pub(crate) fn sweep_completed_orders_request(
@@ -3148,25 +3187,46 @@ impl CcpState {
         // A question the venue never answered. Kept, it held its contract for
         // the life of the session and stayed on this list for ever; given up
         // on, the next option written on that underlying asks again.
+        let mut given_up_on = Vec::new();
         self.pending_dividends.retain(|(query_id, con_id, until)| {
             let waiting = Instant::now() < *until;
             if !waiting {
                 log::debug!("what {con_id} pays out went unanswered under {query_id}");
+                given_up_on.push((query_id.clone(), *con_id));
             }
             waiting
         });
+        for entry in given_up_on {
+            self.dividends_given_up_on.push_back(entry);
+            while self.dividends_given_up_on.len() > GIVEN_UP_ON_DIVIDEND_QUERIES {
+                self.dividends_given_up_on.pop_front();
+            }
+        }
 
-        // A window nobody ended. The venue is under no obligation to send the
-        // sentinel and this connection has not dropped, so nothing else is
-        // going to shut this: the caller is released with what arrived, and
-        // the next question is let through.
+        // A caller who has waited long enough is told so. The window is not
+        // shut with them.
+        //
+        // The two are different things and were one. A clock here says when a
+        // caller has waited long enough; it says nothing about where the
+        // venue's answer ends, and the answer is a run of ordinary reports
+        // that carry no mark of which question they answer. Shutting the
+        // window on the clock hands the rest of that answer to the live path,
+        // where a report stating a fill is a fill and moves a position — and
+        // it says the venue finished when the venue said no such thing.
+        //
+        // So the caller is released with what arrived and the window stays
+        // open until the wire closes it: the sentinel, or the connection
+        // going away. A question queued behind it waits, which is what the
+        // reference client does with a second question while one is pending.
         if self.completed_orders_open
             && self.completed_orders_deadline.is_some_and(|at| Instant::now() >= at)
         {
-            self.completed_orders_open = false;
             self.completed_orders_deadline = None;
             shared.orders.note_completed_orders_end();
-            log::warn!("the venue did not say it had finished; the window is shut on its own");
+            log::warn!(
+                "the venue has not said it has finished; the caller is answered with what \
+                 arrived and the rest is still read as history",
+            );
         }
         let Some(waited_since) = self.completed_orders_wanted else { return };
         if self.completed_orders_open {
