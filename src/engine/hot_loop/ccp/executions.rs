@@ -623,6 +623,7 @@ impl CcpState {
         parsed: &std::collections::HashMap<u32, String>,
         clord_id: u64,
         status: crate::types::OrderStatus,
+        shared: &SharedState,
     ) {
         // What the earlier reports about this order already said. Each report
         // states what changed and leaves the rest out, so a record rebuilt
@@ -644,7 +645,19 @@ impl CcpState {
                 .or_else(|| was.map(|w| w.contract.con_id).filter(|id| *id != 0))
                 .unwrap_or(0),
             symbol: kept(parsed.get(&55), was.map(|w| w.contract.symbol.as_str())),
-            sec_type: kept(parsed.get(&167), was.map(|w| w.contract.sec_type.as_str())),
+            // The name a caller of the reference client knows the type by, not
+            // the wire's own: a stock is written CS there and STK everywhere a
+            // caller reads it, and a finished order answered CS was a type no
+            // program written against that client recognises.
+            sec_type: parsed
+                .get(&167)
+                .map(|stated| {
+                    crate::control::contracts::SecurityType::from_fix(stated).to_api_str().to_string()
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| {
+                    was.map(|w| w.contract.sec_type.clone()).unwrap_or_default()
+                }),
             currency: kept(parsed.get(&15), was.map(|w| w.contract.currency.as_str())),
             exchange: kept(parsed.get(&100), was.map(|w| w.contract.exchange.as_str())),
             local_symbol: kept(parsed.get(&6035), was.map(|w| w.contract.local_symbol.as_str())),
@@ -691,11 +704,36 @@ impl CcpState {
                 .and_then(|s| s.parse().ok())
                 .or_else(|| was.map(|w| w.order.client_id).filter(|id| *id != 0))
                 .unwrap_or(0),
-            perm_id: clord_id as i64,
+            // The venue's own permanent name for the order where it states
+            // one. The key this is assembled under is this session's, and
+            // answering it as the permanent id said the venue had named
+            // something it had not.
+            perm_id: parsed
+                .get(&37)
+                .and_then(|s| s.parse().ok())
+                .or_else(|| was.map(|w| w.order.perm_id).filter(|id| *id != 0))
+                .unwrap_or(clord_id as i64),
             action: side,
             total_quantity: number(38, was.map(|w| w.order.total_quantity), 0.0),
             filled_quantity: number(14, was.map(|w| w.order.filled_quantity), 0.0),
-            order_type: kept(parsed.get(&40), was.map(|w| w.order.order_type.as_str())),
+            // And the order type the same way: the wire writes a limit order 2
+            // and four kinds travel as P, told apart by the instruction beside
+            // them. Passed through as stated, a finished limit order was
+            // answered "2".
+            order_type: parsed
+                .get(&40)
+                .map(|stated| {
+                    crate::types::orders::ord_type_api_name(
+                        stated,
+                        parsed.get(&18).map(String::as_str).unwrap_or(""),
+                    )
+                    .to_string()
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| {
+                    was.map(|w| w.order.order_type.clone()).unwrap_or_default()
+                }),
+            tif: kept(parsed.get(&59), was.map(|w| w.order.tif.as_str())),
             lmt_price: number(44, was.map(|w| w.order.lmt_price), f64::MAX),
             aux_price: number(99, was.map(|w| w.order.aux_price), f64::MAX),
             account: kept(parsed.get(&1), was.map(|w| w.order.account.as_str())),
@@ -713,6 +751,19 @@ impl CcpState {
             Some(at) => self.finished_orders[at] = merged,
             None => self.finished_orders.push(merged),
         }
+        // A window the venue never ends stays open, which is right, and must
+        // not mean an unbounded number of orders held here for the rest of a
+        // connection that never drops. What is held is handed over and let go
+        // of; a later report about one of them starts a fresh record, which is
+        // the old behaviour and bounded.
+        if self.finished_orders.len() > super::FINISHED_ORDERS_HELD {
+            log::warn!(
+                "the venue has stated {} finished orders without saying it is done; \
+                 they are handed over as they stand",
+                self.finished_orders.len(),
+            );
+            self.deliver_finished_orders(shared, super::Handover::Final);
+        }
     }
 
     /// Hand over the answer to what the venue has finished, whole.
@@ -721,10 +772,27 @@ impl CcpState {
     /// an order's events are not always adjacent and each states only what
     /// changed. Published one per report instead, a caller had to choose
     /// between the first report's fields and the last report's status.
-    pub(crate) fn deliver_finished_orders_so_far(&mut self, shared: &SharedState) {
-        for held in self.finished_orders.drain(..) {
+    pub(crate) fn deliver_finished_orders(
+        &mut self, shared: &SharedState, handover: super::Handover,
+    ) {
+        let held_now: Vec<super::FinishedOrder> = match handover {
+            super::Handover::Final => std::mem::take(&mut self.finished_orders),
+            super::Handover::SoFar => self.finished_orders.clone(),
+        };
+        for held in held_now {
+            // A terminal order says so twice: once as the status it is in, and
+            // once as what became of it. Left empty, a rejected order read as
+            // one merely inactive — which this client takes for an order the
+            // venue is holding and may bring back — so a finished order was
+            // answered as an open one and a withdrawal was aimed at it.
+            let status_str = crate::types::order_status::order_status_str(held.status);
             let order_state = api::OrderState {
-                status: crate::types::order_status::order_status_str(held.status).to_string(),
+                status: status_str.to_string(),
+                completed_status: if held.status.is_terminal() {
+                    status_str.to_string()
+                } else {
+                    String::new()
+                },
                 ..Default::default()
             };
             shared.orders.push_order_info(held.order_id, crate::bridge::RichOrderInfo {
@@ -1060,6 +1128,18 @@ impl CcpState {
             None
         };
 
+        let wire_name = parsed.get(&11).and_then(|s| {
+            let stripped = s.strip_prefix('C').or_else(|| s.strip_prefix('L')).unwrap_or(s);
+            stated_order_id(stripped.split('.').next().unwrap_or(stripped))
+        });
+        // The recovery report states both names, so it is the one chance to
+        // learn that they are the same order. Every later report states only
+        // the permanent one.
+        if let (Some(origin), Some(wire)) = (recovery_origin_order_id, wire_name)
+            && origin != wire
+        {
+            self.wire_name_to_order.insert(wire, origin);
+        }
         let clord_id = recovery_origin_order_id.unwrap_or_else(|| {
             parsed.get(&11).and_then(|s| {
                 // A cancel names the order with a leading C, and a position the
@@ -1073,6 +1153,21 @@ impl CcpState {
                 stated_order_id(base)
             }).unwrap_or(0)
         });
+        // And read back, so a report naming the order the venue's way reaches
+        // the order this session is tracking — but only where nothing is
+        // working under that number already. The venue's permanent name for
+        // one order can be another order's own number, and an order under that
+        // number is the order that number means. Read the other way round, a
+        // report for a live order was redirected to an unrelated one.
+        //
+        // Only for a report that did not state its own: a recovery report
+        // names both, so there is nothing to resolve, and resolving it anyway
+        // gave one order's recovery to another order that happened to be
+        // numbered the venue's permanent name for the first.
+        let clord_id = match (recovery_origin_order_id, context.order(clord_id)) {
+            (None, None) => self.wire_name_to_order.get(&clord_id).copied().unwrap_or(clord_id),
+            _ => clord_id,
+        };
 
         // An order placed through an API carries the number that API gave it,
         // and one typed in by hand carries none. That is the whole of what
@@ -1126,7 +1221,7 @@ impl CcpState {
             let finished = status_of(
                 parsed.get(&39).map(String::as_str).unwrap_or(""), clord_id, parsed,
             );
-            self.file_finished_order(parsed, history_id, finished);
+            self.file_finished_order(parsed, history_id, finished, shared);
             return;
         }
 
@@ -1242,7 +1337,7 @@ impl CcpState {
             if self.completed_orders_open {
                 self.completed_orders_open = false;
                 self.completed_orders_deadline = None;
-                self.deliver_finished_orders_so_far(shared);
+                self.deliver_finished_orders(shared, super::Handover::Final);
                 // Only where nobody has been told yet. A caller released on
                 // its own wait has had its answer, and a second signal left
                 // standing was read by the next caller as the answer to a

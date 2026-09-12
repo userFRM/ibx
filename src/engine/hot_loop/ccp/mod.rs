@@ -19,11 +19,35 @@ const MATCHING_SYMBOLS_TIMEOUT: Duration =
 const OPTION_CHAIN_TIMEOUT: Duration =
     Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 3);
 
+/// Whether an answer being handed over is the whole of it.
+///
+/// The window can outlive the caller's patience: it is shut by the wire and
+/// the caller is released by a clock, so an answer may be handed over while
+/// the reports that finish it are still coming. Handed over and then dropped,
+/// the terminal report of an order already given to the caller would start a
+/// fresh record with none of its fields.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Handover {
+    /// Everything held, kept so later reports still merge onto it.
+    SoFar,
+    /// Everything held, and there is no more coming.
+    Final,
+}
+
+/// How many finished orders are assembled before the answer is handed over
+/// whether or not the venue has said it is done.
+///
+/// A window the venue never ends stays open, which is right — but it must not
+/// mean an unbounded number of orders held in the engine for the rest of a
+/// connection that never drops.
+const FINISHED_ORDERS_HELD: usize = 4_096;
+
 /// One order the venue has finished, as the reports about it are merged.
 ///
 /// Its status and what it filled are the latest any report stated; every other
 /// field is the last report that stated it, because a report states what
 /// changed and says nothing about the rest.
+#[derive(Clone)]
 pub(crate) struct FinishedOrder {
     /// The id every report about this order names it by.
     pub(crate) order_id: u64,
@@ -544,6 +568,17 @@ pub(crate) struct CcpState {
     /// In the order the venue stated them, so that is the order a caller hears
     /// about them in.
     finished_orders: Vec<FinishedOrder>,
+    /// The wire name an order is reported under, against the number this
+    /// session knows it by.
+    ///
+    /// The venue names a recovered order two ways. Its recovery report states
+    /// the permanent name on tag 11 and the number an API gave it beside
+    /// that, and this session takes the second, because that is the number a
+    /// caller withdraws it by. Every later report about the order states only
+    /// the first. Looked up under that, the order this session is tracking was
+    /// not found: a fill on it was booked against nothing, and while a
+    /// finished-orders window was open it was filed as history instead.
+    wire_name_to_order: std::collections::HashMap<u64, u64>,
     /// Whether the caller waiting on this window has already been told the
     /// answer is complete.
     ///
@@ -742,6 +777,7 @@ impl CcpState {
             pending_matching_symbols: Vec::new(),
             completed_orders_open: false,
             finished_orders: Vec::new(),
+            wire_name_to_order: std::collections::HashMap::new(),
             completed_orders_answered: false,
             completed_orders_wanted: None,
             completed_orders_deadline: None,
@@ -3109,9 +3145,15 @@ impl CcpState {
         if self.completed_orders_open || self.completed_orders_wanted.is_some() {
             self.completed_orders_open = false;
             self.completed_orders_deadline = None;
+            // Whether anyone is still owed an answer, read before the queue
+            // is cleared. The flag below is about the request whose window is
+            // open; a question queued behind it has never been answered at
+            // all, and suppressing its signal left it waiting out its own
+            // clock for a connection the engine already knew was gone.
+            let a_queued_question_dies_here = self.completed_orders_wanted.is_some();
             self.completed_orders_wanted = None;
-            self.deliver_finished_orders_so_far(shared);
-            if !self.completed_orders_answered {
+            self.deliver_finished_orders(shared, Handover::Final);
+            if a_queued_question_dies_here || !self.completed_orders_answered {
                 shared.orders.note_completed_orders_end();
             }
             self.completed_orders_answered = false;
@@ -3275,7 +3317,12 @@ impl CcpState {
             && self.completed_orders_deadline.is_some_and(|at| Instant::now() >= at)
         {
             self.completed_orders_deadline = None;
-            self.deliver_finished_orders_so_far(shared);
+            // A copy, because the window is still open and the reports that
+            // finish these orders have not arrived. Drained here, the terminal
+            // report of an order already handed over would start a fresh
+            // record with none of its fields and the caller would be left with
+            // the half-built one for good.
+            self.deliver_finished_orders(shared, Handover::SoFar);
             shared.orders.note_completed_orders_end();
             // Said, so the sentinel does not say it again to nobody and leave
             // the next caller reading it as its own answer.

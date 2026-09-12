@@ -3197,6 +3197,76 @@ fn an_order_the_venue_numbered_is_known_as_an_api_order_on_any_path() {
     );
 }
 
+/// A later report about a recovered order reaches the order it is about.
+///
+/// The venue names a recovered order two ways: its recovery report states the
+/// permanent name and the number an API gave it, and this session takes the
+/// second, because that is the number a caller withdraws it by. Every later
+/// report states only the first. Looked up under that, the order this session
+/// is tracking was not found, so a fill on it was booked against nothing — and
+/// while a finished-orders window was open it was filed as history instead.
+#[test]
+fn a_later_report_naming_a_recovered_order_the_venues_way_finds_it() {
+    let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+
+    // Recovered: the venue's permanent name on tag 11, the API's number beside
+    // it, and this session tracks it under the second.
+    let recovery = exec_report_frame(&[
+        (11, "9000.0"), (6121, "42"), (150, "0"), (39, "0"),
+        (6008, "756733"), (55, "SPY"), (54, "1"), (38, "100"),
+        (40, "2"), (44, "100"), (59, "0"), (100, "ARCA"), (198, "ARCA:1"),
+    ]);
+    ccp.handle_exec_report(&recovery, b"", &mut context, &shared, &None, "DU1");
+    assert!(context.order(42).is_some(), "tracked under the number an API gave it");
+
+    // And a later report names it the venue's way only.
+    let mut later = exec_report_frame(&[
+        (39, "1"), (150, "F"), (32, "50"), (31, "100.00"), (14, "50"), (151, "50"),
+        (54, "1"), (38, "100"), (55, "SPY"), (6008, "756733"), (198, "ARCA:2"),
+    ]);
+    later.insert(11, "9000".to_string());
+    ccp.handle_exec_report(&later, b"", &mut context, &shared, &None, "DU1");
+
+    assert_eq!(
+        context.order(42).expect("still tracked").filled,
+        50 * crate::types::QTY_SCALE,
+        "the fill reached the order it was for",
+    );
+}
+
+/// A finished order the venue rejected is not one it is still holding.
+///
+/// A terminal order says so twice: as the status it is in, and as what became
+/// of it. Left empty, a rejected order reads as one merely inactive, which
+/// this client takes for an order the venue is parking and may bring back — so
+/// a finished order was answered as open, and a withdrawal could be aimed at
+/// it.
+#[test]
+fn a_rejected_order_the_venue_has_finished_is_not_read_as_still_open() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    ccp.completed_orders_open = true;
+
+    let mut rejected = exec_report_frame(&[
+        (39, "8"), (150, "8"), (14, "0"), (151, "0"),
+        (54, "1"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+        (40, "2"), (44, "150.00"), (1, "DU111111"),
+    ]);
+    rejected.insert(11, "987654321".to_string());
+    ccp.handle_exec_report(&rejected, b"", &mut context, &shared, &None, "");
+
+    let mut end = exec_report_frame(&[(39, "2"), (55, "*")]);
+    end.insert(11, "0".to_string());
+    ccp.handle_exec_report(&end, b"", &mut context, &shared, &None, "");
+
+    let open = shared.orders.drain_open_orders();
+    assert!(
+        !open.iter().any(|(id, _)| *id == 987_654_321),
+        "a finished order was answered as one the venue is still holding: {open:?}",
+    );
+}
+
 /// One order's reports are one order, whichever number each of them carries.
 ///
 /// The venue states an order under the number an API gave it on some reports
@@ -3276,7 +3346,7 @@ fn the_last_event_of_a_finished_order_is_the_one_that_stands() {
     // that event repeated — and a side nobody stated is not a buy.
     let info = shared.orders.get_order_info(987_654_321).expect("the order is recorded");
     assert_eq!(info.order.total_quantity, 100.0, "the quantity the first event stated");
-    assert_eq!(info.order.order_type, "2", "and its type");
+    assert_eq!(info.order.order_type, "LMT", "and its type, spelled the way a caller reads it");
     assert_eq!(info.order.lmt_price, 150.0, "and its price");
     assert_eq!(info.order.action, "SELL", "the side the first event stated");
     assert_eq!(info.contract.symbol, "IBM", "and the symbol");

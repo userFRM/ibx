@@ -552,16 +552,28 @@ impl OrderState {
     /// handed the first: a filled order reported as submitted, short every
     /// fill that followed. That refusal is for a live replay of an order this
     /// session already saw finish, which is a different thing from the next
-    /// event of the same history.
+    /// event of the same history — so this path does not consult it, and the
+    /// same answer restated supersedes what it restates.
     #[doc(hidden)] pub fn refile_completed_order(&self, order: CompletedOrder) {
         {
-            let mut queued = self.completed_orders.lock().unwrap();
-            if let Some(waiting) = queued.iter_mut().find(|q| q.order_id == order.order_id) {
-                *waiting = order;
-                return;
+            let mut completed = self.completed.lock().unwrap();
+            completed.insert(order.order_id, Instant::now());
+            if completed.len() > COMPLETED_MAX {
+                let now = Instant::now();
+                completed.retain(|_, at| now.duration_since(*at) < COMPLETED_RETENTION);
             }
         }
-        self.push_completed_order(order);
+        let mut queued = self.completed_orders.lock().unwrap();
+        match queued.iter_mut().find(|q| q.order_id == order.order_id) {
+            Some(waiting) => *waiting = order,
+            // Queued whatever the memory of it says. That memory refuses a
+            // *live* replay of an order already seen to finish; this is the
+            // same answer restated, which happens when a caller was released
+            // before the venue had finished and the rest arrived afterwards.
+            // Refused on the strength of the memory, the caller kept the
+            // half-built record for good.
+            None => queued.push(order),
+        }
     }
 
     /// File a completion once. The venue resends terminal reports — a
