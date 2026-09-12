@@ -645,7 +645,7 @@ mod expiry_tests {
 
             client.cancel_calculate_implied_volatility(last);
             assert!(
-                matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 0 })),
+                matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 0, .. })),
                 "the last withdrawal leaves the subscription running",
             );
             assert!(client.pending_option_calcs.lock().unwrap().is_empty());
@@ -680,14 +680,14 @@ mod expiry_tests {
 
         client.cancel_calculate_option_price(1);
         assert!(
-            matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 0 })),
+            matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 0, .. })),
             "another description's zero conId keeps this watch running",
         );
         assert!(!client.core.holds_mkt_data(1));
         assert!(client.core.holds_mkt_data(2), "the other description remains watched");
 
         client.cancel_calculate_option_price(2);
-        assert!(matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 1 })));
+        assert!(matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 1, .. })));
         assert!(client.pending_option_calcs.lock().unwrap().is_empty());
         assert!(!client.core.holds_mkt_data(2));
         assert!(client.core.instrument_to_req.lock().unwrap().is_empty());
@@ -731,7 +731,7 @@ mod expiry_tests {
             assert!(client.core.holds_mkt_data(7), "a refused question owns no watch to withdraw");
             assert!(rx.try_recv().is_err(), "the original watch stays up");
             client.cancel_mkt_data(7).unwrap();
-            assert!(matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 0 })));
+            assert!(matches!(rx.try_recv(), Ok(ControlCommand::Unsubscribe { instrument: 0, .. })));
         }
     }
 

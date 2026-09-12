@@ -156,7 +156,7 @@ fn quotes_for_described_contracts_follow_their_request_ids() {
                     });
                     let _ = reply.send(Ok(slot));
                 }
-                crate::types::ControlCommand::Unsubscribe { instrument } => withdrawn.push(instrument),
+                crate::types::ControlCommand::Unsubscribe { instrument, .. } => withdrawn.push(instrument),
                 _ => {}
             }
         }

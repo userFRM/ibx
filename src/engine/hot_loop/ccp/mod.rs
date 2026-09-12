@@ -447,6 +447,10 @@ pub(crate) struct PendingAdvisor {
 #[derive(Debug, Clone)]
 pub(crate) struct PendingSubscribe {
     pub(crate) instrument: crate::types::InstrumentId,
+    /// Where the caller's request falls in the order of everything the client
+    /// has asked for, carried through the lookup so the subscription that
+    /// follows is recorded under it.
+    pub(crate) issued: u64,
     /// The contract's own id, where the caller gave one. A lookup by id names
     /// the contract whatever else the caller left out; a lookup by symbol
     /// needs the venue to be told where it is listed, which is one of the

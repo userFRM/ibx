@@ -118,7 +118,7 @@ fn a_caller_that_joins_mid_withdrawal_keeps_the_subscription() {
     core.req_to_instrument.lock().unwrap().insert(2, iid);
     drop(holders);
 
-    let (taken_down, _news, _series) = withdrawing.join().unwrap();
+    let taken_down = withdrawing.join().unwrap().subscription;
     assert_eq!(taken_down, None, "the subscription stays up for the caller that joined");
     assert_eq!(
         core.instrument_to_req.lock().unwrap().get(&iid), Some(&2),
@@ -158,7 +158,7 @@ fn the_one_shot_keeps_its_kind_until_the_slot_changes_hands() {
     );
     drop(holders);
 
-    let (taken_down, _news, _series) = withdrawing.join().unwrap();
+    let taken_down = withdrawing.join().unwrap().subscription;
     assert_eq!(taken_down, Some(iid), "and the subscription goes with it");
     assert!(
         !core.chargeable_snapshot_reqs.lock().unwrap().contains(&1),
@@ -189,7 +189,8 @@ fn a_caller_takes_the_series_it_brought_with_it() {
     core.req_to_instrument.lock().unwrap().insert(2, iid);
     core.series_by_req.lock().unwrap().insert(2, vec![233, 236]);
 
-    let (down, _news, series_gone) = core.unregister_mkt_data(&shared, 2);
+    let withdrawn = core.unregister_mkt_data(&shared, 2);
+    let (down, series_gone) = (withdrawn.subscription, withdrawn.series);
     assert_eq!(down, None, "the subscription stays up for the caller that opened it");
     assert_eq!(
         series_gone, Some((iid, vec![236])),
@@ -198,7 +199,8 @@ fn a_caller_takes_the_series_it_brought_with_it() {
 
     // The last caller takes the subscription itself, which carries its series
     // with it: there is nothing left for them to be entries of.
-    let (down, _news, series_gone) = core.unregister_mkt_data(&shared, 1);
+    let withdrawn = core.unregister_mkt_data(&shared, 1);
+    let (down, series_gone) = (withdrawn.subscription, withdrawn.series);
     assert_eq!(down, Some(iid), "the subscription goes");
     assert_eq!(series_gone, None, "whole, with its entries");
 }
@@ -3461,7 +3463,7 @@ fn a_withdrawal_during_registration_takes_down_what_it_opened() {
     );
     assert_eq!(core_ref.watching(2), None, "a mapping was written for it all the same");
     assert!(
-        sent.iter().any(|c| matches!(c, ControlCommand::Unsubscribe { instrument: 0 })),
+        sent.iter().any(|c| matches!(c, ControlCommand::Unsubscribe { instrument: 0, .. })),
         "the subscription it opened was never taken back down: {sent:?}",
     );
 }
@@ -3543,7 +3545,7 @@ fn followers_keep_the_subscriptions_market_data_type() {
             let polled = core.poll_instrument_ticks(&shared, 0, holder);
             assert!(polled.delayed);
             assert_eq!(polled.ticks[0].tick_type, 66);
-            let (withdraw, _, _) = core.unregister_mkt_data(&shared, holder);
+            let withdraw = core.unregister_mkt_data(&shared, holder).subscription;
             assert_eq!(withdraw, (holder == 2).then_some(0));
         }
         subscribe(3);

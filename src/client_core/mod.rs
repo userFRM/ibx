@@ -790,8 +790,25 @@ const TAKING_TICKS: u8 = 1;
 /// watching that contract asks for any more. The quotes stay up for another
 /// caller while the other two end, so a caller told only about the quotes
 /// sent nothing and left both running.
-pub type WhatAWithdrawalLeaves =
-    (Option<InstrumentId>, Option<NewsSubject>, Option<(InstrumentId, Vec<u32>)>);
+pub struct WhatAWithdrawalLeaves {
+    /// The subscription to withdraw, where this was the last caller watching
+    /// it.
+    pub subscription: Option<InstrumentId>,
+    /// The contract whose headlines stop.
+    pub headlines: Option<NewsSubject>,
+    /// The contract, and the series nobody watching it asks for any more.
+    pub series: Option<(InstrumentId, Vec<u32>)>,
+    /// Where this decision falls in the order of everything this client has
+    /// asked for.
+    ///
+    /// Taken as the decision is made, and sent with the commands that carry it
+    /// out. Taken as those commands are sent instead, a caller that asked for
+    /// the same contract in between had its brand-new subscription withdrawn
+    /// by this one: the engine cannot tell the subscription that was decided
+    /// against from the one that replaced it, and this number is what tells
+    /// them apart.
+    pub decided_at: u64,
+}
 
 /// What a request asking for a contract ended up as.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2224,6 +2241,7 @@ impl ClientCore {
                     instrument,
                     con_id,
                     generic_ticks: generic_ticks.clone(),
+                    issued: self.in_order(),
                 });
             }
             // The news subscription was sent above whether or not the quotes
@@ -2261,6 +2279,7 @@ impl ClientCore {
             regulatory_snapshot,
             generic_ticks: generic_ticks.clone(),
             reply_tx: Some(reply_tx),
+            issued: self.in_order(),
         }).map_err(|e| {
             self.give_back_what_this_request_took(con_id, req_id);
             Refusal::not_connected(format!("Engine stopped: {e}"))
@@ -2330,6 +2349,7 @@ impl ClientCore {
                     instrument: instrument_id,
                     con_id,
                     generic_ticks: generic_ticks.clone(),
+                    issued: self.in_order(),
                 });
             }
             return self.settle_registration(shared, control_tx, &claim, req_id, instrument_id);
@@ -2381,20 +2401,24 @@ impl ClientCore {
         if !claim.withdrawn_meanwhile() {
             return Ok(instrument);
         }
-        let (subscription, stop_news, series_gone) = self.unregister_mkt_data(shared, req_id);
+        let withdrawn = self.unregister_mkt_data(shared, req_id);
         // Nothing is reported from here. The withdrawal was answered when it
         // arrived, and a send failing now fails because the engine has gone —
         // which takes the subscription with it.
-        if let Some(subject) = stop_news {
+        if let Some(subject) = withdrawn.headlines {
             let _ = control_tx.send(ControlCommand::UnsubscribeNews { subject });
         }
-        if let Some(subscription) = subscription {
-            let _ = control_tx.send(ControlCommand::Unsubscribe { instrument: subscription });
+        if let Some(subscription) = withdrawn.subscription {
+            let _ = control_tx.send(ControlCommand::Unsubscribe {
+                instrument: subscription,
+                issued: withdrawn.decided_at,
+            });
         }
-        if let Some((slot, generic_ticks)) = series_gone {
+        if let Some((slot, generic_ticks)) = withdrawn.series {
             let _ = control_tx.send(ControlCommand::StopAskingForSeries {
                 instrument: slot,
                 generic_ticks,
+                issued: withdrawn.decided_at,
             });
         }
         Ok(instrument)
@@ -2523,8 +2547,18 @@ impl ClientCore {
     /// Say this number now holds a subscription of its own, distinct from any
     /// it held before.
     fn stamp_registration(&self, req_id: i64) {
-        let n = self.epochs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let n = self.in_order();
         self.registration_epoch.lock().unwrap().insert(req_id, n);
+    }
+
+    /// The next number in the order of everything this client asks for.
+    ///
+    /// One rising count, taken as a decision is made and carried on the
+    /// command that acts on it. The engine keeps the number a subscription
+    /// began under and reads it again on a withdrawal: a withdrawal decided
+    /// before that subscription began is not about it.
+    fn in_order(&self) -> u64 {
+        self.epochs.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Which subscription a number is holding, as a figure that changes every
@@ -2563,12 +2597,18 @@ impl ClientCore {
         // holding it was halfway through its withdrawal read the one-shot as
         // an ordinary stream: it was recorded as watching, sent nothing of its
         // own, and served off a burst that was already over.
-        let (instrument, take_it_down, series_gone) = {
+        let (instrument, take_it_down, series_gone, decided_at) = {
             let mut own = self.ownership();
+            // Taken here, under the maps that decide, so that a subscription
+            // taken by another caller after this decision carries a later
+            // number than the withdrawal that would take it down.
+            let decided_at = self.in_order();
             own.one_shot.remove(&req_id);
             let Some(instrument) = own.by_req.remove(&req_id) else {
                 own.series.remove(&req_id);
-                return (None, None, None);
+                return WhatAWithdrawalLeaves {
+                    subscription: None, headlines: None, series: None, decided_at,
+                };
             };
             // A caller that was watching someone else's subscription stops
             // watching it, and the subscription stays up for the rest. A
@@ -2615,13 +2655,16 @@ impl ClientCore {
                     })
                     .collect();
             }
-            (instrument, take_it_down, series_gone)
+            (instrument, take_it_down, series_gone, decided_at)
         };
         self.mdt_sent.lock().unwrap().remove(&req_id);
         if !take_it_down {
-            let series_gone =
-                (!series_gone.is_empty()).then_some((instrument, series_gone));
-            return (None, self.release_news(shared, req_id), series_gone);
+            return WhatAWithdrawalLeaves {
+                subscription: None,
+                headlines: self.release_news(shared, req_id),
+                series: (!series_gone.is_empty()).then_some((instrument, series_gone)),
+                decided_at,
+            };
         }
         self.last_quotes.lock().unwrap().remove(&instrument);
         self.mdt_by_instrument.lock().unwrap().remove(&instrument);
@@ -2629,7 +2672,12 @@ impl ClientCore {
         self.forget_instrument(instrument);
         // The subscription goes whole, and its series with it: there is
         // nothing left for them to be entries of.
-        (Some(instrument), stop_news, None)
+        WhatAWithdrawalLeaves {
+            subscription: Some(instrument),
+            headlines: stop_news,
+            series: None,
+            decided_at,
+        }
     }
 
     /// Drop the client-side conId cache entries for an instrument id. The

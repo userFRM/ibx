@@ -955,7 +955,7 @@ mod option_model_watch_tests {
             client.cancel_calculate_implied_volatility(py, 7).unwrap();
             let withdrawn: Vec<u32> = rx.try_iter()
                 .filter_map(|cmd| match cmd {
-                    ControlCommand::Unsubscribe { instrument } => Some(instrument),
+                    ControlCommand::Unsubscribe { instrument, .. } => Some(instrument),
                     _ => None,
                 })
                 .collect();
@@ -993,7 +993,7 @@ mod option_model_watch_tests {
                 assert!(!rx.try_iter().any(|cmd| matches!(cmd, ControlCommand::Unsubscribe { .. })));
                 cancel(ids[1]);
                 let withdrawn: Vec<_> = rx.try_iter().filter_map(|cmd| match cmd {
-                    ControlCommand::Unsubscribe { instrument } => Some(instrument),
+                    ControlCommand::Unsubscribe { instrument, .. } => Some(instrument),
                     _ => None,
                 }).collect();
                 assert_eq!(withdrawn, [0]);

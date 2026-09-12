@@ -163,21 +163,28 @@ impl EClient {
                 format!("no contract is being watched under request {req_id}"),
             ));
         }
-        let (instrument, stop_news, series_gone) = self.core.unregister_mkt_data(&self.shared, req_id);
+        let withdrawn = self.core.unregister_mkt_data(&self.shared, req_id);
         // Asked separately, because the quotes stay up for another caller
         // while the headlines this one asked for stop. Withdrawn only
         // alongside the quotes, they carried on with nobody listening.
-        if let Some(subject) = stop_news {
+        if let Some(subject) = withdrawn.headlines {
             let _ = self.send(ControlCommand::UnsubscribeNews { subject });
         }
-        if let Some(instrument) = instrument {
-            self.send(ControlCommand::Unsubscribe { instrument })?;
+        if let Some(instrument) = withdrawn.subscription {
+            self.send(ControlCommand::Unsubscribe {
+                instrument,
+                issued: withdrawn.decided_at,
+            })?;
         }
         // And the series this caller brought to a subscription that stays up
         // for somebody else. Left behind, the venue serves them for the life
         // of that subscription with nobody reading them.
-        if let Some((instrument, generic_ticks)) = series_gone {
-            self.send(ControlCommand::StopAskingForSeries { instrument, generic_ticks })?;
+        if let Some((instrument, generic_ticks)) = withdrawn.series {
+            self.send(ControlCommand::StopAskingForSeries {
+                instrument,
+                generic_ticks,
+                issued: withdrawn.decided_at,
+            })?;
         }
         Ok(())
     }

@@ -2081,9 +2081,9 @@ fn the_headlines_stop_with_the_last_caller_that_asked_for_them() {
     // Two callers asking: the headlines outlast the first of them.
     client.req_mkt_data(3, &spy(), "292", false, false).expect("watches what is up");
     client.req_mkt_data(4, &spy(), "292", false, false).expect("watches what is up");
-    let (_, stop_news, _) = client.core.unregister_mkt_data(&shared, 3);
+    let stop_news = client.core.unregister_mkt_data(&shared, 3).headlines;
     assert_eq!(stop_news, None, "one of two left, so the headlines carry on");
-    let (_, stop_news, _) = client.core.unregister_mkt_data(&shared, 4);
+    let stop_news = client.core.unregister_mkt_data(&shared, 4).headlines;
     assert_eq!(stop_news, Some(NewsSubject::Slot(0)), "and stop when the last of them goes");
 }
 
@@ -2109,7 +2109,7 @@ fn a_second_caller_watches_the_subscription_that_is_up() {
 
     // The holder leaves; the one still watching takes it over rather than
     // losing the feed, and nothing is withdrawn from the venue.
-    let (withdraw, _, _) = client.core.unregister_mkt_data(&shared, 1);
+    let withdraw = client.core.unregister_mkt_data(&shared, 1).subscription;
     assert!(withdraw.is_none(), "nothing is withdrawn while someone is watching");
     assert_eq!(
         client.core.instrument_to_req.lock().unwrap().get(&0).copied(),
@@ -2118,7 +2118,7 @@ fn a_second_caller_watches_the_subscription_that_is_up() {
     );
 
     // And when the last one leaves, it goes.
-    let (withdraw, _, _) = client.core.unregister_mkt_data(&shared, 2);
+    let withdraw = client.core.unregister_mkt_data(&shared, 2).subscription;
     assert_eq!(withdraw, Some(0), "the last one out withdraws it");
 }
 
@@ -2155,7 +2155,7 @@ fn cancel_mkt_data_sends_unsubscribe() {
     client.core.instrument_to_req.lock().unwrap().insert(0, 1);
     client.cancel_mkt_data(1).unwrap();
     let cmd = rx.try_recv().unwrap();
-    assert!(matches!(cmd, ControlCommand::Unsubscribe { instrument: 0 }));
+    assert!(matches!(cmd, ControlCommand::Unsubscribe { instrument: 0, .. }));
     // Mapping should be cleared
     assert!(client.core.req_to_instrument.lock().unwrap().get(&1).is_none());
 }
@@ -10648,7 +10648,7 @@ fn a_quote_withdrawal_during_registration_takes_the_subscription_back_down() {
     );
     assert_eq!(client.core.watching(9), None, "a mapping was written for it all the same");
     assert!(
-        sent.iter().any(|c| matches!(c, ControlCommand::Unsubscribe { instrument: 0 })),
+        sent.iter().any(|c| matches!(c, ControlCommand::Unsubscribe { instrument: 0, .. })),
         "the subscription it opened was never taken back down: {sent:?}",
     );
 }

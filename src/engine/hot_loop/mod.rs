@@ -620,6 +620,9 @@ impl HotLoop {
                 // caller heard the end of it off ticks it did not ask for,
                 // while a stream skipped for a snapshot in flight was dropped
                 // when the snapshot completed and withdrew.
+                // The subscription that answers this request, whichever slot
+                // it turns out to live in.
+                self.farm.note_subscription_asked_on(instrument, p.issued);
                 // Carried onto the slot the contract lives in: asked for now
                 // where a stream is already up there, and added to what that
                 // slot asks for where the subscription below is the one that
@@ -1311,7 +1314,7 @@ impl HotLoop {
                 continue;
             }
             match cmd {
-                ControlCommand::Subscribe { contract, filters, mode_9887, regulatory_snapshot, generic_ticks, reply_tx } => {
+                ControlCommand::Subscribe { contract, filters, mode_9887, regulatory_snapshot, generic_ticks, reply_tx, issued, } => {
                     let ContractRef { con_id, symbol, exchange, sec_type, currency, last_trade_date, strike, right, multiplier } = contract;
                     // What tells two conId-less contracts on one underlying apart.
                     // Built by the same function an order uses, or the two
@@ -1399,6 +1402,11 @@ impl HotLoop {
                         // so a subscribe pointed at one was never sent and the
                         // withdrawal took the record out from under it.
                         Some(id) if self.farm.holds_a_stream(id) && !regulatory_snapshot => {
+                            // This caller is asking for the contract too, so
+                            // the subscription it is served off is the one it
+                            // asked for: a withdrawal decided before it asked
+                            // is not about that subscription.
+                            self.farm.note_subscription_asked_on(id, issued);
                             // The joiner's own series, where the stream it is
                             // joining was not asked for them. Nothing else
                             // sends them: the subscription is already up, so
@@ -1418,6 +1426,7 @@ impl HotLoop {
                             }
                         }
                         Some(id) => {
+                            self.farm.note_subscription_asked_on(id, issued);
                             // The venue states it on the logon. Count streams
                             // waiting on a definition or a reconnect too: they
                             // were admitted already and still need their line.
@@ -1491,6 +1500,7 @@ impl HotLoop {
                                 self.ccp.resolve_for_subscribe(
                                     crate::engine::hot_loop::ccp::PendingSubscribe {
                                         instrument: id,
+                                        issued,
                                         con_id,
                                         symbol: symbol.clone(),
                                         exchange: exchange.clone(),
@@ -1533,7 +1543,11 @@ impl HotLoop {
                         }
                     }
                 }
-                ControlCommand::AlsoAskForSeries { instrument, con_id, generic_ticks } => {
+                ControlCommand::AlsoAskForSeries { instrument, con_id, generic_ticks, issued, } => {
+                    // A caller asking for more on a contract is asking for
+                    // that contract, so the subscription it is served off is
+                    // one it asked for.
+                    self.farm.note_subscription_asked_on(instrument, issued);
                     self.farm.also_ask_for_series(
                         instrument,
                         con_id,
@@ -1543,17 +1557,19 @@ impl HotLoop {
                         &mut self.hb,
                     );
                 }
-                ControlCommand::StopAskingForSeries { instrument, generic_ticks } => {
+                ControlCommand::StopAskingForSeries { instrument, generic_ticks, issued, } => {
                     self.farm.stop_asking_for_series(
                         instrument,
                         &generic_ticks,
+                        issued,
                         &mut self.farm_conn,
                         &mut self.hb,
                     );
                 }
-                ControlCommand::Unsubscribe { instrument } => {
+                ControlCommand::Unsubscribe { instrument, issued, } => {
                     self.farm.send_mktdata_unsubscribe(
                         instrument,
+                        issued,
                         &mut self.farm_conn,
                         &mut self.hb,
                     );
@@ -2276,8 +2292,11 @@ impl HotLoop {
                     let instruments: Vec<InstrumentId> = self.farm.instrument_md_reqs
                         .iter().map(|(id, _)| *id).collect();
                     for instrument in instruments {
+                        // The session is closing, so every subscription goes
+                        // whatever it was asked for under.
                         self.farm.send_mktdata_unsubscribe(
                             instrument,
+                            u64::MAX,
                             &mut self.farm_conn,
                             &mut self.hb,
                         );
@@ -4554,6 +4573,7 @@ mod tests {
             regulatory_snapshot: false,
             generic_ticks: Vec::new(),
             reply_tx: None,
+            issued: 0,
         })
         .expect("the engine holds the other end");
         hl.poll_once();
@@ -4593,6 +4613,7 @@ mod tests {
                     regulatory_snapshot: false,
                     generic_ticks: Vec::new(),
                     reply_tx: Some(reply_tx),
+                    issued: 0,
                 }).unwrap();
                 hl.poll_once();
                 reply_rx.try_recv().expect("the subscriber is answered")
@@ -4611,7 +4632,7 @@ mod tests {
             assert!(hl.is_running(), "existing subscriptions keep running");
 
             if !sec_type.is_empty() {
-                tx.send(ControlCommand::Unsubscribe { instrument: first }).unwrap();
+                tx.send(ControlCommand::Unsubscribe { instrument: first, issued: 0, }).unwrap();
                 hl.poll_once();
                 subscribe(&mut hl, past).expect("a withdrawn subscription gives its line back");
             }
@@ -4938,6 +4959,7 @@ mod tests {
             let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
             let instrument = hl.context.market.register(0);
             let pending = crate::engine::hot_loop::ccp::PendingSubscribe {
+                issued: 0,
                 filters: Default::default(),
                 con_id: 0,
                 instrument,
@@ -4982,6 +5004,7 @@ mod tests {
         let mut hl = HotLoop::new(shared.clone(), None, None);
         let instrument = hl.context.market.register(0);
         hl.ccp.resolved_md_subscribe.push((756733, crate::engine::hot_loop::ccp::PendingSubscribe {
+            issued: 0,
             filters: Default::default(),
             con_id: 0,
             instrument,
@@ -5030,6 +5053,7 @@ mod tests {
         assert_ne!(holds_it, followed, "two slots to begin with");
 
         hl.ccp.resolved_md_subscribe.push((756733, crate::engine::hot_loop::ccp::PendingSubscribe {
+            issued: 0,
             filters: Default::default(),
             con_id: 0,
             instrument: followed,
@@ -5135,6 +5159,7 @@ mod tests {
             instrument: InstrumentId, regulatory_snapshot: bool,
         ) -> crate::engine::hot_loop::ccp::PendingSubscribe {
             crate::engine::hot_loop::ccp::PendingSubscribe {
+                issued: 0,
                 filters: Default::default(),
                 con_id: 756733,
                 instrument,
@@ -5228,6 +5253,7 @@ mod tests {
             regulatory_snapshot: true,
             generic_ticks: Vec::new(),
             reply_tx: None,
+            issued: 0,
         })
         .expect("the engine holds the other end");
         hl.poll_once();
@@ -5273,6 +5299,7 @@ mod tests {
             regulatory_snapshot: true,
             generic_ticks: Vec::new(),
             reply_tx: None,
+            issued: 0,
         })
         .expect("the engine holds the other end");
         hl.poll_once();
@@ -5440,6 +5467,7 @@ mod tests {
             regulatory_snapshot: false,
             generic_ticks: Vec::new(),
             reply_tx: Some(reply_tx),
+            issued: 0,
         })
         .expect("the engine holds the other end");
         hl.poll_once();
@@ -5486,6 +5514,7 @@ mod tests {
             regulatory_snapshot: false,
             generic_ticks: Vec::new(),
             reply_tx: Some(reply_tx),
+            issued: 0,
         })
         .expect("the engine holds the other end");
         hl.poll_once();
@@ -7106,6 +7135,7 @@ mod tests {
         hl.ccp.resolved_md_subscribe.push((
             756733,
             crate::engine::hot_loop::ccp::PendingSubscribe {
+                issued: 0,
                 filters: Default::default(),
                 instrument: by_name,
                 con_id: 0,
@@ -7151,6 +7181,7 @@ mod tests {
         hl.ccp.resolved_md_subscribe.push((
             756733,
             crate::engine::hot_loop::ccp::PendingSubscribe {
+                issued: 0,
                 filters: Default::default(),
                 instrument: by_name,
                 con_id: 0,
@@ -7238,6 +7269,7 @@ mod tests {
             regulatory_snapshot: false,
             generic_ticks: Vec::new(),
             reply_tx: Some(reply_tx),
+            issued: 0,
         })
         .expect("the engine holds the other end");
         tx.send(ControlCommand::FetchHistorical {
@@ -7790,7 +7822,7 @@ mod tests {
             running: Default::default(),
         });
 
-        tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();
+        tx.send(ControlCommand::Unsubscribe { instrument: id, issued: 0, }).unwrap();
         hl.poll_once();
 
         assert_eq!(
@@ -7822,7 +7854,7 @@ mod tests {
         }));
         hl.farm.news_subscriptions.push((id, 55, "BRFG".to_string(), 756733, "STK".to_string()));
 
-        tx.send(ControlCommand::Unsubscribe { instrument: id }).unwrap();
+        tx.send(ControlCommand::Unsubscribe { instrument: id, issued: 0, }).unwrap();
         hl.poll_once();
 
         assert_eq!(
@@ -8220,7 +8252,7 @@ mod tests {
                 mode_9887: 0,
                 regulatory_snapshot: chargeable,
                 reply_tx: None,
-                generic_ticks: Vec::new(),
+                generic_ticks: Vec::new(), issued: 0,
             })
             .expect("the engine is holding the other end");
             hl.poll_control_commands();
@@ -8269,7 +8301,7 @@ mod tests {
                 mode_9887: 0,
                 regulatory_snapshot: false,
                 reply_tx: None,
-                generic_ticks: wanted,
+                generic_ticks: wanted, issued: 0,
             })
             .expect("the engine is holding the other end");
             hl.poll_control_commands();
@@ -8550,6 +8582,7 @@ mod slot_aliasing_tests {
         hl.ccp.pending_md_subscribe.push((
             1,
             crate::engine::hot_loop::ccp::PendingSubscribe {
+                issued: 0,
                 filters: Default::default(),
                 con_id: 0, instrument,
                 symbol: "SPY".into(), exchange: "SMART".into(), sec_type: "STK".into(),

@@ -151,6 +151,17 @@ pub enum ControlCommand {
         /// option model, the trading status and the venue map already are.
         /// Empty where the caller named none.
         generic_ticks: Vec<u32>,
+        /// Where this falls in the order of everything the client has asked
+        /// for.
+        ///
+        /// One number, rising, taken as the decision is made. The engine
+        /// records it against the slot a subscription lands on and reads it
+        /// again on a withdrawal: a withdrawal decided before the subscription
+        /// that is now live began is a withdrawal of a subscription that has
+        /// already gone, and it took down the one that replaced it — a caller
+        /// that had just asked for the contract, published as watching it,
+        /// with nothing on the wire.
+        issued: u64,
         /// Where the engine sends the slot it registered, for a caller waiting
         /// on one.
         reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, crate::error_codes::Refusal>>>,
@@ -174,6 +185,17 @@ pub enum ControlCommand {
         con_id: i64,
         /// The series the joining caller named, by the venue's number for each.
         generic_ticks: Vec<u32>,
+        /// Where this falls in the order of everything the client has asked
+        /// for.
+        ///
+        /// One number, rising, taken as the decision is made. The engine
+        /// records it against the slot a subscription lands on and reads it
+        /// again on a withdrawal: a withdrawal decided before the subscription
+        /// that is now live began is a withdrawal of a subscription that has
+        /// already gone, and it took down the one that replaced it — a caller
+        /// that had just asked for the contract, published as watching it,
+        /// with nothing on the wire.
+        issued: u64,
     },
     /// Stop asking for series on a contract whose subscription stands.
     ///
@@ -189,11 +211,33 @@ pub enum ControlCommand {
         /// The series nobody watching that contract asks for any more, by the
         /// venue's number for each.
         generic_ticks: Vec<u32>,
+        /// Where this falls in the order of everything the client has asked
+        /// for.
+        ///
+        /// One number, rising, taken as the decision is made. The engine
+        /// records it against the slot a subscription lands on and reads it
+        /// again on a withdrawal: a withdrawal decided before the subscription
+        /// that is now live began is a withdrawal of a subscription that has
+        /// already gone, and it took down the one that replaced it — a caller
+        /// that had just asked for the contract, published as watching it,
+        /// with nothing on the wire.
+        issued: u64,
     },
     /// Unsubscribe from market data for an instrument.
     Unsubscribe {
         /// The engine's own slot for the contract.
         instrument: InstrumentId,
+        /// Where this falls in the order of everything the client has asked
+        /// for.
+        ///
+        /// One number, rising, taken as the decision is made. The engine
+        /// records it against the slot a subscription lands on and reads it
+        /// again on a withdrawal: a withdrawal decided before the subscription
+        /// that is now live began is a withdrawal of a subscription that has
+        /// already gone, and it took down the one that replaced it — a caller
+        /// that had just asked for the contract, published as watching it,
+        /// with nothing on the wire.
+        issued: u64,
     },
     /// Subscribe to tick-by-tick data via historical data connection.
     SubscribeTbt {

@@ -561,24 +561,30 @@ impl EClient {
         req_id: i64,
     ) -> PyResult<()> {
         let shared = self.shared_state()?;
-        let (instrument, stop_news, series_gone) = self.core.unregister_mkt_data(&shared, req_id);
+        let withdrawn = self.core.unregister_mkt_data(&shared, req_id);
         // Asked separately, because the quotes stay up for another caller
         // while the headlines this one asked for stop. Withdrawn only
         // alongside the quotes, they carried on with nobody listening.
-        if let Some(subject) = stop_news {
+        if let Some(subject) = withdrawn.headlines {
             let _ = Self::send_control(py, tx, ControlCommand::UnsubscribeNews { subject });
         }
-        if let Some(instrument) = instrument
-            && let Err(why) = Self::send_control(py, tx, ControlCommand::Unsubscribe { instrument })
+        if let Some(instrument) = withdrawn.subscription
+            && let Err(why) = Self::send_control(
+                py, tx,
+                ControlCommand::Unsubscribe { instrument, issued: withdrawn.decided_at },
+            )
         {
             return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
         }
         // And the series this caller brought to a subscription that stays up
         // for somebody else. Left behind, the venue serves them for the life
         // of that subscription with nobody reading them.
-        if let Some((instrument, generic_ticks)) = series_gone
+        if let Some((instrument, generic_ticks)) = withdrawn.series
             && let Err(why) = Self::send_control(
-                py, tx, ControlCommand::StopAskingForSeries { instrument, generic_ticks },
+                py, tx,
+                ControlCommand::StopAskingForSeries {
+                    instrument, generic_ticks, issued: withdrawn.decided_at,
+                },
             )
         {
             return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));

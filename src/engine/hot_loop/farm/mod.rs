@@ -758,6 +758,15 @@ pub(crate) struct FarmState {
     /// subscription again from what is held here and has nowhere else to read
     /// them from.
     pub(crate) asked_generic_ticks: std::collections::HashMap<InstrumentId, Vec<u32>>,
+    /// Where the request that opened each slot's subscription falls in the
+    /// order of everything the client has asked for.
+    ///
+    /// Read on a withdrawal. A withdrawal decided before the subscription that
+    /// is now live began is not about it: the caller that asked for the same
+    /// contract in between had its own subscription taken down by somebody
+    /// else's withdrawal, was published as watching the contract, and heard
+    /// nothing for the rest of the session.
+    subscription_asked_on: std::collections::HashMap<InstrumentId, u64>,
     /// What the running-volume series last stated for a contract: the
     /// cumulative value, share count and trade count, in that order.
     ///
@@ -1350,6 +1359,7 @@ impl FarmState {
             greeks_subs: Vec::new(),
             generic_tick_reqs: Vec::new(),
             asked_generic_ticks: std::collections::HashMap::new(),
+            subscription_asked_on: std::collections::HashMap::new(),
             rt_volume_totals: std::collections::HashMap::new(),
             news_subscriptions: Vec::new(),
             generic_tick_tags: Vec::new(),
@@ -2536,9 +2546,24 @@ impl FarmState {
     pub(crate) fn send_mktdata_unsubscribe(
         &mut self,
         instrument: InstrumentId,
+        issued: u64,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
+        // Not a subscription this withdrawal is about. The client decides to
+        // withdraw and says so a moment later, and a caller asking for the
+        // same contract in between is answered off the subscription that is
+        // up — so the withdrawal that follows would take down a subscription
+        // decided against before that caller ever asked for it, leaving it
+        // published as watching a contract with nothing on the wire.
+        if self.began_after(instrument, issued) {
+            log::debug!(
+                "a withdrawal of slot {instrument} was decided before the subscription \
+                 now on it began; the subscription stands",
+            );
+            return;
+        }
+        self.subscription_asked_on.remove(&instrument);
         // Drop the resubscribe record first. The lookup below early-returns
         // when the instrument has no active requests, which is always the case
         // while the farm is down — `handle_disconnect` cleared that list — so
@@ -3031,6 +3056,23 @@ impl FarmState {
         }
     }
 
+    /// Record which request the subscription on a slot belongs to, as one
+    /// number in the order of everything the client has asked for.
+    ///
+    /// The highest wins: a caller that joins a stream already up is asking for
+    /// that contract too, and a withdrawal decided before it asked is not
+    /// about the subscription it is being served off.
+    pub(crate) fn note_subscription_asked_on(&mut self, instrument: InstrumentId, issued: u64) {
+        let held = self.subscription_asked_on.entry(instrument).or_insert(issued);
+        *held = (*held).max(issued);
+    }
+
+    /// Whether the subscription on a slot was asked for after a decision was
+    /// taken.
+    fn began_after(&self, instrument: InstrumentId, issued: u64) -> bool {
+        self.subscription_asked_on.get(&instrument).is_some_and(|began| *began > issued)
+    }
+
     /// Stop asking for series on a contract whose subscription stands.
     ///
     /// The other half of `also_ask_for_series`. The caller that brought a
@@ -3048,9 +3090,14 @@ impl FarmState {
         &mut self,
         instrument: InstrumentId,
         unwanted: &[u32],
+        issued: u64,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
+        // Not this subscription's series. See `send_mktdata_unsubscribe`.
+        if self.began_after(instrument, issued) {
+            return;
+        }
         // The headlines are asked for under a request of their own and
         // withdrawn under it, so they are not this withdrawal's to take. Nor
         // are the entries every subscription opens for itself — the trading

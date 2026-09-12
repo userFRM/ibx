@@ -4436,6 +4436,7 @@ fn a_request_naming_a_contract_waits_to_be_given_its_id() {
 fn a_subscription_the_venue_never_names_is_reported() {
     let (mut ccp, mut context, shared) = u186_test_state();
     let parked = PendingSubscribe {
+        issued: 0,
         filters: Default::default(),
         con_id: 0,
         instrument: 4,
@@ -4471,6 +4472,7 @@ fn a_subscription_the_venue_never_names_is_reported() {
 fn a_subscription_waits_for_the_lookup_that_names_its_contract() {
     let (mut ccp, mut context, shared) = u186_test_state();
     let parked = PendingSubscribe {
+        issued: 0,
         filters: Default::default(),
         con_id: 0,
         instrument: 3,
@@ -8052,6 +8054,7 @@ fn a_connection_that_dies_takes_the_lookups_waiting_on_it_with_it() {
         deadline: later,
     });
     ccp.resolve_for_subscribe(PendingSubscribe {
+        issued: 0,
         filters: Default::default(),
         con_id: 0, instrument: 4, symbol: "SPY".into(), exchange: "SMART".into(),
         sec_type: "STK".into(), currency: "USD".into(),
@@ -8360,6 +8363,7 @@ fn a_subscription_looks_up_the_listing_the_caller_named() {
     let mut conn = Some(conn);
     ccp.resolve_for_subscribe(
         PendingSubscribe {
+            issued: 0,
             con_id: 0,
             instrument: 5,
             symbol: "ES".into(),
@@ -8389,6 +8393,7 @@ fn a_subscription_looks_up_the_listing_the_caller_named() {
 
 fn spy_by_symbol(instrument: crate::types::InstrumentId) -> PendingSubscribe {
     PendingSubscribe {
+        issued: 0,
         filters: Default::default(),
         con_id: 0, instrument,
         symbol: "SPY".into(), exchange: "SMART".into(), sec_type: "STK".into(), currency: "USD".into(),
