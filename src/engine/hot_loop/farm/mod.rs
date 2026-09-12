@@ -2320,8 +2320,30 @@ impl FarmState {
         // One request per extra series the caller named, allocated whether or
         // not the farm is up: what was asked for is bookkeeping, and the
         // withdrawal has to find every one of them either way.
-        let asked_ticks: Vec<u32> =
-            self.asked_generic_ticks.get(&instrument).cloned().unwrap_or_default();
+        //
+        // Except the ones this subscription already asks for on its own. The
+        // trading status, the venue map and the option model are series like
+        // any other and a caller may name them; named and allocated again,
+        // one caller's request took out two subscriptions to the same series
+        // on the same contract under different numbers, against the same
+        // allowance. And a chargeable snapshot carries no extra series at all
+        // — the message it sends leaves them out — so allocating them here
+        // recorded rows nothing sent and made the withdrawal state them.
+        let already_asked = [
+            TRADING_STATUS_REQUEST_TYPE,
+            BBO_EXCHANGE_MAP_REQUEST_TYPE,
+            GREEKS_REQUEST_TYPE,
+        ];
+        let asked_ticks: Vec<u32> = if regulatory_snapshot {
+            Vec::new()
+        } else {
+            self.asked_generic_ticks.get(&instrument)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|tick| !already_asked.contains(tick))
+                .collect()
+        };
         let mut extra_series: Vec<(u32, u32)> = Vec::new();
         for &tick in &asked_ticks {
             let id = self.next_md_req_id;
@@ -2603,12 +2625,16 @@ impl FarmState {
                 (9830, "1"),
                 (9839, "1"),
             ];
+            // On every entry the subscription carried it on, which is every
+            // entry of a delayed or frozen stream — the extra series among
+            // them. Written only on the two price entries, a series asked for
+            // on a delayed stream was withdrawn without the field it was asked
+            // with, and a withdrawal short of the subscription's fields is one
+            // the venue leaves being served. The chargeable snapshot is served
+            // from no feed and is asked for without it.
             let mode_str = record.mode_9887.to_string();
             if record.mode_9887 != 0
-                && matches!(
-                    entry.request_type,
-                    REALTIME_BID_ASK_REQUEST_TYPE | REALTIME_LAST_REQUEST_TYPE,
-                )
+                && entry.request_type != REGULATORY_SNAPSHOT_REQUEST_TYPE
             {
                 tags.push((9887, &mode_str));
             }
@@ -2895,10 +2921,20 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
+        // The ones this subscription already asks for on its own are not
+        // asked for again, as they are not at the start: a caller may name the
+        // trading status, the venue map or the option model, and a second
+        // subscription to the same series on the same contract is two numbers
+        // against one allowance.
+        let already_asked = [
+            TRADING_STATUS_REQUEST_TYPE,
+            BBO_EXCHANGE_MAP_REQUEST_TYPE,
+            GREEKS_REQUEST_TYPE,
+        ];
         let already = self.asked_generic_ticks.entry(instrument).or_default();
         let new_ones: Vec<u32> = wanted.iter()
             .copied()
-            .filter(|tick| !already.contains(tick))
+            .filter(|tick| !already.contains(tick) && !already_asked.contains(tick))
             .collect();
         if new_ones.is_empty() {
             return;
@@ -2917,6 +2953,14 @@ impl FarmState {
         };
         let _ = symbol;
         let Some(con_id) = context.market.con_id(instrument).filter(|id| *id > 0) else { return };
+        // Nothing is allocated where there is no live subscription to add it
+        // to. A connection that has gone takes the record with it and leaves
+        // the caller's list, which the rebuild reads: numbers allocated here
+        // would then belong to no subscription and to no withdrawal, and the
+        // rebuild allocates its own.
+        if !self.instrument_md_reqs.iter().any(|(id, _)| *id == instrument) {
+            return;
+        }
 
         let mut rows: Vec<(u32, u32)> = Vec::new();
         for tick in new_ones {
@@ -3222,6 +3266,14 @@ impl FarmState {
                     }
                     // The book this client keeps, so it can answer for the
                     // place a withdrawal empties.
+                    // Only for a stream this session holds. A frame already on
+                    // its way when a book was withdrawn arrives under a number
+                    // nothing here reads, and a book kept for it is state no
+                    // later withdrawal can reach.
+                    if subscribers.is_empty() {
+                        if more_entries == 0 { break; }
+                        continue;
+                    }
                     let book = match self.depth_books.iter_mut()
                         .find(|(held_tag, _)| *held_tag == tag)
                     {
@@ -3243,6 +3295,12 @@ impl FarmState {
                         // into the caller's book from there.
                         0 if at <= rows.len() => {
                             rows.insert(at, (name.trim().to_string(), price, size));
+                            // A position is eight bits on this wire, so a level
+                            // past the two hundred and fifty sixth cannot be
+                            // named by any later update and is not a place the
+                            // venue can speak about. Kept anyway, a side grew
+                            // for as long as the stream lasted.
+                            rows.truncate(256);
                         }
                         0 => log::debug!(
                             "a book insert names position {at}, past the {} levels this side \

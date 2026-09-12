@@ -975,10 +975,17 @@ impl CcpState {
                 if !still_working.is_empty() {
                     log::info!(
                         "{} of the orders assembled for this answer are still being stated, \
-                         so they are not part of it",
+                         so they are not part of it and are kept",
                         still_working.len(),
                     );
                 }
+                // Kept, not dropped: a report states what changed and leaves
+                // the rest out, so the record is what every later report about
+                // that order is read against. Dropped here, the terminal
+                // report that finished it rebuilt the order from nothing and
+                // the caller was handed it without its contract, its terms or
+                // its quantities.
+                self.finished_orders = still_working;
                 finished
             }
             // Only the ones the venue has finished stating. A record still

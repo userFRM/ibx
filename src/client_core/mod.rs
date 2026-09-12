@@ -3572,6 +3572,16 @@ impl ClientCore {
                 if o.order.what_if {
                     continue;
                 }
+                // And not one the venue has already finished. The record
+                // here is this client's own account of the order and a
+                // terminal report moves it on the dispatch pass, so a caller
+                // asking in between was handed an order the venue had
+                // finished with — as working, with a quantity outstanding
+                // that is not outstanding. What the bridge remembers finishing
+                // is the wire's own statement and outranks the local record.
+                if shared.orders.recently_completed(oid) {
+                    continue;
+                }
                 if is_open_status(&o.status) || (o.status == "Inactive" && !o.rejected) {
                     let contract = if o.contract.con_id != 0 {
                         self.get_contract(o.contract.con_id, shared).unwrap_or_else(|| o.contract.clone())

@@ -869,7 +869,7 @@ impl EClient {
         // The client this replaces refuses the second outright; this one says
         // so and ends, rather than handing over somebody else's answer or
         // leaving the caller waiting on a sentinel that has already been spent.
-        if !self.shared.orders.claim_the_completed_orders_question() {
+        let Some(mut held) = self.shared.claim_the_completed_orders_question() else {
             wrapper.error(
                 -1, Refusal::NO_ANSWER as i64,
                 "another request for what the account has finished is already waiting; \
@@ -877,7 +877,7 @@ impl EClient {
                 "",
             );
             return wrapper.completed_orders_end();
-        }
+        };
         // Asked of the venue, not only of this session. What finished while
         // this program was watching is a fraction of what the account has
         // done. The answer is a run of ordinary reports ending in a sentinel,
@@ -908,6 +908,13 @@ impl EClient {
             let mut baseline = answered_before;
             let mut seen = false;
             loop {
+                // And on this caller's own turn. A caller that gave up leaves
+                // its answer still coming, and the ask and the end it moves are
+                // not this caller's: read as such, one caller was released by
+                // the answer to a question somebody else asked and gave up on.
+                if self.shared.orders.completed_orders_turn() != held.turn {
+                    break;
+                }
                 let ended_now = self.shared.orders.completed_orders_ended();
                 if !seen {
                     if self.shared.orders.completed_orders_asked() != asked_before {
@@ -939,10 +946,13 @@ impl EClient {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
         }
-        // Answered or not, the question is free again.
-        self.shared.orders.the_completed_orders_question_is_over();
         // Drained once and retained. The queue empties on read and the venue does
         // not resend completed orders, so later calls answer from this archive.
+        //
+        // Taken while this caller still holds the question, so what the venue
+        // stated for it lands in this caller's archive. Released first, the
+        // next caller could ask, and whichever of the two drained first took
+        // both answers.
         {
             let mut archive = self.completed.lock().unwrap();
             // What the venue has taken back goes first. A trade cancel or
@@ -1028,6 +1038,11 @@ impl EClient {
                 self.deferred_evictions.lock().unwrap().insert(order.order_id);
             }
         }
+        // The answer is in this caller's archive now, so the question is free
+        // for the next one — before the callbacks, which may take a while and
+        // may ask for other things while they run. Every path that does not
+        // reach here gives it back when the claim is dropped.
+        held.give_it_back();
         // Copied before anything is called back: a callback may ask for these
         // again, and the lock is not re-entrant.
         let completed = self.completed.lock().unwrap().clone();

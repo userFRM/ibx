@@ -80,6 +80,12 @@ pub struct OrderState {
     completed_orders_asked: std::sync::atomic::AtomicU64,
     /// Whether a caller is already waiting on that question.
     completed_orders_in_flight: std::sync::atomic::AtomicBool,
+    /// Which turn of that question the session is on.
+    ///
+    /// A caller that gives up leaves its own answer on its way, so the next
+    /// caller reads the turn it took the question on and is released only by
+    /// what arrives on or after it.
+    completed_orders_turn: std::sync::atomic::AtomicU64,
     /// Orders the venue has taken back after reporting them finished.
     ///
     /// The completion queue empties on read, and what is read out of it is
@@ -181,6 +187,7 @@ impl OrderState {
             completed_orders_ended: std::sync::atomic::AtomicU64::new(0),
             completed_orders_asked: std::sync::atomic::AtomicU64::new(0),
             completed_orders_in_flight: std::sync::atomic::AtomicBool::new(false),
+            completed_orders_turn: std::sync::atomic::AtomicU64::new(0),
             order_corrections: Mutex::new(Vec::new()),
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
@@ -267,14 +274,24 @@ impl OrderState {
     /// first answer as their own; the client this replaces refuses the second
     /// outright, logging that another request is pending. Refused here too,
     /// and told so, rather than handed somebody else's answer.
-    #[doc(hidden)] pub fn claim_the_completed_orders_question(&self) -> bool {
+    /// Answered with the turn this caller holds the question under, so what
+    /// the venue then says can be told from what it said for the caller
+    /// before: a caller that gave up leaves its own answer still coming, and
+    /// the next caller must not be released by it.
+    #[doc(hidden)] pub fn claim_the_completed_orders_question(&self) -> Option<u64> {
         self.completed_orders_in_flight
             .compare_exchange(
                 false, true,
                 std::sync::atomic::Ordering::AcqRel,
                 std::sync::atomic::Ordering::Acquire,
             )
-            .is_ok()
+            .ok()?;
+        Some(self.completed_orders_turn.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1)
+    }
+
+    /// Which turn the question is on, for a caller that holds it.
+    pub fn completed_orders_turn(&self) -> u64 {
+        self.completed_orders_turn.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// And give it back, answered or not.
@@ -806,5 +823,50 @@ impl OrderState {
         // this order's outcome after the venue had withdrawn it.
         self.order_corrections.lock().unwrap().push(order_id);
         self.order_cache.lock().unwrap().insert(order_id, info);
+    }
+}
+
+/// The one question of what the account has finished, held by one caller.
+///
+/// Given back when this is dropped, whichever way the caller leaves — a
+/// refusal, an early return, or an interpreter unwinding out of a callback.
+/// Depending on reaching a line at the end, the claim was left standing by a
+/// caller that did not, and every later request was refused as though that
+/// caller were still waiting.
+#[doc(hidden)]
+pub struct TheCompletedOrdersQuestion {
+    session: std::sync::Arc<super::SharedState>,
+    /// Which turn of the question this caller holds.
+    pub turn: u64,
+    held: bool,
+}
+
+impl TheCompletedOrdersQuestion {
+    /// Give the question back now, rather than when this is dropped.
+    ///
+    /// What a caller does after its answer is in hand — the callbacks — can
+    /// take a while, and the next caller need not wait for them.
+    pub fn give_it_back(&mut self) {
+        if self.held {
+            self.session.orders.the_completed_orders_question_is_over();
+            self.held = false;
+        }
+    }
+}
+
+impl Drop for TheCompletedOrdersQuestion {
+    fn drop(&mut self) {
+        self.give_it_back();
+    }
+}
+
+impl super::SharedState {
+    /// Take the question, if it is free.
+    #[doc(hidden)]
+    pub fn claim_the_completed_orders_question(
+        self: &std::sync::Arc<Self>,
+    ) -> Option<TheCompletedOrdersQuestion> {
+        let turn = self.orders.claim_the_completed_orders_question()?;
+        Some(TheCompletedOrdersQuestion { session: self.clone(), turn, held: true })
     }
 }

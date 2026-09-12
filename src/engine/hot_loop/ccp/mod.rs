@@ -918,10 +918,16 @@ impl CcpState {
             self.wire_names_learned.push_back(wire_name);
         }
         while self.wire_names_learned.len() > WIRE_NAME_WINDOW {
+            // The name just learned is never the one forgotten. The order it
+            // belongs to is recovered into the book behind this, so at this
+            // moment nothing is working under it — which made it the first
+            // name the sweep below found to forget, and the order went live
+            // with no name at all.
             let forgettable = self.wire_names_learned.iter().position(|name| {
-                self.wire_name_to_order
-                    .get(name)
-                    .is_none_or(|order| context.order(*order).is_none())
+                *name != wire_name
+                    && self.wire_name_to_order
+                        .get(name)
+                        .is_none_or(|order| context.order(*order).is_none())
             });
             // Every name held belongs to an order still working, so there is
             // nothing to forget: the window is what bounds the names of

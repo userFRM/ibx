@@ -8055,6 +8055,42 @@ fn completed_orders_are_still_there_when_they_are_asked_for_again() {
     );
 }
 
+/// An order the venue has finished with is not reported as working.
+///
+/// The record this client keeps of an order it placed is its own, and a
+/// terminal report moves it on the dispatch pass. A caller asking in between
+/// was handed the order as working, with a quantity outstanding that is not
+/// outstanding — what the bridge remembers finishing is the wire's own
+/// statement and outranks the local record.
+#[test]
+fn an_order_the_venue_has_finished_with_is_not_reported_as_working() {
+    let (client, _rx, shared) = test_client();
+    client.core.track_order(
+        44,
+        Contract { symbol: "SPY".into(), sec_type: "STK".into(), ..Default::default() },
+        Order { order_id: 44, action: "BUY".into(), total_quantity: 100.0, ..Default::default() },
+        0,
+    );
+    // The venue finishes it. The dispatch pass that would move the local
+    // record has not run.
+    shared.orders.push_completed_order(crate::types::CompletedOrder {
+        order_id: 44, instrument: 0, status: crate::types::OrderStatus::Filled,
+        filled_qty: 100, timestamp_ns: 0,
+    });
+    shared.orders.set_replay_done();
+
+    let mut w = RecordingWrapper::default();
+    client.req_open_orders(&mut w);
+    assert!(
+        !w.events.iter().any(|e| e == "open_order" || e.starts_with("open_order:")),
+        "an order the venue has finished with is not working: {:?}", w.events,
+    );
+    assert!(
+        w.events.iter().any(|e| e == "open_order_end"),
+        "and the answer still ends: {:?}", w.events,
+    );
+}
+
 /// One question of what the account has finished at a time.
 ///
 /// The answer is a run of ordinary reports and one sentinel, and nothing in
@@ -8070,7 +8106,7 @@ fn a_second_question_about_what_the_account_has_finished_is_refused() {
         filled_qty: 100, timestamp_ns: 0,
     });
     // A caller already waiting, which is what the claim stands for.
-    assert!(shared.orders.claim_the_completed_orders_question());
+    assert!(shared.orders.claim_the_completed_orders_question().is_some());
 
     let mut w = RecordingWrapper::default();
     client.req_completed_orders(false, &mut w);

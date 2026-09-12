@@ -1000,16 +1000,22 @@ impl EClient {
         // ordinary reports and one sentinel, and nothing in the run says which
         // question it answers, so two callers waiting at once both take the
         // first answer as their own.
-        let claimed = self.shared.lock().unwrap().clone()
-            .is_some_and(|shared| shared.orders.claim_the_completed_orders_question());
-        if !claimed {
+        // The session this question is asked on, held for the whole of it: read
+        // again later, a disconnect and reconnect in between would have this
+        // caller reading another session's counters, publishing its orders, and
+        // releasing its claim.
+        let session = self.shared.lock().unwrap().clone();
+        let held = session
+            .as_ref()
+            .and_then(|shared| shared.claim_the_completed_orders_question());
+        let Some((session, mut held)) = session.zip(held) else {
             self.report_refusal(py, -1, crate::error_codes::Refusal::no_answer(
                 "another request for what the account has finished is already waiting; \
                  this one was not sent",
             ))?;
             self.deliver(py, "completed_orders_end", ())?;
             return Ok(());
-        }
+        };
         // Asked of the venue, not only of this session. What finished while
         // this program was watching is a fraction of what the account has
         // done, and the rest is one request away. The answer is a run of
@@ -1018,14 +1024,10 @@ impl EClient {
         // Read before the question goes out, and waited for it to move, as on
         // the other surface: taken as a flag, a caller that gave up a moment
         // before it was set left it standing for the next one.
-        let before = self
-            .shared
-            .lock()
-            .unwrap()
-            .clone()
-            .map(|shared| {
-                (shared.orders.completed_orders_ended(), shared.orders.completed_orders_asked())
-            });
+        let before = (
+            session.orders.completed_orders_ended(),
+            session.orders.completed_orders_asked(),
+        );
         // Detached for the send, as every other command on this surface is:
         // the channel is bounded, so a hot loop that is behind blocks the
         // sender — and blocking here holds the interpreter, including the
@@ -1045,23 +1047,26 @@ impl EClient {
             // seen, as on the other surface: read at that moment, it could
             // already include this question's own answer, and the wait then sat
             // out its whole deadline for an answer already given.
-            let mut baseline = before.map(|(answered_before, _)| answered_before);
+            let (answered_before, asked_before) = before;
+            let mut baseline = answered_before;
             let mut seen = false;
             let ended = loop {
-                if let Some(shared) = self.shared.lock().unwrap().clone()
-                    && let Some((_, asked_before)) = before
-                {
-                    let ended_now = shared.orders.completed_orders_ended();
-                    if !seen {
-                        if shared.orders.completed_orders_asked() != asked_before {
-                            seen = true;
-                        } else {
-                            baseline = Some(ended_now);
-                        }
+                // And on this caller's own turn: a caller that gave up leaves
+                // its answer still coming, and the ask and the end it moves
+                // are not this caller's.
+                if session.orders.completed_orders_turn() != held.turn {
+                    break false;
+                }
+                let ended_now = session.orders.completed_orders_ended();
+                if !seen {
+                    if session.orders.completed_orders_asked() != asked_before {
+                        seen = true;
+                    } else {
+                        baseline = ended_now;
                     }
-                    if seen && baseline.is_some_and(|since| ended_now != since) {
-                        break true;
-                    }
+                }
+                if seen && ended_now != baseline {
+                    break true;
                 }
                 if std::time::Instant::now() >= until {
                     break false;
@@ -1081,12 +1086,11 @@ impl EClient {
                 ))?;
             }
         }
-        // Bind the clone out of the guard first. A MutexGuard temporary in an
-        // if-let scrutinee lives to the end of the body, so cloning alone does
-        // not release it — a callback re-entering disconnect() would deadlock
-        // on this same mutex.
-        let shared = self.shared.lock().unwrap().clone();
-        if let Some(shared) = shared {
+        // The session this question was asked on, not whichever is current now:
+        // a disconnect and reconnect in between would otherwise have this
+        // caller publishing another session's orders.
+        {
+            let shared = &session;
             // Read off the queue once and kept. It empties as it is read and
             // the venue does not send these again, so a second request would
             // otherwise be answered with none of them, and with default objects
@@ -1136,7 +1140,7 @@ impl EClient {
                         ),
                     };
                     if order.client_id == 0 {
-                        order.client_id = self.core.placing_client(&shared, co.order_id);
+                        order.client_id = self.core.placing_client(shared, co.order_id);
                     }
                     // Filled out from what the venue has said about the
                     // contract, as the open-order answer already is on both
@@ -1145,7 +1149,7 @@ impl EClient {
                     // multiplier and its local symbol the moment it finished,
                     // and only on this binding.
                     let contract = if contract.con_id != 0 {
-                        self.core.get_contract(contract.con_id, &shared).unwrap_or(contract)
+                        self.core.get_contract(contract.con_id, shared).unwrap_or(contract)
                     } else {
                         contract
                     };
@@ -1175,6 +1179,11 @@ impl EClient {
             // Copied before anything is called back: a callback may ask for
             // these again, and the lock is not re-entrant.
             let completed = self.completed.lock().unwrap().clone();
+            // The answer is in this caller's archive now, so the question is
+            // free for the next one — before the callbacks, which may take a
+            // while and may ask for other things while they run. What is left
+            // to the drop is every path that does not reach here.
+            held.give_it_back();
             for (contract, order, state) in &completed {
                 // Kept whole in the archive and filtered on the way out, so
                 // the same session can ask for all of them and for the
@@ -1191,10 +1200,7 @@ impl EClient {
             }
             self.deliver(py, "completed_orders_end", ())?;
         }
-        // Answered or not, the question is free again.
-        if let Some(shared) = self.shared.lock().unwrap().clone() {
-            shared.orders.the_completed_orders_question_is_over();
-        }
+        // And where nothing was drained at all, the drop gives it back.
         Ok(())
     }
 }
