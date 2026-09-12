@@ -1317,7 +1317,7 @@ mod news_tests {
 
         // A second caller on the same contract, naming one series already
         // being served and one that is not.
-        farm.also_ask_for_series(instrument, &[233, 236], &context, &mut conn, &mut hb);
+        farm.also_ask_for_series(instrument, 756733, &[233, 236], &context, &mut conn, &mut hb);
 
         let stated = |msg: &[u8], tag: u32| -> Vec<String> {
             let prefix = format!("{tag}=");

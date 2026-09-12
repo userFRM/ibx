@@ -8130,7 +8130,10 @@ fn a_second_question_about_what_the_account_has_finished_is_refused() {
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(60));
             shared.orders.note_completed_orders_asked();
-            shared.orders.note_completed_orders_end();
+            // On the turn the question was asked under, which is what the
+            // engine reads off the command.
+            let turn = shared.orders.completed_orders_turn();
+            shared.orders.note_completed_orders_end_on(turn);
         })
     };
     let mut next = RecordingWrapper::default();
@@ -8140,6 +8143,52 @@ fn a_second_question_about_what_the_account_has_finished_is_refused() {
         next.events.iter().filter(|e| *e == "completed_order").count(), 1,
         "the question is free again: {:?}", next.events,
     );
+}
+
+/// A caller is released by the end of its own question, not by the answer to
+/// one somebody else gave up on.
+///
+/// The answer is a run of ordinary reports and one sentinel, and nothing in
+/// the run says which question it answers. A caller that waits long enough
+/// gives up and leaves its answer still on its way: read as a count alone, the
+/// next caller took that answer as its own.
+#[test]
+fn a_caller_is_released_by_the_end_of_its_own_question() {
+    let (client, rx, shared) = test_client();
+    // The caller before this one asked and gave up.
+    let abandoned_turn = shared.orders.claim_the_completed_orders_question()
+        .expect("the question is free");
+    shared.orders.the_completed_orders_question_is_over();
+
+    // Its answer arrives while this caller is waiting on its own.
+    let engine = {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            shared.orders.note_completed_orders_asked();
+            shared.orders.note_completed_orders_end_on(abandoned_turn);
+        })
+    };
+    let began = std::time::Instant::now();
+    let mut w = RecordingWrapper::default();
+    client.req_completed_orders(false, &mut w);
+    engine.join().unwrap();
+    assert!(
+        began.elapsed() >= std::time::Duration::from_secs(14),
+        "the abandoned caller's answer released this one: {:?}", began.elapsed(),
+    );
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error")),
+        "and this caller is told its own question went unanswered: {:?}", w.events,
+    );
+    // The question went out under this caller's own turn.
+    let asked: Vec<u64> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|cmd| match cmd {
+            ControlCommand::FetchCompletedOrders { turn } => Some(turn),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asked, [abandoned_turn + 1], "its own turn, not the abandoned one: {asked:?}");
 }
 
 /// A question the engine refuses at once is answered at once.
@@ -8161,7 +8210,10 @@ fn a_question_answered_before_the_wait_looks_does_not_wait_it_out() {
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(60));
             shared.orders.note_completed_orders_asked();
-            shared.orders.note_completed_orders_end();
+            // On the turn the question was asked under, which is what the
+            // engine reads off the command.
+            let turn = shared.orders.completed_orders_turn();
+            shared.orders.note_completed_orders_end_on(turn);
         })
     };
 

@@ -165,6 +165,13 @@ pub enum ControlCommand {
     AlsoAskForSeries {
         /// The engine's own slot for the contract.
         instrument: InstrumentId,
+        /// The venue's id for the contract the caller joined.
+        ///
+        /// A slot is given back and handed to another contract, and this
+        /// command can be handled after that has happened: named by slot
+        /// alone, a series one caller asked for on one contract was asked for
+        /// on whatever contract the slot had gone to.
+        con_id: i64,
         /// The series the joining caller named, by the venue's number for each.
         generic_ticks: Vec<u32>,
     },
@@ -397,7 +404,15 @@ pub enum ControlCommand {
     /// The venue states them as ordinary execution reports, ending with the
     /// same sentinel the opening replay ends with, so what this carries is the
     /// window they are read in rather than any payload of its own.
-    FetchCompletedOrders,
+    FetchCompletedOrders {
+        /// Which turn of the question this is.
+        ///
+        /// A caller that gives up leaves its own answer on its way, and the
+        /// answer is a run of ordinary reports that says nothing about which
+        /// question it answers — so the turn travels with the question and
+        /// comes back on the end, and a caller waits for the end of its own.
+        turn: u64,
+    },
     /// Request scanner parameter XML via historical data connection.
     FetchScannerParams,
     /// Subscribe to a scanner scan via historical data connection.

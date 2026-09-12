@@ -1323,9 +1323,15 @@ impl HotLoop {
                     // written here it would leave nothing new to ask for —
                     // and written over theirs it would leave the venue serving
                     // series the rebuild no longer asks for.
+                    // And never from a chargeable snapshot: the message that
+                    // carries one states no extra series at all, so a series
+                    // named beside it went out on nothing — and stayed on the
+                    // list the rebuild after a reconnect reads, which asked
+                    // the venue for it as part of a stream that never named it.
                     if let Some(slot) = registered
                         && !generic_ticks.is_empty()
-                        && !(self.farm.holds_a_stream(slot) && !regulatory_snapshot)
+                        && !regulatory_snapshot
+                        && !self.farm.holds_a_stream(slot)
                     {
                         let held = self.farm.asked_generic_ticks.entry(slot).or_default();
                         for tick in &generic_ticks {
@@ -1366,6 +1372,7 @@ impl HotLoop {
                             if !generic_ticks.is_empty() {
                                 self.farm.also_ask_for_series(
                                     id,
+                                    con_id,
                                     &generic_ticks,
                                     &self.context,
                                     &mut self.farm_conn,
@@ -1492,9 +1499,10 @@ impl HotLoop {
                         }
                     }
                 }
-                ControlCommand::AlsoAskForSeries { instrument, generic_ticks } => {
+                ControlCommand::AlsoAskForSeries { instrument, con_id, generic_ticks } => {
                     self.farm.also_ask_for_series(
                         instrument,
+                        con_id,
                         &generic_ticks,
                         &self.context,
                         &mut self.farm_conn,
@@ -1875,9 +1883,9 @@ impl HotLoop {
                         &mut self.ccp_conn, &mut self.hb, &self.shared,
                     );
                 }
-                ControlCommand::FetchCompletedOrders => {
+                ControlCommand::FetchCompletedOrders { turn } => {
                     self.ccp.send_completed_orders_request(
-                        &mut self.ccp_conn, &mut self.hb, &self.shared,
+                        turn, &mut self.ccp_conn, &mut self.hb, &self.shared,
                     );
                 }
                 ControlCommand::FetchMktDepthExchanges => {

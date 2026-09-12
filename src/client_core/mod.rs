@@ -1460,6 +1460,10 @@ impl ClientCore {
         self.con_id_to_instrument.lock().unwrap().clear();
         self.last_quotes.lock().unwrap().clear();
         self.snapshot_reqs.lock().unwrap().clear();
+        // And which of them were the venue's one-shot. Kept, a number reused
+        // for an ordinary stream on the next session read as a one-shot, and
+        // the callers on that contract were served as though it were one.
+        self.chargeable_snapshot_reqs.lock().unwrap().clear();
         *self.pnl_req_id.lock().unwrap() = None;
         self.pnl_single_reqs.lock().unwrap().clear();
         *self.last_pnl.lock().unwrap() = [0; 3];
@@ -1624,6 +1628,24 @@ impl ClientCore {
     /// Answers whether this request ended up a follower.
     pub(crate) fn take_or_follow(&self, instrument: InstrumentId, req_id: i64) -> bool {
         let mut held = self.instrument_to_req.lock().unwrap();
+        // The venue's one-shot is a request of its own on the wire, whichever
+        // side of it holds the slot: it was sent separately and it has its own
+        // rows to withdraw. Recorded as following, or as followed, it was
+        // ended by the other request's readings and its own rows were left
+        // being served — which is what the guard on the path beside this one
+        // is for, and this path went round it.
+        let one_shot = self.chargeable_snapshot_reqs.lock().unwrap();
+        if one_shot.contains(&req_id)
+            || held.get(&instrument).is_some_and(|existing| one_shot.contains(existing))
+        {
+            drop(one_shot);
+            held.entry(instrument).or_insert(req_id);
+            drop(held);
+            self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
+            self.stamp_registration(req_id);
+            return false;
+        }
+        drop(one_shot);
         match held.get(&instrument) {
             Some(&existing) if existing != req_id => {
                 self.follow_under_holder_lock(instrument, req_id);
@@ -2011,6 +2033,7 @@ impl ClientCore {
                 reply_tx: None,
             }) {
                 self.release_news_askers(con_id);
+                self.chargeable_snapshot_reqs.lock().unwrap().remove(&req_id);
                 return Err(Refusal::not_connected(format!("Engine stopped: {gone}")));
             }
         }
@@ -2039,6 +2062,7 @@ impl ClientCore {
             if !generic_ticks.is_empty() {
                 let _ = control_tx.send(ControlCommand::AlsoAskForSeries {
                     instrument,
+                    con_id,
                     generic_ticks: generic_ticks.clone(),
                 });
             }
@@ -2101,6 +2125,12 @@ impl ClientCore {
                 {
                     let _ = control_tx.send(ControlCommand::UnsubscribeNews { subject });
                 }
+                // And what this request was marked as, because no record of it
+                // remains for a withdrawal to clean up. Left behind, the
+                // number reused for an ordinary stream read as the venue's
+                // one-shot and the callers on that contract were served as
+                // though it were one.
+                self.chargeable_snapshot_reqs.lock().unwrap().remove(&req_id);
                 return Err(refused);
             }
         };
@@ -2121,6 +2151,7 @@ impl ClientCore {
             if !generic_ticks.is_empty() {
                 let _ = control_tx.send(ControlCommand::AlsoAskForSeries {
                     instrument: instrument_id,
+                    con_id,
                     generic_ticks: generic_ticks.clone(),
                 });
             }

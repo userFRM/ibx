@@ -1024,48 +1024,30 @@ impl EClient {
         // Read before the question goes out, and waited for it to move, as on
         // the other surface: taken as a flag, a caller that gave up a moment
         // before it was set left it standing for the next one.
-        let before = (
-            session.orders.completed_orders_ended(),
-            session.orders.completed_orders_asked(),
-        );
+
         // Detached for the send, as every other command on this surface is:
         // the channel is bounded, so a hot loop that is behind blocks the
         // sender — and blocking here holds the interpreter, including the
         // thread whose job is to drain the answers this very call is asking
         // for.
         let asked =
-            Self::send_control(py, &tx, crate::types::ControlCommand::FetchCompletedOrders)
-                .is_ok();
+            Self::send_control(
+                py, &tx,
+                crate::types::ControlCommand::FetchCompletedOrders { turn: held.turn },
+            )
+            .is_ok();
         if asked {
             let until = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
             // Two things in turn and in that order, as on the other surface:
             // the engine takes this question off the queue, and only then is
             // the count of answers read again.
-            // The count to beat is the last one read while the question was
-            // still unasked, and it is never read again after the ask has been
-            // seen, as on the other surface: read at that moment, it could
-            // already include this question's own answer, and the wait then sat
-            // out its whole deadline for an answer already given.
-            let (answered_before, asked_before) = before;
-            let mut baseline = answered_before;
-            let mut seen = false;
+            // The end of this caller's own question is what releases it, as on
+            // the other surface: the turn travels out with the question and
+            // comes back on the end, so an answer is matched to the question
+            // that asked for it.
             let ended = loop {
-                // And on this caller's own turn: a caller that gave up leaves
-                // its answer still coming, and the ask and the end it moves
-                // are not this caller's.
-                if session.orders.completed_orders_turn() != held.turn {
-                    break false;
-                }
-                let ended_now = session.orders.completed_orders_ended();
-                if !seen {
-                    if session.orders.completed_orders_asked() != asked_before {
-                        seen = true;
-                    } else {
-                        baseline = ended_now;
-                    }
-                }
-                if seen && ended_now != baseline {
+                if session.orders.completed_orders_ended_on() >= held.turn {
                     break true;
                 }
                 if std::time::Instant::now() >= until {
@@ -1089,6 +1071,20 @@ impl EClient {
         // The session this question was asked on, not whichever is current now:
         // a disconnect and reconnect in between would otherwise have this
         // caller publishing another session's orders.
+        //
+        // And where that has happened, nothing of this caller's is written
+        // anywhere: the archive, the record of what was placed and the
+        // evictions all belong to whichever session the client now holds, so
+        // an answer about the session that ended would be filed against the
+        // one that replaced it — and published from it.
+        if !self.is_current_session(&session) {
+            self.report_refusal(py, -1, crate::error_codes::Refusal::not_connected(
+                "the session this question was asked on has ended; what the venue said \
+                 about it is not this session's to answer with",
+            ))?;
+            self.deliver(py, "completed_orders_end", ())?;
+            return Ok(());
+        }
         {
             let shared = &session;
             // Read off the queue once and kept. It empties as it is read and
@@ -2010,7 +2006,10 @@ w = W()",
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(60));
                     shared.orders.note_completed_orders_asked();
-                    shared.orders.note_completed_orders_end();
+                    // On the turn the question was asked under, which is what
+                    // the engine reads off the command.
+                    let turn = shared.orders.completed_orders_turn();
+                    shared.orders.note_completed_orders_end_on(turn);
                 })
             };
             let began = std::time::Instant::now();
@@ -2055,7 +2054,8 @@ w = W()",
                     std::thread::sleep(std::time::Duration::from_millis(20));
                     shared.orders.note_completed_orders_asked();
                     std::thread::sleep(std::time::Duration::from_millis(20));
-                    shared.orders.note_completed_orders_end();
+                    let turn = shared.orders.completed_orders_turn();
+                    shared.orders.note_completed_orders_end_on(turn);
                 })
             };
             let answers = |client: &EClient| {

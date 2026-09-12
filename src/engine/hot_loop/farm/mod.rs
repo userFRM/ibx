@@ -2916,11 +2916,24 @@ impl FarmState {
     pub(crate) fn also_ask_for_series(
         &mut self,
         instrument: InstrumentId,
+        named_contract: i64,
         wanted: &[u32],
         context: &Context,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
+        // The contract the caller joined, and not whatever holds the slot now.
+        // A slot is given back and handed on, and this is handled after the
+        // caller that asked has been registered — so named by slot alone, one
+        // contract's series were asked for on another's.
+        let Some(holds_the_slot) = context.market.con_id(instrument) else { return };
+        if named_contract != 0 && holds_the_slot != named_contract {
+            log::debug!(
+                "a series asked for on contract {named_contract} arrived for slot \
+                 {instrument}, which now holds {holds_the_slot}; nothing is asked",
+            );
+            return;
+        }
         // The ones this subscription already asks for on its own are not
         // asked for again, as they are not at the start: a caller may name the
         // trading status, the venue map or the option model, and a second
@@ -2931,7 +2944,11 @@ impl FarmState {
             BBO_EXCHANGE_MAP_REQUEST_TYPE,
             GREEKS_REQUEST_TYPE,
         ];
-        let already = self.asked_generic_ticks.entry(instrument).or_default();
+        // Nothing is written down before the subscription this would join is
+        // found: a list created here for a slot that holds no stream is a list
+        // the next contract to take the slot is asked for.
+        let already: Vec<u32> =
+            self.asked_generic_ticks.get(&instrument).cloned().unwrap_or_default();
         let new_ones: Vec<u32> = wanted.iter()
             .copied()
             .filter(|tick| !already.contains(tick) && !already_asked.contains(tick))
@@ -2939,7 +2956,6 @@ impl FarmState {
         if new_ones.is_empty() {
             return;
         }
-        already.extend(new_ones.iter().copied());
         let Some((_, symbol, exchange, sec_type, .., mode_9887)) = self
             .md_resub_info
             .iter()
@@ -2961,6 +2977,9 @@ impl FarmState {
         if !self.instrument_md_reqs.iter().any(|(id, _)| *id == instrument) {
             return;
         }
+        // Past every check, so this is a stream that is up on the contract the
+        // caller named: the list is what the rebuild after a reconnect reads.
+        self.asked_generic_ticks.entry(instrument).or_default().extend(new_ones.iter().copied());
 
         let mut rows: Vec<(u32, u32)> = Vec::new();
         for tick in new_ones {

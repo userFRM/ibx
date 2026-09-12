@@ -882,13 +882,14 @@ impl EClient {
         // this program was watching is a fraction of what the account has
         // done. The answer is a run of ordinary reports ending in a sentinel,
         // so the wait is on that end rather than on a clock.
-        // Read before the question goes out, and waited for it to move. Taken
-        // as a flag instead, a caller that gave up a moment before the flag
-        // was set left it standing and the next caller read it as the answer
-        // to a question it had not yet asked.
-        let answered_before = self.shared.orders.completed_orders_ended();
-        let asked_before = self.shared.orders.completed_orders_asked();
-        if self.control_tx.send(crate::types::ControlCommand::FetchCompletedOrders).is_ok() {
+        // The question goes out under the turn this caller holds it on, and
+        // the end that answers it comes back under the same turn. Waited on a
+        // count instead, a caller that gave up left its answer on its way and
+        // the next caller read it as the answer to its own question.
+        if self.control_tx
+            .send(crate::types::ControlCommand::FetchCompletedOrders { turn: held.turn })
+            .is_ok()
+        {
             let until = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
             // Two things in turn, and in that order. First the engine takes
@@ -898,32 +899,14 @@ impl EClient {
             // answer that completed before the engine had even seen this
             // question satisfied it, and the caller returned before its own
             // request had reached the venue.
-            // The count to beat is the last one read while the question was
-            // still unasked, and it is never read again after the ask has been
-            // seen. Read at that moment instead, it could already include this
-            // question's own answer — the engine counts the ask and, where
-            // there is no connection to send on, the end in the same pass — and
-            // the wait then sat out its whole deadline for an answer it had
-            // already been given, and said the venue had not finished.
-            let mut baseline = answered_before;
-            let mut seen = false;
+            // The end of this caller's own question is what releases it. The
+            // turn travels out with the question and comes back on the end, so
+            // an answer is matched to the question that asked for it — counted
+            // instead, a caller that gave up left its answer on its way and
+            // the next caller took it as its own, and an answer that arrived
+            // before the engine had seen the question satisfied nobody.
             loop {
-                // And on this caller's own turn. A caller that gave up leaves
-                // its answer still coming, and the ask and the end it moves are
-                // not this caller's: read as such, one caller was released by
-                // the answer to a question somebody else asked and gave up on.
-                if self.shared.orders.completed_orders_turn() != held.turn {
-                    break;
-                }
-                let ended_now = self.shared.orders.completed_orders_ended();
-                if !seen {
-                    if self.shared.orders.completed_orders_asked() != asked_before {
-                        seen = true;
-                    } else {
-                        baseline = ended_now;
-                    }
-                }
-                if seen && self.shared.orders.completed_orders_ended() != baseline {
+                if self.shared.orders.completed_orders_ended_on() >= held.turn {
                     break;
                 }
                 if std::time::Instant::now() >= until {
@@ -1038,14 +1021,19 @@ impl EClient {
                 self.deferred_evictions.lock().unwrap().insert(order.order_id);
             }
         }
-        // The answer is in this caller's archive now, so the question is free
-        // for the next one — before the callbacks, which may take a while and
-        // may ask for other things while they run. Every path that does not
-        // reach here gives it back when the claim is dropped.
-        held.give_it_back();
         // Copied before anything is called back: a callback may ask for these
         // again, and the lock is not re-entrant.
+        //
+        // And copied before the question is given back: released first, the
+        // next caller could ask, be answered, and archive its answer while
+        // this caller was still to read the archive — so this caller
+        // published orders that were not in the answer to its own question.
         let completed = self.completed.lock().unwrap().clone();
+        // The answer is this caller's now, so the question is free for the
+        // next one — before the callbacks, which may take a while and may ask
+        // for other things while they run. Every path that does not reach
+        // here gives it back when the claim is dropped.
+        held.give_it_back();
         for (contract, order, state) in &completed {
             // Kept whole in the archive and filtered on the way out, so the
             // same session can ask for all of them and for the numbered ones

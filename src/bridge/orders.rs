@@ -86,6 +86,8 @@ pub struct OrderState {
     /// caller reads the turn it took the question on and is released only by
     /// what arrives on or after it.
     completed_orders_turn: std::sync::atomic::AtomicU64,
+    /// The latest turn the venue has finished answering.
+    completed_orders_ended_on: std::sync::atomic::AtomicU64,
     /// Orders the venue has taken back after reporting them finished.
     ///
     /// The completion queue empties on read, and what is read out of it is
@@ -188,6 +190,7 @@ impl OrderState {
             completed_orders_asked: std::sync::atomic::AtomicU64::new(0),
             completed_orders_in_flight: std::sync::atomic::AtomicBool::new(false),
             completed_orders_turn: std::sync::atomic::AtomicU64::new(0),
+            completed_orders_ended_on: std::sync::atomic::AtomicU64::new(0),
             order_corrections: Mutex::new(Vec::new()),
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
@@ -306,6 +309,23 @@ impl OrderState {
     /// says the run is over.
     #[doc(hidden)] pub fn note_completed_orders_end(&self) {
         self.completed_orders_ended.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// The same, for the turn the question was asked on.
+    ///
+    /// A caller waits for the end of its own question: the answer is a run of
+    /// ordinary reports that says nothing about which question it answers, so
+    /// the turn travels with the question and comes back here. Counted alone,
+    /// a caller that gave up left its answer on its way and the next caller
+    /// was released by it.
+    #[doc(hidden)] pub fn note_completed_orders_end_on(&self, turn: u64) {
+        self.completed_orders_ended_on.fetch_max(turn, std::sync::atomic::Ordering::AcqRel);
+        self.note_completed_orders_end();
+    }
+
+    /// The latest turn the venue has finished answering.
+    pub fn completed_orders_ended_on(&self) -> u64 {
+        self.completed_orders_ended_on.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// How many times that end has been said.

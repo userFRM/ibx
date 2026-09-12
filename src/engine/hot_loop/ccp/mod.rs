@@ -662,6 +662,15 @@ pub(crate) struct CcpState {
     /// arrive inside that window and are filed as history instead of being
     /// recovered into the book a withdrawal walks.
     completed_orders_wanted: Option<Instant>,
+    /// Which turn of the question the window that is open belongs to.
+    ///
+    /// The answer is a run of ordinary reports and says nothing about which
+    /// question it answers, so the turn the caller asked on travels with the
+    /// question and comes back on its end: a caller that gave up leaves its
+    /// answer on its way, and the next caller must not be released by it.
+    completed_orders_asked_on: u64,
+    /// And the turn of a question held behind that window.
+    completed_orders_queued_on: Option<u64>,
     /// When the question stops waiting for the replay of the working orders.
     ///
     /// Held against the connection rather than against the question: the
@@ -852,6 +861,8 @@ impl CcpState {
             completed_orders_answered: false,
             completed_orders_wanted: None,
             replay_hold_until: None,
+            completed_orders_asked_on: 0,
+            completed_orders_queued_on: None,
             completed_orders_deadline: None,
             pending_option_params: Vec::new(),
             pending_dividends: Vec::new(),
@@ -3128,6 +3139,7 @@ impl CcpState {
     /// sentinel is the whole mechanism, and it is held here.
     pub(crate) fn send_completed_orders_request(
         &mut self,
+        turn: u64,
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
         shared: &SharedState,
@@ -3162,6 +3174,11 @@ impl CcpState {
         if the_replay_could_still_be_running || self.completed_orders_open {
             self.completed_orders_wanted
                 .get_or_insert_with(|| Instant::now() + COMPLETED_ORDERS_TIMEOUT);
+            // Held under its own turn, not the open window's: the window that
+            // is open belongs to the caller before this one, and its end is
+            // that caller's answer. Written over it, this caller would have
+            // been released by the answer to the question it is queued behind.
+            self.completed_orders_queued_on = Some(turn);
             log::debug!(
                 "holding the question of what the venue has finished until the one before it                  is answered",
             );
@@ -3169,8 +3186,11 @@ impl CcpState {
         }
         // Past the hold, so whatever was waiting is no longer waiting.
         self.completed_orders_wanted = None;
+        self.completed_orders_queued_on = None;
+        // Whose question this is, carried through to the end that answers it.
+        self.completed_orders_asked_on = turn;
         let Some(conn) = ccp_conn.as_mut() else {
-            shared.orders.note_completed_orders_end();
+            shared.orders.note_completed_orders_end_on(self.completed_orders_asked_on);
             return;
         };
         let ts = chrono_free_timestamp();
@@ -3196,7 +3216,7 @@ impl CcpState {
             }
             Err(e) => {
                 log::warn!("the request for finished orders could not be sent: {e}");
-                shared.orders.note_completed_orders_end();
+                shared.orders.note_completed_orders_end_on(self.completed_orders_asked_on);
             }
         }
     }
@@ -3317,9 +3337,15 @@ impl CcpState {
             // The next connection replays the account again, so the question
             // waits for that replay again.
             self.replay_hold_until = None;
+            // And a question queued behind the window dies with it, on its own
+            // turn: the caller waiting on it is told the answer is over rather
+            // than waiting for a connection that has gone.
+            if let Some(queued) = self.completed_orders_queued_on.take() {
+                shared.orders.note_completed_orders_end_on(queued);
+            }
             self.deliver_finished_orders(shared, Handover::Final);
             if a_queued_question_dies_here || !self.completed_orders_answered {
-                shared.orders.note_completed_orders_end();
+                shared.orders.note_completed_orders_end_on(self.completed_orders_asked_on);
             }
             self.completed_orders_answered = false;
         }
@@ -3499,7 +3525,7 @@ impl CcpState {
             // record with none of its fields and the caller would be left with
             // the half-built one for good.
             self.deliver_finished_orders(shared, Handover::SoFar);
-            shared.orders.note_completed_orders_end();
+            shared.orders.note_completed_orders_end_on(self.completed_orders_asked_on);
             // Said, so the sentinel does not say it again to nobody and leave
             // the next caller reading it as its own answer.
             self.completed_orders_answered = true;
@@ -3522,7 +3548,10 @@ impl CcpState {
         // Left set, so the guard inside sees the wait it has already run out —
         // clearing it first makes that guard read "nothing has waited yet" and
         // hold the question all over again. It is cleared there, past the hold.
-        self.send_completed_orders_request(ccp_conn, hb, shared);
+        // On the turn the question that was held was asked on, which is not
+        // the open window's: this is that question going out at last.
+        let asked_on = self.completed_orders_queued_on.unwrap_or(self.completed_orders_asked_on);
+        self.send_completed_orders_request(asked_on, ccp_conn, hb, shared);
     }
 
     /// Report the orders the recovery push did not account for.

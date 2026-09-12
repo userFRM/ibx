@@ -1588,7 +1588,7 @@ impl CcpState {
                 // standing was read by the next caller as the answer to a
                 // question the venue had not begun.
                 if !self.completed_orders_answered {
-                    shared.orders.note_completed_orders_end();
+                    shared.orders.note_completed_orders_end_on(self.completed_orders_asked_on);
                 }
                 self.completed_orders_answered = false;
                 log::info!("The venue has stated everything it has finished");

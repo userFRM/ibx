@@ -38,6 +38,35 @@ fn nothing_follows_a_chargeable_snapshot() {
     );
 }
 
+/// The venue's one-shot neither follows a stream nor is followed by one, on
+/// the path that records ownership as well as the one that decides it.
+///
+/// It is a request of its own on the wire — sent separately, with its own rows
+/// to withdraw. Recorded as following, or as followed, it was ended by the
+/// other request's readings and its own rows were left being served.
+#[test]
+fn the_one_shot_is_neither_a_follower_nor_followed() {
+    let core = ClientCore::new();
+    let instrument = 5u32;
+
+    // A stream holds the slot; the one-shot does not become its follower.
+    core.instrument_to_req.lock().unwrap().insert(instrument, 30);
+    core.chargeable_snapshot_reqs.lock().unwrap().insert(31);
+    assert!(
+        !core.take_or_follow(instrument, 31),
+        "the one-shot is its own request beside the stream",
+    );
+
+    // And a stream does not become the one-shot's follower.
+    let other = ClientCore::new();
+    other.instrument_to_req.lock().unwrap().insert(instrument, 40);
+    other.chargeable_snapshot_reqs.lock().unwrap().insert(40);
+    assert!(
+        !other.take_or_follow(instrument, 41),
+        "the stream is sent rather than served off the one-shot",
+    );
+}
+
 /// A market-data type nobody recognises does not become the venue's word.
 ///
 /// Subscriptions stay realtime whatever it names, and the callback that

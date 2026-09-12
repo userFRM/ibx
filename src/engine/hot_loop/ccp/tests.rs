@@ -3260,7 +3260,7 @@ fn the_question_waits_for_the_session_s_own_replay() {
     let mut hb = HeartbeatState::new();
     let mut conn = None;
 
-    ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
+    ccp.send_completed_orders_request(1, &mut conn, &mut hb, &shared);
     assert!(!ccp.completed_orders_open, "nothing was asked yet");
     assert!(
         shared.orders.completed_orders_ended() == 0,
@@ -3302,7 +3302,7 @@ fn a_question_held_for_a_replay_that_names_nothing_is_asked_anyway() {
     let mut hb = HeartbeatState::new();
     let mut conn = None;
 
-    ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
+    ccp.send_completed_orders_request(1, &mut conn, &mut hb, &shared);
     assert!(shared.orders.completed_orders_ended() == 0, "held, and the replay has not ended");
 
     // Held for as long as the replay could take, and no longer. There is no
@@ -3332,7 +3332,7 @@ fn the_hold_and_the_window_fit_inside_the_wait_the_caller_keeps() {
     let mut conn = None;
 
     // Held once, for the replay.
-    ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
+    ccp.send_completed_orders_request(1, &mut conn, &mut hb, &shared);
     assert_eq!(shared.orders.completed_orders_ended(), 0, "held while the replay could run");
 
     // The hold runs out and the question goes out. There is no connection, so
@@ -3344,7 +3344,7 @@ fn the_hold_and_the_window_fit_inside_the_wait_the_caller_keeps() {
 
     // A second question on the same connection is not held again: the replay
     // happens once, and it has already had its time.
-    ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
+    ccp.send_completed_orders_request(1, &mut conn, &mut hb, &shared);
     assert!(
         shared.orders.completed_orders_ended() > after_the_first,
         "the question was held for a replay that had already had its time",
