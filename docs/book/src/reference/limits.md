@@ -45,8 +45,10 @@ not the delayed one is a property of the feed rather than of the account.
 
 ## Market depth depends on the entitlement
 
-A book is asked for at a named venue, and every level names the venue it came
-from. Which venues answer is the account's entitlement, not this client's:
+A book is asked for at a named venue, and a level carries the maker the venue
+names on it — empty where it names none, which is the ordinary shape on a venue
+that quotes no makers. Which venues answer is the account's entitlement, not
+this client's:
 
 * A venue the account is not entitled to refuses by name, and the refusal
   reaches the caller.
@@ -61,6 +63,14 @@ name, while `EUR.USD`, `GBP.USD` and `USD.JPY` on `IDEALPRO` all deliver, and
 a twenty-level book delivers as readily as a five-level one. Smart depth on a
 currency produces nothing, which is the venue saying a currency has one venue
 and nothing to aggregate.
+
+A book of the size asked for stays that size. The venue sends every level it
+holds and says nothing about the one that moves when a level inside the asked
+size goes away, so this client keeps the book and states that move itself: a
+withdrawal inside the book is followed by the level that came up into the place
+it left, and a level arriving inside it is preceded by the withdrawal of the one
+it pushed out. A caller applying the operations in the order they arrive holds
+the size it asked for.
 
 ## A broad lookup takes longer than one contract
 

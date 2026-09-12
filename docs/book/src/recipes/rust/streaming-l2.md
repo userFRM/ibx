@@ -20,8 +20,10 @@ maker, and:
 | `operation` | 0 insert, 1 update, 2 delete |
 | `side` | 0 ask, 1 bid |
 
-Every level from this client names the venue it stands on, which is why the
-example keeps `market_maker` alongside price and size.
+A level carries the maker the venue names on it. An exchange-level book often
+names none — many venues quote no makers — and then the field is empty; on the
+aggregated book the exchange stands in where the venue names no maker. That is
+why the example keeps `market_maker` alongside price and size.
 
 The example collects for the whole window and prints each book once at the end,
 not on every update. `DURATION_SECS` sets that window; the default is 15.
