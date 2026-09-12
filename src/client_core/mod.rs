@@ -5606,7 +5606,22 @@ impl ClientCore {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|since| (since.as_secs() / 86_400) as i64)
                     .unwrap_or(0);
-                crate::control::dividends::over_the_life(&schedule, today, years, &contract.currency)
+                // The far end of the window is the contract's own expiry date,
+                // which the caller named. Taken off the count of days the
+                // venue states the contract has left — a fraction, rounded up
+                // — it was the day after expiry for every hour of a session on
+                // a contract expiring at the close, and a payment going ex
+                // that day was priced into a contract that never sees it.
+                let expires_on = crate::protocol::datetime::day_number(
+                    &contract.last_trade_date_or_contract_month,
+                );
+                expires_on
+                    .map(|expires_on| {
+                        crate::control::dividends::over_the_life(
+                            &schedule, today, expires_on, &contract.currency,
+                        )
+                    })
+                    .unwrap_or_default()
             })
             .unwrap_or_default();
 

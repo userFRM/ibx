@@ -3133,9 +3133,14 @@ impl CcpState {
         let raw = String::from_utf8_lossy(msg);
         let fields: Vec<&str> = raw.split('\x01').collect();
 
-        // The message has repeating 100=EXCHANGE|6813=NAME pairs grouped by sections.
-        // Sections: 6523=category|6811=category_name for stock categories,
-        //           8128=N and 8129=N separate stock/derivative sections.
+        // The message has repeating 100=EXCHANGE|6813=NAME pairs grouped by
+        // sections. Sections: 6523=category|6811=category_name for the share
+        // categories, then 8128=N and 8129=N, each stating how many venues
+        // follow it. What follows 8128 is the index venues and what follows
+        // 8129 the futures venues; the venues before either are the shares.
+        // Labelled shares, every index venue was handed to a caller under a
+        // type it does not trade, and a caller asking which venues carry depth
+        // for an index was told none do.
         // Every 100/6813 pair becomes a DepthMktDataDescription entry.
         let mut descs: Vec<DepthMktDataDescription> = Vec::new();
         let mut current_sec_type = "STK".to_string();
@@ -3144,9 +3149,7 @@ impl CcpState {
         while i < fields.len() {
             let f = fields[i];
             if f.starts_with("8128=") {
-                // Section separator — exchanges above are shares, below are
-                // derivatives. The number it carries is how many follow.
-                current_sec_type = "STK".to_string();
+                current_sec_type = "IND".to_string();
             } else if f.starts_with("8129=") {
                 current_sec_type = "FUT".to_string();
             } else if let Some(exch) = f.strip_prefix("100=") {
@@ -3276,6 +3279,16 @@ impl CcpState {
         for p in &mut self.pending_schedule_pair { p.deadline = Instant::now(); }
         self.sweep_pending_schedule_pairs(shared, event_tx);
         self.details_delivered.clear();
+        // What the advisor was asked, which only the connection that was asked
+        // can answer: the one that replaces it is asked nothing this one was.
+        // Left standing, a caller reading a partition of the configuration
+        // waited for ever, and one replacing a partition never learned whether
+        // the venue had taken its document — no end, and no refusal either.
+        for (_, asked) in self.pending_advisor.drain() {
+            shared.reference.push_advisor_refused(
+                asked.req_id, ADVISOR_SAVE_REFUSED, WHY.to_string(),
+            );
+        }
         // A scan parked behind the naming of its rows is released with the
         // rows it has, the way its own deadline releases it: the lookups it
         // waited on went with the connection.

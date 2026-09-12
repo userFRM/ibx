@@ -137,9 +137,15 @@ fn main() {
         let with_yield = recover_yield(terms, bare, &[])
             .map(|yield_rate| VenueModel { yield_rate, ..bare })
             .and_then(|m| greeks(terms, m, &[], model.implied_vol, model.und_price));
+        let expires_on = ibx::protocol::datetime::day_number(
+            &contract.last_trade_date_or_contract_month,
+        );
         let over = schedule
             .as_ref()
-            .map(|s| dividends::over_the_life(s, today, years, &contract.currency))
+            .zip(expires_on)
+            .map(|(s, expires_on)| {
+                dividends::over_the_life(s, today, expires_on, &contract.currency)
+            })
             .unwrap_or_default();
         // The schedule with a carry recovered on top of it, which is what
         // this client now solves with.

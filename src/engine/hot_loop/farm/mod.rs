@@ -958,7 +958,13 @@ const NO_LENGTH_TICKS: [u32; 7] = [221, 320, 376, 530, 532, 619, 787];
 /// at the next, and behind it in the same message came the venue list and the
 /// option parameters. Every field is a whole number of bytes wide, so where
 /// the record ends is where the next one starts.
-const SELF_DESCRIBING_TICKS: [u32; 4] = [220, 221, 619, 787];
+///
+/// Every tick that states no length is one of these. Four of them were left
+/// out, and a message carrying one of those was abandoned at it — so the
+/// quote, the trading status, the venue list and every other series answering
+/// into the same message were dropped with it, for as long as the caller kept
+/// asking for that one.
+const SELF_DESCRIBING_TICKS: [u32; 8] = [220, 221, 320, 376, 530, 532, 619, 787];
 
 impl PayloadLength {
     fn of(tick: u32) -> Self {

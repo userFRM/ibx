@@ -1291,6 +1291,28 @@ mod news_tests {
         assert_eq!(generic_tick_length(stated, carried + 2), Some(carried));
     }
 
+    /// Every tick that states no length of its own says where it ends, so a
+    /// record of one is read and the records behind it in the same message
+    /// survive.
+    ///
+    /// Left out of that second list, such a record was abandoned at — and with
+    /// it the quote, the trading status, the venue list and every other series
+    /// answering into the same message, for as long as the caller kept asking
+    /// for the one series that was not read.
+    #[test]
+    fn every_tick_that_states_no_length_says_where_it_ends() {
+        for tick in NO_LENGTH_TICKS {
+            assert_eq!(
+                PayloadLength::of(tick), PayloadLength::ToTheEnd,
+                "{tick} states no length",
+            );
+            assert!(
+                SELF_DESCRIBING_TICKS.contains(&tick),
+                "{tick} states no length and no record of it can be stepped over",
+            );
+        }
+    }
+
     /// A tick that states its length in two bytes is read that way. Which
     /// ticks do is a property of the tick, not something on the frame.
     #[test]

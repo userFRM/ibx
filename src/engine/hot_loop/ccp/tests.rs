@@ -1382,6 +1382,43 @@ fn the_per_currency_figures_are_read_off_their_bucket() {
     );
 }
 
+/// The venue's exchange directory says which of its sections is which, and a
+/// venue is handed over under the type that section carries.
+///
+/// The directory states the share venues first, then a count of index venues,
+/// then a count of futures venues. Labelled shares, every index venue reached
+/// a caller under a type it does not trade, and a caller asking which venues
+/// carry depth for an index was told none do.
+#[test]
+fn an_exchange_is_handed_over_under_the_type_its_section_carries() {
+    let (ccp, _context, shared) = ord_status_test_state();
+    let msg: Vec<u8> = [
+        "35=U", "6040=102",
+        "100=NYSE", "6813=New York",
+        "8128=1", "100=CBOE", "6813=Chicago Options",
+        "8129=1", "100=CME", "6813=Chicago Mercantile",
+    ].join("\u{1}").into_bytes();
+
+    ccp.handle_exchange_list(&msg, &shared);
+
+    // Read the way a caller reads it: the directory is answered to whoever
+    // asked for it.
+    shared.reference.notify_depth_exchanges();
+    let said: Vec<(String, String)> = shared.reference.drain_depth_exchanges()
+        .into_iter()
+        .map(|d| (d.exchange, d.sec_type))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("NYSE".to_string(), "STK".to_string()),
+            ("CBOE".to_string(), "IND".to_string()),
+            ("CME".to_string(), "FUT".to_string()),
+        ],
+        "each venue under the type its own section carries",
+    );
+}
+
 /// The venue moving a working order reaches the caller.
 ///
 /// It states only what it changed — where the order is working, what its limit
@@ -1857,6 +1894,35 @@ fn an_advisor_replacement_the_venue_refuses_is_reported_as_trouble() {
     assert_eq!(
         shared.reference.drain_advisor_refused(),
         vec![(51, 10229, "group DU1 is not yours".to_string())],
+    );
+}
+
+/// An advisor request the connection outlives is refused, not left waiting.
+///
+/// Only the connection that was asked can answer: the one that replaces it is
+/// asked nothing this one was. Left standing, a caller reading a partition of
+/// the configuration waited for ever, and one replacing a partition never
+/// learned whether the venue had taken its document — no end, and no refusal.
+#[test]
+fn an_advisor_request_the_connection_outlives_is_refused() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    let mut conn = Some(crate::protocol::connection::Connection::new_raw(stream).unwrap());
+    let mut ccp = CcpState::new();
+    let mut hb = HeartbeatState::new();
+    let mut context = Context::new();
+    let shared = SharedState::new();
+
+    ccp.send_advisor_config(51, 3, "Group", 1, Some("<Groups/>"), &mut conn, &mut hb);
+    ccp.handle_disconnect(&mut conn, &mut context, &shared, &None);
+
+    let refused = shared.reference.drain_advisor_refused();
+    assert_eq!(refused.len(), 1, "the caller is told, rather than waiting: {refused:?}");
+    assert_eq!(refused[0].0, 51, "under the number it asked with");
+    assert!(
+        shared.reference.drain_advisor_replaced().is_empty(),
+        "and not told its document stands",
     );
 }
 

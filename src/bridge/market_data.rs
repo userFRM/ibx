@@ -635,6 +635,10 @@ impl MarketDataState {
     #[doc(hidden)] pub fn purge_tbt_for(&self, req_id: i64) {
         self.tbt_trades.lock().unwrap().retain(|t| t.req_id != req_id);
         self.tbt_quotes.lock().unwrap().retain(|q| q.req_id != req_id);
+        // The midpoints as well. Left queued, a stream reopened under the same
+        // number before the next read was served the withdrawn stream's
+        // midpoints, under its own number and about another contract.
+        self.tbt_mids.lock().unwrap().retain(|m| m.req_id != req_id);
     }
 
     /// Remove all buffered depth updates for a given req_id (called on cancel).
@@ -713,8 +717,18 @@ impl MarketDataState {
         // would otherwise hold every record of the day. Past the bound the
         // oldest go, so what a late reader gets is the most recent rather than
         // everything or nothing.
+        // A tenth at a time rather than one at a time, as every other stream
+        // here sheds: dropping one per push leaves every later push shifting
+        // the whole vector — on the thread reading the socket, under this
+        // lock, for every record of a busy series.
         if queued.len() >= STREAM_BACKLOG_LIMIT {
-            queued.remove(0);
+            let keep_to = STREAM_BACKLOG_LIMIT - STREAM_BACKLOG_LIMIT / 10;
+            let shed = queued.len() - keep_to;
+            queued.drain(..shed);
+            log::warn!(
+                "the extra series on one contract have gone past {STREAM_BACKLOG_LIMIT} \
+                 unread, so the oldest of them were dropped — nothing is draining them",
+            );
         }
         queued.push(tick);
     }

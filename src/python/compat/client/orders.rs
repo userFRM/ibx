@@ -1006,7 +1006,14 @@ impl EClient {
             .map(|shared| {
                 (shared.orders.completed_orders_ended(), shared.orders.completed_orders_asked())
             });
-        let asked = tx.send(crate::types::ControlCommand::FetchCompletedOrders).is_ok();
+        // Detached for the send, as every other command on this surface is:
+        // the channel is bounded, so a hot loop that is behind blocks the
+        // sender — and blocking here holds the interpreter, including the
+        // thread whose job is to drain the answers this very call is asking
+        // for.
+        let asked =
+            Self::send_control(py, &tx, crate::types::ControlCommand::FetchCompletedOrders)
+                .is_ok();
         if asked {
             let until = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);

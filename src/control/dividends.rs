@@ -144,8 +144,14 @@ fn one_payment(entry: &str) -> Option<Payment> {
 /// ex-date: it rounds the fraction of a day up, and it decides what is
 /// eligible by comparing calendar dates — so a payment going ex tomorrow is a
 /// day away whatever hour it is now, and one going ex today has gone.
+///
+/// `expires_on` is the contract's expiry as a day number, and the far end of
+/// the window is that date rather than a count taken off how long the venue
+/// says the contract has left: the venue states that as a fraction of a day,
+/// and rounded up it is the day after expiry for every hour of a session on a
+/// contract expiring at the close.
 pub fn over_the_life(
-    schedule: &Schedule, from: i64, years_to_expiry: f64, currency: &str,
+    schedule: &Schedule, from: i64, expires_on: i64, currency: &str,
 ) -> Vec<(f64, f64)> {
     let mut out: Vec<(f64, f64)> = Vec::new();
     for payment in &schedule.payments {
@@ -167,13 +173,14 @@ pub fn over_the_life(
         if days <= 0 {
             continue;
         }
-        // Against the same whole days the ex-date is counted in. The venue
-        // states how long the contract has left as a fraction — ninety-eight
-        // and a twenty-fifth of a day — and a payment going ex on the day it
-        // expires is a whole day count one larger than that fraction. Compared
-        // as they stand, such a payment read as falling after expiry and was
-        // dropped, on exactly the contracts where it matters most.
-        if days as f64 > (years_to_expiry * 365.0).ceil() {
+        // Against the day the contract expires, which is a date and not a
+        // count. The venue states how long the contract has left as a
+        // fraction of a day, so a count rounded up off that fraction is the
+        // day after expiry for every hour of the session on a contract
+        // expiring at the close — and a payment going ex the day after the
+        // option expires was admitted, dropping the underlying just before
+        // expiry by a dividend the option never sees.
+        if ex > expires_on {
             continue;
         }
         out.push((days as f64 / 365.0, payment.amount));
@@ -276,7 +283,8 @@ mod tests {
         // payment has gone, the two in between are in, and the next January is
         // past expiry.
         let from = crate::protocol::datetime::day_number("20260301").expect("a real day");
-        let over = over_the_life(&schedule, from, 0.5, "USD");
+        let expires = crate::protocol::datetime::day_number("20260901").expect("a real day");
+        let over = over_the_life(&schedule, from, expires, "USD");
         assert_eq!(over.len(), 2, "{over:?}");
         assert_eq!(over[0].1, 1.81);
         assert_eq!(over[1].1, 1.77);
@@ -284,18 +292,23 @@ mod tests {
         assert!((over[0].0 - 19.0 / 365.0).abs() < 1e-12, "{}", over[0].0);
 
         // A payment going ex on the day the contract expires is inside its
-        // life. The venue states how long is left as a fraction, and a whole
-        // day count is one larger than that fraction — compared as they
-        // stand, the payment read as falling after expiry and was dropped.
-        let expiring = Schedule {
+        // life, and one going ex the day after is not. The window is the
+        // expiry's own date: taken off the count of days the venue says are
+        // left — a fraction, rounded up — the far end was the day after
+        // expiry for every hour of a session on a contract expiring at the
+        // close, and the tree dropped the underlying by a dividend the option
+        // never sees.
+        let around_expiry = Schedule {
             tax_adjustment: 1.0,
             term_rates: Vec::new(),
             payments: vec![
                 Payment { ex_date: "20260311".into(), amount: 1.0, ..Default::default() },
+                Payment { ex_date: "20260312".into(), amount: 2.0, ..Default::default() },
             ],
         };
-        let nine_and_a_half = 9.5 / 365.0;
-        let over = over_the_life(&expiring, from, nine_and_a_half, "");
-        assert_eq!(over.len(), 1, "the payment on the day it expires: {over:?}");
+        let expires = crate::protocol::datetime::day_number("20260311").expect("a real day");
+        let over = over_the_life(&around_expiry, from, expires, "");
+        assert_eq!(over.len(), 1, "the payment on the day it expires, and only that: {over:?}");
+        assert_eq!(over[0].1, 1.0);
     }
 }
