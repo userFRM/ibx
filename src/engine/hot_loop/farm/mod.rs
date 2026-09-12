@@ -194,17 +194,31 @@ fn deliver_series(
 ) -> bool {
     use crate::types::{SeriesTick, SeriesValue};
     let say = |tick_type: i32, value: SeriesValue| {
-        // The venue states a figure it does not hold as the largest a double
-        // carries. On the callback that takes a plain number the reference
-        // client sends nothing at all rather than that number, so neither does
-        // this: read as a figure it is two hundred undecillion.
-        if matches!(value, SeriesValue::Generic(v) if v == f64::MAX) {
-            return;
-        }
-        // And on the callback that takes text, a series with nothing to say
-        // says nothing: an empty string is not a reading, and the reference
-        // client sends none.
-        if matches!(&value, SeriesValue::Text(t) if t.is_empty()) {
+        // The venue states a figure it does not hold as the largest its field
+        // carries, and which field that is depends on the record: the largest
+        // double where it holds a double, the largest single where it holds
+        // one of those, the largest signed integer where it counts. The
+        // reference client sends nothing at all rather than that number, so
+        // neither does this — read as a figure, the largest double is two
+        // hundred undecillion and the largest integer is two billion shares.
+        //
+        // Judged here rather than in each record's own arm. Every series this
+        // client publishes passes through here, and the arms that remembered
+        // to check were the minority: a price, a size and a rate all reached a
+        // caller as the sentinel that says the venue had nothing to say.
+        let nothing_was_said = match &value {
+            SeriesValue::Generic(v) | SeriesValue::Price(v) => {
+                !v.is_finite() || *v == f64::MAX || *v == f32::MAX as f64
+            }
+            SeriesValue::Size(v) => {
+                !v.is_finite() || *v == f64::MAX || *v == i32::MAX as f64
+            }
+            // And on the callback that takes text, a series with nothing to
+            // say says nothing: an empty string is not a reading, and the
+            // reference client sends none.
+            SeriesValue::Text(t) => t.is_empty(),
+        };
+        if nothing_was_said {
             return;
         }
         shared.market.push_series_tick(SeriesTick { instrument, tick_type, value });
@@ -957,16 +971,10 @@ impl PayloadLength {
 /// The length of a generic tick message, in bytes, from the length it states
 /// and how much arrived with it.
 ///
-/// The venue states it in bits in two bytes, so it wraps at sixty-five
-/// thousand five hundred and thirty-six bits — eight thousand one hundred and
-/// ninety-two bytes. What was carried is recovered against how much actually
-/// arrived: a message longer than that would otherwise be cut off in the
-/// middle with nothing to say it had been.
+/// These records stand on byte boundaries, so a count of bits that is not a
+/// whole number of bytes describes no message this reads.
 fn generic_tick_length(stated_bits: u16, arrived: usize) -> Option<usize> {
-    let mut bits = stated_bits as usize;
-    while bits + 65_536 < arrived * 8 {
-        bits += 65_536;
-    }
+    let bits = crate::protocol::tick_decoder::bits_carried(stated_bits, arrived);
     if !bits.is_multiple_of(8) {
         return None;
     }

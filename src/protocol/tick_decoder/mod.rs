@@ -329,6 +329,28 @@ pub fn decode_ticks_35p(body: &[u8]) -> Vec<RawTick> {
     ticks
 }
 
+/// How many bits a packed section carries, from the count it states and how
+/// much arrived with it.
+///
+/// The venue states the count in bits in two bytes, so it wraps at sixty-five
+/// thousand five hundred and thirty-six — eight thousand one hundred and
+/// ninety-two bytes. What was carried is recovered against how much arrived,
+/// `arrived` counting the whole section, the two bytes stating the count
+/// included: read as stated, a longer section is cut off in the middle with
+/// nothing to say it had been, and a section exactly a cycle long states
+/// nought and reads as carrying nothing at all.
+///
+/// A cycle is added only where a whole one fits inside what arrived, so
+/// anything that arrived beside the section and is not part of it cannot make
+/// one up.
+pub(crate) fn bits_carried(stated: u16, arrived: usize) -> usize {
+    let mut bits = stated as usize;
+    while bits + 65_536 < arrived * 8 {
+        bits += 65_536;
+    }
+    bits
+}
+
 /// Decode ticks into a caller-supplied buffer (avoids heap allocation on hot path).
 pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
     ticks.clear();
@@ -336,15 +358,21 @@ pub fn decode_ticks_35p_into(body: &[u8], ticks: &mut Vec<RawTick>) {
         return;
     }
 
-    let bit_count = ((body[0] as usize) << 8) | (body[1] as usize);
+    let stated_bits = u16::from_be_bytes([body[0], body[1]]);
     let payload = &body[2..];
+    // Recovered across the wrap, as the generic tick stream's own length is:
+    // this is one grammar and the count is two bytes in both. Read as stated,
+    // a batch past the wrap decoded as its own first eight kilobytes and the
+    // records behind that were dropped, and one exactly a cycle long — which
+    // states nought — was dropped whole.
+    let bit_count = bits_carried(stated_bits, body.len());
     // A length the bytes do not satisfy is a frame cut short: refused rather
     // than read as the shorter frame it is not, which would deliver part of
     // the ticks as the whole of them.
     if bit_count > payload.len() * 8 {
         return;
     }
-    // A frame stating no bits carries no ticks. Passed on, the reader below
+    // A section carrying no bits carries no ticks. Passed on, the reader below
     // reads nought as "as many as there are" — which is its answer for a
     // caller that does not know the length, and the wrong answer for a peer
     // that stated one — and everything after the count decoded into ticks,

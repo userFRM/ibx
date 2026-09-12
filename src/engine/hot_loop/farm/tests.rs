@@ -245,6 +245,61 @@ mod news_tests {
         );
     }
 
+    /// A series the venue has nothing to say on reaches nobody.
+    ///
+    /// It says so by stating the largest figure the field holds — the largest
+    /// double where the record carries a double, the largest single where it
+    /// carries one of those, the largest signed integer where it counts. The
+    /// reference client publishes none of those, and a caller handed one reads
+    /// two hundred undecillion dollars of borrow cost or two billion contracts
+    /// of open interest as a reading.
+    #[test]
+    fn a_series_the_venue_has_nothing_to_say_on_reaches_nobody() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+
+        // Option volume: two counts, neither held.
+        let mut counted = Vec::new();
+        counted.extend_from_slice(&i32::MAX.to_be_bytes());
+        counted.extend_from_slice(&i32::MAX.to_be_bytes());
+        farm.generic_tick_tags.push((21, 100, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(21, 100, &counted)]), &mut context, &shared, &None,
+        );
+
+        // The borrow cost and the regular session's last trade, both stated
+        // as doubles.
+        farm.generic_tick_tags.push((22, 499, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(22, 499, &f64::MAX.to_be_bytes())]),
+            &mut context, &shared, &None,
+        );
+        farm.generic_tick_tags.push((23, 318, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(23, 318, &f64::MAX.to_be_bytes())]),
+            &mut context, &shared, &None,
+        );
+
+        // And the auction, whose price is a single and whose two counts are
+        // integers.
+        let mut auction = Vec::new();
+        auction.extend_from_slice(&i32::MAX.to_be_bytes());
+        auction.extend_from_slice(&i32::MAX.to_be_bytes());
+        auction.extend_from_slice(&f32::MAX.to_be_bytes());
+        farm.generic_tick_tags.push((24, 225, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(24, 225, &auction)]), &mut context, &shared, &None,
+        );
+
+        let said = shared.market.drain_series_ticks(instrument);
+        assert!(
+            said.is_empty(),
+            "the venue said nothing and the caller was told something: {said:?}",
+        );
+    }
+
     /// What an extra series states reaches the caller, under the number the
     /// reference client publishes it under.
     ///

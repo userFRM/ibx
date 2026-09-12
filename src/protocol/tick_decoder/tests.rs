@@ -284,6 +284,60 @@ fn a_frame_cut_short_by_its_own_length_is_refused() {
     );
 }
 
+/// The count of bits is two bytes, so it wraps at sixty-five thousand five
+/// hundred and thirty-six. What was carried is recovered against how much
+/// arrived — read as stated, a long batch decodes as its own first eight
+/// kilobytes and the records behind that are lost, and one exactly a cycle
+/// long, which states nought, is lost whole.
+#[test]
+fn a_batch_past_the_wrap_of_its_own_bit_count_is_read_whole() {
+    // Each of these is seventy-two bits: a header and one four-byte value.
+    let filler = |b: &mut PayloadBuilder, n: usize| {
+        for i in 0..n {
+            b.server_tag(0, 1_000 + i as u32);
+            b.tick(2, 0, 4, 500 + i as u64, false);
+        }
+    };
+
+    let mut b = PayloadBuilder::new();
+    filler(&mut b, 914);
+    b.server_tag(0, 7);
+    b.tick(3, 0, 4, 4_242, false);
+    let body = b.build();
+    assert_eq!(
+        u16::from_be_bytes([body[0], body[1]]), 344,
+        "the count has wrapped once, which is what this exercises",
+    );
+    let ticks = decode_ticks_35p(&body);
+    assert!(
+        ticks.iter().any(|t| t.server_tag == 1_000 && t.magnitude == 500),
+        "the first record reads",
+    );
+    assert!(
+        ticks.iter().any(|t| t.server_tag == 7 && t.magnitude == 4_242),
+        "and so does the one past the wrap: {} records read", ticks.len(),
+    );
+
+    // And the boundary itself: nine hundred and nine of those, then a record
+    // of eighty-eight bits, is sixty-five thousand five hundred and
+    // thirty-six bits exactly — a full cycle, stated as nought.
+    let mut b = PayloadBuilder::new();
+    filler(&mut b, 909);
+    b.server_tag(0, 11);
+    b.tick(4, 1, 4, 1_234, false);
+    b.tick(5, 0, 1, 99, false);
+    let body = b.build();
+    assert_eq!(
+        u16::from_be_bytes([body[0], body[1]]), 0,
+        "a cycle exactly states nought",
+    );
+    let ticks = decode_ticks_35p(&body);
+    assert!(
+        ticks.iter().any(|t| t.server_tag == 11 && t.magnitude == 99),
+        "the last record of a batch a cycle long reads: {} records read", ticks.len(),
+    );
+}
+
 // ── decode_ticks_35p tests ──────────────────────────────────────────
 
 #[test]
