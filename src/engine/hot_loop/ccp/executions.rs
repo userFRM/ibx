@@ -932,16 +932,16 @@ impl CcpState {
             ord_type: stated_type,
             exec_inst: stated_inst,
         };
-        match at {
-            Some(at) => self.finished_orders[at] = merged,
-            None => self.finished_orders.push(merged),
+        if let Some(at) = at {
+            self.finished_orders[at] = merged;
+            return;
         }
         // A window the venue never ends stays open, which is right, and must
         // not mean an unbounded number of orders held here for the rest of a
-        // connection that never drops. What is held is handed over and let go
-        // of; a later report about one of them starts a fresh record, which is
-        // the old behaviour and bounded.
-        if self.finished_orders.len() > super::FINISHED_ORDERS_HELD {
+        // connection that never drops. What is finished is handed over and let
+        // go of; a later report about one of them starts a fresh record, which
+        // is the old behaviour and bounded.
+        if self.finished_orders.len() >= super::FINISHED_ORDERS_HELD {
             log::warn!(
                 "the venue has stated {} finished orders without saying it is done; \
                  they are handed over as they stand",
@@ -949,6 +949,26 @@ impl CcpState {
             );
             self.deliver_finished_orders(shared, super::Handover::Final);
         }
+        // And where that freed nothing — every record still being stated, so
+        // none of them is part of an answer — the answer is as large as it is
+        // going to get. The order is left out of it rather than held: kept,
+        // the records no report was finishing grew for the life of a
+        // connection that never drops, and every report after them was read
+        // against the whole of it.
+        if self.finished_orders.len() >= super::FINISHED_ORDERS_HELD {
+            if !self.the_answer_is_full {
+                self.the_answer_is_full = true;
+                log::warn!(
+                    "{} orders assembled for this answer are still being stated and none of \
+                     them is finishing; what the venue states about other orders is not \
+                     part of the answer",
+                    self.finished_orders.len(),
+                );
+            }
+            return;
+        }
+        self.the_answer_is_full = false;
+        self.finished_orders.push(merged);
     }
 
     /// Hand over the answer to what the venue has finished, whole.

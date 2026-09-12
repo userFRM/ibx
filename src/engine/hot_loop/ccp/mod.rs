@@ -651,6 +651,12 @@ pub(crate) struct CcpState {
     /// next caller, who read it as the answer to a question the venue had not
     /// begun to answer.
     completed_orders_answered: bool,
+    /// Whether the answer being assembled has taken all the orders it can.
+    ///
+    /// Said once rather than per report: past the bound every report the venue
+    /// states about an order the answer does not already hold is left out of
+    /// it, and that is one thing that happened, not thousands.
+    the_answer_is_full: bool,
     /// A caller asked what the venue has finished before the session's own
     /// replay was over, so the question is held until it is.
     ///
@@ -859,6 +865,7 @@ impl CcpState {
             wire_name_to_order: std::collections::HashMap::new(),
             wire_names_learned: VecDeque::new(),
             completed_orders_answered: false,
+            the_answer_is_full: false,
             completed_orders_wanted: None,
             replay_hold_until: None,
             completed_orders_asked_on: 0,

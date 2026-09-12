@@ -561,7 +561,7 @@ impl EClient {
         req_id: i64,
     ) -> PyResult<()> {
         let shared = self.shared_state()?;
-        let (instrument, stop_news) = self.core.unregister_mkt_data(&shared, req_id);
+        let (instrument, stop_news, series_gone) = self.core.unregister_mkt_data(&shared, req_id);
         // Asked separately, because the quotes stay up for another caller
         // while the headlines this one asked for stop. Withdrawn only
         // alongside the quotes, they carried on with nobody listening.
@@ -570,6 +570,16 @@ impl EClient {
         }
         if let Some(instrument) = instrument
             && let Err(why) = Self::send_control(py, tx, ControlCommand::Unsubscribe { instrument })
+        {
+            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+        }
+        // And the series this caller brought to a subscription that stays up
+        // for somebody else. Left behind, the venue serves them for the life
+        // of that subscription with nobody reading them.
+        if let Some((instrument, generic_ticks)) = series_gone
+            && let Err(why) = Self::send_control(
+                py, tx, ControlCommand::StopAskingForSeries { instrument, generic_ticks },
+            )
         {
             return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
         }

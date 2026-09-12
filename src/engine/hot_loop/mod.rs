@@ -1509,6 +1509,14 @@ impl HotLoop {
                         &mut self.hb,
                     );
                 }
+                ControlCommand::StopAskingForSeries { instrument, generic_ticks } => {
+                    self.farm.stop_asking_for_series(
+                        instrument,
+                        &generic_ticks,
+                        &mut self.farm_conn,
+                        &mut self.hb,
+                    );
+                }
                 ControlCommand::Unsubscribe { instrument } => {
                     self.farm.send_mktdata_unsubscribe(
                         instrument,

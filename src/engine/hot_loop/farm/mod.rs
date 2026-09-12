@@ -2963,11 +2963,17 @@ impl FarmState {
             .cloned()
         else {
             // Nothing here says what contract that slot holds, so there is
-            // nothing to ask on. The list is still recorded, so the rebuild
-            // after a reconnect asks for it.
+            // nothing to ask on and nothing for a rebuild to ask on either.
             return;
         };
         let _ = symbol;
+        // The record the rebuild reads is what the caller asked for, so it is
+        // written the moment the subscription this joins is found — before the
+        // checks below, which are about what can be sent now. Written after
+        // them, a series named while the connection was down was dropped on
+        // the floor: the call answered, the rebuild asked for the list as it
+        // was, and the caller waited on a stream nobody had asked for.
+        self.asked_generic_ticks.entry(instrument).or_default().extend(new_ones.iter().copied());
         let Some(con_id) = context.market.con_id(instrument).filter(|id| *id > 0) else { return };
         // Nothing is allocated where there is no live subscription to add it
         // to. A connection that has gone takes the record with it and leaves
@@ -2977,9 +2983,6 @@ impl FarmState {
         if !self.instrument_md_reqs.iter().any(|(id, _)| *id == instrument) {
             return;
         }
-        // Past every check, so this is a stream that is up on the contract the
-        // caller named: the list is what the rebuild after a reconnect reads.
-        self.asked_generic_ticks.entry(instrument).or_default().extend(new_ones.iter().copied());
 
         let mut rows: Vec<(u32, u32)> = Vec::new();
         for tick in new_ones {
@@ -3016,6 +3019,105 @@ impl FarmState {
                 rows.len(),
             );
         }
+    }
+
+    /// Stop asking for series on a contract whose subscription stands.
+    ///
+    /// The other half of `also_ask_for_series`. The caller that brought a
+    /// series with it withdraws while the subscription it joined stays up for
+    /// whoever opened it, and the series nobody asks for any more goes with
+    /// it: each is an entry of the subscription, withdrawn as itself the way
+    /// the whole subscription withdraws its entries. Left behind, the venue
+    /// served it for as long as the subscription outlived its caller — against
+    /// an allowance that is counted — and the rebuild after a reconnect asked
+    /// for it again.
+    ///
+    /// Which series nobody asks for any more is the client's question, not
+    /// this one's: only the client knows what each caller named.
+    pub(crate) fn stop_asking_for_series(
+        &mut self,
+        instrument: InstrumentId,
+        unwanted: &[u32],
+        farm_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        // The headlines are asked for under a request of their own and
+        // withdrawn under it, so they are not this withdrawal's to take.
+        let unwanted: Vec<u32> =
+            unwanted.iter().copied().filter(|tick| *tick != NEWS_REQUEST_TYPE).collect();
+        if unwanted.is_empty() {
+            return;
+        }
+        // The caller's list first, because that is what the rebuild after a
+        // reconnect asks for. Left standing, a series withdrawn on this
+        // connection came back on the next one with nobody asking for it.
+        if let Some(asked) = self.asked_generic_ticks.get_mut(&instrument) {
+            asked.retain(|tick| !unwanted.contains(tick));
+            if asked.is_empty() {
+                self.asked_generic_ticks.remove(&instrument);
+            }
+        }
+        let Some((_, record)) = self.instrument_md_reqs.iter_mut()
+            .find(|(id, _)| *id == instrument)
+        else {
+            return;
+        };
+        // Each entry as it went out: the number it was asked under, what it
+        // asked for, and the venue it was asked on. A withdrawal short of
+        // those is one the venue leaves being served.
+        let going: Vec<(u32, u32, String)> = record.entries.iter()
+            .filter(|entry| unwanted.contains(&entry.request_type))
+            .map(|entry| (entry.req_id, entry.request_type, entry.venue.clone()))
+            .collect();
+        if going.is_empty() {
+            return;
+        }
+        record.entries.retain(|entry| !unwanted.contains(&entry.request_type));
+        let con_id_str = (record.con_id as u32).to_string();
+        let sec_type = record.sec_type.clone();
+        let mode_9887 = record.mode_9887;
+        let reqs: Vec<u32> = going.iter().map(|(req_id, ..)| *req_id).collect();
+        // And everything filed under those numbers, the way the withdrawal of
+        // a whole subscription forgets them: a number the venue hands to the
+        // next subscription would otherwise still be read as the series this
+        // one asked for.
+        self.md_req_to_instrument.retain(|(req_id, _)| !reqs.contains(req_id));
+        self.generic_tick_reqs.retain(|(req_id, _)| !reqs.contains(req_id));
+        self.generic_tick_tags
+            .retain(|(_, tick, held)| *held != instrument || !unwanted.contains(tick));
+        self.greeks_subs.retain(|(id, ..)| !reqs.contains(id));
+        let Some(conn) = farm_conn.as_mut() else { return };
+        let mode_str = mode_9887.to_string();
+        for (req_id, request_type, venue) in &going {
+            let req_id_str = req_id.to_string();
+            let request_type_str = request_type.to_string();
+            let mut tags: Vec<(u32, &str)> = vec![
+                (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ),
+                (263, "2"),
+                (146, "1"),
+                (262, &req_id_str),
+                (6008, &con_id_str),
+                (207, venue.as_str()),
+                (167, sec_type.as_str()),
+                (264, &request_type_str),
+                (6088, "Socket"),
+                (9830, "1"),
+                (9839, "1"),
+            ];
+            // Stated the way the subscription stated it, as the withdrawal of
+            // a whole subscription states it: a withdrawal short of the
+            // fields the subscription carried is not the same entry coming
+            // back, and the venue leaves it being served.
+            if mode_9887 != 0 && *request_type != REGULATORY_SNAPSHOT_REQUEST_TYPE {
+                tags.push((9887, &mode_str));
+            }
+            let _ = conn.send_fixcomp(&tags);
+        }
+        hb.last_farm_sent = Instant::now();
+        log::info!(
+            "Stopped asking for {} series on slot {instrument}, which nobody watches for",
+            going.len(),
+        );
     }
 
     /// Ask for one contract's book.

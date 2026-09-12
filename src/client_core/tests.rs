@@ -108,24 +108,99 @@ fn a_caller_that_joins_mid_withdrawal_keeps_the_subscription() {
     let (c, sh) = (Arc::clone(&core), Arc::clone(&shared));
     let withdrawing = std::thread::spawn(move || c.unregister_mkt_data(&sh, 1));
 
-    // The withdrawal is under way once it has stopped pointing 1 at anything.
-    while core.req_to_instrument.lock().unwrap().contains_key(&1) {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(std::time::Duration::from_millis(150));
 
-    // And a second caller joins, the way `follows_existing_subscription`
-    // records one: under the holder map.
-    core.follow_under_holder_lock(iid, 2);
+    // And a second caller joins while it waits there. Written straight into
+    // the maps, because a joiner going the ordinary way would wait on the
+    // holder map this test is holding — which is the point: the withdrawal
+    // must read the watchers after this, not before.
+    core.instrument_followers.lock().unwrap().entry(iid).or_default().push(2);
     core.req_to_instrument.lock().unwrap().insert(2, iid);
     drop(holders);
 
-    let (taken_down, _news) = withdrawing.join().unwrap();
+    let (taken_down, _news, _series) = withdrawing.join().unwrap();
     assert_eq!(taken_down, None, "the subscription stays up for the caller that joined");
     assert_eq!(
         core.instrument_to_req.lock().unwrap().get(&iid), Some(&2),
         "and that caller holds it",
     );
+}
+
+/// The venue's one-shot is still a one-shot until the slot it holds changes
+/// hands.
+///
+/// Which number bought the burst and which number holds the slot are one
+/// question: the mark is what keeps a stream from being served off it. Given
+/// back first, a stream asking for that contract while the withdrawal was
+/// halfway through read the one-shot as an ordinary stream, was recorded as
+/// watching it, and sent nothing of its own — off a burst that was over.
+#[test]
+fn the_one_shot_keeps_its_kind_until_the_slot_changes_hands() {
+    use std::sync::Arc;
+    let core = Arc::new(ClientCore::new());
+    let shared = Arc::new(SharedState::new());
+    let iid: InstrumentId = 0;
+
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, iid);
+    core.chargeable_snapshot_reqs.lock().unwrap().insert(1);
+
+    // The withdrawal waits on the holder map, as every decision about a
+    // subscription does.
+    let holders = core.instrument_to_req.lock().unwrap();
+    let (c, sh) = (Arc::clone(&core), Arc::clone(&shared));
+    let withdrawing = std::thread::spawn(move || c.unregister_mkt_data(&sh, 1));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    assert!(
+        core.chargeable_snapshot_reqs.lock().unwrap().contains(&1),
+        "while it still holds the slot, what holds the slot is still the one-shot",
+    );
+    drop(holders);
+
+    let (taken_down, _news, _series) = withdrawing.join().unwrap();
+    assert_eq!(taken_down, Some(iid), "and the subscription goes with it");
+    assert!(
+        !core.chargeable_snapshot_reqs.lock().unwrap().contains(&1),
+        "the number is an ordinary number again once the slot is given up",
+    );
+}
+
+/// A caller takes the series it brought with it.
+///
+/// A subscription is shared here and the series on it are not: a caller
+/// joining one brings its own list. Left behind when that caller withdrew, the
+/// venue served those series for as long as the subscription it joined
+/// outlived it — against an allowance that is counted — and every rebuild
+/// after a reconnect asked for them again. What another caller also named
+/// stays: that caller is still reading it.
+#[test]
+fn a_caller_takes_the_series_it_brought_with_it() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let iid: InstrumentId = 0;
+
+    // The caller that opened the subscription, naming one series.
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, iid);
+    core.series_by_req.lock().unwrap().insert(1, vec![233]);
+    // And one watching it, naming that one and one of its own.
+    core.instrument_followers.lock().unwrap().insert(iid, vec![2]);
+    core.req_to_instrument.lock().unwrap().insert(2, iid);
+    core.series_by_req.lock().unwrap().insert(2, vec![233, 236]);
+
+    let (down, _news, series_gone) = core.unregister_mkt_data(&shared, 2);
+    assert_eq!(down, None, "the subscription stays up for the caller that opened it");
+    assert_eq!(
+        series_gone, Some((iid, vec![236])),
+        "and only the series nobody else named goes with the caller that named it",
+    );
+
+    // The last caller takes the subscription itself, which carries its series
+    // with it: there is nothing left for them to be entries of.
+    let (down, _news, series_gone) = core.unregister_mkt_data(&shared, 1);
+    assert_eq!(down, Some(iid), "the subscription goes");
+    assert_eq!(series_gone, None, "whole, with its entries");
 }
 
 /// A registration the engine never took gives back what it bought.
@@ -3388,7 +3463,7 @@ fn followers_keep_the_subscriptions_market_data_type() {
             let polled = core.poll_instrument_ticks(&shared, 0, holder);
             assert!(polled.delayed);
             assert_eq!(polled.ticks[0].tick_type, 66);
-            let (withdraw, _) = core.unregister_mkt_data(&shared, holder);
+            let (withdraw, _, _) = core.unregister_mkt_data(&shared, holder);
             assert_eq!(withdraw, (holder == 2).then_some(0));
         }
         subscribe(3);

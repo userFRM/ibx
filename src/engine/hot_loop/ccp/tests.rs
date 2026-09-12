@@ -3464,6 +3464,43 @@ fn a_correction_for_this_session_s_own_order_is_not_history() {
     );
 }
 
+/// The bound on what an answer holds is a bound on orders that are still being
+/// stated too.
+///
+/// The bound hands over what the venue has finished and lets go of it, and an
+/// order still being stated is not part of that — it is kept, because every
+/// later report about it is read against what is held. So an answer whose
+/// records are all still being stated freed nothing at the bound: the next
+/// order was held beside them, the one after that too, and a window the venue
+/// never ends grew for the life of a connection that never drops, reading each
+/// report against the whole of it.
+#[test]
+fn an_answer_of_orders_still_being_stated_is_bounded_too() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    ccp.completed_orders_open = true;
+    for order_id in 0..super::FINISHED_ORDERS_HELD as u64 {
+        ccp.hold_a_finished_order_for_test(order_id, crate::types::OrderStatus::Submitted);
+    }
+
+    // One more order the venue states, which nothing here holds a record of.
+    let mut frame = exec_report_frame(&[
+        (39, "0"), (150, "0"), (32, "0"), (14, "0"), (151, "100"),
+        (54, "1"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+        (40, "2"), (44, "150.00"), (1, "DU111111"),
+    ]);
+    frame.insert(11, "424242".to_string());
+    ccp.handle_exec_report(&frame, b"", &mut context, &shared, &None, "");
+
+    assert_eq!(
+        ccp.finished_orders.len(), super::FINISHED_ORDERS_HELD,
+        "the answer holds what it holds and no more",
+    );
+    assert!(
+        !ccp.finished_orders.iter().any(|held| held.order_id == 424_242),
+        "and the order the venue stated past the bound is not in it",
+    );
+}
+
 /// An order the venue numbered is an API order whichever path its report took.
 ///
 /// The number is what tells an order placed through an API from one typed in

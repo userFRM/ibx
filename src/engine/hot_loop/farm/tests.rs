@@ -1353,6 +1353,108 @@ mod news_tests {
         );
     }
 
+    /// A series named while the connection is down is what the rebuild asks
+    /// for.
+    ///
+    /// The wire record goes with the connection and the caller's list stays,
+    /// because the list is what the rebuild reads. Written only once a live
+    /// record had been found, a series named in between was dropped: the call
+    /// answered, the rebuild asked for the list as it stood, and the caller
+    /// watched for a series nobody had asked the venue for.
+    #[test]
+    fn a_series_named_while_the_wire_is_down_is_what_the_rebuild_asks_for() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).expect("a connection over the test pair");
+
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut conn, &mut hb,
+        );
+        let _ = super::drain_inner(&mut peer);
+
+        // The connection goes away. What the callers asked for survives it;
+        // the record of what is on the wire does not.
+        farm.handle_disconnect(&mut conn, &mut context, &None, &crate::bridge::SharedState::new());
+
+        // And a caller joins the client-side stream, naming a series of its
+        // own.
+        farm.also_ask_for_series(instrument, 756733, &[236], &context, &mut conn, &mut hb);
+
+        assert_eq!(
+            farm.asked_generic_ticks.get(&instrument).map(Vec::as_slice),
+            Some([236u32].as_slice()),
+            "the rebuild after the reconnect asks for it",
+        );
+    }
+
+    /// A series nobody asks for any more is withdrawn as itself, and the rest
+    /// of the subscription stands.
+    ///
+    /// The caller that brought a series withdraws while the subscription it
+    /// joined stays up for whoever opened it. Left asked for, the venue served
+    /// it for the life of that subscription with nobody reading it, and the
+    /// rebuild after a reconnect asked for it again.
+    #[test]
+    fn a_series_nobody_asks_for_is_withdrawn_as_itself() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).expect("a connection over the test pair");
+
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut conn, &mut hb,
+        );
+        farm.also_ask_for_series(instrument, 756733, &[236], &context, &mut conn, &mut hb);
+        let _ = super::drain_inner(&mut peer);
+
+        farm.stop_asking_for_series(instrument, &[236], &mut conn, &mut hb);
+
+        let stated = |msg: &[u8], tag: u32| -> Vec<String> {
+            let prefix = format!("{tag}=");
+            msg.split(|&b| b == 0x01)
+                .filter_map(|field| {
+                    std::str::from_utf8(field).ok()?.strip_prefix(prefix.as_str()).map(str::to_string)
+                })
+                .collect()
+        };
+        let withdrawn: Vec<String> = super::drain_inner(&mut peer)
+            .into_iter()
+            .filter(|msg| stated(msg, 263).first().map(String::as_str) == Some("2"))
+            .flat_map(|msg| stated(&msg, 264))
+            .collect();
+        assert_eq!(
+            withdrawn, ["236".to_string()],
+            "the series it brought, and nothing else of the subscription: {withdrawn:?}",
+        );
+        assert!(
+            !farm.asked_generic_ticks.get(&instrument)
+                .is_some_and(|asked| asked.contains(&236)),
+            "the rebuild after a reconnect does not ask for it again",
+        );
+        let record = farm.instrument_md_reqs.iter()
+            .find(|(id, _)| *id == instrument)
+            .map(|(_, record)| record)
+            .expect("the subscription stands");
+        assert!(
+            !record.entries.iter().any(|e| e.request_type == 236),
+            "and it is no longer one of its entries: {:?}",
+            record.entries.iter().map(|e| e.request_type).collect::<Vec<_>>(),
+        );
+        assert!(
+            record.entries.iter().any(|e| e.request_type != 236),
+            "while the rest of the subscription is still being served",
+        );
+    }
+
     /// Every tick that states no length of its own says where it ends, so a
     /// record of one is read and the records behind it in the same message
     /// survive.

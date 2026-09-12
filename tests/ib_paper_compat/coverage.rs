@@ -63,6 +63,14 @@ const KNOWN_CONTROL_COMMAND_GAPS: &[(&str, &str)] = &[
          subscription — is settled offline against the bytes it writes",
     ),
     (
+        "StopAskingForSeries",
+        "The other half of the pair above, sent where such a joiner withdraws \
+         and the subscription stays up for whoever opened it. Nothing joins in \
+         a phase here, so nothing leaves one either: what the command does — \
+         withdrawing the entries nobody asks for and leaving the rest — is \
+         settled offline against the bytes it writes",
+    ),
+    (
         "CancelCorporateActions",
         "Sent where a caller stops waiting for corporate actions, which is a \
          deadline no phase waits out: the query is answered in well under it, \

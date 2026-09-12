@@ -175,6 +175,21 @@ pub enum ControlCommand {
         /// The series the joining caller named, by the venue's number for each.
         generic_ticks: Vec<u32>,
     },
+    /// Stop asking for series on a contract whose subscription stands.
+    ///
+    /// The other half of the pair above. A caller that joined a subscription
+    /// and brought series of its own withdraws, and the subscription stays up
+    /// for whoever opened it: the series nobody is asking for any more go with
+    /// the caller that asked for them. Left behind, the venue served them for
+    /// the life of the subscription that outlived their caller, and the
+    /// rebuild after a reconnect asked for them again.
+    StopAskingForSeries {
+        /// The engine's own slot for the contract.
+        instrument: InstrumentId,
+        /// The series nobody watching that contract asks for any more, by the
+        /// venue's number for each.
+        generic_ticks: Vec<u32>,
+    },
     /// Unsubscribe from market data for an instrument.
     Unsubscribe {
         /// The engine's own slot for the contract.
