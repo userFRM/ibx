@@ -883,13 +883,26 @@ impl EClient {
             // answer that completed before the engine had even seen this
             // question satisfied it, and the caller returned before its own
             // request had reached the venue.
-            let mut answered_before = answered_before;
+            // The count to beat is the last one read while the question was
+            // still unasked, and it is never read again after the ask has been
+            // seen. Read at that moment instead, it could already include this
+            // question's own answer — the engine counts the ask and, where
+            // there is no connection to send on, the end in the same pass — and
+            // the wait then sat out its whole deadline for an answer it had
+            // already been given, and said the venue had not finished.
+            let mut baseline = answered_before;
             let mut seen = false;
-            while !seen || self.shared.orders.completed_orders_ended() == answered_before {
-                if !seen && self.shared.orders.completed_orders_asked() != asked_before {
-                    seen = true;
-                    answered_before = self.shared.orders.completed_orders_ended();
-                    continue;
+            loop {
+                let ended_now = self.shared.orders.completed_orders_ended();
+                if !seen {
+                    if self.shared.orders.completed_orders_asked() != asked_before {
+                        seen = true;
+                    } else {
+                        baseline = ended_now;
+                    }
+                }
+                if seen && self.shared.orders.completed_orders_ended() != baseline {
+                    break;
                 }
                 if std::time::Instant::now() >= until {
                     log::warn!(

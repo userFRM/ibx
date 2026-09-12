@@ -81,7 +81,19 @@ const GIVEN_UP_ON_DIVIDEND_QUERIES: usize = 64;
 /// this long whether or not the sentinel that ends it ever comes, because the
 /// caller waiting on that sentinel is the one thing holding the answer.
 const COMPLETED_ORDERS_TIMEOUT: Duration =
-    Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 3);
+    Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 6);
+
+/// How long the question waits for the replay of what the account is working.
+///
+/// The wait every other reader of that replay keeps, and for the same reason:
+/// an account with nothing working never names an order, so the replay ends
+/// without saying so and this is what says it has had long enough. Held for as
+/// long as the *window* instead, one question spent twelve seconds waiting and
+/// the window behind it another twelve, against a caller that waits fifteen —
+/// so the caller was handed an empty answer, or paid twelve seconds for one the
+/// venue gives at once, on every call and on exactly the accounts most likely
+/// to ask.
+const COMPLETED_ORDERS_HOLD: Duration = crate::bridge::REPLAY_WAIT;
 
 /// Neither may outlive the wait the caller keeps. Stated here so a change to
 /// either constant, or to the caller's wait, stops the build rather than
@@ -89,7 +101,12 @@ const COMPLETED_ORDERS_TIMEOUT: Duration =
 const _: () = assert!(
     MATCHING_SYMBOLS_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS
         && OPTION_CHAIN_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS
-        && COMPLETED_ORDERS_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS,
+        && COMPLETED_ORDERS_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS
+        // And the two that run one behind the other, as their sum: the
+        // question is held for the replay and then its window is opened, and
+        // a caller waiting on the end of the second gave up during it.
+        && COMPLETED_ORDERS_HOLD.as_secs() + COMPLETED_ORDERS_TIMEOUT.as_secs()
+            < crate::config::ANSWER_TIMEOUT_SECS,
     "an engine deadline must be shorter than the wait the caller keeps",
 );
 
@@ -229,13 +246,34 @@ fn handle_venue_error(parsed: &std::collections::HashMap<u32, String>, shared: &
 /// working on, its limit, or both — so what it does not state is what the
 /// order already held. The revised order goes back to the caller the way any
 /// other change to it does.
+impl CcpState {
 fn handle_order_revision(
+    &self,
     parsed: &std::collections::HashMap<u32, String>,
+    context: &Context,
     shared: &SharedState,
 ) {
-    let Some(order_id) = parsed.get(&11).and_then(|id| id.split('.').next()?.parse::<u64>().ok())
-    else {
+    // Named the way every other report names an order: a cancel carries a
+    // leading C and a liquidation a leading L, a revision chain carries a
+    // suffix, and a recovered order is named by the venue's own permanent
+    // name rather than by the number a caller addresses it under. Parsed as a
+    // plain number instead, a revision for a recovered order — which is every
+    // order the account already had — either resolved to nothing and was
+    // dropped, or resolved to an unrelated live order that happened to be
+    // numbered the venue's permanent name for this one, and wrote this order's
+    // venue and limit onto that one.
+    let Some(named) = parsed.get(&11) else { return };
+    let stripped = named.strip_prefix('C').or_else(|| named.strip_prefix('L')).unwrap_or(named);
+    let base = stripped.split('.').next().unwrap_or(stripped);
+    let Some(named) = executions::stated_order_id(base) else {
         return;
+    };
+    // Read back through the names this session learned at recovery, and only
+    // where nothing is working under the number itself: an order under that
+    // number is the order that number means.
+    let order_id = match context.order(named) {
+        Some(_) => named,
+        None => self.wire_name_to_order.get(&named).copied().unwrap_or(named),
     };
     let Some(mut held) = shared.orders.get_order_info(order_id) else {
         // An order this session holds no account of. The venue states the
@@ -259,6 +297,7 @@ fn handle_order_revision(
     }
     log::info!("the venue revised order {order_id}");
     shared.orders.push_order_info(order_id, held);
+}
 }
 
 /// Why a message this client receives is deliberately not read.
@@ -607,6 +646,13 @@ pub(crate) struct CcpState {
     /// arrive inside that window and are filed as history instead of being
     /// recovered into the book a withdrawal walks.
     completed_orders_wanted: Option<Instant>,
+    /// When the question stops waiting for the replay of the working orders.
+    ///
+    /// Held against the connection rather than against the question: the
+    /// replay happens once per connection, so a question asked after it has
+    /// had its time is not held at all. Armed against each question instead,
+    /// every call paid the hold again.
+    replay_hold_until: Option<Instant>,
     /// When an open window is shut whether or not its sentinel has come.
     ///
     /// Nothing on the wire obliges the venue to send one, and a window with no
@@ -788,6 +834,7 @@ impl CcpState {
             wire_name_to_order: std::collections::HashMap::new(),
             completed_orders_answered: false,
             completed_orders_wanted: None,
+            replay_hold_until: None,
             completed_orders_deadline: None,
             pending_option_params: Vec::new(),
             pending_dividends: Vec::new(),
@@ -1065,7 +1112,7 @@ impl CcpState {
                         // nothing, a caller's own account of the order stayed
                         // at what it was placed with while the venue worked a
                         // different one.
-                        "110" => handle_order_revision(&parsed, shared),
+                        "110" => self.handle_order_revision(&parsed, context, shared),
                         "210" => handle_account_config(&parsed, shared),
                         "117" => self.handle_advisor_config(&parsed, shared),
                         "139" => self.handle_option_chain(msg, shared),
@@ -3023,8 +3070,11 @@ impl CcpState {
         // as long as a replay could take, and then asked anyway. The window is
         // not on a clock here: it has one of its own, and the sweep shuts it
         // before it sends anything behind it.
-        let the_replay_could_still_be_running = !shared.orders.replay_done()
-            && self.completed_orders_wanted.is_none_or(|until| Instant::now() < until);
+        let hold_until = *self
+            .replay_hold_until
+            .get_or_insert_with(|| Instant::now() + COMPLETED_ORDERS_HOLD);
+        let the_replay_could_still_be_running =
+            !shared.orders.replay_done() && Instant::now() < hold_until;
         if the_replay_could_still_be_running || self.completed_orders_open {
             self.completed_orders_wanted
                 .get_or_insert_with(|| Instant::now() + COMPLETED_ORDERS_TIMEOUT);
@@ -3168,6 +3218,9 @@ impl CcpState {
             // clock for a connection the engine already knew was gone.
             let a_queued_question_dies_here = self.completed_orders_wanted.is_some();
             self.completed_orders_wanted = None;
+            // The next connection replays the account again, so the question
+            // waits for that replay again.
+            self.replay_hold_until = None;
             self.deliver_finished_orders(shared, Handover::Final);
             if a_queued_question_dies_here || !self.completed_orders_answered {
                 shared.orders.note_completed_orders_end();
@@ -3270,6 +3323,7 @@ impl CcpState {
     #[cfg(test)]
     pub(crate) fn give_up_waiting_for_the_replay(&mut self) {
         self.completed_orders_wanted = Some(Instant::now());
+        self.replay_hold_until = Some(Instant::now());
     }
 
     /// The same for the sentinel that ends an open window.

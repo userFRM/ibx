@@ -2306,6 +2306,15 @@ impl FarmState {
         };
         entries.push(MdReqEntry { req_id: status_req_id, request_type: TRADING_STATUS_REQUEST_TYPE, venue: venue.clone() });
         entries.push(MdReqEntry { req_id: venue_map_req_id, request_type: BBO_EXCHANGE_MAP_REQUEST_TYPE, venue: venue.clone() });
+        // Each series the caller named is an entry of the subscription, as the
+        // greeks are: the withdrawal is composed from these, and a number left
+        // out of them was never withdrawn — the venue went on serving it
+        // against the account's allowance, and its request number outlived the
+        // slot it was asked on, so an acknowledgement still in flight bound the
+        // old contract's series onto whatever contract the slot went to next.
+        for &(id, tick) in &extra_series {
+            entries.push(MdReqEntry { req_id: id, request_type: tick, venue: venue.clone() });
+        }
         if let Some(id) = greeks_req_id {
             entries.push(MdReqEntry { req_id: id, request_type: GREEKS_REQUEST_TYPE, venue: GREEKS_VENUE.to_string() });
         }
@@ -3067,10 +3076,13 @@ impl FarmState {
         self.depth_fanout_map.clear();
         // The venue's numbers do not survive the connection that issued them,
         // and one left behind would read the next subscription's frames as the
-        // tick the last one asked for.
+        // tick the last one asked for. What the caller asked for is not one of
+        // the venue's numbers and does survive: cleared with them, the rebuild
+        // read an empty list, the extra series were never asked for again, and
+        // the subscription went on looking healthy because the prices came
+        // back. It ends where the caller ends it, which is the withdrawal.
         self.generic_tick_reqs.clear();
         self.generic_tick_tags.clear();
-        self.asked_generic_ticks.clear();
         self.rt_volume_totals.clear();
         // Keyed the same way, and left behind they are never reachable again:
         // what removes an entry looks it up by an id the reconnect has already
@@ -3447,7 +3459,15 @@ impl FarmState {
             fields.iter().find(|f| f.id == id).filter(|f| f.decimal_shift == 0)
         };
         let increment = context.market.min_tick_scaled(instrument);
-        let counted_in = context.market.size_tick(instrument);
+        // Counted in whole ones where the venue stated no increment, as
+        // every other reader of this figure does. Multiplied in raw, a size
+        // the venue stated reached the caller as nought — a reading nobody
+        // sent — whenever the increment had not arrived yet or the venue
+        // stated none.
+        let counted_in = match context.market.size_tick(instrument) {
+            stated if stated > 0.0 => stated,
+            _ => 1.0,
+        };
         let say = |tick_type: i32, value: crate::types::SeriesValue| {
             shared.market.push_series_tick(crate::types::SeriesTick {
                 instrument, tick_type, value,

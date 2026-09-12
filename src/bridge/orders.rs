@@ -9,7 +9,11 @@ use crate::types::*;
 use crate::types::model as api;
 
 /// How long a caller waits for the venue to finish naming the working orders.
-const REPLAY_WAIT: Duration = Duration::from_secs(3);
+///
+/// Read by the engine as well, which holds the question of what the account
+/// has finished for the same replay and must not invent a second answer to
+/// "how long could that take".
+pub(crate) const REPLAY_WAIT: Duration = Duration::from_secs(3);
 
 /// What a connection has said about the orders it already had working.
 ///

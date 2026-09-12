@@ -1407,10 +1407,12 @@ fn the_venue_revising_a_working_order_reaches_the_caller() {
         last_exec: Default::default(),
     });
 
+    let (mut ccp, mut context, _unused) = ord_status_test_state();
+
     let revision: std::collections::HashMap<u32, String> = [
         (11u32, "55".to_string()), (30u32, "ARCA".to_string()), (44u32, "101.5".to_string()),
     ].into_iter().collect();
-    super::handle_order_revision(&revision, &shared);
+    ccp.handle_order_revision(&revision, &context, &shared);
 
     let held = shared.orders.get_order_info(55).expect("the order is still held");
     assert_eq!(held.order.lmt_price, 101.5, "the limit the venue is now working");
@@ -1419,10 +1421,63 @@ fn the_venue_revising_a_working_order_reaches_the_caller() {
     // Stating nothing changes nothing, rather than blanking what was held.
     let quiet: std::collections::HashMap<u32, String> =
         [(11u32, "55".to_string())].into_iter().collect();
-    super::handle_order_revision(&quiet, &shared);
+    ccp.handle_order_revision(&quiet, &context, &shared);
     let held = shared.orders.get_order_info(55).expect("still held");
     assert_eq!(held.order.lmt_price, 101.5, "what it did not state, it did not change");
     assert_eq!(held.contract.exchange, "ARCA");
+
+    // And an order this session recovered is named by the venue's own
+    // permanent name from then on, which is not the number a caller addresses
+    // it under. Read as a plain number, the revision either reached nothing —
+    // which is every order the account already had — or reached whichever
+    // unrelated order happened to be numbered the venue's permanent name for
+    // this one, and wrote this order's venue and limit onto that one.
+    ccp.wire_name_to_order.insert(90_071_992_547, 55);
+    let named_the_venues_way: std::collections::HashMap<u32, String> = [
+        (11u32, "90071992547.0".to_string()), (44u32, "102.25".to_string()),
+    ].into_iter().collect();
+    ccp.handle_order_revision(&named_the_venues_way, &context, &shared);
+    let held = shared.orders.get_order_info(55).expect("still held");
+    assert_eq!(
+        held.order.lmt_price, 102.25,
+        "a revision naming the order the venue's way reaches the order it means",
+    );
+
+    // Unless something is working under that number itself, in which case
+    // that is the order the number means.
+    shared.orders.push_order_info(90_071_992_547, crate::bridge::RichOrderInfo {
+        contract: crate::types::model::Contract {
+            symbol: "QQQ".into(), exchange: "SMART".into(), ..Default::default()
+        },
+        order: crate::types::model::Order {
+            order_id: 90_071_992_547, lmt_price: 500.0, ..Default::default()
+        },
+        order_state: Default::default(),
+        last_exec: Default::default(),
+    });
+    context.insert_order(crate::types::Order {
+        order_id: 90_071_992_547,
+        instrument: 0,
+        side: Side::Buy,
+        price: 0,
+        qty: 100 * QTY_SCALE,
+        filled: 0,
+        status: crate::types::OrderStatus::Submitted,
+        ord_type: b'2',
+        tif: b'0',
+        stop_price: 0,
+    });
+    let same_name: std::collections::HashMap<u32, String> = [
+        (11u32, "90071992547.0".to_string()), (44u32, "501.0".to_string()),
+    ].into_iter().collect();
+    ccp.handle_order_revision(&same_name, &context, &shared);
+    assert_eq!(
+        shared.orders.get_order_info(55).expect("still held").order.lmt_price, 102.25,
+        "the revision went to the order working under that number, not through the name",
+    );
+    assert_eq!(
+        shared.orders.get_order_info(90_071_992_547).expect("held").order.lmt_price, 501.0,
+    );
 }
 
 /// The case a blanket suppression of marked reports loses. A CCP reconnect
@@ -3074,6 +3129,41 @@ fn a_question_held_for_a_replay_that_names_nothing_is_asked_anyway() {
     assert!(
         shared.orders.completed_orders_ended() > 0,
         "the question went out rather than waiting on a replay that names nothing",
+    );
+}
+
+/// The hold and the window fit inside one caller's wait, and the hold is taken
+/// once per connection rather than once per question.
+///
+/// Both were built from the same constant and ran one behind the other: a
+/// question waited twelve seconds for a replay that never names an order, the
+/// window behind it another twelve, and the caller waits fifteen. So the
+/// caller was handed an empty answer the venue never gave — and paid the hold
+/// again on every call, on exactly the accounts that have nothing working and
+/// are most likely to ask.
+#[test]
+fn the_hold_and_the_window_fit_inside_the_wait_the_caller_keeps() {
+    let (mut ccp, _context, shared) = ord_status_test_state();
+    let mut hb = HeartbeatState::new();
+    let mut conn = None;
+
+    // Held once, for the replay.
+    ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
+    assert_eq!(shared.orders.completed_orders_ended(), 0, "held while the replay could run");
+
+    // The hold runs out and the question goes out. There is no connection, so
+    // the answer is that it cannot be answered.
+    ccp.give_up_waiting_for_the_replay();
+    ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
+    let after_the_first = shared.orders.completed_orders_ended();
+    assert!(after_the_first > 0, "the question was asked");
+
+    // A second question on the same connection is not held again: the replay
+    // happens once, and it has already had its time.
+    ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
+    assert!(
+        shared.orders.completed_orders_ended() > after_the_first,
+        "the question was held for a replay that had already had its time",
     );
 }
 

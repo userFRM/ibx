@@ -1013,21 +1013,27 @@ impl EClient {
             // Two things in turn and in that order, as on the other surface:
             // the engine takes this question off the queue, and only then is
             // the count of answers read again.
-            let mut seen_since: Option<u64> = None;
+            // The count to beat is the last one read while the question was
+            // still unasked, and it is never read again after the ask has been
+            // seen, as on the other surface: read at that moment, it could
+            // already include this question's own answer, and the wait then sat
+            // out its whole deadline for an answer already given.
+            let mut baseline = before.map(|(answered_before, _)| answered_before);
+            let mut seen = false;
             let ended = loop {
                 if let Some(shared) = self.shared.lock().unwrap().clone()
-                    && let Some((answered_before, asked_before)) = before
+                    && let Some((_, asked_before)) = before
                 {
-                    match seen_since {
-                        None if shared.orders.completed_orders_asked() != asked_before => {
-                            seen_since = Some(shared.orders.completed_orders_ended());
+                    let ended_now = shared.orders.completed_orders_ended();
+                    if !seen {
+                        if shared.orders.completed_orders_asked() != asked_before {
+                            seen = true;
+                        } else {
+                            baseline = Some(ended_now);
                         }
-                        Some(since) if shared.orders.completed_orders_ended() != since => {
-                            break true;
-                        }
-                        _ => {
-                            let _ = answered_before;
-                        }
+                    }
+                    if seen && baseline.is_some_and(|since| ended_now != since) {
+                        break true;
                     }
                 }
                 if std::time::Instant::now() >= until {
@@ -1891,6 +1897,37 @@ w = W()",
             assert_eq!(*id, 3);
             assert_eq!(*code, Refusal::VALIDATION as i64);
             assert!(message.contains("combo leg 0 has no conId"), "{message}");
+        });
+    }
+
+    /// A question the engine refuses at once is answered at once, as on the
+    /// other surface.
+    ///
+    /// The engine counts the ask and, where there is no connection to carry
+    /// the question, the end in the same pass. A wait that re-read the count
+    /// of answers at the moment it saw the ask adopted a figure that already
+    /// included its own answer, and then sat out its whole deadline.
+    #[test]
+    fn a_question_answered_before_the_wait_looks_does_not_wait_it_out() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, _wrapper) = wired_client(py);
+            let engine = {
+                let shared = shared.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(60));
+                    shared.orders.note_completed_orders_asked();
+                    shared.orders.note_completed_orders_end();
+                })
+            };
+            let began = std::time::Instant::now();
+            client.req_completed_orders(py, false).unwrap();
+            engine.join().unwrap();
+            assert!(
+                began.elapsed() < std::time::Duration::from_secs(2),
+                "the wait sat out its deadline for an answer it already had: {:?}",
+                began.elapsed(),
+            );
         });
     }
 

@@ -8055,6 +8055,44 @@ fn completed_orders_are_still_there_when_they_are_asked_for_again() {
     );
 }
 
+/// A question the engine refuses at once is answered at once.
+///
+/// The engine counts the question as asked and, where there is no connection
+/// to carry it, counts the answer as ended in the same pass. A wait that
+/// re-read the count of answers at the moment it saw the ask adopted a figure
+/// that already included its own answer — and then sat out its whole deadline
+/// waiting for a figure that could not move again, before reporting that the
+/// venue had not finished.
+#[test]
+fn a_question_answered_before_the_wait_looks_does_not_wait_it_out() {
+    let (client, _rx, shared) = test_client();
+    // What the engine does with the question where there is no connection to
+    // carry it: it counts the ask and the end in one pass, both of them
+    // between two of the caller's looks.
+    let engine = {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            shared.orders.note_completed_orders_asked();
+            shared.orders.note_completed_orders_end();
+        })
+    };
+
+    let began = std::time::Instant::now();
+    let mut w = RecordingWrapper::default();
+    client.req_completed_orders(false, &mut w);
+    engine.join().unwrap();
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(2),
+        "the wait sat out its deadline for an answer it already had: {:?}",
+        began.elapsed(),
+    );
+    assert!(
+        w.events.iter().any(|e| e == "completed_orders_end"),
+        "and the caller is told the answer is over: {:?}", w.events,
+    );
+}
+
 /// One venue order is archived once, whatever it is named along the way.
 ///
 /// The venue names an order permanently at some point in its life, not from

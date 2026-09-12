@@ -278,7 +278,7 @@ pub(crate) fn stated_reason(parsed: &std::collections::HashMap<u32, String>) -> 
 /// range is one that can be neither reported nor counted past. Taken as it
 /// stood, such a report named its order under a negative id and left the
 /// next id to hand out at zero, which the venue refuses as one it has used.
-fn stated_order_id(field: &str) -> Option<u64> {
+pub(crate) fn stated_order_id(field: &str) -> Option<u64> {
     let id = field.parse::<u64>().ok()?;
     if id > crate::bridge::MAX_ORDER_ID {
         log::warn!("a report names order {id}, which is past the highest id this client carries");

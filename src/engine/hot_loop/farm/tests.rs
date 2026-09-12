@@ -237,12 +237,53 @@ mod news_tests {
             );
         }
 
-        // And they go with the subscription rather than outliving it.
-        farm.send_mktdata_unsubscribe(instrument, &mut None, &mut hb);
+        // And each is an entry of the subscription, because the withdrawal is
+        // composed from those: left out of them, a series was never withdrawn
+        // and its number outlived the slot it was asked on.
+        let record = farm.instrument_md_reqs.iter()
+            .find(|(id, _)| *id == instrument)
+            .map(|(_, record)| record)
+            .expect("the subscription is recorded");
+        for tick in [233u32, 236] {
+            assert!(
+                record.entries.iter().any(|e| e.request_type == tick),
+                "the series is an entry of the subscription: {:?}",
+                record.entries.iter().map(|e| e.request_type).collect::<Vec<_>>(),
+            );
+        }
+
+        // A connection dying does not forget what the caller asked for: the
+        // rebuild behind it reads the list from here, and nothing else in the
+        // process holds it.
+        let mut farm_after = FarmState::new();
+        farm_after.asked_generic_ticks.insert(instrument, vec![233, 236]);
+        farm_after.handle_disconnect(&mut None, &mut context, &None, &SharedState::new());
+        assert_eq!(
+            farm_after.asked_generic_ticks.get(&instrument).map(Vec::as_slice),
+            Some([233u32, 236].as_slice()),
+            "the series the caller named survive the connection that carried them",
+        );
+
+        // And they go with the subscription rather than outliving it, which is
+        // where the caller's asking actually ends.
+        farm.send_mktdata_unsubscribe(instrument, &mut conn, &mut hb);
         assert!(
             !farm.asked_generic_ticks.contains_key(&instrument),
             "what was asked for on this contract is released with it",
         );
+        // The withdrawal states every number the subscription handed out,
+        // each one as its own row.
+        let withdrawn: Vec<String> = super::drain_inner(&mut peer)
+            .into_iter()
+            .filter(|msg| stated(msg, 263).first().map(String::as_str) == Some("2"))
+            .flat_map(|msg| stated(&msg, 264))
+            .collect();
+        for tick in ["233", "236"] {
+            assert!(
+                withdrawn.iter().any(|t| t == tick),
+                "the series is withdrawn as itself: {withdrawn:?}",
+            );
+        }
     }
 
     /// What the venue states about an issuer is held under the contract, as
@@ -798,6 +839,29 @@ mod news_tests {
                 (106, "price 101.5".to_string()),
                 (110, "text P".to_string()),
             ],
+        );
+
+        // And where the venue has stated no size increment — which it does by
+        // stating none, and which is also every record arriving before the
+        // acknowledgement carrying one — a size is counted in whole ones. Read
+        // against an increment of nought, a size the venue stated reached the
+        // caller as nought.
+        let bare = context.market.register(265598);
+        context.market.set_min_tick(bare, 0.01);
+        farm.generic_tick_tags.push((81, 787, bare));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(81, 787, &payload)]), &mut context, &shared, &None,
+        );
+        let sizes: Vec<(i32, f64)> = shared.market.drain_series_ticks(bare)
+            .into_iter()
+            .filter_map(|t| match t.value {
+                SeriesValue::Size(v) => Some((t.tick_type, v)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sizes, [(107, 30.0), (108, 70.0)],
+            "the sizes the venue stated, counted in whole ones",
         );
     }
 
