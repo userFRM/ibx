@@ -59,6 +59,9 @@ pub(crate) struct FinishedOrder {
     pub(crate) status: crate::types::OrderStatus,
     /// And how much of it filled.
     pub(crate) filled: i64,
+    /// What became of it, as the venue stated it: the time it finished and the
+    /// reason it was refused, both of which only the report carries.
+    pub(crate) state: crate::types::model::OrderState,
 }
 
 /// How many given-up-on dividend queries are remembered, so a late answer can
@@ -3142,6 +3145,11 @@ impl CcpState {
         // The queries that went out on this connection will not be answered on
         // the next one, and an entry nobody will answer holds its contract.
         self.pending_dividends.clear();
+        // The names one connection's recovery taught this session mean nothing
+        // on the next one, which recovers the account again and says them
+        // afresh. Kept, they grew for the life of the engine and went on
+        // redirecting reports to orders long finished.
+        self.wire_name_to_order.clear();
         if self.completed_orders_open || self.completed_orders_wanted.is_some() {
             self.completed_orders_open = false;
             self.completed_orders_deadline = None;

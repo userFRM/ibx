@@ -995,13 +995,22 @@ impl EClient {
         // done, and the rest is one request away. The answer is a run of
         // ordinary reports ending in a sentinel, so the wait below is on that
         // end rather than on a clock.
+        // Read before the question goes out, and waited for it to move, as on
+        // the other surface: taken as a flag, a caller that gave up a moment
+        // before it was set left it standing for the next one.
+        let answered_before = self
+            .shared
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|shared| shared.orders.completed_orders_ended());
         let asked = tx.send(crate::types::ControlCommand::FetchCompletedOrders).is_ok();
         if asked {
             let until = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
             let ended = loop {
                 if let Some(shared) = self.shared.lock().unwrap().clone()
-                    && shared.orders.take_completed_orders_end()
+                    && Some(shared.orders.completed_orders_ended()) != answered_before
                 {
                     break true;
                 }

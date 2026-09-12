@@ -3024,13 +3024,13 @@ fn the_question_waits_for_the_session_s_own_replay() {
     ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
     assert!(!ccp.completed_orders_open, "nothing was asked yet");
     assert!(
-        !shared.orders.take_completed_orders_end(),
+        shared.orders.completed_orders_ended() == 0,
         "and the caller was not told the answer is complete",
     );
 
     // Nor on a later pass, while the replay is still running.
     ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
-    assert!(!shared.orders.take_completed_orders_end(), "still waiting");
+    assert!(shared.orders.completed_orders_ended() == 0, "still waiting");
 
     // Nor while an earlier question is still being answered: two of them share
     // one window and one sentinel, so the first sentinel would shut the window
@@ -3038,7 +3038,7 @@ fn the_question_waits_for_the_session_s_own_replay() {
     shared.orders.set_replay_done();
     ccp.completed_orders_open = true;
     ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
-    assert!(!shared.orders.take_completed_orders_end(), "one at a time");
+    assert!(shared.orders.completed_orders_ended() == 0, "one at a time");
     ccp.completed_orders_open = false;
 
     // Once the way is clear the question goes out. There is no connection here
@@ -3046,7 +3046,7 @@ fn the_question_waits_for_the_session_s_own_replay() {
     // which is the path a held question joins, not a path of its own.
     ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
     assert!(
-        shared.orders.take_completed_orders_end(),
+        shared.orders.completed_orders_ended() > 0,
         "the held question was asked once the replay was over",
     );
 }
@@ -3064,7 +3064,7 @@ fn a_question_held_for_a_replay_that_names_nothing_is_asked_anyway() {
     let mut conn = None;
 
     ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
-    assert!(!shared.orders.take_completed_orders_end(), "held, and the replay has not ended");
+    assert!(shared.orders.completed_orders_ended() == 0, "held, and the replay has not ended");
 
     // Held for as long as the replay could take, and no longer. There is no
     // connection here to carry it, so what the caller is told is that it
@@ -3072,7 +3072,7 @@ fn a_question_held_for_a_replay_that_names_nothing_is_asked_anyway() {
     ccp.give_up_waiting_for_the_replay();
     ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
     assert!(
-        shared.orders.take_completed_orders_end(),
+        shared.orders.completed_orders_ended() > 0,
         "the question went out rather than waiting on a replay that names nothing",
     );
 }
@@ -3096,7 +3096,7 @@ fn a_caller_who_waited_long_enough_is_answered_without_shutting_the_window() {
     ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
 
     assert!(
-        shared.orders.take_completed_orders_end(),
+        shared.orders.completed_orders_ended() > 0,
         "the caller is answered with what arrived",
     );
     assert!(
@@ -3122,7 +3122,7 @@ fn a_drop_mid_answer_releases_the_caller_and_shuts_the_window() {
 
     assert!(!ccp.completed_orders_open, "the window is shut");
     assert!(
-        shared.orders.take_completed_orders_end(),
+        shared.orders.completed_orders_ended() > 0,
         "and the caller is released rather than left on a sentinel nobody will send",
     );
 }
@@ -3234,6 +3234,76 @@ fn a_later_report_naming_a_recovered_order_the_venues_way_finds_it() {
         50 * crate::types::QTY_SCALE,
         "the fill reached the order it was for",
     );
+}
+
+/// A caller released early is handed the orders the venue has finished, and
+/// not the ones it is still describing.
+///
+/// A record still being built says the order is working, and a record saying
+/// that is one this client reads as an order the venue is holding. Handed over
+/// anyway, a question about finished orders answered with live ones, and a
+/// withdrawal could be aimed at one of them.
+#[test]
+fn a_caller_released_early_is_not_handed_a_half_described_order() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let mut hb = HeartbeatState::new();
+    let mut conn = None;
+    ccp.completed_orders_open = true;
+
+    // One the venue has finished describing, and one it has not.
+    for (id, status) in [(11_001u64, "2"), (11_002, "0")] {
+        let mut report = exec_report_frame(&[
+            (39, status), (150, "0"), (14, "0"), (151, "0"),
+            (54, "1"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+            (40, "2"), (44, "150.00"), (1, "DU111111"),
+        ]);
+        report.insert(11, id.to_string());
+        ccp.handle_exec_report(&report, b"", &mut context, &shared, &None, "");
+    }
+
+    ccp.give_up_waiting_for_the_sentinel();
+    ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
+
+    let finished: Vec<u64> =
+        shared.orders.drain_completed_orders().into_iter().map(|o| o.order_id).collect();
+    assert_eq!(finished, [11_001], "only the one the venue has finished: {finished:?}");
+    let open = shared.orders.drain_open_orders();
+    assert!(
+        !open.iter().any(|(id, _)| *id == 11_002),
+        "the half-described one was answered as an order the venue is working: {open:?}",
+    );
+}
+
+/// Two callers in turn are each answered for their own question.
+///
+/// The end of an answer was a flag: set by one answer and taken by whoever
+/// polled next. A caller that gave up a moment before it was set left it
+/// standing, and the next caller read it as the answer to a question it had
+/// not yet asked — returning before its own request reached the venue.
+#[test]
+fn the_end_of_one_answer_is_not_the_end_of_the_next_question() {
+    let (_ccp, _context, shared) = ord_status_test_state();
+
+    // What a caller reads before it asks.
+    let before = shared.orders.completed_orders_ended();
+
+    // An answer completes while nobody is waiting.
+    shared.orders.note_completed_orders_end();
+    assert!(
+        shared.orders.completed_orders_ended() > before,
+        "the answer that completed moved the count",
+    );
+
+    // The next caller reads the count as it now stands, and is not satisfied
+    // by the answer that completed before it asked.
+    let before = shared.orders.completed_orders_ended();
+    assert_eq!(
+        shared.orders.completed_orders_ended(),
+        before,
+        "nothing has answered this caller yet",
+    );
+    shared.orders.note_completed_orders_end();
+    assert!(shared.orders.completed_orders_ended() > before, "and then its own answer does");
 }
 
 /// A finished order the venue rejected is not one it is still holding.
@@ -3403,14 +3473,14 @@ fn what_the_venue_has_finished_is_filed_rather_than_worked() {
     // so the answer is assembled and given whole when the venue says it has
     // finished.
     assert!(shared.orders.drain_completed_orders().is_empty(), "not until the venue is done");
-    assert!(!shared.orders.take_completed_orders_end(), "not yet");
+    assert!(shared.orders.completed_orders_ended() == 0, "not yet");
 
     // And the sentinel says the venue has said everything.
     let mut end = exec_report_frame(&[(39, "2"), (55, "*")]);
     end.insert(11, "0".to_string());
     ccp.handle_exec_report(&end, b"", &mut context, &shared, &None, "");
     assert!(!ccp.completed_orders_open, "the window is shut");
-    assert!(shared.orders.take_completed_orders_end(), "and the caller is released");
+    assert!(shared.orders.completed_orders_ended() > 0, "and the caller is released");
 
     let finished = shared.orders.drain_completed_orders();
     assert_eq!(finished.len(), 1, "it is filed as finished: {finished:?}");

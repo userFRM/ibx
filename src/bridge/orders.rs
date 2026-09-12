@@ -72,7 +72,7 @@ pub struct OrderState {
     what_if_responses: Mutex<Vec<WhatIfResponse>>,
     completed_orders: Mutex<Vec<CompletedOrder>>,
     /// Whether the venue has said it has stated every finished order it holds.
-    completed_orders_ended: std::sync::atomic::AtomicBool,
+    completed_orders_ended: std::sync::atomic::AtomicU64,
     /// Orders the venue has taken back after reporting them finished.
     ///
     /// The completion queue empties on read, and what is read out of it is
@@ -171,7 +171,7 @@ impl OrderState {
             restated_executions: Mutex::new(Vec::new()),
             what_if_responses: Mutex::new(Vec::with_capacity(8)),
             completed_orders: Mutex::new(Vec::with_capacity(64)),
-            completed_orders_ended: std::sync::atomic::AtomicBool::new(false),
+            completed_orders_ended: std::sync::atomic::AtomicU64::new(0),
             order_corrections: Mutex::new(Vec::new()),
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
@@ -256,12 +256,19 @@ impl OrderState {
     /// answer is a run of ordinary reports and its end is the only thing that
     /// says the run is over.
     #[doc(hidden)] pub fn note_completed_orders_end(&self) {
-        self.completed_orders_ended.store(true, std::sync::atomic::Ordering::Release);
+        self.completed_orders_ended.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 
-    /// Whether that end has been said, taking it if so.
-    pub fn take_completed_orders_end(&self) -> bool {
-        self.completed_orders_ended.swap(false, std::sync::atomic::Ordering::AcqRel)
+    /// How many times that end has been said.
+    ///
+    /// Counted rather than flagged, and each caller reads the count before it
+    /// asks and waits for it to move. A flag is set by one answer and taken by
+    /// whoever polls next: a caller that gave up a moment before the flag was
+    /// set left it standing, and the next caller took it as the answer to a
+    /// question that had not been asked yet, returning before its own request
+    /// reached the venue.
+    pub fn completed_orders_ended(&self) -> u64 {
+        self.completed_orders_ended.load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub fn drain_completed_orders(&self) -> Vec<CompletedOrder> {
@@ -555,14 +562,7 @@ impl OrderState {
     /// event of the same history — so this path does not consult it, and the
     /// same answer restated supersedes what it restates.
     #[doc(hidden)] pub fn refile_completed_order(&self, order: CompletedOrder) {
-        {
-            let mut completed = self.completed.lock().unwrap();
-            completed.insert(order.order_id, Instant::now());
-            if completed.len() > COMPLETED_MAX {
-                let now = Instant::now();
-                completed.retain(|_, at| now.duration_since(*at) < COMPLETED_RETENTION);
-            }
-        }
+        self.remember_completed(order.order_id);
         let mut queued = self.completed_orders.lock().unwrap();
         match queued.iter_mut().find(|q| q.order_id == order.order_id) {
             Some(waiting) => *waiting = order,
@@ -587,31 +587,40 @@ impl OrderState {
     /// a replay of it can still be refused.
     #[doc(hidden)] pub fn push_completed_order(&self, order: CompletedOrder) {
         let already = self.recently_completed(order.order_id);
-        {
-            let now = Instant::now();
-            let mut completed = self.completed.lock().unwrap();
-            completed.insert(order.order_id, now);
-            // Pruned here rather than on every read: this runs once per order,
-            // and a read is on the message path.
-            if completed.len() > COMPLETED_MAX {
-                completed.retain(|_, at| now.duration_since(*at) < COMPLETED_RETENTION);
-            }
-            // A burst faster than the retention window leaves nothing expired
-            // for `retain` to find, so the map can still be over the cap here.
-            // Evict the oldest survivors until it isn't — the actual bound,
-            // not just the common case.
-            if completed.len() > COMPLETED_MAX {
-                let mut by_age: Vec<(u64, Instant)> = completed.iter().map(|(&id, &at)| (id, at)).collect();
-                by_age.sort_unstable_by_key(|&(_, at)| at);
-                for (id, _) in by_age.into_iter().take(completed.len() - COMPLETED_MAX) {
-                    completed.remove(&id);
-                }
-            }
-        }
+        self.remember_completed(order.order_id);
         if already {
             return;
         }
         self.completed_orders.lock().unwrap().push(order);
+    }
+
+    /// Remember that this order finished, and keep that memory bounded.
+    ///
+    /// One place, because both the live path and the history path need it and
+    /// one of them had only half of it: pruning what had expired but not
+    /// evicting the oldest survivors when nothing had, so a burst faster than
+    /// the retention window grew past the cap it advertises.
+    fn remember_completed(&self, order_id: u64) {
+        let now = Instant::now();
+        let mut completed = self.completed.lock().unwrap();
+        completed.insert(order_id, now);
+        // Pruned here rather than on every read: this runs once per order,
+        // and a read is on the message path.
+        if completed.len() > COMPLETED_MAX {
+            completed.retain(|_, at| now.duration_since(*at) < COMPLETED_RETENTION);
+        }
+        // A burst faster than the retention window leaves nothing expired
+        // for `retain` to find, so the map can still be over the cap here.
+        // Evict the oldest survivors until it isn't — the actual bound,
+        // not just the common case.
+        if completed.len() > COMPLETED_MAX {
+            let mut by_age: Vec<(u64, Instant)> =
+                completed.iter().map(|(&id, &at)| (id, at)).collect();
+            by_age.sort_unstable_by_key(|&(_, at)| at);
+            for (id, _) in by_age.into_iter().take(completed.len() - COMPLETED_MAX) {
+                completed.remove(&id);
+            }
+        }
     }
 
     /// Whether this order completed recently enough that a frame reopening it

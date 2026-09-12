@@ -867,10 +867,15 @@ impl EClient {
         // this program was watching is a fraction of what the account has
         // done. The answer is a run of ordinary reports ending in a sentinel,
         // so the wait is on that end rather than on a clock.
+        // Read before the question goes out, and waited for it to move. Taken
+        // as a flag instead, a caller that gave up a moment before the flag
+        // was set left it standing and the next caller read it as the answer
+        // to a question it had not yet asked.
+        let answered_before = self.shared.orders.completed_orders_ended();
         if self.control_tx.send(crate::types::ControlCommand::FetchCompletedOrders).is_ok() {
             let until = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
-            while !self.shared.orders.take_completed_orders_end() {
+            while self.shared.orders.completed_orders_ended() == answered_before {
                 if std::time::Instant::now() >= until {
                     log::warn!(
                         "the venue did not finish stating what it has finished; answering with \

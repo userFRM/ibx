@@ -27,6 +27,19 @@ const ORDER_INACTIVE_ERROR_CODE: i32 = 399;
 /// message about an order that is still live.
 const ORDER_REJECTED_ERROR_CODE: i32 = 201;
 
+/// How long an order stands, spelled the way a caller reads it.
+///
+/// Stated but unmapped is reported as stated: the venue is authoritative when
+/// it says anything, and a code this does not name is still better seen than
+/// replaced by an unrelated local value.
+fn tif_api_name(stated: &str) -> &str {
+    match stated {
+        "0" => "DAY", "1" => "GTC", "3" => "IOC", "4" => "FOK",
+        "2" => "OPG", "6" => "GTD", "8" => "AUC",
+        other => other,
+    }
+}
+
 /// Everything else the report says about the order.
 ///
 /// A report carries the whole order, not the handful of terms that identify
@@ -710,9 +723,10 @@ impl CcpState {
             // something it had not.
             perm_id: parsed
                 .get(&37)
-                .and_then(|s| s.parse().ok())
+                .map(|stated| perm_id_from_fix_order_id(stated))
+                .filter(|id| *id != 0)
                 .or_else(|| was.map(|w| w.order.perm_id).filter(|id| *id != 0))
-                .unwrap_or(clord_id as i64),
+                .unwrap_or(0),
             action: side,
             total_quantity: number(38, was.map(|w| w.order.total_quantity), 0.0),
             filled_quantity: number(14, was.map(|w| w.order.filled_quantity), 0.0),
@@ -733,7 +747,11 @@ impl CcpState {
                 .unwrap_or_else(|| {
                     was.map(|w| w.order.order_type.clone()).unwrap_or_default()
                 }),
-            tif: kept(parsed.get(&59), was.map(|w| w.order.tif.as_str())),
+            tif: parsed
+                .get(&59)
+                .map(|stated| tif_api_name(stated).to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| was.map(|w| w.order.tif.clone()).unwrap_or_default()),
             lmt_price: number(44, was.map(|w| w.order.lmt_price), f64::MAX),
             aux_price: number(99, was.map(|w| w.order.aux_price), f64::MAX),
             account: kept(parsed.get(&1), was.map(|w| w.order.account.as_str())),
@@ -746,7 +764,60 @@ impl CcpState {
         let filled = parse_qty_tag(parsed.get(&14))
             .or_else(|| was.map(|w| w.filled))
             .unwrap_or(0);
-        let merged = super::FinishedOrder { order_id: clord_id, contract, order, status, filled };
+        // And everything else the report says about it, read the same way the
+        // ordinary path reads it. Left out, a finished order came back saying
+        // it was not outside regular hours, stood alone in no group, carried
+        // no reference the caller gave it and waited on no condition — none of
+        // which the venue had said.
+        let mut order = order;
+        order.oca_group = kept(parsed.get(&583), was.map(|w| w.order.oca_group.as_str()));
+        order.order_ref = kept(parsed.get(&6010), was.map(|w| w.order.order_ref.as_str()));
+        order.rule80a = kept(parsed.get(&47), was.map(|w| w.order.rule80a.as_str()));
+        order.good_till_date = kept(parsed.get(&432), was.map(|w| w.order.good_till_date.as_str()));
+        order.fa_group = kept(parsed.get(&6160), was.map(|w| w.order.fa_group.as_str()));
+        order.fa_method = kept(parsed.get(&6159), was.map(|w| w.order.fa_method.as_str()));
+        order.fa_percentage =
+            kept(parsed.get(&6164), was.map(|w| w.order.fa_percentage.as_str()));
+        order.submitter = kept(parsed.get(&109), was.map(|w| w.order.submitter.as_str()));
+        order.algo_strategy =
+            kept(parsed.get(&847), was.map(|w| w.order.algo_strategy.as_str()));
+        if let Some(before) = was {
+            order.outside_rth = before.order.outside_rth;
+            order.hidden = before.order.hidden;
+            order.display_size = before.order.display_size;
+        }
+        read_stated_attributes(&mut order, parsed);
+
+        // What became of it, as the venue stated it — the time it finished and
+        // the reason it was refused, both of which the ordinary path keeps and
+        // this had been throwing away and replacing with the flat word.
+        let state = api::OrderState {
+            status: crate::types::order_status::order_status_str(status).to_string(),
+            completed_time: match status {
+                crate::types::OrderStatus::Filled
+                | crate::types::OrderStatus::Cancelled
+                | crate::types::OrderStatus::Rejected => kept(
+                    parsed.get(&52),
+                    was.map(|w| w.state.completed_time.as_str()),
+                ),
+                _ => was.map(|w| w.state.completed_time.clone()).unwrap_or_default(),
+            },
+            completed_status: match status {
+                crate::types::OrderStatus::Filled => "Filled".to_string(),
+                crate::types::OrderStatus::Cancelled => "Cancelled".to_string(),
+                // An empty reason still marks a refusal: Inactive with no
+                // completed status is the venue holding it, not refusing it.
+                crate::types::OrderStatus::Rejected => parsed
+                    .get(&58)
+                    .filter(|why| !why.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| "Rejected".to_string()),
+                _ => String::new(),
+            },
+            ..Default::default()
+        };
+        let merged =
+            super::FinishedOrder { order_id: clord_id, contract, order, status, filled, state };
         match at {
             Some(at) => self.finished_orders[at] = merged,
             None => self.finished_orders.push(merged),
@@ -777,28 +848,23 @@ impl CcpState {
     ) {
         let held_now: Vec<super::FinishedOrder> = match handover {
             super::Handover::Final => std::mem::take(&mut self.finished_orders),
-            super::Handover::SoFar => self.finished_orders.clone(),
+            // Only the ones the venue has finished stating. A record still
+            // being built says the order is working, and a record saying that
+            // is one this client reads as an order the venue is holding — so a
+            // caller released early was handed live orders out of an answer
+            // about finished ones, and could aim a withdrawal at one.
+            super::Handover::SoFar => self
+                .finished_orders
+                .iter()
+                .filter(|held| held.status.is_terminal())
+                .cloned()
+                .collect(),
         };
         for held in held_now {
-            // A terminal order says so twice: once as the status it is in, and
-            // once as what became of it. Left empty, a rejected order read as
-            // one merely inactive — which this client takes for an order the
-            // venue is holding and may bring back — so a finished order was
-            // answered as an open one and a withdrawal was aimed at it.
-            let status_str = crate::types::order_status::order_status_str(held.status);
-            let order_state = api::OrderState {
-                status: status_str.to_string(),
-                completed_status: if held.status.is_terminal() {
-                    status_str.to_string()
-                } else {
-                    String::new()
-                },
-                ..Default::default()
-            };
             shared.orders.push_order_info(held.order_id, crate::bridge::RichOrderInfo {
                 contract: held.contract,
                 order: held.order,
-                order_state,
+                order_state: held.state,
                 last_exec: Default::default(),
             });
             shared.orders.refile_completed_order(crate::types::CompletedOrder {
@@ -1328,6 +1394,28 @@ impl CcpState {
         // Drop the sentinel/end-of-stream record (ClOrdID="*"/"0"/absent → parses
         // to 0). Real orders are assigned monotonic IDs via next_order_id and
         // never collide with 0. The recovery-push terminator (11='*') lands here.
+        // The terminator is a record the venue writes as such: it names the
+        // order `*` or `0`, or names none at all. A number this cannot read is
+        // not that — read as the terminator, one bad row shut the window and
+        // handed the rest of the answer to the live path, where a report
+        // stating a fill is a fill.
+        let is_the_terminator = match parsed.get(&11) {
+            None => true,
+            Some(named) => {
+                let named = named.trim();
+                named.is_empty()
+                    || named == "*"
+                    || named.split('.').next().unwrap_or(named) == "0"
+            }
+        };
+        if clord_id == 0 && !is_the_terminator {
+            log::debug!(
+                "ExecReport: a report names an order this cannot read ({:?}); it is dropped, \
+                 and it is not the end of anything",
+                parsed.get(&11),
+            );
+            return;
+        }
         if clord_id == 0 {
             log::debug!("ExecReport: dropping sentinel record (ClOrdID=0/*) sym={:?} status={:?}",
                 parsed.get(&55), parsed.get(&39));
@@ -1891,15 +1979,7 @@ impl CcpState {
             // The sibling above passes the raw tag through instead; that works
             // there because an absent tag leaves it empty, while any non-empty
             // TIF code would suppress the fallback that knows the real answer.
-            let tif_str = match tif_tag {
-                "0" => "DAY", "1" => "GTC", "3" => "IOC", "4" => "FOK",
-                "2" => "OPG", "6" => "GTD", "8" => "AUC",
-                // Stated but unmapped: reported as stated, like the order-type
-                // sibling above. The gateway is authoritative when it says
-                // anything, and a code this does not name is still better seen
-                // than replaced by an unrelated local value.
-                other => other,
-            };
+            let tif_str = tif_api_name(tif_tag);
 
             let action = match parsed.get(&54).map(|s| s.as_str()) {
                 Some("1") => "BUY",
