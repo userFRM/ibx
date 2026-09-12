@@ -19,12 +19,23 @@ const MATCHING_SYMBOLS_TIMEOUT: Duration =
 const OPTION_CHAIN_TIMEOUT: Duration =
     Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 3);
 
+/// The same again, for the question of what the venue has finished — both
+/// halves of it. A question held for the session's own replay to end waits
+/// this long for that and then goes out anyway, because the replay of an
+/// account with nothing working ends without naming an order and there is
+/// nothing else to wait for. And a window that has been opened is shut after
+/// this long whether or not the sentinel that ends it ever comes, because the
+/// caller waiting on that sentinel is the one thing holding the answer.
+const COMPLETED_ORDERS_TIMEOUT: Duration =
+    Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 3);
+
 /// Neither may outlive the wait the caller keeps. Stated here so a change to
 /// either constant, or to the caller's wait, stops the build rather than
 /// quietly making a whole request unanswerable again.
 const _: () = assert!(
     MATCHING_SYMBOLS_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS
-        && OPTION_CHAIN_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS,
+        && OPTION_CHAIN_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS
+        && COMPLETED_ORDERS_TIMEOUT.as_secs() < crate::config::ANSWER_TIMEOUT_SECS,
     "an engine deadline must be shorter than the wait the caller keeps",
 );
 
@@ -231,10 +242,12 @@ fn known_unread(subtype: &str) -> Option<&'static str> {
 /// by looking each up, because three of them repeat and a keyed read answers
 /// with whichever came last.
 ///
-/// Nothing where the venue's own count and what arrived disagree. The count is
-/// what says the message is whole, and read without it a truncated answer
+/// Nothing where the venue's own count and what arrived disagree, and nothing
+/// where it stated no count. The count is what says the message is whole, so
+/// its absence is not proof of anything: read without it, a truncated answer
 /// published however many pairs happened to parse — as the account's defaults,
-/// beside a number the venue itself said was larger.
+/// beside a number the venue itself said was larger — and one carrying neither
+/// count nor pairs cleared what the account holds.
 fn parse_order_presets(msg: &[u8]) -> Option<Vec<(String, String)>> {
     let mut out = Vec::new();
     let mut key: Option<String> = None;
@@ -251,9 +264,14 @@ fn parse_order_presets(msg: &[u8]) -> Option<Vec<(String, String)>> {
             _ => {}
         }
     }
+    // The count is what says the message is whole, so a message that does not
+    // state one is not whole either. Accepted without it, a truncated answer
+    // published however many pairs happened to parse — and one carrying
+    // neither count nor pairs cleared the sets this account holds as though
+    // the venue had said it holds none.
     match stated {
-        Some(n) if n != out.len() => None,
-        _ => Some(out),
+        Some(n) if n == out.len() => Some(out),
+        _ => None,
     }
 }
 
@@ -502,21 +520,43 @@ pub(crate) struct CcpState {
     /// that states a fill is a fill. Worse, the replayed orders themselves
     /// arrive inside that window and are filed as history instead of being
     /// recovered into the book a withdrawal walks.
-    completed_orders_wanted: bool,
+    completed_orders_wanted: Option<Instant>,
+    /// When an open window is shut whether or not its sentinel has come.
+    ///
+    /// Nothing on the wire obliges the venue to send one, and a window with no
+    /// deadline stayed open for the life of a connection that never dropped:
+    /// the caller waited out its own clock for a sentinel nobody was sending,
+    /// every later question queued behind it for ever, and every report for an
+    /// order this session does not hold went on being filed as history.
+    completed_orders_deadline: Option<Instant>,
     /// In-flight option chain requests: (req_id, symbol, underlying conId,
     /// deadline). The request states no id of its own, so the symbol is what
     /// ties a reply back to it, and the conId is held because the callback
     /// names the underlying the caller asked about.
     pub(crate) pending_option_params: Vec<(u32, String, i64, Instant)>,
-    /// Dividend queries in flight, as `(the id it went out under, the contract
-    /// it is about)`.
+    /// Dividend queries, as `(the id it went out under, the contract it is
+    /// about, when to stop waiting)`.
     ///
     /// The query goes out as text and the answer echoes only the id, so this
     /// is what says which contract an answer is about. Two queries in flight
     /// on one contract cannot happen — a second is not sent while the first is
     /// outstanding — but two on different contracts can, and read by contract
     /// rather than by id the second schedule would be filed under the first.
-    pending_dividends: Vec<(String, u32)>,
+    ///
+    /// An entry is given up on at its deadline. Kept until the answer came, a
+    /// query the venue never answered held that contract for the life of the
+    /// session and one more entry here for every underlying it happened to —
+    /// so the list grew without bound and the contract could never be asked
+    /// about again.
+    pending_dividends: Vec<(String, u32, Instant)>,
+    /// The contracts already asked about and answered.
+    ///
+    /// A schedule is a fact about the contract rather than a subscription, so
+    /// it is asked for once. Told apart from the list above because that one
+    /// empties as answers arrive: with only that, the next option written on
+    /// the same underlying asked the same question again and was answered with
+    /// the schedule this session already held.
+    dividends_answered: std::collections::HashSet<u32>,
     /// The id the next query of this kind goes out under. This client's own
     /// number, distinct from every other request's because the venue echoes
     /// only this one tag back.
@@ -650,9 +690,11 @@ impl CcpState {
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
             completed_orders_open: false,
-            completed_orders_wanted: false,
+            completed_orders_wanted: None,
+            completed_orders_deadline: None,
             pending_option_params: Vec::new(),
             pending_dividends: Vec::new(),
+            dividends_answered: std::collections::HashSet::new(),
             next_xml_query_id: 1,
             pending_schedule_pair: Vec::new(),
             pnl_subscriptions: Vec::new(),
@@ -1128,6 +1170,7 @@ impl CcpState {
                         let flat = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq())
                             .map(|d| d.con_id);
                         for def in all.into_iter().filter(|d| d.con_id != 0 && Some(d.con_id) != flat) {
+                            self.note_what_it_is_written_on(&def, shared, ccp_conn, hb);
                             shared.reference.cache_definition(
                             def.con_id as i64,
                             // Mapped where every other reader of a
@@ -1180,16 +1223,7 @@ impl CcpState {
                             // underlying apart.
                             crate::types::model::ContractDetails::from_definition(&def).contract,
                         );
-                            // What it is written on, and what that pays out.
-                            // The schedule belongs to the underlying and every
-                            // option on it is priced against the same one, so
-                            // it is asked for once and the definition is where
-                            // this session first learns which contract to ask
-                            // about.
-                            shared.reference.note_under_con_id(def.con_id, def.under_con_id);
-                            if def.under_con_id != 0 {
-                                self.send_dividends_query(def.under_con_id, ccp_conn, hb);
-                            }
+                            self.note_what_it_is_written_on(&def, shared, ccp_conn, hb);
                             identify_position(shared, &def);
                             self.try_release_scanner_enrichments(def.con_id as i64, shared);
                             // The master row for this same contract may be
@@ -1245,6 +1279,7 @@ impl CcpState {
                 if let Some(def) = crate::control::contracts::parse_secdef_response(msg, shared.island_for_nasdaq()) {
                     let is_last_wire = crate::control::contracts::secdef_response_is_last(msg);
                     if def.con_id != 0 {
+                        self.note_what_it_is_written_on(&def, shared, ccp_conn, hb);
                         shared.reference.cache_definition(
                             def.con_id as i64,
                             // Mapped where every other reader of a
@@ -2562,6 +2597,28 @@ impl CcpState {
         });
     }
 
+    /// Note what a definition says its contract is written on, and ask what
+    /// that pays out.
+    ///
+    /// Every definition, not the ones on one path: a contract is looked up by
+    /// its own id, by symbol, for a subscription, for a scanner row and for
+    /// the engine's own reasons, and the underlying is stated on all of them.
+    /// Done on one of those paths only, an option asked for by id alone could
+    /// never reach its schedule and was priced on the fallback for the life of
+    /// the session.
+    fn note_what_it_is_written_on(
+        &mut self,
+        def: &crate::control::contracts::ContractDefinition,
+        shared: &SharedState,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        shared.reference.note_under_con_id(def.con_id, def.under_con_id);
+        if def.under_con_id != 0 {
+            self.send_dividends_query(def.under_con_id, ccp_conn, hb);
+        }
+    }
+
     /// Ask the venue what a contract pays out.
     ///
     /// Not a document like the other reference queries: the venue takes a line
@@ -2580,7 +2637,10 @@ impl CcpState {
         ccp_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        if con_id == 0 || self.pending_dividends.iter().any(|(_, held)| *held == con_id) {
+        if con_id == 0
+            || self.dividends_answered.contains(&con_id)
+            || self.pending_dividends.iter().any(|(_, held, _)| *held == con_id)
+        {
             return;
         }
         let Some(conn) = ccp_conn.as_mut() else {
@@ -2601,7 +2661,9 @@ impl CcpState {
             Ok(()) => {
                 hb.last_ccp_sent = Instant::now();
                 log::info!("Asked what {con_id} pays out, under {query_id}");
-                self.pending_dividends.push((query_id, con_id));
+                self.pending_dividends.push((
+                    query_id, con_id, Instant::now() + COMPLETED_ORDERS_TIMEOUT,
+                ));
             }
             // Registered as outstanding only if it went out. Recorded either
             // way, the contract would never be asked about again.
@@ -2620,11 +2682,12 @@ impl CcpState {
         shared: &SharedState,
     ) {
         let Some(query_id) = parsed.get(&320) else { return };
-        let Some(at) = self.pending_dividends.iter().position(|(id, _)| id == query_id) else {
+        let Some(at) = self.pending_dividends.iter().position(|(id, _, _)| id == query_id) else {
             log::debug!("an answer arrived under {query_id}, which nothing here asked");
             return;
         };
-        let (_, con_id) = self.pending_dividends.remove(at);
+        let (_, con_id, _) = self.pending_dividends.remove(at);
+        self.dividends_answered.insert(con_id);
         let Some(body) = parsed.get(&6118) else {
             log::debug!("the answer for {con_id} states no schedule");
             return;
@@ -2826,13 +2889,26 @@ impl CcpState {
         // arrive shuts the window on both, so the second answer took the live
         // path and only one of the two callers was ever released. Asked one at
         // a time, each has a sentinel of its own.
-        if !shared.orders.replay_done() || self.completed_orders_open {
-            self.completed_orders_wanted = true;
+        //
+        // The replay half of that wait has an end: an account with nothing
+        // working ends its replay without naming an order, and naming one is
+        // what says the replay has begun — so a question held for it would
+        // wait for ever on exactly the accounts most likely to ask. Held for
+        // as long as a replay could take, and then asked anyway. The window is
+        // not on a clock here: it has one of its own, and the sweep shuts it
+        // before it sends anything behind it.
+        let the_replay_could_still_be_running = !shared.orders.replay_done()
+            && self.completed_orders_wanted.is_none_or(|until| Instant::now() < until);
+        if the_replay_could_still_be_running || self.completed_orders_open {
+            self.completed_orders_wanted
+                .get_or_insert_with(|| Instant::now() + COMPLETED_ORDERS_TIMEOUT);
             log::debug!(
                 "holding the question of what the venue has finished until the one before it                  is answered",
             );
             return;
         }
+        // Past the hold, so whatever was waiting is no longer waiting.
+        self.completed_orders_wanted = None;
         let Some(conn) = ccp_conn.as_mut() else {
             shared.orders.note_completed_orders_end();
             return;
@@ -2855,6 +2931,7 @@ impl CcpState {
             Ok(()) => {
                 hb.last_ccp_sent = Instant::now();
                 self.completed_orders_open = true;
+                self.completed_orders_deadline = Some(Instant::now() + COMPLETED_ORDERS_TIMEOUT);
                 log::info!("Asked the venue for what it has finished, {from} to {to}");
             }
             Err(e) => {
@@ -2947,9 +3024,13 @@ impl CcpState {
         // sentinel is coming, so the caller was left waiting out its whole
         // deadline — and the window stayed open across the reconnect, where
         // the replay that follows is read as history rather than recovered.
-        if self.completed_orders_open || self.completed_orders_wanted {
+        // The queries that went out on this connection will not be answered on
+        // the next one, and an entry nobody will answer holds its contract.
+        self.pending_dividends.clear();
+        if self.completed_orders_open || self.completed_orders_wanted.is_some() {
             self.completed_orders_open = false;
-            self.completed_orders_wanted = false;
+            self.completed_orders_deadline = None;
+            self.completed_orders_wanted = None;
             shared.orders.note_completed_orders_end();
         }
         // The engine stops believing these statuses here, and said so to
@@ -3041,6 +3122,21 @@ impl CcpState {
         }
     }
 
+    /// Bring both of the completed-order deadlines forward to now.
+    ///
+    /// Only a test calls these: the two waits are measured against a clock,
+    /// and a test that slept them out would be a test that takes the wait.
+    #[cfg(test)]
+    pub(crate) fn give_up_waiting_for_the_replay(&mut self) {
+        self.completed_orders_wanted = Some(Instant::now());
+    }
+
+    /// The same for the sentinel that ends an open window.
+    #[cfg(test)]
+    pub(crate) fn give_up_waiting_for_the_sentinel(&mut self) {
+        self.completed_orders_deadline = Some(Instant::now());
+    }
+
     /// Send a held question about what the venue has finished, if the
     /// session's own replay is over by now.
     pub(crate) fn sweep_completed_orders_request(
@@ -3049,13 +3145,43 @@ impl CcpState {
         hb: &mut HeartbeatState,
         shared: &SharedState,
     ) {
-        if !self.completed_orders_wanted
-            || !shared.orders.replay_done()
-            || self.completed_orders_open
+        // A question the venue never answered. Kept, it held its contract for
+        // the life of the session and stayed on this list for ever; given up
+        // on, the next option written on that underlying asks again.
+        self.pending_dividends.retain(|(query_id, con_id, until)| {
+            let waiting = Instant::now() < *until;
+            if !waiting {
+                log::debug!("what {con_id} pays out went unanswered under {query_id}");
+            }
+            waiting
+        });
+
+        // A window nobody ended. The venue is under no obligation to send the
+        // sentinel and this connection has not dropped, so nothing else is
+        // going to shut this: the caller is released with what arrived, and
+        // the next question is let through.
+        if self.completed_orders_open
+            && self.completed_orders_deadline.is_some_and(|at| Instant::now() >= at)
         {
+            self.completed_orders_open = false;
+            self.completed_orders_deadline = None;
+            shared.orders.note_completed_orders_end();
+            log::warn!("the venue did not say it had finished; the window is shut on its own");
+        }
+        let Some(waited_since) = self.completed_orders_wanted else { return };
+        if self.completed_orders_open {
             return;
         }
-        self.completed_orders_wanted = false;
+        // The replay of an account with nothing working ends without naming an
+        // order, and it is naming one that says the replay has begun — so a
+        // question held for it would wait for ever on such an account. Held
+        // for as long as the replay could take and then asked anyway.
+        if !shared.orders.replay_done() && Instant::now() < waited_since {
+            return;
+        }
+        // Left set, so the guard inside sees the wait it has already run out —
+        // clearing it first makes that guard read "nothing has waited yet" and
+        // hold the question all over again. It is cleared there, past the hold.
         self.send_completed_orders_request(ccp_conn, hb, shared);
     }
 

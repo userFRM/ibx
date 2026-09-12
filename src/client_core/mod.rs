@@ -5589,7 +5589,7 @@ impl ClientCore {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|since| (since.as_secs() / 86_400) as i64)
                     .unwrap_or(0);
-                crate::control::dividends::over_the_life(&schedule, today, years)
+                crate::control::dividends::over_the_life(&schedule, today, years, &contract.currency)
             })
             .unwrap_or_default();
 

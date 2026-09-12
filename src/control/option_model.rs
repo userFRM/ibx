@@ -149,8 +149,16 @@ fn payouts_by_step(
     // A future costs nothing to hold and drifts nowhere, so what is owed on it
     // does not grow either.
     let drift = if on_a_future { 0.0 } else { rate - payouts.yield_rate };
+    let life = dt * STEPS as f64;
     for &(years_to_ex, amount) in payouts.schedule {
-        if !(years_to_ex.is_finite() && amount.is_finite()) || years_to_ex <= 0.0 {
+        // A payment the option's life does not cover is not the option's. One
+        // after expiry, carried anyway, is owed at every step up to the last
+        // and then forced to nought at it — which is a drop the underlying
+        // takes just before expiry and never recovers from.
+        if !(years_to_ex.is_finite() && amount.is_finite())
+            || years_to_ex <= 0.0
+            || years_to_ex > life
+        {
             continue;
         }
         let today = amount * (-rate * years_to_ex).exp();

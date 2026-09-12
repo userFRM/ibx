@@ -127,6 +127,9 @@ fn one_payment(entry: &str) -> Option<Payment> {
 /// The payments an option's life covers, as the tree wants them: how far off
 /// each ex-date is, in years, and what the underlying drops by.
 ///
+/// In the contract's own currency only. The venue states the currency of each
+/// payment and it need not be the one the contract is quoted in.
+///
 /// Measured from the day the caller names, as a count of days since the epoch
 /// — the same count this library reads a date the venue stated into.
 ///
@@ -140,10 +143,21 @@ fn one_payment(entry: &str) -> Option<Payment> {
 /// eligible by comparing calendar dates — so a payment going ex tomorrow is a
 /// day away whatever hour it is now, and one going ex today has gone.
 pub fn over_the_life(
-    schedule: &Schedule, from: i64, years_to_expiry: f64,
+    schedule: &Schedule, from: i64, years_to_expiry: f64, currency: &str,
 ) -> Vec<(f64, f64)> {
     let mut out: Vec<(f64, f64)> = Vec::new();
     for payment in &schedule.payments {
+        // In the money the contract is quoted in, or not at all. The tree
+        // takes the amount off the underlying's price and off the strike, so
+        // a payment in another currency taken at face value is a number of
+        // euros subtracted from a price in dollars — a finite answer in no
+        // units at all. Converting it needs a rate nothing here states.
+        if !payment.currency.is_empty()
+            && !currency.is_empty()
+            && !payment.currency.eq_ignore_ascii_case(currency)
+        {
+            continue;
+        }
         let Some(ex) = crate::protocol::datetime::day_number(&payment.ex_date) else { continue };
         let days = ex - from;
         if days <= 0 {
@@ -253,7 +267,7 @@ mod tests {
         // payment has gone, the two in between are in, and the next January is
         // past expiry.
         let from = crate::protocol::datetime::day_number("20260301").expect("a real day");
-        let over = over_the_life(&schedule, from, 0.5);
+        let over = over_the_life(&schedule, from, 0.5, "USD");
         assert_eq!(over.len(), 2, "{over:?}");
         assert_eq!(over[0].1, 1.81);
         assert_eq!(over[1].1, 1.77);

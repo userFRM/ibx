@@ -3013,6 +3013,56 @@ fn the_question_waits_for_the_session_s_own_replay() {
     );
 }
 
+/// An account with nothing working still gets an answer.
+///
+/// The opening replay ends by naming no order at all on such an account, and
+/// naming one is what says the replay has begun — so a question held for the
+/// replay to finish waited on something that was never going to happen, on
+/// exactly the accounts where the question is most likely to be asked.
+#[test]
+fn a_question_held_for_a_replay_that_names_nothing_is_asked_anyway() {
+    let (mut ccp, _context, shared) = ord_status_test_state();
+    let mut hb = HeartbeatState::new();
+    let mut conn = None;
+
+    ccp.send_completed_orders_request(&mut conn, &mut hb, &shared);
+    assert!(!shared.orders.take_completed_orders_end(), "held, and the replay has not ended");
+
+    // Held for as long as the replay could take, and no longer. There is no
+    // connection here to carry it, so what the caller is told is that it
+    // cannot be answered — which is an answer, and is what was missing.
+    ccp.give_up_waiting_for_the_replay();
+    ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
+    assert!(
+        shared.orders.take_completed_orders_end(),
+        "the question went out rather than waiting on a replay that names nothing",
+    );
+}
+
+/// A window nobody ends is shut anyway.
+///
+/// Nothing on the wire obliges the venue to send the sentinel that ends the
+/// answer. With no deadline the window stayed open for the life of a
+/// connection that never dropped: the caller waited out its own clock, every
+/// later question queued behind it for ever, and every report for an order
+/// this session does not hold went on being filed as history.
+#[test]
+fn a_window_the_venue_never_ends_is_shut_on_its_own() {
+    let (mut ccp, _context, shared) = ord_status_test_state();
+    let mut hb = HeartbeatState::new();
+    let mut conn = None;
+    ccp.completed_orders_open = true;
+    ccp.give_up_waiting_for_the_sentinel();
+
+    ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
+
+    assert!(!ccp.completed_orders_open, "the window is shut");
+    assert!(
+        shared.orders.take_completed_orders_end(),
+        "and the caller is released with what arrived",
+    );
+}
+
 /// The question dies with the connection that carried it.
 ///
 /// Its answer ends with a sentinel, so a drop mid-answer left the caller
@@ -3061,6 +3111,46 @@ fn a_correction_for_this_session_s_own_order_is_not_history() {
     assert!(
         context.market.instrument_by_con_id(8314).is_some(),
         "the report took the live path, where what it says still counts",
+    );
+}
+
+/// An order the venue numbered is an API order whichever path its report took.
+///
+/// The number is what tells an order placed through an API from one typed in
+/// by hand, and it is on every report the venue sends about the order — not
+/// only the ones that arrive in answer to a question about finished orders.
+/// Read on that path alone, an order another API placed and finished while
+/// this session was watching was left out of the answer to a caller asking for
+/// the API orders.
+#[test]
+fn an_order_the_venue_numbered_is_known_as_an_api_order_on_any_path() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+
+    // A live report for an order this session did not place, with no window
+    // open — so it takes the ordinary path — and the venue's own number on it.
+    let mut numbered = exec_report_frame(&[
+        (39, "2"), (150, "F"), (32, "100"), (31, "150.00"), (14, "100"), (151, "0"),
+        (54, "1"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+        (40, "2"), (44, "150.00"), (1, "DU111111"), (6121, "4471"),
+    ]);
+    numbered.insert(11, "987654321".to_string());
+    ccp.handle_exec_report(&numbered, b"", &mut context, &shared, &None, "");
+    assert!(
+        shared.orders.was_entered_through_an_api(0, 987_654_321),
+        "the venue numbered it, so it went through an API",
+    );
+
+    // And one it did not number, which is what a manual entry looks like.
+    let mut typed_in = exec_report_frame(&[
+        (39, "2"), (150, "F"), (32, "50"), (31, "150.00"), (14, "50"), (151, "0"),
+        (54, "1"), (38, "50"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+        (40, "2"), (44, "150.00"), (1, "DU111111"),
+    ]);
+    typed_in.insert(11, "987654322".to_string());
+    ccp.handle_exec_report(&typed_in, b"", &mut context, &shared, &None, "");
+    assert!(
+        !shared.orders.was_entered_through_an_api(0, 987_654_322),
+        "nothing numbered it, so nothing says an API placed it",
     );
 }
 
@@ -4734,6 +4824,15 @@ fn the_order_defaults_the_account_holds_are_read() {
         1,
     );
     assert_eq!(super::parse_order_presets(&short), None, "one of three is not the answer");
+
+    // And a message that states no count at all proves nothing whole. Read as
+    // an answer, one carrying neither count nor pairs cleared the sets this
+    // account holds as though the venue had said it holds none.
+    let countless = crate::protocol::fix::fix_build(
+        &[(35, "U"), (6040, "194"), (6556, "OPR.2"), (8166, "L")],
+        1,
+    );
+    assert_eq!(super::parse_order_presets(&countless), None, "no count is not a count of none");
 }
 
 /// A message nobody has looked at and a message deliberately not read are

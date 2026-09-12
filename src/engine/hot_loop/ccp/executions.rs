@@ -649,13 +649,6 @@ impl CcpState {
             right: parsed.get(&201).cloned().unwrap_or_default(),
             ..Default::default()
         };
-        // An order placed through an API carries the number that API gave it,
-        // and one typed in by hand carries none. That is the whole of what
-        // tells them apart — the venue states no origin beside it — so it is
-        // recorded here, where the report that states it is read.
-        if parsed.get(&6121).and_then(|s| s.parse::<i64>().ok()).is_some_and(|id| id != 0) {
-            shared.orders.note_api_numbered(clord_id);
-        }
         let order = api::Order {
             // The venue's own number for the order where it states one, and
             // the number it is known by here either way.
@@ -1019,6 +1012,18 @@ impl CcpState {
             }).unwrap_or(0)
         });
 
+        // An order placed through an API carries the number that API gave it,
+        // and one typed in by hand carries none. That is the whole of what
+        // tells them apart — the venue states no origin beside it — and it is
+        // read here, before the report takes any of the paths below, because
+        // an order the venue numbered is one whatever became of it. Recorded
+        // on the history path alone, an order another API placed and finished
+        // while this session watched was left out of the answer to the caller
+        // who asked for the API orders.
+        if parsed.get(&6121).and_then(|s| s.parse::<i64>().ok()).is_some_and(|id| id != 0) {
+            shared.orders.note_api_numbered(clord_id);
+        }
+
         // A report that arrived because a caller asked what the venue has
         // finished. Every event in such an order's life arrives as its own
         // ordinary report, so through the path below each one is a fill: it
@@ -1160,6 +1165,7 @@ impl CcpState {
             // a run of ordinary reports and nothing else says it is over.
             if self.completed_orders_open {
                 self.completed_orders_open = false;
+                self.completed_orders_deadline = None;
                 shared.orders.note_completed_orders_end();
                 log::info!("The venue has stated everything it has finished");
             }

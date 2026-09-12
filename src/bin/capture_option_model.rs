@@ -139,7 +139,7 @@ fn main() {
             .and_then(|m| greeks(terms, m, &[], model.implied_vol, model.und_price));
         let over = schedule
             .as_ref()
-            .map(|s| dividends::over_the_life(s, today, years))
+            .map(|s| dividends::over_the_life(s, today, years, &contract.currency))
             .unwrap_or_default();
         // The schedule with a carry recovered on top of it, which is what
         // this client now solves with.
