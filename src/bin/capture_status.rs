@@ -81,10 +81,8 @@ fn main() {
     let config = EClientConfig {
         username,
         password,
-        host: std::env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string()),
+        host: std::env::var("IB_HOST").unwrap_or_default(),
         paper: true,
-        core_id: None,
-        code_provider: None,
         ..Default::default()
     };
 

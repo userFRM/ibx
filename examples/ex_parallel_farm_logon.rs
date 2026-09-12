@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let username = env::var(user_var).map_err(|_| format!("{user_var} not set"))?;
     let password = env::var(pass_var).map_err(|_| format!("{pass_var} not set"))?;
-    let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
+    let host = env::var("IB_HOST").unwrap_or_default();
 
     let cfg = GatewayConfig {
         settings: Default::default(),

@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let username = env::var("IB_USERNAME")?;
     let password = env::var("IB_PASSWORD")?;
-    let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
+    let host = env::var("IB_HOST").unwrap_or_default();
     let symbol = env::var("SYMBOL").unwrap_or_else(|_| "AAPL".to_string());
     let con_id: i64 = env::var("CON_ID").unwrap_or_else(|_| "265598".to_string()).parse()?;
     let duration: u64 = env::var("DURATION_SECS").unwrap_or_else(|_| "20".to_string()).parse()?;

@@ -31,7 +31,7 @@ fn main() {
     let config = EClientConfig {
         username: std::env::var("IB_USERNAME").expect("IB_USERNAME"),
         password: std::env::var("IB_PASSWORD").expect("IB_PASSWORD"),
-        host: std::env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string()),
+        host: std::env::var("IB_HOST").unwrap_or_default(),
         paper: true,
         ..Default::default()
     };

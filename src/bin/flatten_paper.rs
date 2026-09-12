@@ -31,8 +31,6 @@ fn main() {
         password,
         host: std::env::var("IB_HOST").unwrap_or_default(),
         paper: true,
-        core_id: None,
-        code_provider: None,
         ..Default::default()
     };
     let session = match Client::connect(&config) {

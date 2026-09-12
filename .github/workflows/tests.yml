@@ -192,6 +192,15 @@ jobs:
       - name: No module depends on one that depends on it
         run: python scripts/check_module_graph.py
 
+      # A page includes a file and tells the reader to run an example; both can
+      # move, and the book builds either way, publishing an empty block and an
+      # instruction that fails. And an example a reader copies must not name a
+      # door: the venue names the server this account is on, so a hostname in
+      # a recipe is at best noise and at worst a door that has moved. Thirty
+      # nine examples carried one, and the pages include them verbatim.
+      - name: The book promises what is here, and names no door
+        run: python scripts/check_docs_promises.py
+
       # A question pumps the queues into its own collector and the queues empty
       # as they are read, so the Tee is what also feeds the record a session
       # keeps. A callback it does not forward reaches the question and nobody

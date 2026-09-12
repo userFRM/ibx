@@ -4,7 +4,7 @@
 //!   IB_USERNAME=user IB_PASSWORD=pass cargo run --example l2_aapl_tsla
 //!
 //! Optional env vars:
-//!   IB_HOST       — the venue host to log in to (default: cdc1.ibllc.com)
+//!   IB_HOST       — the venue host to log in to (default: the venue names it)
 //!   DURATION_SECS — how long to collect data (default: 15)
 
 use std::collections::HashMap;
@@ -144,7 +144,7 @@ fn tsla() -> Contract {
 fn main() {
     let username = env::var("IB_USERNAME").expect("IB_USERNAME required");
     let password = env::var("IB_PASSWORD").expect("IB_PASSWORD required");
-    let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".into());
+    let host = env::var("IB_HOST").unwrap_or_default();
     let duration_secs: u64 = env::var("DURATION_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -156,8 +156,6 @@ fn main() {
         password,
         host,
         paper: true,
-        core_id: None,
-        code_provider: None,
         ..Default::default()
     }).expect("Failed to connect");
     println!("Connected.");

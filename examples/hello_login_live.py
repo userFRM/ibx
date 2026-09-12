@@ -29,7 +29,7 @@ c = EClient(w)
 c.connect(
     username=os.environ["IB_LIVE_USERNAME"],
     password=os.environ["IB_LIVE_PASSWORD"],
-    host=os.environ.get("IB_HOST", "cdc1.ibllc.com"),
+    host=os.environ.get("IB_HOST", ""),
     paper=False,
 )
 threading.Thread(target=c.run, daemon=True).start()

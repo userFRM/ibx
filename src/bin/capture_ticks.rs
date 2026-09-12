@@ -106,13 +106,11 @@ fn main() {
     let config = EClientConfig {
         username,
         password,
-        host: std::env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string()),
+        host: std::env::var("IB_HOST").unwrap_or_default(),
         // The run this tool was asked for, not one it decided on: the gate
         // above waits for a window when the live account was named, and
         // connecting to paper anyway made that wait mean nothing.
         paper: !against_live,
-        core_id: None,
-        code_provider: None,
         ..Default::default()
     };
 

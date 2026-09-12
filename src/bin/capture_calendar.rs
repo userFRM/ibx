@@ -48,8 +48,6 @@ fn main() {
         // server this account belongs on.
         host: std::env::var("IB_HOST").unwrap_or_default(),
         paper: true,
-        core_id: None,
-        code_provider: None,
         ..Default::default()
     };
 

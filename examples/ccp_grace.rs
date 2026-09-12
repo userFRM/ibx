@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let username = env::var("IB_USERNAME")?;
     let password = env::var("IB_PASSWORD")?;
-    let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
+    let host = env::var("IB_HOST").unwrap_or_default();
     let hold_secs: u64 = env::var("HOLD_SECS").unwrap_or_else(|_| "20".to_string()).parse()?;
 
     println!("== ccp_grace: connecting to paper ({host})...");

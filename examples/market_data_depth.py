@@ -107,7 +107,7 @@ def run_example():
     w = Wrapper()
     c = EClient(w)
     c.connect(username=username, password=password,
-              host=os.environ.get("IB_HOST", "cdc1.ibllc.com"), paper=True)
+              host=os.environ.get("IB_HOST", ""), paper=True)
     t = threading.Thread(target=c.run, daemon=True)
     t.start()
     print("Connected.")

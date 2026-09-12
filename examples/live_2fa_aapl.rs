@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "IB_LIVE_USERNAME not set (.env or shell)")?;
     let password = env::var("IB_LIVE_PASSWORD")
         .map_err(|_| "IB_LIVE_PASSWORD not set (.env or shell)")?;
-    let host = env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".to_string());
+    let host = env::var("IB_HOST").unwrap_or_default();
 
     println!("== Connecting LIVE ({host}). Approve the second-factor push on your phone when it arrives.");
     let t0 = Instant::now();

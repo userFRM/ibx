@@ -41,7 +41,6 @@ c = EClient(w)
 c.connect(
     username=os.environ["IB_USERNAME"],
     password=os.environ["IB_PASSWORD"],
-    host="cdc1.ibllc.com",
     paper=True,
 )
 threading.Thread(target=c.run, daemon=True).start()

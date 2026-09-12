@@ -57,10 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = EClient::connect(&EClientConfig {
         username: env::var("IB_USERNAME")?,
         password: env::var("IB_PASSWORD")?,
-        host: env::var("IB_HOST").unwrap_or_else(|_| "cdc1.ibllc.com".into()),
+        host: env::var("IB_HOST").unwrap_or_default(),
         paper: true,
-        core_id: None,
-        code_provider: None,
         ..Default::default()
     })?;
 
