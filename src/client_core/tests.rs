@@ -9,6 +9,35 @@ use crate::types::SmartComponent;
 use crate::bridge::RichOrderInfo;
 use crate::types::model::OrderState as ApiOrderState;
 
+/// Nothing follows the venue's chargeable one-shot.
+///
+/// The venue answers it once, under a request type of its own, and it is
+/// withdrawn as soon as it completes. A
+/// stream that followed one was never sent to the venue, and when the one-shot
+/// went the follower was promoted onto its row — a subscription the caller was
+/// told it had, on which no quote ever arrives.
+#[test]
+fn nothing_follows_a_chargeable_snapshot() {
+    let core = ClientCore::new();
+    let instrument = 3u32;
+
+    // An ordinary stream is followed, which is the whole point of the map.
+    core.instrument_to_req.lock().unwrap().insert(instrument, 10);
+    assert!(
+        core.follows_existing_subscription(instrument, 11),
+        "a second caller watches the stream that is up",
+    );
+
+    // The one-shot is not.
+    let one_shot = ClientCore::new();
+    one_shot.instrument_to_req.lock().unwrap().insert(instrument, 20);
+    one_shot.chargeable_snapshot_reqs.lock().unwrap().insert(20);
+    assert!(
+        !one_shot.follows_existing_subscription(instrument, 21),
+        "a stream does not follow the one-shot",
+    );
+}
+
 /// A market-data type nobody recognises does not become the venue's word.
 ///
 /// Subscriptions stay realtime whatever it names, and the callback that

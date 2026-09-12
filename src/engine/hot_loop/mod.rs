@@ -836,6 +836,11 @@ impl HotLoop {
             // subscription: held, it outlives every caller that asked and the
             // next one to watch this slot is handed readings from before it.
             self.shared.market.forget_series_ticks(instrument);
+            // And what was asked for on it. The list is the caller's intent
+            // and outlives a connection on purpose, but not the slot: left
+            // behind, the next contract to take this slot was asked for the
+            // previous contract's series, which nobody watching it named.
+            self.farm.asked_generic_ticks.remove(&instrument);
             log::info!("Reclaimed instrument slot {instrument}");
         }
     }
@@ -1309,10 +1314,25 @@ impl HotLoop {
                     // Held against the slot before the subscription goes out,
                     // so the frame that carries them is built from them and the
                     // rebuild after a reconnect asks for them again.
+                    //
+                    // Written against the slot only where this caller is the
+                    // one the subscription goes out for. A caller landing on a
+                    // slot another caller is already being served on is a
+                    // joiner: its list is added to what the slot asks for as
+                    // the series are asked for, in the arm below, because
+                    // written here it would leave nothing new to ask for —
+                    // and written over theirs it would leave the venue serving
+                    // series the rebuild no longer asks for.
                     if let Some(slot) = registered
                         && !generic_ticks.is_empty()
+                        && !(self.farm.holds_a_stream(slot) && !regulatory_snapshot)
                     {
-                        self.farm.asked_generic_ticks.insert(slot, generic_ticks.clone());
+                        let held = self.farm.asked_generic_ticks.entry(slot).or_default();
+                        for tick in &generic_ticks {
+                            if !held.contains(tick) {
+                                held.push(*tick);
+                            }
+                        }
                     }
                     match registered {
                         None => {
@@ -1339,6 +1359,19 @@ impl HotLoop {
                         // so a subscribe pointed at one was never sent and the
                         // withdrawal took the record out from under it.
                         Some(id) if self.farm.holds_a_stream(id) && !regulatory_snapshot => {
+                            // The joiner's own series, where the stream it is
+                            // joining was not asked for them. Nothing else
+                            // sends them: the subscription is already up, so
+                            // this is the one chance to ask.
+                            if !generic_ticks.is_empty() {
+                                self.farm.also_ask_for_series(
+                                    id,
+                                    &generic_ticks,
+                                    &self.context,
+                                    &mut self.farm_conn,
+                                    &mut self.hb,
+                                );
+                            }
                             if let Some(tx) = &reply_tx {
                                 let _ = tx.try_send(Ok(id));
                             }
@@ -8107,6 +8140,64 @@ mod tests {
             "the snapshot is asked for under its own request rather than riding \
              the stream: {asked:?}",
         );
+    }
+
+    /// A second caller on a contract already streaming has the series it named
+    /// asked for, and the first caller's are still asked for after a
+    /// reconnect.
+    ///
+    /// The list that reached the venue is the first caller's. A joiner naming a
+    /// series nobody had asked for waited on a stream that was never
+    /// requested; and written over the list held against the slot, the first
+    /// caller's series were the ones the rebuild stopped asking for.
+    #[test]
+    fn a_second_caller_on_a_streaming_contract_has_its_series_asked_for() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        let contract = || ContractRef {
+            con_id: 756733,
+            symbol: "SPY".into(),
+            exchange: "SMART".into(),
+            sec_type: "STK".into(),
+            currency: "USD".into(),
+            ..Default::default()
+        };
+        for wanted in [vec![233u32], vec![236u32]] {
+            tx.send(ControlCommand::Subscribe {
+                filters: Default::default(),
+                contract: contract(),
+                mode_9887: 0,
+                regulatory_snapshot: false,
+                reply_tx: None,
+                generic_ticks: wanted,
+            })
+            .expect("the engine is holding the other end");
+            hl.poll_control_commands();
+        }
+
+        let instrument = hl.context.market.instrument_by_con_id(756733)
+            .expect("the contract holds a slot");
+        let mut held = hl.farm.asked_generic_ticks
+            .get(&instrument)
+            .cloned()
+            .unwrap_or_default();
+        held.sort_unstable();
+        assert_eq!(
+            held, [233u32, 236],
+            "both callers' series are what the rebuild asks for: {held:?}",
+        );
+        let asked: Vec<u32> = hl.farm.instrument_md_reqs.iter()
+            .find(|(id, _)| *id == instrument)
+            .expect("the contract has requests standing on it")
+            .1
+            .entries.iter().map(|e| e.request_type).collect();
+        for series in [233u32, 236] {
+            assert!(
+                asked.contains(&series),
+                "{series} is an entry of the subscription: {asked:?}",
+            );
+        }
     }
 }
 

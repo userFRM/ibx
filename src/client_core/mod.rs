@@ -876,6 +876,14 @@ pub struct ClientCore {
     /// Snapshots being waited on: when each was asked for, and which of the
     /// kinds one is made of the venue has stated so far.
     pub snapshot_reqs: Mutex<HashMap<i64, (std::time::Instant, u8)>>,
+    /// The requests that asked for the venue's one-shot snapshot.
+    ///
+    /// One of those is a request of its own and not a stream: the venue
+    /// answers it once, under a request type of its own, and it is withdrawn
+    /// as soon as it completes. Nothing follows one — a stream that did was
+    /// never sent, and when the one-shot was withdrawn the follower was
+    /// promoted onto the one-shot's own row and heard no quotes at all.
+    chargeable_snapshot_reqs: Mutex<std::collections::HashSet<i64>>,
 
     // PnL subscription state
     /// The request a running profit is reported under.
@@ -1080,6 +1088,7 @@ impl ClientCore {
             pending_group_events: Mutex::new(Vec::new()),
             last_quotes: Mutex::new(HashMap::new()),
             snapshot_reqs: Mutex::new(HashMap::new()),
+            chargeable_snapshot_reqs: Mutex::new(std::collections::HashSet::new()),
             pnl_req_id: Mutex::new(None),
             pnl_single_reqs: Mutex::new(HashMap::new()),
             last_pnl: Mutex::new([0; 3]),
@@ -1561,6 +1570,16 @@ impl ClientCore {
     pub(crate) fn follows_existing_subscription(&self, instrument: InstrumentId, req_id: i64) -> bool {
         let held = self.instrument_to_req.lock().unwrap();
         match held.get(&instrument) {
+            // Nothing follows the venue's chargeable one-shot. It is answered
+            // once and withdrawn as soon as it completes, so a stream that
+            // followed one was never sent — and when the one-shot went, the
+            // follower was promoted onto its row and heard no quotes at all.
+            Some(&existing)
+                if existing != req_id
+                    && self.chargeable_snapshot_reqs.lock().unwrap().contains(&existing) =>
+            {
+                false
+            }
             Some(&existing) if existing != req_id => {
                 self.follow_under_holder_lock(instrument, req_id);
                 drop(held);
@@ -1915,6 +1934,11 @@ impl ClientCore {
         // The chargeable snapshot is one burst by construction, so it ends the
         // way an ordinary snapshot does and the caller hears the same end.
         let snapshot = snapshot || regulatory_snapshot;
+        // Written down before anything can follow this request: what it asked
+        // for decides whether it may be followed at all.
+        if regulatory_snapshot {
+            self.chargeable_snapshot_reqs.lock().unwrap().insert(req_id);
+        }
         // News subscription if generic_tick_list names 292. The whole entry,
         // not its last three characters: "1292" is not 292, and matching on a
         // suffix subscribes to news the caller did not ask for. The list is
@@ -2042,7 +2066,7 @@ impl ClientCore {
             filters: filters.clone(),
             mode_9887,
             regulatory_snapshot,
-            generic_ticks,
+            generic_ticks: generic_ticks.clone(),
             reply_tx: Some(reply_tx),
         }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
 
@@ -2091,6 +2115,15 @@ impl ClientCore {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
             self.pay_a_joiner(shared, instrument_id, req_id);
+            // And the series this caller named, as on the path that never
+            // reached the engine: the list that went to the venue is the
+            // holder's.
+            if !generic_ticks.is_empty() {
+                let _ = control_tx.send(ControlCommand::AlsoAskForSeries {
+                    instrument: instrument_id,
+                    generic_ticks: generic_ticks.clone(),
+                });
+            }
             return self.settle_registration(shared, control_tx, &claim, req_id, instrument_id);
         }
         // Somebody may have taken this contract while this request was being
@@ -2305,6 +2338,7 @@ impl ClientCore {
         // stream reads as a snapshot and is withdrawn as soon as it has both
         // sides of a quote.
         self.snapshot_reqs.lock().unwrap().remove(&req_id);
+        self.chargeable_snapshot_reqs.lock().unwrap().remove(&req_id);
         self.registration_epoch.lock().unwrap().remove(&req_id);
         if let Some(instrument) = self.req_to_instrument.lock().unwrap().remove(&req_id) {
             // A caller that was watching someone else's subscription stops
