@@ -1010,16 +1010,25 @@ impl EClient {
         if asked {
             let until = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
+            // Two things in turn and in that order, as on the other surface:
+            // the engine takes this question off the queue, and only then is
+            // the count of answers read again.
+            let mut seen_since: Option<u64> = None;
             let ended = loop {
-                // Two things in turn, as on the other surface: the engine has
-                // taken this question off the queue, and an answer has
-                // completed since.
                 if let Some(shared) = self.shared.lock().unwrap().clone()
                     && let Some((answered_before, asked_before)) = before
-                    && shared.orders.completed_orders_asked() != asked_before
-                    && shared.orders.completed_orders_ended() != answered_before
                 {
-                    break true;
+                    match seen_since {
+                        None if shared.orders.completed_orders_asked() != asked_before => {
+                            seen_since = Some(shared.orders.completed_orders_ended());
+                        }
+                        Some(since) if shared.orders.completed_orders_ended() != since => {
+                            break true;
+                        }
+                        _ => {
+                            let _ = answered_before;
+                        }
+                    }
                 }
                 if std::time::Instant::now() >= until {
                     break false;

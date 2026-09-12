@@ -3372,10 +3372,18 @@ fn reports_naming_one_order_two_ways_are_still_one_order() {
     let finished = shared.orders.drain_completed_orders();
     assert_eq!(finished.len(), 1, "one order, not one per number: {finished:?}");
     assert_eq!(finished[0].status, crate::types::OrderStatus::Filled, "with its outcome");
-    let info = shared.orders.get_order_info(9000).expect("and its fields");
+    // Filed under the number a caller addresses it by, not the permanent name
+    // the venue files it under: that name belongs to no client, and published
+    // as an order id it raises the mark this session issues its own above.
+    assert_eq!(finished[0].order_id, 4471, "the number an API gave it");
+    assert!(
+        shared.orders.get_order_info(9000).is_none(),
+        "and not under the venue's own permanent name",
+    );
+    let info = shared.orders.get_order_info(4471).expect("its fields, under that number");
     assert_eq!(info.order.action, "SELL");
     assert_eq!(info.contract.symbol, "IBM");
-    assert_eq!(info.order.order_id, 4471, "the number an API gave it is kept as its own");
+    assert_eq!(info.order.order_id, 4471);
 }
 
 /// The last event of a finished order's life is the one the caller is handed.

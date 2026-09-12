@@ -876,14 +876,21 @@ impl EClient {
         if self.control_tx.send(crate::types::ControlCommand::FetchCompletedOrders).is_ok() {
             let until = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
-            // Two things in turn: the engine has taken this question off the
-            // queue, and an answer has completed since. Waiting only on the
-            // second, an answer to somebody else's question that completed in
-            // between was read as the answer to this one, and the caller
-            // returned before its own request had reached the venue.
-            while self.shared.orders.completed_orders_asked() == asked_before
-                || self.shared.orders.completed_orders_ended() == answered_before
-            {
+            // Two things in turn, and in that order. First the engine takes
+            // this question off the queue; only then is the count of answers
+            // read again, because one hot-loop pass can take a sentinel off
+            // the socket and this question off the queue in that order — so an
+            // answer that completed before the engine had even seen this
+            // question satisfied it, and the caller returned before its own
+            // request had reached the venue.
+            let mut answered_before = answered_before;
+            let mut seen = false;
+            while !seen || self.shared.orders.completed_orders_ended() == answered_before {
+                if !seen && self.shared.orders.completed_orders_asked() != asked_before {
+                    seen = true;
+                    answered_before = self.shared.orders.completed_orders_ended();
+                    continue;
+                }
                 if std::time::Instant::now() >= until {
                     log::warn!(
                         "the venue did not finish stating what it has finished; answering with \

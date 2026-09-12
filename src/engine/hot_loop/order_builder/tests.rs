@@ -3092,6 +3092,59 @@ fn a_delayed_activation_is_written_the_way_it_is_read() {
     assert_eq!(stated, Some("20260311-09:30:00"), "sent on 168: {fields:?}");
 }
 
+/// What this client writes about an order, it reads back.
+///
+/// The two sides are written in different files and drifted: the smallest
+/// fill quantity was sent on one tag and read from none, the time a manual
+/// order was entered was sent on one tag and read from another, and three
+/// flags were sent as `Y` or `1` and read by a parser that accepted neither.
+/// Each of those came back as though the caller had asked for nothing.
+///
+/// So the check is the round trip rather than either side of it: state the
+/// attributes, write them, read them back, and compare.
+#[test]
+fn what_this_client_writes_about_an_order_it_reads_back() {
+    let attrs = crate::types::OrderAttrs {
+        min_qty: 25,
+        manual_order_time: "20260311-09:30:00".to_string(),
+        manual_order_indicator: 1,
+        route_marketable_to_bbo: true,
+        block_order: true,
+        display_size: 100,
+        not_held: true,
+        sweep_to_fill: true,
+        solicited: true,
+        post_only: true,
+        discretionary_amt: crate::types::price_from_f64(0.05),
+        trigger_method: 2,
+        clearing_account: "CA-1".to_string(),
+        ..Default::default()
+    };
+    let mut fields: Vec<(u32, String)> = Vec::new();
+    super::push_order_attrs(
+        &mut fields, &attrs, &crate::types::OrderKind::Limit { price: 100_0000_0000 },
+        Side::Buy, String::new(),
+    );
+    let on_the_wire: std::collections::HashMap<u32, String> = fields.into_iter().collect();
+
+    let mut read = crate::types::model::Order::default();
+    crate::engine::hot_loop::ccp::executions::read_stated_attributes(&mut read, &on_the_wire);
+
+    assert_eq!(read.min_qty, 25, "the smallest fill it may take: {on_the_wire:?}");
+    assert_eq!(read.manual_order_time, "20260311-09:30:00", "when it was entered by hand");
+    assert_eq!(read.manual_order_indicator, 1, "that it was entered by hand");
+    assert_eq!(read.route_marketable_to_bbo, Some(true), "that it routes to the best offer");
+    assert!(read.block_order, "that it is a block order");
+    assert_eq!(read.display_size, 100, "how much of it shows");
+    assert!(read.not_held, "that it is not held");
+    assert!(read.sweep_to_fill, "that it sweeps to fill");
+    assert!(read.solicited, "that it was solicited");
+    assert!(read.post_only, "that it only posts");
+    assert_eq!(read.discretionary_amt, 0.05, "what it may move by");
+    assert_eq!(read.trigger_method, 2, "what triggers it");
+    assert_eq!(read.clearing_account, "CA-1", "where it clears");
+}
+
 /// A block order states tag 9801 as the character `Y`.
 ///
 /// A numeric `1` is not read on this tag, and the tag is omitted when the flag

@@ -40,6 +40,18 @@ fn tif_api_name(stated: &str) -> &str {
     }
 }
 
+/// Whether a flag the venue states is set.
+///
+/// The venue writes these `Y`, `1` or `true` and chooses per field, and this
+/// client writes some of them one way and read them back another: an order
+/// that asked to be routed to the best offer was written `1` and read with a
+/// parser that refuses `1`, and one marked a block order was written `Y` and
+/// read as though only `1` counted. Both came back saying the order had asked
+/// for nothing. One reader for all of them, so the two sides cannot drift.
+fn flag(stated: &str) -> bool {
+    stated == "1" || stated.eq_ignore_ascii_case("true") || stated.eq_ignore_ascii_case("y")
+}
+
 /// Everything else the report says about the order.
 ///
 /// A report carries the whole order, not the handful of terms that identify
@@ -50,20 +62,27 @@ fn tif_api_name(stated: &str) -> &str {
 ///
 /// Only what the report states is taken. A term it does not mention is one the
 /// order does not carry, and the default already says that.
-fn read_stated_attributes(
+pub(crate) fn read_stated_attributes(
     order: &mut api::Order,
     parsed: &std::collections::HashMap<u32, String>,
 ) {
     if let Some(v) = parsed.get(&77) { order.open_close = v.clone(); }
+    // The smallest quantity the order may fill. This client writes it and
+    // read it back from nowhere, so an order came back saying it would take
+    // any fill at all.
+    if let Some(v) = parsed.get(&110).and_then(|v| v.parse::<i32>().ok()) { order.min_qty = v; }
     if let Some(v) = parsed.get(&111).and_then(|v| v.parse::<i32>().ok()) { order.display_size = v; }
     if let Some(v) = parsed.get(&126) { order.good_till_date = v.clone(); }
     if let Some(v) = parsed.get(&168) { order.good_after_time = v.clone(); }
     if let Some(v) = parsed.get(&440) { order.clearing_account = v.clone(); }
-    if let Some(v) = parsed.get(&1028).and_then(|v| v.parse::<i32>().ok()) { order.manual_order_indicator = v; }
+    // Written `Y` or `N` and read as a number, which neither of them is.
+    if let Some(v) = parsed.get(&1028) {
+        order.manual_order_indicator = i32::from(flag(v));
+    }
     if let Some(v) = parsed.get(&3055) { order.account = v.clone(); }
-    if let Some(v) = parsed.get(&6102) { order.sweep_to_fill = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6102) { order.sweep_to_fill = flag(v); }
     if let Some(v) = parsed.get(&6115).and_then(|v| v.parse::<i32>().ok()) { order.trigger_method = v; }
-    if let Some(v) = parsed.get(&6135) { order.hidden = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6135) { order.hidden = flag(v); }
     if let Some(v) = parsed.get(&6152).and_then(|v| v.parse::<f64>().ok()) { order.stock_range_lower = v; }
     if let Some(v) = parsed.get(&6153).and_then(|v| v.parse::<f64>().ok()) { order.stock_range_upper = v; }
     if let Some(v) = parsed.get(&6154).and_then(|v| v.parse::<f64>().ok()) { order.delta = v; }
@@ -73,28 +92,32 @@ fn read_stated_attributes(
     if let Some(v) = parsed.get(&6261) { order.adjusted_order_type = v.clone(); }
     if let Some(v) = parsed.get(&6262).and_then(|v| v.parse::<f64>().ok()) { order.adjusted_stop_limit_price = v; }
     if let Some(v) = parsed.get(&6269).and_then(|v| v.parse::<i32>().ok()) { order.adjustable_trailing_unit = v; }
-    if let Some(v) = parsed.get(&6275) { order.continuous_update = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6275) { order.continuous_update = flag(v); }
     if let Some(v) = parsed.get(&6279).and_then(|v| v.parse::<i32>().ok()) { order.reference_price_type = v; }
     if let Some(v) = parsed.get(&6280).and_then(|v| v.parse::<i32>().ok()) { order.volatility_type = v; }
-    if let Some(v) = parsed.get(&6287) { order.not_held = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6287) { order.not_held = flag(v); }
     if let Some(v) = parsed.get(&6290) { order.delta_neutral_order_type = v.clone(); }
     if let Some(v) = parsed.get(&6291).and_then(|v| v.parse::<f64>().ok()) { order.delta_neutral_aux_price = v; }
-    if let Some(v) = parsed.get(&6300) { order.manual_order_time = v.clone(); }
+    // Tag 6532, which is where this client writes it. Read off 6300, an
+    // order's stated time never came back at all.
+    if let Some(v) = parsed.get(&6532) { order.manual_order_time = v.clone(); }
     if let Some(v) = parsed.get(&6446).and_then(|v| v.parse::<f64>().ok()) { order.scale_profit_offset = v; }
-    if let Some(v) = parsed.get(&6461) { order.scale_auto_reset = v == "1" || v.eq_ignore_ascii_case("true"); }
-    if let Some(v) = parsed.get(&6488) { order.solicited = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6461) { order.scale_auto_reset = flag(v); }
+    if let Some(v) = parsed.get(&6488) { order.solicited = flag(v); }
     if let Some(v) = parsed.get(&6526).and_then(|v| v.parse::<i32>().ok()) { order.scale_price_adjust_interval = v; }
     if let Some(v) = parsed.get(&6527).and_then(|v| v.parse::<f64>().ok()) { order.scale_price_adjust_value = v; }
     if let Some(v) = parsed.get(&6564).and_then(|v| v.parse::<i32>().ok()) { order.ref_futures_con_id = v; }
     if let Some(v) = parsed.get(&6580).and_then(|v| v.parse::<f64>().ok()) { order.stock_ref_price = v; }
-    if let Some(v) = parsed.get(&6605) { order.post_only = v == "1" || v.eq_ignore_ascii_case("true"); }
-    if let Some(v) = parsed.get(&6636) { order.professional_customer = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6605) { order.post_only = flag(v); }
+    if let Some(v) = parsed.get(&6636) { order.professional_customer = flag(v); }
     if let Some(v) = parsed.get(&6670) { order.active_start_time = v.clone(); }
-    if let Some(v) = parsed.get(&6737) { order.imbalance_only = v == "1" || v.eq_ignore_ascii_case("true"); }
-    if let Some(v) = parsed.get(&6965) { order.auto_cancel_parent = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&6737) { order.imbalance_only = flag(v); }
+    if let Some(v) = parsed.get(&6965) { order.auto_cancel_parent = flag(v); }
     if let Some(v) = parsed.get(&8089) { order.ext_operator = v.clone(); }
     if let Some(v) = parsed.get(&8229) { order.advanced_error_override = v.clone(); }
-    if let Some(v) = parsed.get(&8265).and_then(|v| v.parse::<bool>().ok()) { order.route_marketable_to_bbo = Some(v); }
+    // Written `1`, which Rust's own boolean parser refuses, so an order that
+    // asked for this came back saying nothing about it.
+    if let Some(v) = parsed.get(&8265) { order.route_marketable_to_bbo = Some(flag(v)); }
     if let Some(v) = parsed.get(&8402).and_then(|v| v.parse::<i32>().ok()) { order.duration = v; }
     if let Some(v) = parsed.get(&8403).and_then(|v| v.parse::<f64>().ok()) { order.mid_offset_at_whole = v; }
     if let Some(v) = parsed.get(&8404).and_then(|v| v.parse::<f64>().ok()) { order.mid_offset_at_half = v; }
@@ -102,8 +125,8 @@ fn read_stated_attributes(
     if let Some(v) = parsed.get(&8411).and_then(|v| v.parse::<i32>().ok()) { order.min_compete_size = v; }
     if let Some(v) = parsed.get(&8412).and_then(|v| v.parse::<f64>().ok()) { order.compete_against_best_offset = v; }
     if let Some(v) = parsed.get(&8415).and_then(|v| v.parse::<i32>().ok()) { order.min_trade_qty = v; }
-    if let Some(v) = parsed.get(&8534) { order.include_overnight = v == "1" || v.eq_ignore_ascii_case("true"); }
-    if let Some(v) = parsed.get(&9801) { order.block_order = v == "1" || v.eq_ignore_ascii_case("true"); }
+    if let Some(v) = parsed.get(&8534) { order.include_overnight = flag(v); }
+    if let Some(v) = parsed.get(&9801) { order.block_order = flag(v); }
     if let Some(v) = parsed.get(&9813).and_then(|v| v.parse::<f64>().ok()) { order.discretionary_amt = v; }
     if let Some(v) = parsed.get(&9816).and_then(|v| v.parse::<f64>().ok()) { order.volatility = v; }
     if let Some(v) = parsed.get(&9822).and_then(|v| v.parse::<f64>().ok()) { order.percent_offset = v; }
@@ -698,6 +721,10 @@ impl CcpState {
             Some("5") => "SSHORT".to_string(),
             _ => was.map(|w| w.order.action.clone()).unwrap_or_default(),
         };
+        // The two halves the order type is named from, each replaced only
+        // where this report states it.
+        let stated_type = kept(parsed.get(&40), was.map(|w| w.ord_type.as_str()));
+        let stated_inst = kept(parsed.get(&18), was.map(|w| w.exec_inst.as_str()));
         let number = |tag: u32, before: Option<f64>, unset: f64| -> f64 {
             parsed
                 .get(&tag)
@@ -735,19 +762,14 @@ impl CcpState {
             // and four kinds travel as P, told apart by the instruction beside
             // them. Passed through as stated, a finished limit order was
             // answered "2".
-            order_type: parsed
-                .get(&40)
-                .map(|stated| {
-                    crate::types::orders::ord_type_api_name(
-                        stated,
-                        parsed.get(&18).map(String::as_str).unwrap_or(""),
-                    )
-                    .to_string()
-                })
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| {
-                    was.map(|w| w.order.order_type.clone()).unwrap_or_default()
-                }),
+            // Named from both halves the venue states it in. Four kinds
+            // travel as `P` and the instruction beside it is what tells them
+            // apart, so the two are kept as stated and the name derived from
+            // whichever pair is current — translated and then merged, a later
+            // report repeating the type and not the instruction turned a
+            // midpoint peg into a trailing stop.
+            order_type: crate::types::orders::ord_type_api_name(&stated_type, &stated_inst)
+                .to_string(),
             tif: parsed
                 .get(&59)
                 .map(|stated| tif_api_name(stated).to_string())
@@ -830,9 +852,14 @@ impl CcpState {
         // flattened map cannot hold, so it is read off the report itself —
         // and an order read back with its waits dropped is one that goes live
         // at once when it is placed again.
-        let stated_conditions = decode_conditions(raw);
-        if !stated_conditions.is_empty() {
-            order.conditions = stated_conditions;
+        //
+        // The count is the statement, not the groups: a report stating none
+        // has removed them, and read as "nothing to carry over" it left the
+        // ones an earlier report had named. An order handed back still waiting
+        // on a condition the venue had removed is one that waits again when it
+        // is placed.
+        if parsed.contains_key(&6136) {
+            order.conditions = decode_conditions(raw);
         }
         if let Some(stated) = parsed.get(&6128) {
             order.conditions_cancel_order = stated == "1";
@@ -870,14 +897,30 @@ impl CcpState {
             },
             // And the venue's own code for the refusal, which it states
             // beside the words.
-            reject_reason: match stated_reason(parsed) {
-                why if !why.is_empty() => why,
-                _ => was.map(|w| w.state.reject_reason.clone()).unwrap_or_default(),
+            // Only while the order is still refused. A later report stating
+            // that it filled says the refusal is not what became of it, and a
+            // record carrying both said the order filled and was rejected.
+            reject_reason: match status {
+                crate::types::OrderStatus::Filled | crate::types::OrderStatus::Cancelled => {
+                    String::new()
+                }
+                _ => match stated_reason(parsed) {
+                    why if !why.is_empty() => why,
+                    _ => was.map(|w| w.state.reject_reason.clone()).unwrap_or_default(),
+                },
             },
             ..Default::default()
         };
-        let merged =
-            super::FinishedOrder { order_id: clord_id, contract, order, status, filled, state };
+        let merged = super::FinishedOrder {
+            order_id: clord_id,
+            contract,
+            order,
+            status,
+            filled,
+            state,
+            ord_type: stated_type,
+            exec_inst: stated_inst,
+        };
         match at {
             Some(at) => self.finished_orders[at] = merged,
             None => self.finished_orders.push(merged),
@@ -921,14 +964,23 @@ impl CcpState {
                 .collect(),
         };
         for held in held_now {
-            shared.orders.push_order_info(held.order_id, crate::bridge::RichOrderInfo {
+            // Handed over under the number a caller addresses the order by,
+            // not under the name the venue files it under. The two are the
+            // same on some accounts and not on others, and the second is a
+            // permanent name that belongs to no client: published as an order
+            // id it raised the mark this session issues its own numbers above,
+            // and marked that number as finished — so an unrelated order whose
+            // own number the venue happened to use as a permanent name could
+            // not be cached as open again.
+            let known_as = held.order.order_id.max(0) as u64;
+            shared.orders.push_order_info(known_as, crate::bridge::RichOrderInfo {
                 contract: held.contract,
                 order: held.order,
                 order_state: held.state,
                 last_exec: Default::default(),
             });
             shared.orders.refile_completed_order(crate::types::CompletedOrder {
-                order_id: held.order_id,
+                order_id: known_as,
                 instrument: 0,
                 status: held.status,
                 filled_qty: held.filled,
@@ -2125,7 +2177,7 @@ impl CcpState {
             // Tag 8339 is its own field, not derived from the algo strategy on
             // tag 847; a report that does not carry it states nothing about it.
             let use_price_mgmt_algo = parsed.get(&8339)
-                .map(|v| i32::from(v == "1" || v.eq_ignore_ascii_case("true")));
+                .map(|v| i32::from(flag(v)));
             let trail_stop_price: f64 = parsed.get(&6117)
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(f64::MAX);
@@ -2293,7 +2345,7 @@ impl CcpState {
                     .unwrap_or(0.0),
                 // The price on this report may yet be revised.
                 pending_price_revision: parsed.get(&8497)
-                    .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+                    .is_some_and(|v| flag(v)),
             };
 
             if con_id != 0 {

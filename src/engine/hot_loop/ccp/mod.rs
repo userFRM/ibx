@@ -62,6 +62,11 @@ pub(crate) struct FinishedOrder {
     /// What became of it, as the venue stated it: the time it finished and the
     /// reason it was refused, both of which only the report carries.
     pub(crate) state: crate::types::model::OrderState,
+    /// The order type as the wire states it, kept because four kinds travel
+    /// under one letter and the instruction below is what tells them apart.
+    pub(crate) ord_type: String,
+    /// That instruction, kept for the same reason.
+    pub(crate) exec_inst: String,
 }
 
 /// How many given-up-on dividend queries are remembered, so a late answer can
