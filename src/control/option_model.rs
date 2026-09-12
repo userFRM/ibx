@@ -286,9 +286,18 @@ fn tree_near_the_root(
 
     // Value at expiry, from the lowest node up. Nothing is owed by then, so
     // the pay-off is struck against the strike itself.
+    //
+    // A node that is not a number ends it here. The step ratio is finite and
+    // raising it to the number of steps need not be, and a put's pay-off
+    // against an infinite underlying is a finite nothing — so the overflow was
+    // swallowed on one side and caught on the other, and the same impossible
+    // tree answered a put with a price and refused the call beside it.
     let mut value = Vec::with_capacity(STEPS + 1);
     for i in 0..=STEPS {
         let underlying = adjusted * up.powi(i as i32) * down.powi((STEPS - i) as i32);
+        if !underlying.is_finite() {
+            return None;
+        }
         value.push(exercise_value(terms, underlying));
     }
     // Back through the tree, taking early exercise wherever it is worth more.
@@ -1030,6 +1039,28 @@ mod tests {
         }, dt, false).expect("a present value places");
         assert_eq!(flat_owed[0], today);
         assert!(flat_owed[1..].iter().all(|owed| *owed == 0.0));
+    }
+
+    /// A tree whose nodes overflow is refused on both sides of the contract.
+    ///
+    /// The step ratio is finite and raising it to the number of steps need not
+    /// be. A put's pay-off against an infinite underlying is a finite nothing,
+    /// so the overflow was swallowed there and caught on the call beside it:
+    /// the same impossible tree answered one with a price and refused the
+    /// other.
+    #[test]
+    fn a_tree_whose_nodes_overflow_is_refused_for_a_put_as_for_a_call() {
+        for is_call in [true, false] {
+            let terms = OptionTerms {
+                strike: 100.0, years_to_expiry: 1.0, is_call, on_a_future: false,
+            };
+            assert_eq!(
+                price(terms, 100.0, 80.0, 0.05, Payouts::default()),
+                None,
+                "a tree that overflows was priced for a {}",
+                if is_call { "call" } else { "put" },
+            );
+        }
     }
 
     /// An underlying that overflows what is left of it is refused too.

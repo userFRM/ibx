@@ -998,19 +998,26 @@ impl EClient {
         // Read before the question goes out, and waited for it to move, as on
         // the other surface: taken as a flag, a caller that gave up a moment
         // before it was set left it standing for the next one.
-        let answered_before = self
+        let before = self
             .shared
             .lock()
             .unwrap()
             .clone()
-            .map(|shared| shared.orders.completed_orders_ended());
+            .map(|shared| {
+                (shared.orders.completed_orders_ended(), shared.orders.completed_orders_asked())
+            });
         let asked = tx.send(crate::types::ControlCommand::FetchCompletedOrders).is_ok();
         if asked {
             let until = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
             let ended = loop {
+                // Two things in turn, as on the other surface: the engine has
+                // taken this question off the queue, and an answer has
+                // completed since.
                 if let Some(shared) = self.shared.lock().unwrap().clone()
-                    && Some(shared.orders.completed_orders_ended()) != answered_before
+                    && let Some((answered_before, asked_before)) = before
+                    && shared.orders.completed_orders_asked() != asked_before
+                    && shared.orders.completed_orders_ended() != answered_before
                 {
                     break true;
                 }

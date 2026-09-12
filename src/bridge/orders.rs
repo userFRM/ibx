@@ -73,6 +73,7 @@ pub struct OrderState {
     completed_orders: Mutex<Vec<CompletedOrder>>,
     /// Whether the venue has said it has stated every finished order it holds.
     completed_orders_ended: std::sync::atomic::AtomicU64,
+    completed_orders_asked: std::sync::atomic::AtomicU64,
     /// Orders the venue has taken back after reporting them finished.
     ///
     /// The completion queue empties on read, and what is read out of it is
@@ -172,6 +173,7 @@ impl OrderState {
             what_if_responses: Mutex::new(Vec::with_capacity(8)),
             completed_orders: Mutex::new(Vec::with_capacity(64)),
             completed_orders_ended: std::sync::atomic::AtomicU64::new(0),
+            completed_orders_asked: std::sync::atomic::AtomicU64::new(0),
             order_corrections: Mutex::new(Vec::new()),
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
@@ -269,6 +271,24 @@ impl OrderState {
     /// reached the venue.
     pub fn completed_orders_ended(&self) -> u64 {
         self.completed_orders_ended.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Note that a question about finished orders has been acted on.
+    ///
+    /// Said when the engine sends it, or holds it, or refuses it for want of a
+    /// connection — the point is that the engine has seen it, not what it did.
+    #[doc(hidden)] pub fn note_completed_orders_asked(&self) {
+        self.completed_orders_asked.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// How many have been acted on.
+    ///
+    /// A caller waits for this to move before it waits for an answer. Without
+    /// it, an answer to somebody else's question that completed between the
+    /// caller reading the count and the engine taking its question off the
+    /// queue was read as the answer to a question the engine had not yet seen.
+    pub fn completed_orders_asked(&self) -> u64 {
+        self.completed_orders_asked.load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub fn drain_completed_orders(&self) -> Vec<CompletedOrder> {

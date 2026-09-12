@@ -3396,6 +3396,8 @@ fn the_last_event_of_a_finished_order_is_the_one_that_stands() {
         (39, "0"), (150, "0"), (14, "0"), (151, "0"),
         (54, "2"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
         (100, "NYSE"), (40, "2"), (44, "150.00"), (1, "DU111111"),
+        (59, "1"), (6433, "1"), (583, "grp-7"), (6010, "mine"),
+        (168, "20260901-09:30:00"),
     ]);
     first.insert(11, "987654321".to_string());
     ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
@@ -3412,12 +3414,18 @@ fn the_last_event_of_a_finished_order_is_the_one_that_stands() {
     ccp.handle_exec_report(&end, b"", &mut context, &shared, &None, "");
 
     // The later event said nothing about the side, the symbol, the venue, the
-    // quantity or the price. Rebuilt from nothing, the record kept only what
-    // that event repeated — and a side nobody stated is not a buy.
+    // quantity, the price or any term the first event stated once. Rebuilt
+    // from nothing, the record kept only what that event repeated — and a
+    // side nobody stated is not a buy.
     let info = shared.orders.get_order_info(987_654_321).expect("the order is recorded");
     assert_eq!(info.order.total_quantity, 100.0, "the quantity the first event stated");
     assert_eq!(info.order.order_type, "LMT", "and its type, spelled the way a caller reads it");
     assert_eq!(info.order.lmt_price, 150.0, "and its price");
+    assert_eq!(info.order.tif, "GTC", "and how long it stood, also spelled that way");
+    assert!(info.order.outside_rth, "and that it ran outside regular hours");
+    assert_eq!(info.order.oca_group, "grp-7", "and the group it cancelled with");
+    assert_eq!(info.order.order_ref, "mine", "and the reference its caller gave it");
+    assert_eq!(info.order.good_after_time, "20260901-09:30:00", "and when it became live");
     assert_eq!(info.order.action, "SELL", "the side the first event stated");
     assert_eq!(info.contract.symbol, "IBM", "and the symbol");
     assert_eq!(info.contract.exchange, "NYSE", "and where it traded");

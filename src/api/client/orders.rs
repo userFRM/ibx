@@ -872,10 +872,18 @@ impl EClient {
         // was set left it standing and the next caller read it as the answer
         // to a question it had not yet asked.
         let answered_before = self.shared.orders.completed_orders_ended();
+        let asked_before = self.shared.orders.completed_orders_asked();
         if self.control_tx.send(crate::types::ControlCommand::FetchCompletedOrders).is_ok() {
             let until = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS);
-            while self.shared.orders.completed_orders_ended() == answered_before {
+            // Two things in turn: the engine has taken this question off the
+            // queue, and an answer has completed since. Waiting only on the
+            // second, an answer to somebody else's question that completed in
+            // between was read as the answer to this one, and the caller
+            // returned before its own request had reached the venue.
+            while self.shared.orders.completed_orders_asked() == asked_before
+                || self.shared.orders.completed_orders_ended() == answered_before
+            {
                 if std::time::Instant::now() >= until {
                     log::warn!(
                         "the venue did not finish stating what it has finished; answering with \

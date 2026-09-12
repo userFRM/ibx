@@ -634,6 +634,7 @@ impl CcpState {
     fn file_finished_order(
         &mut self,
         parsed: &std::collections::HashMap<u32, String>,
+        raw: &[u8],
         clord_id: u64,
         status: crate::types::OrderStatus,
         shared: &SharedState,
@@ -755,8 +756,22 @@ impl CcpState {
             lmt_price: number(44, was.map(|w| w.order.lmt_price), f64::MAX),
             aux_price: number(99, was.map(|w| w.order.aux_price), f64::MAX),
             account: kept(parsed.get(&1), was.map(|w| w.order.account.as_str())),
-            model_code: kept(parsed.get(&6700), was.map(|w| w.order.model_code.as_str())),
-            ..Default::default()
+            // The venue says an order is for an account and no model by
+            // naming the one tag that means it, whatever it says beside.
+            // Read from the model tag alone, an order explicitly cleared of
+            // its model kept the one an earlier report had named.
+            model_code: if parsed.contains_key(&8065) {
+                String::new()
+            } else if parsed.contains_key(&6700) {
+                stated_model(parsed)
+            } else {
+                was.map(|w| w.order.model_code.clone()).unwrap_or_default()
+            },
+            // Everything this does not name is what an earlier report about
+            // the same order said. Started from nothing each time, a terminal
+            // report that restated only the outcome dropped every term the
+            // venue had stated once and not repeated.
+            ..was.map(|w| w.order.clone()).unwrap_or_default()
         };
         // The latest anyone said, which for these two is the report in hand:
         // a status is what the order is now and a cumulative figure is what it
@@ -781,10 +796,49 @@ impl CcpState {
         order.submitter = kept(parsed.get(&109), was.map(|w| w.order.submitter.as_str()));
         order.algo_strategy =
             kept(parsed.get(&847), was.map(|w| w.order.algo_strategy.as_str()));
-        if let Some(before) = was {
-            order.outside_rth = before.order.outside_rth;
-            order.hidden = before.order.hidden;
-            order.display_size = before.order.display_size;
+        // And the terms the ordinary path decodes, each replaced only where
+        // this report states it.
+        if let Some(stated) = parsed.get(&6433) {
+            order.outside_rth = stated == "1" || stated.eq_ignore_ascii_case("true");
+        }
+        if let Some(stated) = parsed.get(&6370).and_then(|s| s.parse().ok()) {
+            order.lmt_price_offset = stated;
+        }
+        if let Some(stated) = parsed.get(&6117).and_then(|s| s.parse().ok()) {
+            order.trail_stop_price = stated;
+        }
+        if let Some(stated) = parsed.get(&6419) {
+            order.clearing_intent = stated.clone();
+        }
+        if let Some(stated) = parsed.get(&6596) {
+            order.auto_cancel_date = stated.clone();
+        }
+        if let Some(stated) = parsed.get(&6209).map(String::as_str) {
+            order.oca_type = match stated {
+                "CancelOnFillWBlock" => 1,
+                "ReduceOnFillWBlock" => 2,
+                "ReduceOnFillNonBlock" => 3,
+                "ReduceOnFillWBlockFromTotal" => 4,
+                _ => 3,
+            };
+        }
+        if let Some(stated) = parsed.get(&8339) {
+            order.use_price_mgmt_algo =
+                Some(i32::from(stated == "1" || stated.eq_ignore_ascii_case("true")));
+        }
+        // What the order waits for. It arrives as repeating groups the
+        // flattened map cannot hold, so it is read off the report itself —
+        // and an order read back with its waits dropped is one that goes live
+        // at once when it is placed again.
+        let stated_conditions = decode_conditions(raw);
+        if !stated_conditions.is_empty() {
+            order.conditions = stated_conditions;
+        }
+        if let Some(stated) = parsed.get(&6128) {
+            order.conditions_cancel_order = stated == "1";
+        }
+        if let Some(stated) = parsed.get(&6151) {
+            order.conditions_ignore_rth = stated == "1";
         }
         read_stated_attributes(&mut order, parsed);
 
@@ -813,6 +867,12 @@ impl CcpState {
                     .cloned()
                     .unwrap_or_else(|| "Rejected".to_string()),
                 _ => String::new(),
+            },
+            // And the venue's own code for the refusal, which it states
+            // beside the words.
+            reject_reason: match stated_reason(parsed) {
+                why if !why.is_empty() => why,
+                _ => was.map(|w| w.state.reject_reason.clone()).unwrap_or_default(),
             },
             ..Default::default()
         };
@@ -1243,8 +1303,16 @@ impl CcpState {
         // on the history path alone, an order another API placed and finished
         // while this session watched was left out of the answer to the caller
         // who asked for the API orders.
-        if parsed.get(&6121).and_then(|s| s.parse::<i64>().ok()).is_some_and(|id| id != 0) {
+        if let Some(numbered) = parsed.get(&6121).and_then(|s| stated_order_id(s))
+            && numbered != 0
+        {
+            // Under both names. The number the venue states is the one a
+            // finished order is reported by, and the one this session resolved
+            // the report to is the one the live path knows it as — recorded
+            // under one alone, an order the venue itself had marked was left
+            // out of the answer to a caller asking for the API's own.
             shared.orders.note_api_numbered(clord_id);
+            shared.orders.note_api_numbered(numbered);
         }
 
         // A report that arrived because a caller asked what the venue has
@@ -1287,7 +1355,7 @@ impl CcpState {
             let finished = status_of(
                 parsed.get(&39).map(String::as_str).unwrap_or(""), clord_id, parsed,
             );
-            self.file_finished_order(parsed, history_id, finished, shared);
+            self.file_finished_order(parsed, raw, history_id, finished, shared);
             return;
         }
 

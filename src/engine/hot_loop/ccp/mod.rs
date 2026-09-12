@@ -2996,6 +2996,9 @@ impl CcpState {
         hb: &mut HeartbeatState,
         shared: &SharedState,
     ) {
+        // Said first, whatever becomes of the question below: what a caller
+        // waits on is that the engine has taken its question off the queue.
+        shared.orders.note_completed_orders_asked();
         // Not while the session's own replay is still running. Both answers
         // end with the same sentinel and nothing on the wire says which
         // question a sentinel answers, so a window opened across the replay is
