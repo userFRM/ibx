@@ -505,10 +505,23 @@ fn deliver_series(
         // of its estimate — and a flag word saying which of them stand.
         586 => {
             let Some(stated) = series_i32(payload, 4) else { return true };
-            let prices: Vec<f64> = (0..stated.clamp(0, 3))
-                .filter_map(|i| series_f64(payload, 8 + 8 * i as usize))
+            // Three points, and a record stating more of them is not this
+            // record. Read as three of however many it stated, the word
+            // saying which prices stand was read out of the middle of the
+            // fourth price — and a fourth price whose low bits happen to say
+            // so published an estimate the venue never marked as standing.
+            if stated > 3 {
+                return true;
+            }
+            // Where that word sits is where the record said it would, behind
+            // as many prices as it stated rather than as many as happened to
+            // read. A record stating fewer states the rest as the largest a
+            // double carries, which is how the venue says it holds none.
+            let stated = stated.max(0) as usize;
+            let prices: Vec<f64> = (0..stated)
+                .filter_map(|i| series_f64(payload, 8 + 8 * i))
                 .collect();
-            let Some(flags) = series_i32(payload, 8 + 8 * prices.len()) else { return true };
+            let Some(flags) = series_i32(payload, 8 + 8 * stated) else { return true };
             if flags == -1 {
                 return true;
             }
@@ -2838,9 +2851,24 @@ impl FarmState {
     /// layout is not byte-aligned once a name of odd length has been read, so
     /// nothing below indexes a byte directly.
     fn book_bits(body: &[u8]) -> Option<BookBits<'_>> {
-        let bit_len = usize::from(u16::from_be_bytes([*body.first()?, *body.get(1)?]));
+        let stated = u16::from_be_bytes([*body.first()?, *body.get(1)?]);
         let bytes = &body[2..];
-        Some(BookBits { bytes, at: 0, end: bit_len.min(bytes.len() * 8) })
+        // Recovered across the wrap, as every bit-counted section on this wire
+        // is: two bytes state the count, so it repeats every sixty-five
+        // thousand five hundred and thirty-six, and how much arrived is what
+        // says how many times. Read as stated, a book of four thousand
+        // withdrawals — a full cycle exactly, which states nought — was
+        // dropped whole, and the caller's book kept every level the venue had
+        // just taken away.
+        let end = crate::protocol::tick_decoder::bits_carried(stated, body.len());
+        // A count the bytes do not satisfy is a frame cut short. Read up to
+        // the bytes instead, part of a book arrives as the whole of it: the
+        // levels the frame did not finish stating read as levels the venue no
+        // longer holds.
+        if end > bytes.len() * 8 {
+            return None;
+        }
+        Some(BookBits { bytes, at: 0, end })
     }
 
     /// Parse a 35=Y book frame and deliver its levels.
@@ -3377,7 +3405,15 @@ impl FarmState {
             return;
         };
         let text = if series == 454 { payload.get(4..).unwrap_or_default() } else { payload };
-        let pairs = crate::control::fundamental::stated_pairs(&String::from_utf8_lossy(text));
+        // Read as text or not at all. Read with the bytes it could not make
+        // sense of replaced, a record carrying one such byte was handed to a
+        // caller with a replacement character in it — a character the venue
+        // never sent, in a value a caller reads as the venue's own.
+        let Ok(text) = std::str::from_utf8(text) else {
+            log::debug!("company data on series {series} is not text; nothing is published");
+            return;
+        };
+        let pairs = crate::control::fundamental::stated_pairs(text);
         // A record stating no pair states nothing. Written down anyway, a
         // caller reading the series could not tell a contract the venue holds
         // nothing for from one it has not answered yet.

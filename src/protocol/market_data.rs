@@ -2,9 +2,11 @@
 //!
 //! A market-data request is an action, a count, and that many request rows.
 //! The action and the count come first and each row states the contract it is
-//! about and the one thing wanted of it, so asking for two kinds of tick is
-//! two rows rather than one row saying both. A withdrawal is the same shape as
-//! the subscription it withdraws rather than an id on its own.
+//! about, the one thing wanted of it, and the request it is: a row is what the
+//! venue acknowledges and what a withdrawal names, so two kinds of tick are
+//! two rows under two numbers rather than one row saying both, or two rows
+//! sharing one number. A withdrawal is the same shape as the subscription it
+//! withdraws rather than an id on its own.
 
 use crate::protocol::fix::{self, fix_build};
 
@@ -44,9 +46,8 @@ fn build_request(
     con_id: u32,
     exchange: &str,
     sec_type: &str,
-    md_req_id: &str,
     now: &str,
-    tick_types: &[u32],
+    rows: &[(&str, u32)],
     top_quote: bool,
     seq: u32,
 ) -> Vec<u8> {
@@ -54,9 +55,9 @@ fn build_request(
         (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ.to_string()),
         (fix::TAG_SENDING_TIME, now.to_string()),
         (263, action.to_string()),
-        (146, tick_types.len().to_string()),
+        (146, rows.len().to_string()),
     ];
-    for &tick_type in tick_types {
+    for &(md_req_id, tick_type) in rows {
         fields.extend(request_row(con_id, exchange, sec_type, md_req_id, tick_type, top_quote));
     }
     fix_build(
@@ -68,40 +69,41 @@ fn build_request(
 /// Build a market data subscription request.
 ///
 /// `now` is the sending time, tag 52.
-/// `tick_types` are the venue's tick numbers — 442 for a quote, 443 for
-/// the last trade, 1 for the top of book, 292 for news — one row each.
+/// `rows` is one `(request id, tick number)` per row — 442 for a quote, 443
+/// for the last trade, 1 for the top of book, 292 for news. The number is the
+/// row's own: the venue acknowledges a row under it and routes what it then
+/// sends under it, so two rows sharing one number are two streams a caller
+/// cannot tell apart or withdraw separately.
 /// `top_quote` asks for the top of book alone.
 #[allow(clippy::too_many_arguments)]
 pub fn build_mktdata_subscribe(
     con_id: u32,
     exchange: &str,
     sec_type: &str,
-    md_req_id: &str,
     now: &str,
-    tick_types: &[u32],
+    rows: &[(&str, u32)],
     top_quote: bool,
     seq: u32,
 ) -> Vec<u8> {
-    build_request("1", con_id, exchange, sec_type, md_req_id, now, tick_types, top_quote, seq)
+    build_request("1", con_id, exchange, sec_type, now, rows, top_quote, seq)
 }
 
 /// Build a market data unsubscribe request.
 ///
-/// The same rows the subscription stated. A withdrawal naming only the request
-/// id carries no contract and no count, which is not the shape the protocol
-/// defines for one.
+/// The same rows the subscription stated, under the same numbers. A withdrawal
+/// naming only the request id carries no contract and no count, which is not
+/// the shape the protocol defines for one.
 #[allow(clippy::too_many_arguments)]
 pub fn build_mktdata_unsubscribe(
     con_id: u32,
     exchange: &str,
     sec_type: &str,
-    md_req_id: &str,
     now: &str,
-    tick_types: &[u32],
+    rows: &[(&str, u32)],
     top_quote: bool,
     seq: u32,
 ) -> Vec<u8> {
-    build_request("2", con_id, exchange, sec_type, md_req_id, now, tick_types, top_quote, seq)
+    build_request("2", con_id, exchange, sec_type, now, rows, top_quote, seq)
 }
 
 #[cfg(test)]
@@ -124,7 +126,7 @@ mod tests {
 
     #[test]
     fn a_subscription_states_its_action_before_its_row() {
-        let msg = build_mktdata_subscribe(265598, "SMART", "CS", "REQ1", "20260101-12:00:00", &[442], false, 5);
+        let msg = build_mktdata_subscribe(265598, "SMART", "CS", "20260101-12:00:00", &[("REQ1", 442)], false, 5);
         assert_eq!(
             order_of(&msg, &[35, 34, 52, 263, 146, 262, 6008, 207, 167, 264]),
             vec![35, 34, 52, 263, 146, 262, 6008, 207, 167, 264],
@@ -140,7 +142,7 @@ mod tests {
     /// id alone it named no contract and no count.
     #[test]
     fn an_unsubscribe_states_the_row_it_withdraws() {
-        let msg = build_mktdata_unsubscribe(265598, "SMART", "CS", "REQ1", "20260101-12:00:00", &[442], false, 6);
+        let msg = build_mktdata_unsubscribe(265598, "SMART", "CS", "20260101-12:00:00", &[("REQ1", 442)], false, 6);
         assert_eq!(
             order_of(&msg, &[35, 34, 52, 263, 146, 262, 6008, 207, 167, 264]),
             vec![35, 34, 52, 263, 146, 262, 6008, 207, 167, 264],
@@ -157,18 +159,23 @@ mod tests {
     /// requests say.
     #[test]
     fn the_top_quote_flag_is_stated_only_when_asked_for() {
-        let asked = build_mktdata_subscribe(265598, "SMART", "CS", "REQ1", "20260101-12:00:00", &[442], true, 5);
+        let asked = build_mktdata_subscribe(265598, "SMART", "CS", "20260101-12:00:00", &[("REQ1", 442)], true, 5);
         assert!(tags(&asked).iter().any(|(t, v)| *t == 9830 && v == "1"));
-        let not = build_mktdata_subscribe(265598, "SMART", "CS", "REQ1", "20260101-12:00:00", &[442], false, 5);
+        let not = build_mktdata_subscribe(265598, "SMART", "CS", "20260101-12:00:00", &[("REQ1", 442)], false, 5);
         assert!(!tags(&not).iter().any(|(t, _)| *t == 9830));
     }
 
     /// Two kinds of tick are two rows, and tag 146 states the count. One row
     /// carrying both is not a valid request shape.
+    ///
+    /// And each row is its own request. The venue answers a row under the
+    /// number that row stated and sends what it then holds under the same
+    /// number, so two rows written under one number are two streams arriving
+    /// as one, neither of which can be withdrawn on its own.
     #[test]
-    fn asking_for_two_ticks_states_two_rows() {
+    fn asking_for_two_ticks_states_two_rows_under_two_numbers() {
         let msg = build_mktdata_subscribe(
-            265598, "SMART", "CS", "REQ1", "20260101-12:00:00", &[442, 443], false, 5,
+            265598, "SMART", "CS", "20260101-12:00:00", &[("REQ1", 442), ("REQ2", 443)], false, 5,
         );
         let fields = tags(&msg);
         assert_eq!(
@@ -178,6 +185,9 @@ mod tests {
         let ticks: Vec<&str> =
             fields.iter().filter(|(t, _)| *t == 264).map(|(_, v)| v.as_str()).collect();
         assert_eq!(ticks, vec!["442", "443"]);
+        let asked: Vec<&str> =
+            fields.iter().filter(|(t, _)| *t == 262).map(|(_, v)| v.as_str()).collect();
+        assert_eq!(asked, vec!["REQ1", "REQ2"], "a number each, as the venue answers them");
         assert_eq!(fields.iter().filter(|(t, _)| *t == 6008).count(), 2, "one row each");
     }
 }

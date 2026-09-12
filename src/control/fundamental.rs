@@ -26,20 +26,36 @@ pub const TAG_RAW_DATA: u32 = 96;
 /// left out. Where a key is stated twice the last statement of it stands.
 pub fn stated_pairs(text: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    for part in text.split([';', '\n', '\r']) {
-        let Some((key, value)) = part.split_once('=') else { continue };
+    // A key is a run of word characters and a value is everything up to the
+    // next separator, which for a value is an equals sign as much as a
+    // semicolon: `A=B=C` states `A` as `B` and then a key of nothing, which
+    // states nothing. Read to the end of the run instead, the value would
+    // carry a second pair's worth of text.
+    let is_key = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut rest = text;
+    while let Some(at) = rest.find('=') {
+        let (before, after) = rest.split_at(at);
+        // The key is the word that ends at the separator, whatever came
+        // before it. Anything not a word character between two pairs is not
+        // part of either.
+        let key: String = before
+            .chars()
+            .rev()
+            .take_while(|c| is_key(*c))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let value: &str = &after[1..];
+        let end = value.find([';', '=', '\n', '\r']).unwrap_or(value.len());
+        let (value, after) = value.split_at(end);
+        rest = after;
         if key.is_empty() || value.is_empty() {
             continue;
         }
-        // The venue writes a key as a word. Anything else is not a key it
-        // states, and a run of bytes that happens to hold an equals sign is
-        // not a pair.
-        if !key.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            continue;
-        }
-        match out.iter_mut().find(|(held, _)| held == key) {
+        match out.iter_mut().find(|(held, _)| *held == key) {
             Some(held) => held.1 = value.to_string(),
-            None => out.push((key.to_string(), value.to_string())),
+            None => out.push((key, value.to_string())),
         }
     }
     out
@@ -203,9 +219,22 @@ mod tests {
         );
         // Nothing stated: no key, no value, no pair at all.
         assert!(stated_pairs("=5;KEY=;;plain text;").is_empty());
-        // A key the venue writes as something other than a word is not a key
-        // it states.
-        assert!(stated_pairs("not a key=5").is_empty());
+        // A value ends at the next separator, and an equals sign is one: read
+        // to the end of the run, the value would carry a second pair's worth
+        // of text.
+        assert_eq!(
+            stated_pairs("RATING=BUY=SELL"),
+            [("RATING".to_string(), "BUY".to_string())],
+        );
+        // The key is the word that ends at the separator, and a word is
+        // written in the characters the venue writes one in: what is in front
+        // of it belongs to neither pair, and a key outside those characters is
+        // no key at all.
+        assert_eq!(
+            stated_pairs("not a key=5"),
+            [("key".to_string(), "5".to_string())],
+        );
+        assert!(stated_pairs("\u{c9}=1").is_empty());
         // Stated twice, the last statement stands, as it does where this
         // arrives.
         assert_eq!(

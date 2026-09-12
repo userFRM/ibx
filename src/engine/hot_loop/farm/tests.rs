@@ -288,6 +288,18 @@ mod news_tests {
             "both series are named as stated",
         );
 
+        // A record this cannot read as text publishes nothing, rather than
+        // publishing the byte it could not read as a character the venue
+        // never sent.
+        farm.generic_tick_tags.push((33, 548, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(33, 548, b"RATING=\xff")]), &mut context, &shared, &None,
+        );
+        assert!(
+            shared.reference.company_data(756733, 548).is_empty(),
+            "a record that is not text was published anyway",
+        );
+
         // Restated, a series replaces what it said rather than adding to it:
         // one message carries the whole set.
         farm.handle_generic_tick(
@@ -298,6 +310,61 @@ mod news_tests {
             vec![("RATING".to_string(), "3".to_string())],
             "the later statement stands alone",
         );
+    }
+
+    /// A record stating more estimate points than the series carries is not
+    /// that record, and publishes nothing.
+    ///
+    /// The venue states three points and a word saying which of them stand.
+    /// Read as three of however many it stated, the word was read out of the
+    /// middle of a fourth price — and a fourth price whose low bits happen to
+    /// say so published an estimate the venue never marked as standing.
+    #[test]
+    fn an_estimate_stating_more_points_than_it_carries_publishes_nothing() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+
+        // Four prices where the venue states three, and the fourth begins with
+        // the bytes that read as "the estimate stands". Read as three of the
+        // four, the word saying which prices stand is the head of that fourth
+        // price.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&0i32.to_be_bytes());
+        payload.extend_from_slice(&4i32.to_be_bytes());
+        for price in [31.0f64, 32.0, 33.0] {
+            payload.extend_from_slice(&price.to_be_bytes());
+        }
+        payload.extend_from_slice(&[0, 0, 0, 3, 0, 0, 0, 0]);
+        payload.extend_from_slice(&0i32.to_be_bytes());
+        farm.generic_tick_tags.push((41, 586, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(41, 586, &payload)]), &mut context, &shared, &None,
+        );
+        assert!(
+            shared.market.drain_series_ticks(instrument).is_empty(),
+            "a record stating four points published one of them",
+        );
+
+        // And the record the venue does state still reads: three points and
+        // the word behind them.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&0i32.to_be_bytes());
+        payload.extend_from_slice(&3i32.to_be_bytes());
+        for price in [31.0f64, 32.0, 33.0] {
+            payload.extend_from_slice(&price.to_be_bytes());
+        }
+        payload.extend_from_slice(&3i32.to_be_bytes());
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(41, 586, &payload)]), &mut context, &shared, &None,
+        );
+        let said: Vec<(i32, String)> = shared.market.drain_series_ticks(instrument)
+            .into_iter()
+            .map(|t| (t.tick_type, format!("{:?}", t.value)))
+            .collect();
+        assert_eq!(said.len(), 1, "the middle of the estimate, and nothing else: {said:?}");
+        assert_eq!(said[0].0, 101);
     }
 
     /// A series the venue has nothing to say on reaches nobody.
@@ -3304,6 +3371,41 @@ mod depth_bit_tests {
         let got: Vec<_> = shared.market.drain_depth_updates().into_iter()
             .map(|u| (u.position, u.price, u.size)).collect();
         assert_eq!(got, [(2, 100.50, 7.0), (3, 100.75, 9.0)], "{got:?}");
+    }
+
+    /// A book past the wrap of its own bit count is read whole.
+    ///
+    /// Two bytes state the count, so it repeats every sixty-five thousand five
+    /// hundred and thirty-six. A book of four thousand withdrawals is a full
+    /// cycle exactly and states nought: read as stated, every withdrawal in it
+    /// was dropped and the caller's book kept levels the venue had just taken
+    /// away.
+    #[test]
+    fn a_book_past_the_wrap_of_its_own_bit_count_is_read_whole() {
+        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        // A withdrawal carries no fields and no name, so each is sixteen
+        // bits; four thousand and ninety four of them behind a thirty-two bit
+        // section header is the cycle exactly.
+        let mut entries: Vec<Entry<'_>> = (0..4_093)
+            .map(|i| Entry { op: 2, name: "", position: (i % 256) as u64, fields: vec![] })
+            .collect();
+        // The last one is the reading: it arrives only if the count was
+        // recovered.
+        entries.push(Entry { op: 0, name: "", position: 9, fields: vec![
+            Field { id: BID_PX, len: 2, value: 10123 },
+            Field { id: BID_SZ, len: 1, value: 4 },
+        ] });
+        let msg = framed_35y(&[(0x1122, entries)]);
+        assert_eq!(
+            u16::from_be_bytes([msg[b"35=Y\x01".len()], msg[b"35=Y\x01".len() + 1]]), 40,
+            "the stated count has wrapped, which is what this exercises",
+        );
+        farm.handle_depth_35y(&msg, &shared);
+        let got = shared.market.drain_depth_updates();
+        assert!(
+            got.iter().any(|u| u.position == 9 && (u.price - 101.23).abs() < 1e-9),
+            "the level past the wrap arrived: {} updates", got.len(),
+        );
     }
 
     /// The frame ends where its bit count says, not where the bytes do.
