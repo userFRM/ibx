@@ -75,9 +75,9 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(_tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         let _ = implied_vol_options;
-        if let Err(why) = self.answer_option_model(req_id, contract, |terms, model| {
+        if let Err(why) = self.answer_option_model(req_id, contract, |terms, model, schedule| {
             crate::control::option_model::implied_volatility(
-                terms, model, option_price, under_price,
+                terms, model, schedule, option_price, under_price,
             )
         }, |volatility| crate::types::OptionComputation {
             implied_vol: volatility,
@@ -117,9 +117,9 @@ impl EClient {
     ) -> PyResult<()> {
         let Some(_tx) = self.tx_or_report(req_id)? else { return Ok(()) };
         let _ = opt_prc_options;
-        if let Err(why) = self.answer_option_model(req_id, contract, |terms, model| {
+        if let Err(why) = self.answer_option_model(req_id, contract, |terms, model, schedule| {
             crate::control::option_model::option_price(
-                terms, model, volatility, under_price,
+                terms, model, schedule, volatility, under_price,
             )
         }, |price| crate::types::OptionComputation {
             implied_vol: volatility,
@@ -680,11 +680,13 @@ impl EClient {
         let Ok(shared) = self.shared_state() else { return false };
         let (given, und) = (calc.option_price, calc.under_price);
         let wants_volatility = calc.wants_volatility;
-        let solved = self.core.solve_option(&shared, &calc.contract, Some(req_id), |terms, model| {
+        let solved = self.core.solve_option(&shared, &calc.contract, Some(req_id), |terms, model, schedule| {
             if wants_volatility {
-                crate::control::option_model::implied_volatility(terms, model, given, und)
+                crate::control::option_model::implied_volatility(
+                    terms, model, schedule, given, und,
+                )
             } else {
-                crate::control::option_model::option_price(terms, model, given, und)
+                crate::control::option_model::option_price(terms, model, schedule, given, und)
             }
         });
         match solved {
@@ -729,6 +731,7 @@ impl EClient {
         solve: impl Fn(
             crate::control::option_model::OptionTerms,
             crate::control::option_model::VenueModel,
+            &[(f64, f64)],
         ) -> Option<f64>,
         into_computation: impl Fn(f64) -> crate::types::OptionComputation,
     ) -> Result<(), Refusal> {

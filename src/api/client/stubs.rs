@@ -127,9 +127,9 @@ impl EClient {
         &self, req_id: i64, contract: &super::Contract,
         option_price: f64, under_price: f64,
     ) {
-        match self.solve_option(contract, None, |terms, model| {
+        match self.solve_option(contract, None, |terms, model, schedule| {
             crate::control::option_model::implied_volatility(
-                terms, model, option_price, under_price,
+                terms, model, schedule, option_price, under_price,
             )
         }) {
             Ok(volatility) => self.shared.market.push_option_computation(
@@ -165,8 +165,10 @@ impl EClient {
         &self, req_id: i64, contract: &super::Contract,
         volatility: f64, under_price: f64,
     ) {
-        match self.solve_option(contract, None, |terms, model| {
-            crate::control::option_model::option_price(terms, model, volatility, under_price)
+        match self.solve_option(contract, None, |terms, model, schedule| {
+            crate::control::option_model::option_price(
+                terms, model, schedule, volatility, under_price,
+            )
         }) {
             Ok(price) => self.shared.market.push_option_computation(
                 crate::types::OptionComputation {
@@ -196,8 +198,8 @@ impl EClient {
         &self, req_id: i64, calc: &super::PendingOptionCalc,
     ) -> bool {
         let (opt, und) = (calc.option_price, calc.under_price);
-        match self.solve_option(&calc.contract, Some(req_id), |terms, model| {
-            crate::control::option_model::implied_volatility(terms, model, opt, und)
+        match self.solve_option(&calc.contract, Some(req_id), |terms, model, schedule| {
+            crate::control::option_model::implied_volatility(terms, model, schedule, opt, und)
         }) {
             Ok(volatility) => {
                 self.shared.market.push_option_computation(crate::types::OptionComputation {
@@ -230,8 +232,8 @@ impl EClient {
         &self, req_id: i64, calc: &super::PendingOptionCalc,
     ) -> bool {
         let (vol, und) = (calc.option_price, calc.under_price);
-        match self.solve_option(&calc.contract, Some(req_id), |terms, model| {
-            crate::control::option_model::option_price(terms, model, vol, und)
+        match self.solve_option(&calc.contract, Some(req_id), |terms, model, schedule| {
+            crate::control::option_model::option_price(terms, model, schedule, vol, und)
         }) {
             Ok(price) => {
                 self.shared.market.push_option_computation(crate::types::OptionComputation {
@@ -289,6 +291,7 @@ impl EClient {
         solve: impl Fn(
             crate::control::option_model::OptionTerms,
             crate::control::option_model::VenueModel,
+            &[(f64, f64)],
         ) -> Option<f64>,
     ) -> Result<f64, Refusal> {
         self.core.solve_option(&self.shared, contract, watched_under, solve)
@@ -540,7 +543,8 @@ mod advisor_partition_tests {
 
 #[cfg(test)]
 mod expiry_tests {
-    use crate::client_core::{days_from_civil, years_to_expiry};
+    use crate::client_core::years_to_expiry;
+    use crate::protocol::datetime::days_from_civil;
 
     /// A known date, against a known day count. Written out rather than pulled
     /// in, so it is checked rather than trusted.

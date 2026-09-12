@@ -23,6 +23,25 @@ pub fn tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     Some(&xml[start..end])
 }
 
+/// Every `<tag>…</tag>` in the document, in the order they appear.
+///
+/// For the answers that repeat an element — one per dividend, one per rate —
+/// where [`tag`] would read the first and stop. Nesting the same name inside
+/// itself would need a parser, and none of the replies read here does.
+pub fn elements<'a>(xml: &'a str, name: &str) -> Vec<&'a str> {
+    let open = format!("<{name}>");
+    let close = format!("</{name}>");
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while let Some(found) = xml[at..].find(&open) {
+        let start = at + found + open.len();
+        let Some(end) = xml[start..].find(&close) else { break };
+        out.push(&xml[start..start + end]);
+        at = start + end + close.len();
+    }
+    out
+}
+
 /// Withdraw a query the venue is still answering, by the id it was asked under.
 ///
 /// The venue takes the same document for every kind of query — fundamentals,
@@ -58,5 +77,14 @@ mod tests {
     #[test]
     fn the_first_pair_is_the_one_read() {
         assert_eq!(tag("<a>one</a><a>two</a>", "a"), Some("one"));
+    }
+
+    /// And where the answer repeats an element, every one of them in order.
+    #[test]
+    fn a_repeated_element_reads_back_in_the_order_it_was_stated() {
+        assert_eq!(elements("<a>one</a><b>x</b><a>two</a>", "a"), ["one", "two"]);
+        assert_eq!(elements("<a></a><a>two</a>", "a"), ["", "two"], "stated and empty counts");
+        assert!(elements("<a>never closed<a>nor this", "a").is_empty(), "neither pair closes");
+        assert!(elements("<b>x</b>", "a").is_empty());
     }
 }

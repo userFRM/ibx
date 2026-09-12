@@ -508,6 +508,19 @@ pub(crate) struct CcpState {
     /// ties a reply back to it, and the conId is held because the callback
     /// names the underlying the caller asked about.
     pub(crate) pending_option_params: Vec<(u32, String, i64, Instant)>,
+    /// Dividend queries in flight, as `(the id it went out under, the contract
+    /// it is about)`.
+    ///
+    /// The query goes out as text and the answer echoes only the id, so this
+    /// is what says which contract an answer is about. Two queries in flight
+    /// on one contract cannot happen — a second is not sent while the first is
+    /// outstanding — but two on different contracts can, and read by contract
+    /// rather than by id the second schedule would be filed under the first.
+    pending_dividends: Vec<(String, u32)>,
+    /// The id the next query of this kind goes out under. This client's own
+    /// number, distinct from every other request's because the venue echoes
+    /// only this one tag back.
+    next_xml_query_id: u64,
     /// Secdef replies awaiting paired schedule reply (joined by tag 6256).
     pub(crate) pending_schedule_pair: Vec<PendingSchedulePair>,
     /// Profit-and-loss subscriptions standing, by request number and account.
@@ -639,6 +652,8 @@ impl CcpState {
             completed_orders_open: false,
             completed_orders_wanted: false,
             pending_option_params: Vec::new(),
+            pending_dividends: Vec::new(),
+            next_xml_query_id: 1,
             pending_schedule_pair: Vec::new(),
             pnl_subscriptions: Vec::new(),
             next_schedule_sub_id: 1,
@@ -937,6 +952,11 @@ impl CcpState {
                         // venue keeps a set of order defaults per security
                         // type and fills parts of an order the caller left
                         // unstated from them, so what sets exist is a fact
+                        // What a contract pays out, answered under the id
+                        // the query went out with. The reference terminal's
+                        // own option model reads its dividend schedule off
+                        // this, and nothing here had ever asked for one.
+                        "20" => self.handle_dividends_answer(&parsed, shared),
                         // about every order placed from here.
                         //
                         // It states the sets and their versions rather than
@@ -1160,6 +1180,16 @@ impl CcpState {
                             // underlying apart.
                             crate::types::model::ContractDetails::from_definition(&def).contract,
                         );
+                            // What it is written on, and what that pays out.
+                            // The schedule belongs to the underlying and every
+                            // option on it is priced against the same one, so
+                            // it is asked for once and the definition is where
+                            // this session first learns which contract to ask
+                            // about.
+                            shared.reference.note_under_con_id(def.con_id, def.under_con_id);
+                            if def.under_con_id != 0 {
+                                self.send_dividends_query(def.under_con_id, ccp_conn, hb);
+                            }
                             identify_position(shared, &def);
                             self.try_release_scanner_enrichments(def.con_id as i64, shared);
                             // The master row for this same contract may be
@@ -2530,6 +2560,81 @@ impl CcpState {
                 true
             }
         });
+    }
+
+    /// Ask the venue what a contract pays out.
+    ///
+    /// Not a document like the other reference queries: the venue takes a line
+    /// of text on tag 58 and answers with a small XML document on 6118, under
+    /// the id this client asked with. That id is the only thing tying an answer
+    /// to a question — the answer names neither the contract nor the query —
+    /// so it is kept here against the contract until it comes back.
+    ///
+    /// Asked once per contract, and not again while one is outstanding: the
+    /// answer is a fact about the contract rather than a subscription, and a
+    /// second question would be answered with the same schedule under an id
+    /// nothing was waiting on.
+    pub(crate) fn send_dividends_query(
+        &mut self,
+        con_id: u32,
+        ccp_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        if con_id == 0 || self.pending_dividends.iter().any(|(_, held)| *held == con_id) {
+            return;
+        }
+        let Some(conn) = ccp_conn.as_mut() else {
+            log::debug!("what {con_id} pays out could not be asked: no connection to the venue");
+            return;
+        };
+        let query_id = format!("div_{}", self.next_xml_query_id);
+        self.next_xml_query_id += 1;
+        let query = crate::control::dividends::query_for(con_id);
+        let ts = chrono_free_timestamp();
+        match conn.send_fix(&[
+            (fix::TAG_MSG_TYPE, "U"),
+            (fix::TAG_SENDING_TIME, &ts),
+            (6040, "27"),
+            (320, &query_id),
+            (58, &query),
+        ]) {
+            Ok(()) => {
+                hb.last_ccp_sent = Instant::now();
+                log::info!("Asked what {con_id} pays out, under {query_id}");
+                self.pending_dividends.push((query_id, con_id));
+            }
+            // Registered as outstanding only if it went out. Recorded either
+            // way, the contract would never be asked about again.
+            Err(e) => log::warn!("what {con_id} pays out could not be asked: {e}"),
+        }
+    }
+
+    /// One answer to that question, filed against the contract it is about.
+    ///
+    /// The id is what says which contract, because the answer states no
+    /// contract of its own. An id nothing is waiting on is an answer to a
+    /// question this session did not ask, which is not a schedule to file.
+    fn handle_dividends_answer(
+        &mut self,
+        parsed: &std::collections::HashMap<u32, String>,
+        shared: &SharedState,
+    ) {
+        let Some(query_id) = parsed.get(&320) else { return };
+        let Some(at) = self.pending_dividends.iter().position(|(id, _)| id == query_id) else {
+            log::debug!("an answer arrived under {query_id}, which nothing here asked");
+            return;
+        };
+        let (_, con_id) = self.pending_dividends.remove(at);
+        let Some(body) = parsed.get(&6118) else {
+            log::debug!("the answer for {con_id} states no schedule");
+            return;
+        };
+        let schedule = crate::control::dividends::parse(body);
+        log::info!(
+            "{con_id} pays out {} times over the venue's books",
+            schedule.payments.len(),
+        );
+        shared.reference.set_dividend_schedule(con_id, schedule);
     }
 
     /// Ask for the option chain of an underlying.

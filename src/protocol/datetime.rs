@@ -358,6 +358,38 @@ fn canonical_zone(zone: &str) -> &str {
     }
 }
 
+/// Which day since the epoch a date the venue stated is, or nothing where it
+/// stated no day.
+///
+/// Reads the first eight digits, whatever punctuation is between them, which
+/// is every shape the venue writes a date in.
+pub fn day_number(stated: &str) -> Option<i64> {
+    let digits: String = stated.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
+    if digits.len() != 8 {
+        return None;
+    }
+    let year: i64 = digits[0..4].parse().ok()?;
+    let month: i64 = digits[4..6].parse().ok()?;
+    let day: i64 = digits[6..8].parse().ok()?;
+    // The count below is arithmetic, not a calendar: it places a thirteenth
+    // month or a thirty-second day somewhere regardless, and a solve measuring
+    // from there answers from a day the venue never stated. A date that cannot
+    // exist measures nothing.
+    jiff::civil::Date::new(year as i16, month as i8, day as i8).ok()?;
+    Some(days_from_civil(year, month, day))
+}
+
+/// Days since the epoch for a civil date. Written out rather than pulled in:
+/// one date, once, and a dependency for it would be a dependency for good.
+pub fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 /// Convert days since Unix epoch to (year, month, day).
 pub fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     // Algorithm from Howard Hinnant

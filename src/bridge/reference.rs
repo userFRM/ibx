@@ -152,6 +152,18 @@ pub struct ReferenceState {
     /// The order presets the account holds, by the key the venue names each
     /// set under, with the version it is on.
     order_presets: Mutex<Vec<(String, String)>>,
+    /// What a derivative's underlying is, by the venue's id for the
+    /// derivative.
+    ///
+    /// Stated on the definition, and held because the schedule an option is
+    /// priced against belongs to its underlying rather than to the option.
+    under_con_ids: Mutex<std::collections::HashMap<u32, u32>>,
+    /// What each contract pays out, by the venue's id for it.
+    ///
+    /// Kept rather than drained: a schedule is a fact about the contract that
+    /// every option on it is priced against, and the option that needs it next
+    /// is not the one whose question fetched it.
+    dividend_schedules: Mutex<std::collections::HashMap<u32, crate::control::dividends::Schedule>>,
 }
 
 impl ReferenceState {
@@ -201,6 +213,8 @@ impl ReferenceState {
             island_granted: AtomicBool::new(false),
             algorithms: Mutex::new(HashMap::new()),
             order_presets: Mutex::new(Vec::new()),
+            under_con_ids: Mutex::new(std::collections::HashMap::new()),
+            dividend_schedules: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -1139,6 +1153,31 @@ impl ReferenceState {
 
     #[doc(hidden)] pub fn set_order_presets(&self, presets: Vec<(String, String)>) {
         *self.order_presets.lock().unwrap() = presets;
+    }
+
+    /// What this derivative is written on, where the venue has said.
+    pub fn under_con_id(&self, con_id: u32) -> Option<u32> {
+        self.under_con_ids.lock().unwrap().get(&con_id).copied()
+    }
+
+    #[doc(hidden)] pub fn note_under_con_id(&self, con_id: u32, under_con_id: u32) {
+        if con_id != 0 && under_con_id != 0 {
+            self.under_con_ids.lock().unwrap().insert(con_id, under_con_id);
+        }
+    }
+
+    /// What a contract pays out over the life of an option on it, where the
+    /// venue has stated it for this contract.
+    pub fn dividend_schedule(
+        &self, con_id: u32,
+    ) -> Option<crate::control::dividends::Schedule> {
+        self.dividend_schedules.lock().unwrap().get(&con_id).cloned()
+    }
+
+    #[doc(hidden)] pub fn set_dividend_schedule(
+        &self, con_id: u32, schedule: crate::control::dividends::Schedule,
+    ) {
+        self.dividend_schedules.lock().unwrap().insert(con_id, schedule);
     }
 
     #[doc(hidden)] pub fn set_algorithms(&self, algorithms: HashMap<String, Vec<String>>) {

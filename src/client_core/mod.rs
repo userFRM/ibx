@@ -1000,19 +1000,7 @@ pub(crate) const OPTION_MODEL_UNSTATED: &str =
 
 /// Years between now and a stated expiry, as `yyyymmdd`.
 pub(crate) fn years_to_expiry(expiry: &str) -> Option<f64> {
-    let digits: String = expiry.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
-    if digits.len() != 8 {
-        return None;
-    }
-    let year: i64 = digits[0..4].parse().ok()?;
-    let month: i64 = digits[4..6].parse().ok()?;
-    let day: i64 = digits[6..8].parse().ok()?;
-    // The count below is arithmetic, not a calendar: it places a thirteenth
-    // month or a thirty-second day somewhere regardless, and a solve measuring
-    // from there answers from a day the venue never stated. A date that cannot
-    // exist measures nothing.
-    jiff::civil::Date::new(year as i16, month as i8, day as i8).ok()?;
-    let expiry_day = days_from_civil(year, month, day);
+    let expiry_day = crate::protocol::datetime::day_number(expiry)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
@@ -1022,16 +1010,6 @@ pub(crate) fn years_to_expiry(expiry: &str) -> Option<f64> {
     (days > 0).then(|| days as f64 / 365.0)
 }
 
-/// Days since the epoch for a civil date. Written out rather than pulled in:
-/// one date, once, and a dependency for it would be a dependency for good.
-pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
 
 /// The reference client's protocol level this client implements.
 ///
@@ -5510,6 +5488,7 @@ impl ClientCore {
         solve: impl Fn(
             crate::control::option_model::OptionTerms,
             crate::control::option_model::VenueModel,
+            &[(f64, f64)],
         ) -> Option<f64>,
     ) -> Result<f64, crate::error_codes::Refusal> {
         // Forget released slots before reading the model: another contract
@@ -5597,22 +5576,46 @@ impl ClientCore {
             // of it. Recovered from the price the venue itself published.
             yield_rate: 0.0,
         };
-        // On a future there is nothing to recover: the tree prices one on a
-        // price that drifts nowhere, so what the underlying yields does not
-        // enter the arithmetic and nought is what it uses either way.
-        //
-        // On anything else the yield is solved for, and a recovery that fails
-        // is not nought. It means no yield in a plausible range reproduces the
-        // price the venue published — so the model is not anchored to the
-        // venue's statement, and a number worked out on it would be this
-        // client's own with the venue's name on it. Taken as nought, that is
-        // exactly what was published.
-        let solved = if terms.on_a_future {
-            solve(terms, model)
-        } else {
-            crate::control::option_model::recover_yield(terms, model).and_then(|yield_rate| {
-                solve(terms, crate::control::option_model::VenueModel { yield_rate, ..model })
+        // What the underlying pays out over the option's life, where the venue
+        // has stated its schedule. It states one per contract, and the one
+        // that matters is the underlying's rather than the option's — so it is
+        // looked up by what the definition said this option is written on.
+        let schedule = shared
+            .reference
+            .under_con_id(contract.con_id as u32)
+            .and_then(|under| shared.reference.dividend_schedule(under))
+            .map(|schedule| {
+                let today = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|since| (since.as_secs() / 86_400) as i64)
+                    .unwrap_or(0);
+                crate::control::dividends::over_the_life(&schedule, today, years)
             })
+            .unwrap_or_default();
+
+        // The carry is solved for on top of whatever the schedule says, not
+        // instead of it: the schedule states when the underlying drops and by
+        // how much, and the carry puts the price back on the figure the venue
+        // published. A recovery that fails is not nought — it means no carry in
+        // a plausible range reproduces that figure, so the model is not the
+        // venue's and a number worked out on it would be this client's own with
+        // the venue's name on it. Taken as nought, that is exactly what was
+        // published.
+        //
+        // A future is the exception: the tree prices one on a price that
+        // drifts nowhere, so what the underlying yields never enters the
+        // arithmetic and nought is what it uses either way.
+        let solved = if terms.on_a_future {
+            solve(terms, model, &schedule)
+        } else {
+            crate::control::option_model::recover_yield(terms, model, &schedule)
+                .and_then(|yield_rate| {
+                    solve(
+                        terms,
+                        crate::control::option_model::VenueModel { yield_rate, ..model },
+                        &schedule,
+                    )
+                })
         };
         solved.ok_or_else(|| {
             crate::error_codes::Refusal::validation(

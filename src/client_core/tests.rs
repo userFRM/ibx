@@ -3339,7 +3339,9 @@ fn a_model_that_cannot_be_anchored_is_refused_rather_than_answered() {
         instrument: 3, implied_vol: 0.2, opt_price: 5.0, und_price: 100.0,
         cal_days: 30.0, ..Default::default()
     });
-    let solve = |terms, model| crate::control::option_model::option_price(terms, model, 0.2, 100.0);
+    let solve = |terms, model, schedule: &[(f64, f64)]| {
+        crate::control::option_model::option_price(terms, model, schedule, 0.2, 100.0)
+    };
     assert!(
         core.solve_option(&shared, &option, None, solve).is_err(),
         "a model nothing anchors was answered",
@@ -3362,7 +3364,9 @@ fn an_option_solve_forgets_a_released_contracts_slot() {
         instrument: 3, implied_vol: 0.2, opt_price: 2.28, und_price: 100.0,
         cal_days: 30.0, ..Default::default()
     });
-    let solve = |terms, model| crate::control::option_model::option_price(terms, model, 0.2, 100.0);
+    let solve = |terms, model, schedule: &[(f64, f64)]| {
+        crate::control::option_model::option_price(terms, model, schedule, 0.2, 100.0)
+    };
     core.cache_instrument(option.con_id, 3);
     publish();
     assert!(core.solve_option(&shared, &option, None, solve).unwrap().is_finite());

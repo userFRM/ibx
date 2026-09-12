@@ -123,6 +123,11 @@ name = "capture_option_model"
 path = "src/bin/capture_option_model.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "capture_dividends"
+path = "src/bin/capture_dividends.rs"
+required-features = ["dev-tools"]
+
 
 [[bin]]
 name = "capture_status"

@@ -58,6 +58,21 @@ pub struct VenueModel {
 
 
 
+impl VenueModel {
+    /// What this model says the underlying pays out, with the schedule the
+    /// venue stated for it beside it.
+    ///
+    /// Empty where the venue has not stated one, which leaves the present
+    /// value and the yield to carry it as they did before.
+    pub fn payouts<'a>(&self, schedule: &'a [(f64, f64)]) -> Payouts<'a> {
+        Payouts {
+            present_value: self.present_value_of_dividends,
+            schedule,
+            yield_rate: self.yield_rate,
+        }
+    }
+}
+
 /// What the contract is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OptionTerms {
@@ -88,88 +103,75 @@ pub struct OptionTerms {
 /// under a cent on an ordinary contract, and few enough to answer at once.
 const STEPS: usize = 256;
 
+/// What the underlying pays out over the life of the option.
+///
+/// The venue carries this two ways and this carries both: a present value,
+/// where it says what the dividends before expiry are worth today and nothing
+/// about when they fall, and the schedule itself, where it says the date and
+/// the amount of each one. The schedule is the better of the two and the
+/// reason is the shape: folded into one figure, the price the tree was
+/// calibrated to comes back exactly and everything that depends on *when* the
+/// underlying drops — what a day costs, what a point of volatility is worth —
+/// is measured against a drop that happens everywhere at once.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Payouts<'a> {
+    /// What the dividends before expiry are worth today, where that is all the
+    /// venue stated.
+    pub present_value: f64,
+    /// How far off each ex-date is in years, and what the underlying drops by
+    /// on it. Where this is stated the present value is not read: the schedule
+    /// states the same thing and states when.
+    pub schedule: &'a [(f64, f64)],
+    /// What the underlying yields continuously, where its dividends are
+    /// carried that way instead.
+    pub yield_rate: f64,
+}
+
+/// What is still to be paid out at each step, which is what the tree strikes
+/// against.
+///
+/// The underlying drops by the dividend on its ex-date, so the tree is walked
+/// on what is left once every payment still to come is taken off — and the
+/// strike is lowered by the same at each step, because a holder exercising
+/// there is buying the shares and the payments they still carry. By expiry
+/// there are none left, which is why the last step is nought.
+fn payouts_by_step(
+    rate: f64, payouts: Payouts<'_>, dt: f64, on_a_future: bool,
+) -> Option<Vec<f64>> {
+    let mut by_step = vec![0.0f64; STEPS + 1];
+    // Nothing stated but a present value: it is all owed today and the tree
+    // learns nothing more about it, which is where this stood before the
+    // venue was asked for the dates.
+    if payouts.schedule.is_empty() {
+        by_step[0] = payouts.present_value;
+        return by_step[0].is_finite().then_some(by_step);
+    }
+    // A future costs nothing to hold and drifts nowhere, so what is owed on it
+    // does not grow either.
+    let drift = if on_a_future { 0.0 } else { rate - payouts.yield_rate };
+    for &(years_to_ex, amount) in payouts.schedule {
+        if !(years_to_ex.is_finite() && amount.is_finite()) || years_to_ex <= 0.0 {
+            continue;
+        }
+        let today = amount * (-rate * years_to_ex).exp();
+        for (step, owed) in by_step.iter_mut().enumerate().take(STEPS) {
+            if step as f64 * dt <= years_to_ex {
+                *owed += today * (drift * step as f64 * dt).exp();
+            }
+        }
+    }
+    by_step.iter().all(|owed| owed.is_finite()).then_some(by_step)
+}
+
 /// The price of an American option, by a binomial tree.
 ///
 /// American, not European: an equity option can be exercised before it
 /// expires, and pricing one as though it could not misprices every put deep
 /// enough in the money to be worth exercising today.
-///
-/// Dividends are taken off the underlying rather than modelled as a yield,
-/// which is what the venue states — a present value, not a rate.
 pub fn price(
-    terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividends: f64,
-    yield_rate: f64,
+    terms: OptionTerms, spot: f64, volatility: f64, rate: f64, payouts: Payouts<'_>,
 ) -> Option<f64> {
-    // Every figure, the contract's own terms included. A strike that is not a
-    // number passes every test written as a comparison — nought is not less
-    // than it and neither is anything else — so the whole tree was walked on
-    // one, every pay-off came out at nothing, and the largest double in the
-    // world for a strike answered as an option worth exactly nothing rather
-    // than as a contract nobody can price.
-    if !(spot.is_finite()
-        && volatility.is_finite()
-        && rate.is_finite()
-        && dividends.is_finite()
-        && yield_rate.is_finite()
-        && terms.strike.is_finite()
-        && terms.years_to_expiry.is_finite())
-    {
-        return None;
-    }
-    if terms.years_to_expiry <= 0.0 || volatility <= 0.0 || terms.strike <= 0.0 {
-        return None;
-    }
-    let adjusted = spot - dividends;
-    if adjusted <= 0.0 {
-        return None;
-    }
-
-    let dt = terms.years_to_expiry / STEPS as f64;
-    let up = (volatility * dt.sqrt()).exp();
-    let down = 1.0 / up;
-    // A future drifts nowhere: it is already the price agreed for delivery,
-    // and holding it costs nothing. A share grows at the rate.
-    let growth = if terms.on_a_future { 1.0 } else { ((rate - yield_rate) * dt).exp() };
-    if !(up.is_finite() && growth.is_finite()) || (up - down).abs() < f64::EPSILON {
-        return None;
-    }
-    let up_chance = (growth - down) / (up - down);
-    if !(0.0..=1.0).contains(&up_chance) {
-        return None;
-    }
-    let discount = (-rate * dt).exp();
-
-    // Value at expiry, from the lowest node up.
-    let mut value = Vec::with_capacity(STEPS + 1);
-    for i in 0..=STEPS {
-        let underlying = adjusted * up.powi(i as i32) * down.powi((STEPS - i) as i32);
-        value.push(exercise_value(terms, underlying));
-    }
-    // Back through the tree, taking early exercise wherever it is worth more.
-    for step in (0..STEPS).rev() {
-        for i in 0..=step {
-            let held = discount * (up_chance * value[i + 1] + (1.0 - up_chance) * value[i]);
-            let underlying = adjusted * up.powi(i as i32) * down.powi((step - i) as i32);
-            // Taken early where that is worth more — except on a future,
-            // whose options settle at expiry. Allowed there, the tree returns
-            // the difference between the future and the strike for anything
-            // deep enough in the money, and the venue's own price for those
-            // sits below it.
-            value[i] = if terms.on_a_future {
-                held
-            } else {
-                held.max(exercise_value(terms, underlying))
-            };
-        }
-    }
-    // A terminal node that overflowed carries the overflow down to the root.
-    // The step ratio is checked above and being finite there does not make it
-    // finite raised to the number of steps: the highest node is the ratio to
-    // that power, so a volatility stated per cent where a fraction was meant
-    // reaches it. What comes back is not a price, and a caller reading it as
-    // one has no way to tell — it is refused here for the reason a volatility
-    // that will not converge is refused.
-    value[0].is_finite().then_some(value[0])
+    tree_near_the_root(terms, spot, volatility, rate, payouts).map(|(_, _, _, root)| root)
 }
 
 /// What an option is worth, and what its worth is doing.
@@ -198,10 +200,10 @@ pub struct Greeks {
 /// The root alone gives a price and nothing else. Delta is the spread across
 /// the two nodes one step in, gamma the spread of that spread across the three
 /// nodes two steps in, and theta what two steps of time cost — so the walk
-/// stops at step two and hands those five values back.
+/// stops at step two and hands those five values back. The price is the root
+/// of this same walk, so there is one tree here and not two.
 fn tree_near_the_root(
-    terms: OptionTerms, spot: f64, volatility: f64, rate: f64, dividends: f64,
-    yield_rate: f64,
+    terms: OptionTerms, spot: f64, volatility: f64, rate: f64, payouts: Payouts<'_>,
 ) -> Option<([f64; 3], f64, f64, f64)> {
     // Every figure, the contract's own terms included. A strike that is not a
     // number passes every test written as a comparison — nought is not less
@@ -212,8 +214,8 @@ fn tree_near_the_root(
     if !(spot.is_finite()
         && volatility.is_finite()
         && rate.is_finite()
-        && dividends.is_finite()
-        && yield_rate.is_finite()
+        && payouts.present_value.is_finite()
+        && payouts.yield_rate.is_finite()
         && terms.strike.is_finite()
         && terms.years_to_expiry.is_finite())
     {
@@ -222,14 +224,17 @@ fn tree_near_the_root(
     if terms.years_to_expiry <= 0.0 || volatility <= 0.0 || terms.strike <= 0.0 {
         return None;
     }
-    let adjusted = spot - dividends;
+    let dt = terms.years_to_expiry / STEPS as f64;
+    let owed = payouts_by_step(rate, payouts, dt, terms.on_a_future)?;
+    let adjusted = spot - owed[0];
     if adjusted <= 0.0 {
         return None;
     }
-    let dt = terms.years_to_expiry / STEPS as f64;
     let up = (volatility * dt.sqrt()).exp();
     let down = 1.0 / up;
-    let growth = if terms.on_a_future { 1.0 } else { ((rate - yield_rate) * dt).exp() };
+    // A future drifts nowhere: it is already the price agreed for delivery,
+    // and holding it costs nothing. A share grows at the rate.
+    let growth = if terms.on_a_future { 1.0 } else { ((rate - payouts.yield_rate) * dt).exp() };
     if !(up.is_finite() && growth.is_finite()) || (up - down).abs() < f64::EPSILON {
         return None;
     }
@@ -238,20 +243,42 @@ fn tree_near_the_root(
         return None;
     }
     let discount = (-rate * dt).exp();
+    // A call is worth more alive than exercised unless a dividend is coming:
+    // the holder gives up the interest on the strike and gains nothing but the
+    // payment. So the reference model tests a call for early exercise only
+    // where something is still to be paid, and rolls it back as held
+    // otherwise — whatever the underlying yields continuously. A put is tested
+    // at every node.
+    let a_payment_is_coming = owed.iter().any(|owed| *owed > 0.0);
+    let exercised = |underlying: f64, step: usize| exercise_value_against(
+        terms, underlying, terms.strike - owed[step],
+    );
+    let take_the_better = |held: f64, underlying: f64, step: usize| {
+        if terms.on_a_future || (terms.is_call && !a_payment_is_coming) {
+            held
+        } else {
+            held.max(exercised(underlying, step))
+        }
+    };
+
+    // Value at expiry, from the lowest node up. Nothing is owed by then, so
+    // the pay-off is struck against the strike itself.
     let mut value = Vec::with_capacity(STEPS + 1);
     for i in 0..=STEPS {
         let underlying = adjusted * up.powi(i as i32) * down.powi((STEPS - i) as i32);
         value.push(exercise_value(terms, underlying));
     }
+    // Back through the tree, taking early exercise wherever it is worth more.
     for step in (0..STEPS).rev() {
         for i in 0..=step {
             let held = discount * (up_chance * value[i + 1] + (1.0 - up_chance) * value[i]);
             let underlying = adjusted * up.powi(i as i32) * down.powi((step - i) as i32);
-            value[i] = if terms.on_a_future {
-                held
-            } else {
-                held.max(exercise_value(terms, underlying))
-            };
+            // Taken early where that is worth more — except on a future,
+            // whose options settle at expiry. Allowed there, the tree returns
+            // the difference between the future and the strike for anything
+            // deep enough in the money, and the venue's own price for those
+            // sits below it.
+            value[i] = take_the_better(held, underlying, step);
         }
         // Two steps from the root is as far back as anything here needs.
         if step == 2 {
@@ -261,20 +288,18 @@ fn tree_near_the_root(
             for i in 0..=1usize {
                 let held = discount * (up_chance * value[i + 1] + (1.0 - up_chance) * value[i]);
                 let underlying = adjusted * up.powi(i as i32) * down.powi((1 - i) as i32);
-                one[i] = if terms.on_a_future {
-                    held
-                } else {
-                    held.max(exercise_value(terms, underlying))
-                };
+                one[i] = take_the_better(held, underlying, 1);
             }
             let root = {
                 let held = discount * (up_chance * one[1] + (1.0 - up_chance) * one[0]);
-                if terms.on_a_future {
-                    held
-                } else {
-                    held.max(exercise_value(terms, adjusted))
-                }
+                take_the_better(held, adjusted, 0)
             };
+            // A terminal node that overflowed carries the overflow down to the
+            // root. The step ratio is checked above and being finite there does
+            // not make it finite raised to the number of steps: the highest
+            // node is the ratio to that power, so a volatility stated per cent
+            // where a fraction was meant reaches it. What comes back is not a
+            // price, and a caller reading it as one has no way to tell.
             return root.is_finite().then_some((two, one[0], one[1], root));
         }
     }
@@ -298,7 +323,16 @@ fn tree_near_the_root(
 /// Nothing is returned where the venue stated no price to solve against, or
 /// where no yield in a plausible range reproduces it. A yield this client
 /// made up would move every figure that follows from it.
-pub fn recover_yield(terms: OptionTerms, model: VenueModel) -> Option<f64> {
+///
+/// Solved on top of the schedule where the venue has stated one, not instead
+/// of it. The schedule says when the underlying drops and by how much, which
+/// is what the greeks are measured against; what it leaves is a residual of
+/// under a per cent on the price, and a carry recovered against that residual
+/// puts the price back on the venue's own figure without moving the shape.
+/// The two are the same one unknown against the same one statement.
+pub fn recover_yield(
+    terms: OptionTerms, model: VenueModel, schedule: &[(f64, f64)],
+) -> Option<f64> {
     if !(model.option_price.is_finite() && model.option_price > 0.0) {
         return None;
     }
@@ -310,7 +344,7 @@ pub fn recover_yield(terms: OptionTerms, model: VenueModel) -> Option<f64> {
     let miss = |q: f64| {
         price(
             terms, model.underlying_price, model.volatility, model.rate,
-            model.present_value_of_dividends, q,
+            VenueModel { yield_rate: q, ..model }.payouts(schedule),
         )
         .map(|p| if terms.is_call { p - model.option_price } else { model.option_price - p })
     };
@@ -339,13 +373,17 @@ pub fn recover_yield(terms: OptionTerms, model: VenueModel) -> Option<f64> {
 /// what two steps of time cost is the theta. Only vega is a second valuation,
 /// because volatility is not a direction the tree already branches in.
 pub fn greeks(
-    terms: OptionTerms, model: VenueModel, volatility: f64, underlying_price: f64,
+    terms: OptionTerms, model: VenueModel, schedule: &[(f64, f64)], volatility: f64,
+    underlying_price: f64,
 ) -> Option<Greeks> {
-    let dividends = model.present_value_of_dividends;
-    let (two, one_down, one_up, root) =
-        tree_near_the_root(terms, underlying_price, volatility, model.rate, dividends, model.yield_rate)?;
-    let adjusted = underlying_price - dividends;
+    let payouts = model.payouts(schedule);
     let dt = terms.years_to_expiry / STEPS as f64;
+    let (two, one_down, one_up, root) =
+        tree_near_the_root(terms, underlying_price, volatility, model.rate, payouts)?;
+    // The tree is walked on what is left of the underlying once every payment
+    // still to come is taken off, so the spacing of its nodes is measured
+    // against that and not against the price the venue quoted.
+    let adjusted = underlying_price - payouts_by_step(model.rate, payouts, dt, terms.on_a_future)?[0];
     let up = (volatility * dt.sqrt()).exp();
     let down = 1.0 / up;
 
@@ -355,9 +393,7 @@ pub fn greeks(
     let gamma = (delta_up - delta_down) / (0.5 * adjusted * (up * up - down * down));
     let theta = (two[1] - root) / (2.0 * dt * 365.0);
     // A percentage point of volatility, valued on the same tree.
-    let bumped = price(
-        terms, underlying_price, volatility + 0.01, model.rate, dividends, model.yield_rate,
-    )?;
+    let bumped = price(terms, underlying_price, volatility + 0.01, model.rate, payouts)?;
     let vega = bumped - root;
 
     let all = Greeks { price: root, delta, gamma, vega, theta };
@@ -367,11 +403,22 @@ pub fn greeks(
         .then_some(all)
 }
 
+/// What exercising is worth here and now, against the contract's own strike.
 fn exercise_value(terms: OptionTerms, underlying: f64) -> f64 {
+    exercise_value_against(terms, underlying, terms.strike)
+}
+
+/// The same, against a strike the payments still to come have lowered.
+///
+/// Exercising early buys the shares, and the shares still carry every dividend
+/// the tree has taken off the underlying — so what the holder pays is the
+/// strike less what is still owed on it. Struck against the strike itself,
+/// every node before the last understates what exercising is worth.
+fn exercise_value_against(terms: OptionTerms, underlying: f64, strike: f64) -> f64 {
     if terms.is_call {
-        (underlying - terms.strike).max(0.0)
+        (underlying - strike).max(0.0)
     } else {
-        (terms.strike - underlying).max(0.0)
+        (strike - underlying).max(0.0)
     }
 }
 
@@ -382,6 +429,7 @@ fn exercise_value(terms: OptionTerms, underlying: f64) -> f64 {
 pub fn implied_volatility(
     terms: OptionTerms,
     model: VenueModel,
+    schedule: &[(f64, f64)],
     option_price: f64,
     underlying_price: f64,
 ) -> Option<f64> {
@@ -412,16 +460,10 @@ pub fn implied_volatility(
     // and a floor set with room to spare sits above the answer and finds
     // nothing.
     let smallest = (drift.abs() * step.sqrt() * 1.02).max(1e-4);
+    let payouts = model.payouts(schedule);
     solve(smallest, 5.0, |volatility| {
-        price(
-            terms,
-            underlying_price,
-            volatility,
-            rate,
-            model.present_value_of_dividends,
-            model.yield_rate,
-        )
-        .map(|p| p - option_price)
+        price(terms, underlying_price, volatility, rate, payouts)
+            .map(|p| p - option_price)
     })
 }
 
@@ -429,17 +471,11 @@ pub fn implied_volatility(
 pub fn option_price(
     terms: OptionTerms,
     model: VenueModel,
+    schedule: &[(f64, f64)],
     volatility: f64,
     underlying_price: f64,
 ) -> Option<f64> {
-    price(
-        terms,
-        underlying_price,
-        volatility,
-        model.rate,
-        model.present_value_of_dividends,
-        model.yield_rate,
-    )
+    price(terms, underlying_price, volatility, model.rate, model.payouts(schedule))
 }
 
 // Why an answer to a hypothetical carries no greeks.
@@ -528,9 +564,9 @@ mod tests {
             present_value_of_dividends: 0.0, rate: 0.04, yield_rate: 0.0,
         };
         let sigma = 0.25;
-        let all = greeks(terms, model, sigma, 100.0).expect("a tree this ordinary walks");
+        let all = greeks(terms, model, &[], sigma, 100.0).expect("a tree this ordinary walks");
 
-        let priced = |s: f64| price(terms, s, sigma, model.rate, 0.0, 0.0).unwrap();
+        let priced = |s: f64| price(terms, s, sigma, model.rate, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }).unwrap();
         assert!((all.price - priced(100.0)).abs() < 1e-9, "the price is the tree's");
 
         // The bump has to clear the lattice's own node spacing, or the
@@ -546,13 +582,13 @@ mod tests {
         assert!((all.gamma - curve).abs() < 5e-3, "gamma {} against {curve}", all.gamma);
 
         // A percentage point of volatility, which is the unit this reports in.
-        let by_vol = price(terms, 100.0, sigma + 0.01, model.rate, 0.0, 0.0).unwrap() - all.price;
+        let by_vol = price(terms, 100.0, sigma + 0.01, model.rate, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }).unwrap() - all.price;
         assert!((all.vega - by_vol).abs() < 1e-9, "vega {}", all.vega);
 
         // And one calendar day, which for a half-year call is a few cents.
         assert!(all.theta < 0.0 && all.theta > -0.5, "theta {}", all.theta);
         let shorter = OptionTerms { years_to_expiry: 0.5 - 1.0 / 365.0, ..terms };
-        let tomorrow = price(shorter, 100.0, sigma, model.rate, 0.0, 0.0).unwrap();
+        let tomorrow = price(shorter, 100.0, sigma, model.rate, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }).unwrap();
         assert!(
             (all.theta - (tomorrow - all.price)).abs() < 5e-3,
             "theta {} against a day of it {}", all.theta, tomorrow - all.price,
@@ -569,7 +605,7 @@ mod tests {
             volatility: 0.3, option_price: 0.0, underlying_price: 100.0,
             present_value_of_dividends: 0.0, rate: 0.03, yield_rate: 0.0,
         };
-        let all = greeks(terms, model, 0.3, 100.0).expect("walks");
+        let all = greeks(terms, model, &[], 0.3, 100.0).expect("walks");
         assert!(all.delta < 0.0 && all.delta > -1.0, "a put falls as the underlying rises: {}", all.delta);
         assert!(all.gamma > 0.0, "and curves the same way a call does: {}", all.gamma);
         assert!(all.vega > 0.0, "and is worth more the wilder it is: {}", all.vega);
@@ -585,7 +621,107 @@ mod tests {
             volatility: 0.2, option_price: 0.0, underlying_price: 100.0,
             present_value_of_dividends: 0.0, rate: 0.04, yield_rate: 0.0,
         };
-        assert_eq!(greeks(terms, model, 0.2, 100.0), None, "an option with no time left");
+        assert_eq!(greeks(terms, model, &[], 0.2, 100.0), None, "an option with no time left");
+    }
+
+    /// The venue's own greeks, against this client's, with the dates in hand.
+    ///
+    /// Three of the venue's models on one underlying and one expiry, captured
+    /// whole — the volatility it used, the price that came out, the rate, the
+    /// days, and all four greeks — beside the schedule of ex-dates the venue
+    /// keeps for what they are written on. Two payments fall inside these
+    /// ninety-eight days.
+    ///
+    /// What the schedule is for is theta. Folded into one carry the dividends
+    /// happen everywhere at once, so what a day costs was measured against a
+    /// drop that never falls on a day: across six of the venue's models it came
+    /// out between two and seventeen per cent from the venue's own figure. With
+    /// the dates each payment sits at its step and the spread closes to under
+    /// seven. Not every row improves: the one that does not was already the
+    /// closest of them, which is what tightening a spread looks like. The carry
+    /// recovered on top of the dates puts the price back exactly where the
+    /// venue published it.
+    ///
+    /// Vega is not pinned to a band here and the reason is the oracle rather
+    /// than the model: at the seven hundred strike the venue's own call and put
+    /// vega differ by seven per cent, which is more than this client differs
+    /// from either. Its own two figures do not agree closely enough to hold a
+    /// tighter one to.
+    #[test]
+    fn the_dates_bring_what_a_day_costs_nearer_the_venues_own() {
+        let und = 764.3305053710938;
+        let years = 98.04166666666667 / 365.0;
+        let rate = 0.043_307_335_714_285_716;
+        // The venue's schedule, as it answered for this underlying: two
+        // payments inside the option's life, seven and ninety-eight days out.
+        let schedule = [(7.0 / 365.0, 1.8311_f64), (98.0 / 365.0, 1.8311)];
+        // strike, call, volatility, price, delta, gamma, theta
+        let stated: &[(f64, bool, f64, f64, f64, f64, f64)] = &[
+            (700.0, true, 0.201_911_942_347_409, 77.581_852_456_929_61,
+             0.837_389_304_885_677_8, 0.003_112_535_866_936_207_3, -0.1621),
+            (700.0, false, 0.201_911_942_347_409, 7.435_576_976_171_44,
+             -0.168_080_170_653_972_04, 0.003_210_275_309_540_352, -0.0823),
+            (660.0, false, 0.239_136_958_577_290_73, 4.477_610_625_571_742,
+             -0.095_831_415_150_120_24, 0.001_815_375_484_790_229_4, -0.0780),
+        ];
+        let (mut worst_with_dates, mut worst_on_carry) = (0.0f64, 0.0f64);
+        for &(strike, is_call, volatility, option_price, delta, gamma, theta) in stated {
+            let terms = OptionTerms {
+                strike, years_to_expiry: years, is_call, on_a_future: false,
+            };
+            let bare = VenueModel {
+                volatility, option_price, underlying_price: und,
+                present_value_of_dividends: 0.0, rate, yield_rate: 0.0,
+            };
+
+            let with_dates = {
+                let carry = recover_yield(terms, bare, &schedule)
+                    .unwrap_or_else(|| panic!("{strike} states a price to solve against"));
+                greeks(terms, VenueModel { yield_rate: carry, ..bare }, &schedule, volatility, und)
+                    .unwrap_or_else(|| panic!("{strike} walks"))
+            };
+            let carry_alone = {
+                let carry = recover_yield(terms, bare, &[])
+                    .unwrap_or_else(|| panic!("{strike} states a price to solve against"));
+                greeks(terms, VenueModel { yield_rate: carry, ..bare }, &[], volatility, und)
+                    .unwrap_or_else(|| panic!("{strike} walks"))
+            };
+
+            // The carry is recovered against the price either way, so the
+            // price comes back exactly either way.
+            assert!(
+                (with_dates.price - option_price).abs() < 1e-3,
+                "{strike}: {} against the venue's {option_price}", with_dates.price,
+            );
+            // Out of sample, because only the price was used to find the carry.
+            assert!(
+                ((with_dates.delta - delta) / delta).abs() < 0.005,
+                "{strike}: delta {} against {delta}", with_dates.delta,
+            );
+            assert!(
+                ((with_dates.gamma - gamma) / gamma).abs() < 0.01,
+                "{strike}: gamma {} against {gamma}", with_dates.gamma,
+            );
+            assert!(
+                ((with_dates.theta - theta) / theta).abs() < 0.07,
+                "{strike}: theta {} against {theta}", with_dates.theta,
+            );
+            worst_with_dates = worst_with_dates
+                .max(((with_dates.theta - theta) / theta).abs());
+            worst_on_carry = worst_on_carry.max(((carry_alone.theta - theta) / theta).abs());
+        }
+        // And the point of the dates, stated as the two figures rather than
+        // as a ratio: the worst of these three is under seven per cent out
+        // with them and over ten per cent out without. Across the six rows the
+        // measurement was taken on, the worst without them is seventeen.
+        assert!(
+            worst_with_dates < 0.07,
+            "the worst with the dates is {worst_with_dates}",
+        );
+        assert!(
+            worst_on_carry > 0.10,
+            "the worst without them is {worst_on_carry}, so the dates are fixing nothing",
+        );
     }
 
     /// The venue's own models, reproduced from the venue's own statement.
@@ -630,14 +766,14 @@ mod tests {
                 volatility, option_price, underlying_price: und,
                 present_value_of_dividends: 0.0, rate, yield_rate: 0.0,
             };
-            let q = recover_yield(terms, bare)
+            let q = recover_yield(terms, bare, &[])
                 .unwrap_or_else(|| panic!("{strike} states a price to solve against"));
             // A dividend, not a different model: this underlying pays about
             // one and a bit per cent.
             assert!((0.005..0.02).contains(&q), "{strike} recovered a yield of {q}");
 
             let model = VenueModel { yield_rate: q, ..bare };
-            let ours = greeks(terms, model, volatility, und)
+            let ours = greeks(terms, model, &[], volatility, und)
                 .unwrap_or_else(|| panic!("{strike} walks"));
 
             assert!(
@@ -665,7 +801,7 @@ mod tests {
     /// per cent.
     #[test]
     fn the_tree_agrees_with_the_closed_form() {
-        let price = price(call(100.0, 1.0), 100.0, 0.2, 0.05, 0.0, 0.0).expect("it prices");
+        let price = price(call(100.0, 1.0), 100.0, 0.2, 0.05, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }).expect("it prices");
         assert!((price - 10.4506).abs() < 0.05, "the tree says {price}");
     }
 
@@ -683,7 +819,7 @@ mod tests {
         assert!(!ratio.powi(super::STEPS as i32).is_finite(), "and the tree still overflows");
 
         assert_eq!(
-            price(call(100.0, 1.0), 100.0, 80.0, 0.05, 0.0, 0.0),
+            price(call(100.0, 1.0), 100.0, 80.0, 0.05, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }),
             None,
             "an infinity was handed back as a price",
         );
@@ -692,7 +828,7 @@ mod tests {
     /// An option worth nothing at expiry is worth nothing.
     #[test]
     fn a_worthless_call_is_worth_nothing() {
-        let price = price(call(200.0, 0.5), 100.0, 0.2, 0.05, 0.0, 0.0).expect("it prices");
+        let price = price(call(200.0, 0.5), 100.0, 0.2, 0.05, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }).expect("it prices");
         assert!(price < 0.01, "{price}");
     }
 
@@ -703,7 +839,7 @@ mod tests {
     #[test]
     fn a_deep_put_is_worth_at_least_exercising_it() {
         let terms = OptionTerms { strike: 200.0, years_to_expiry: 1.0, is_call: false, on_a_future: false };
-        let price = price(terms, 100.0, 0.2, 0.05, 0.0, 0.0).expect("it prices");
+        let price = price(terms, 100.0, 0.2, 0.05, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }).expect("it prices");
         assert!(price >= 100.0 - 0.01, "an American put worth less than exercising it: {price}");
     }
 
@@ -732,14 +868,14 @@ mod tests {
             rate: 0.00011 * 365.0,
             yield_rate: 0.0,
         };
-        let ours = option_price(terms, model, model.volatility, model.underlying_price)
+        let ours = option_price(terms, model, &[], model.volatility, model.underlying_price)
             .expect("it prices");
         assert!((ours - 6.7223).abs() < 0.05, "the venue said 6.7223, this said {ours}");
 
         // The venue's figures taken for a year's without carrying them over,
         // which is how they were read before and what priced the contract at
         // nothing.
-        let uncarried = price(terms, model.underlying_price, 0.00561, 0.00011, 0.0, 0.0)
+        let uncarried = price(terms, model.underlying_price, 0.00561, 0.00011, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() })
             .expect("it prices");
         assert!(uncarried < 0.01, "taken for a year's the contract was worth {uncarried}");
     }
@@ -749,7 +885,7 @@ mod tests {
     #[test]
     fn a_price_gives_back_its_volatility() {
         let terms = call(100.0, 1.0);
-        let venue_price = price(terms, 100.0, 0.25, 0.04, 1.5, 0.0).expect("it prices");
+        let venue_price = price(terms, 100.0, 0.25, 0.04, Payouts { present_value: 1.5, yield_rate: 0.0, ..Default::default() }).expect("it prices");
         let model = VenueModel {
             volatility: 0.25,
             option_price: venue_price,
@@ -757,10 +893,10 @@ mod tests {
             present_value_of_dividends: 1.5,
             rate: 0.04, yield_rate: 0.0,
         };
-        let same = implied_volatility(terms, model, venue_price, 100.0).expect("it solves");
+        let same = implied_volatility(terms, model, &[], venue_price, 100.0).expect("it solves");
         assert!((same - 0.25).abs() < 1e-3, "the venue's price gave {same}");
 
-        let dearer = implied_volatility(terms, model, venue_price * 1.2, 100.0).expect("it solves");
+        let dearer = implied_volatility(terms, model, &[], venue_price * 1.2, 100.0).expect("it solves");
         assert!(dearer > same, "a dearer option implies more volatility, not {dearer}");
     }
 
@@ -769,7 +905,7 @@ mod tests {
     #[test]
     fn a_volatility_gives_back_its_price() {
         let terms = call(100.0, 1.0);
-        let venue_price = price(terms, 100.0, 0.25, 0.04, 1.5, 0.0).expect("it prices");
+        let venue_price = price(terms, 100.0, 0.25, 0.04, Payouts { present_value: 1.5, yield_rate: 0.0, ..Default::default() }).expect("it prices");
         let model = VenueModel {
             volatility: 0.25,
             option_price: venue_price,
@@ -777,7 +913,7 @@ mod tests {
             present_value_of_dividends: 1.5,
             rate: 0.04, yield_rate: 0.0,
         };
-        let same = option_price(terms, model, 0.25, 100.0).expect("it prices");
+        let same = option_price(terms, model, &[], 0.25, 100.0).expect("it prices");
         assert!((same - venue_price).abs() < 0.01, "{same} against {venue_price}");
     }
 
@@ -785,10 +921,10 @@ mod tests {
     /// of nothing, an underlying worth less than its own dividends.
     #[test]
     fn nonsense_is_not_answered() {
-        assert!(price(call(100.0, 0.0), 100.0, 0.2, 0.05, 0.0, 0.0).is_none());
-        assert!(price(call(100.0, 1.0), 100.0, 0.0, 0.05, 0.0, 0.0).is_none());
-        assert!(price(call(100.0, 1.0), 1.0, 0.2, 0.05, 5.0, 0.0).is_none());
-        assert!(price(call(100.0, 1.0), f64::NAN, 0.2, 0.05, 0.0, 0.0).is_none());
+        assert!(price(call(100.0, 0.0), 100.0, 0.2, 0.05, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }).is_none());
+        assert!(price(call(100.0, 1.0), 100.0, 0.0, 0.05, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }).is_none());
+        assert!(price(call(100.0, 1.0), 1.0, 0.2, 0.05, Payouts { present_value: 5.0, yield_rate: 0.0, ..Default::default() }).is_none());
+        assert!(price(call(100.0, 1.0), f64::NAN, 0.2, 0.05, Payouts::default()).is_none());
     }
 
     /// A price that is not a number has no volatility, and is told so.
@@ -813,11 +949,64 @@ mod tests {
         };
         for price in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert_eq!(
-                implied_volatility(terms, model, price, 100.0),
+                implied_volatility(terms, model, &[], price, 100.0),
                 None,
                 "a price of {price} was answered with a volatility",
             );
         }
+    }
+
+    /// A dividend on a date is not the same as a dividend worth the same
+    /// amount today.
+    ///
+    /// Both take the underlying's forward down by what is paid, so both price
+    /// the option about the same. What they do not share is the shape: with a
+    /// date, the drop happens at one step and nothing before it, and every
+    /// figure that depends on when the drop falls — what a day costs, what a
+    /// point of volatility is worth — is measured against that rather than
+    /// against a drop smeared over the whole life.
+    #[test]
+    fn a_dividend_with_a_date_prices_like_its_present_value_and_moves_unlike_it() {
+        let terms = call(100.0, 1.0);
+        let (rate, vol) = (0.05, 0.2);
+        // One payment of two, half a year out. What it is worth today is what
+        // the venue would have stated as a present value.
+        let schedule = [(0.5_f64, 2.0_f64)];
+        let today = 2.0 * (-rate * 0.5_f64).exp();
+
+        let dated = price(terms, 100.0, vol, rate, Payouts {
+            schedule: &schedule, ..Default::default()
+        }).expect("it prices");
+        let flat = price(terms, 100.0, vol, rate, Payouts {
+            present_value: today, ..Default::default()
+        }).expect("it prices");
+        let none = price(terms, 100.0, vol, rate, Payouts::default()).expect("it prices");
+
+        assert!(dated < none, "a dividend takes a call down: {dated} against {none}");
+        assert!(
+            (dated - flat).abs() < 0.05,
+            "the same money either way prices the same: {dated} against {flat}",
+        );
+
+        // And the payments are placed: every step up to the ex-date carries
+        // what is still owed, and nothing is owed by expiry.
+        let dt = terms.years_to_expiry / STEPS as f64;
+        let owed = payouts_by_step(rate, Payouts { schedule: &schedule, ..Default::default() },
+            dt, false).expect("a schedule this ordinary places");
+        assert!((owed[0] - today).abs() < 1e-12, "what is owed today: {}", owed[0]);
+        assert_eq!(owed[STEPS], 0.0, "nothing is owed by expiry");
+        let last_step_before = (0.5 / dt) as usize;
+        assert!(owed[last_step_before] > 0.0, "still owed the step before it is paid");
+        assert_eq!(owed[last_step_before + 2], 0.0, "and nothing after");
+
+        // Nothing stated but a present value puts it all at the root and
+        // leaves every step after it clear, which is where this stood before
+        // the venue was asked for the dates.
+        let flat_owed = payouts_by_step(rate, Payouts {
+            present_value: today, ..Default::default()
+        }, dt, false).expect("a present value places");
+        assert_eq!(flat_owed[0], today);
+        assert!(flat_owed[1..].iter().all(|owed| *owed == 0.0));
     }
 
     /// A contract term that is not a number is not a worthless option.
@@ -832,21 +1021,21 @@ mod tests {
         for strike in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let terms = call(strike, 0.5);
             assert_eq!(
-                price(terms, 100.0, 0.2, 0.04, 0.0, 0.0), None,
+                price(terms, 100.0, 0.2, 0.04, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }), None,
                 "a strike of {strike} was priced",
             );
             let model = VenueModel {
                 volatility: 0.2, option_price: 5.0, underlying_price: 100.0,
                 present_value_of_dividends: 0.0, rate: 0.04, yield_rate: 0.0,
             };
-            assert_eq!(greeks(terms, model, 0.2, 100.0), None, "and answered greeks");
+            assert_eq!(greeks(terms, model, &[], 0.2, 100.0), None, "and answered greeks");
         }
         let terms = call(100.0, f64::NAN);
-        assert_eq!(price(terms, 100.0, 0.2, 0.04, 0.0, 0.0), None, "nor is a life of no length");
+        assert_eq!(price(terms, 100.0, 0.2, 0.04, Payouts { present_value: 0.0, yield_rate: 0.0, ..Default::default() }), None, "nor is a life of no length");
         // A yield that is not a number reaches the carry, where it makes every
         // node of the tree one too.
         assert_eq!(
-            price(call(100.0, 0.5), 100.0, 0.2, 0.04, 0.0, f64::NAN), None,
+            price(call(100.0, 0.5), 100.0, 0.2, 0.04, Payouts { present_value: 0.0, yield_rate: f64::NAN, ..Default::default() }), None,
             "nor is a carry that is not a number",
         );
     }
@@ -869,20 +1058,20 @@ mod tests {
             rate: 0.0,
             yield_rate: 0.0,
         };
-        let recovered = recover_yield(terms, stated).expect("the price is reachable");
+        let recovered = recover_yield(terms, stated, &[]).expect("the price is reachable");
         assert!(recovered < 0.0, "this price is above the one no yield reaches: {recovered}");
         let model = VenueModel { yield_rate: recovered, ..stated };
 
         // The volatility that reproduces the venue's own price is the one the
         // venue stated, which is what anchoring to its statement means.
-        let back = implied_volatility(terms, model, stated.option_price, stated.underlying_price)
+        let back = implied_volatility(terms, model, &[], stated.option_price, stated.underlying_price)
             .expect("the venue's own price is solvable under the venue's own model");
         assert!((back - stated.volatility).abs() < 1e-4, "solved back to {back}");
 
         // And a price either side of it is answered too, rather than refused.
         for price in [stated.option_price - 2.0, stated.option_price + 2.0] {
             assert!(
-                implied_volatility(terms, model, price, stated.underlying_price).is_some(),
+                implied_volatility(terms, model, &[], price, stated.underlying_price).is_some(),
                 "a price of {price} was refused",
             );
         }
