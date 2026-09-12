@@ -36,6 +36,8 @@ pub(crate) fn settings_from(
             "version" => settings.version = Some(value),
             "encoded" => settings.encoded = Some(value),
             "hardware_id" => settings.hardware_id = Some(value),
+            "mac_address" => settings.mac_address = Some(value),
+            "lan_ip" => settings.lan_ip = Some(value),
             "market_data_host" => settings.market_data_host = Some(value),
             "port" => settings.port = Some(value.parse().map_err(|_| format!("port: {value}"))?),
             "registration_timeout_ms" => {

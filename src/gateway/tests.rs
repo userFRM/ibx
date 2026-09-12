@@ -459,6 +459,22 @@ fn a_stated_setting_is_what_the_logon_announces() {
     assert_eq!(fields[&6034], "9999", "the build it announces");
     assert_eq!(fields[&6968], "9.9.9", "the version beside it");
     assert_eq!(fields[&6266], "17.0.10.0.101/W/ja_JP/G", "the longer string with them");
+
+    // And the address on the local network, which the machine is asked for
+    // where the caller states none — inside a container that answers with the
+    // container's own rather than with the machine the session belongs to.
+    let stated = crate::settings::SessionSettings {
+        lan_ip: Some("10.11.12.13".into()),
+        ..Default::default()
+    };
+    let msg = build_ccp_logon(
+        &stated, "abc123|AA:BB:CC:DD:EE:FF", "17.0.10.0.101/W/en/G", 10, 1,
+    );
+    let fields = fix_parse(&msg);
+    assert_eq!(
+        fields[&6351], "<abc123|AA:BB:CC:DD:EE:FF|10.11.12.13>",
+        "the machine identity the logon announces",
+    );
 }
 
 /// Where a farm connection goes is the whole of what these two settings do.

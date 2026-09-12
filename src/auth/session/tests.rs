@@ -202,7 +202,7 @@ fn recv_8eq1_preserves_coalesced_tail() {
 
 #[test]
 fn hw_info_format() {
-    let info = get_hw_info(None);
+    let info = get_hw_info(None, None);
     assert!(info.contains('|'));
     let parts: Vec<&str> = info.split('|').collect();
     assert_eq!(parts.len(), 2);
@@ -215,8 +215,8 @@ fn hw_info_format() {
 // behavior (random id per call) and failed once a hwid file existed.
 #[test]
 fn hw_info_machine_id_is_stable_across_calls() {
-    let info1 = get_hw_info(None);
-    let info2 = get_hw_info(None);
+    let info1 = get_hw_info(None, None);
+    let info2 = get_hw_info(None, None);
     let machine1 = info1.split('|').next().unwrap();
     let machine2 = info2.split('|').next().unwrap();
     assert_eq!(machine1, machine2, "Persistent machine ID must not change between calls");
@@ -225,24 +225,61 @@ fn hw_info_machine_id_is_stable_across_calls() {
         "machine ID must be 8 hex chars, got {machine1:?}");
 }
 
+/// A card and an address the caller stated are the ones presented.
+///
+/// The identity the venue holds a session under is three things and only one
+/// of them used to be the caller's to state. The other two are read off the
+/// machine, which answers with a virtual card on some systems and with the
+/// container's own address inside one — neither of which is the machine the
+/// session belongs to.
+#[test]
+fn a_stated_card_and_address_are_the_ones_presented() {
+    // However the caller separated the bytes, and in the case the machine's
+    // own is read in: the same machine has to present the same string.
+    for spelling in ["aa:bb:cc:dd:ee:ff", "AA-BB-CC-DD-EE-FF", "aabbccddeeff"] {
+        assert_eq!(
+            get_hw_info(Some("abc123"), Some(spelling)),
+            "00abc123|AA:BB:CC:DD:EE:FF",
+            "{spelling} did not reach the identity as the card it names",
+        );
+    }
+    // What is not six bytes names no card, and the machine's own stands.
+    for spelling in ["", "aa:bb:cc", "aa:bb:cc:dd:ee:ff:00", "not a mac"] {
+        assert_eq!(
+            get_hw_info(None, Some(spelling)), get_hw_info(None, None),
+            "{spelling} was presented as a card",
+        );
+    }
+
+    assert_eq!(get_lan_ip(Some("10.0.0.9")), "10.0.0.9");
+    assert_eq!(get_lan_ip(Some("  10.0.0.9  ")), "10.0.0.9", "read as an address, not as text");
+    // And what is not an address leaves the machine's own to answer.
+    for spelling in ["", "not.an.ip", "999.1.1.1"] {
+        assert_eq!(
+            get_lan_ip(Some(spelling)), get_lan_ip(None),
+            "{spelling} was presented as an address",
+        );
+    }
+}
+
 /// A stated machine identity is the one presented, padded to the width the
 /// field takes. It reaches the wire in tag 6351 and in the connection request,
 /// and every other test here states none and reads back the machine's own.
 #[test]
 fn a_stated_machine_identity_is_the_one_presented() {
     assert!(
-        get_hw_info(Some("abc123")).starts_with("00abc123|"),
+        get_hw_info(Some("abc123"), None).starts_with("00abc123|"),
         "got {}",
-        get_hw_info(Some("abc123")),
+        get_hw_info(Some("abc123"), None),
     );
     // Anything the field cannot carry is not an identity to present, so the
     // machine's own stands rather than a malformed one going out.
-    assert_eq!(get_hw_info(Some("not hex")), get_hw_info(None));
+    assert_eq!(get_hw_info(Some("not hex"), None), get_hw_info(None, None));
 }
 
 #[test]
 fn hw_info_mac_format_is_six_hex_octets() {
-    let info = get_hw_info(None);
+    let info = get_hw_info(None, None);
     let mac = info.split('|').nth(1).unwrap();
     let octets: Vec<&str> = mac.split(':').collect();
     assert_eq!(octets.len(), 6, "MAC must be 6 colon-separated octets, got {mac:?}");
@@ -256,7 +293,7 @@ fn hw_info_mac_format_is_six_hex_octets() {
 
 #[test]
 fn lan_ip_returns_a_valid_ipv4_or_loopback_fallback() {
-    let ip = get_lan_ip();
+    let ip = get_lan_ip(None);
     // Either a routable address or the documented loopback fallback.
     let parsed: Result<std::net::IpAddr, _> = ip.parse();
     assert!(parsed.is_ok(), "get_lan_ip returned non-parseable address {ip:?}");

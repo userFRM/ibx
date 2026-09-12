@@ -51,6 +51,8 @@ _SETTINGS: dict[str, tuple[str, str]] = {
     "version": ("IBX_VERSION", "the version announced at logon"),
     "encoded": ("IBX_ENCODED", "the longer string announced with them"),
     "hardware_id": ("IBX_HWID", "the machine identity presented at logon"),
+    "mac_address": ("IBX_MAC", "the network card named as this machine's, where the machine's own is not the one to name"),
+    "lan_ip": ("IBX_IP", "the address on the local network named as this machine's, for the same reason"),
     "execution_reports": (
         "IBX_EXECUTION_REPORTS",
         "which executions arrive when a session opens: 'today' or 'all'",

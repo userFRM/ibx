@@ -53,6 +53,11 @@ pub struct GatewaySettings {
     /// The machine identity it presented. Resumed the same way
     /// [`encoded`](Self::encoded) is.
     pub hardware_id: Option<String>,
+    /// The network card it presented, where the machine's own is not the one
+    /// to present.
+    pub mac_address: Option<String>,
+    /// The address on the local network it presented, for the same reason.
+    pub lan_ip: Option<String>,
     /// The host every farm connection is opened on, where it is not the one
     /// the venue names.
     pub market_data_host: Option<String>,
@@ -143,6 +148,17 @@ pub struct SessionSettings {
     pub encoded: String,
     /// What it identifies this machine as. Derived when unset.
     pub hardware_id: Option<String>,
+    /// Which network card it names as this machine's. Probed when unset.
+    ///
+    /// The machine identity the venue holds a session under is built from
+    /// three things, and only one of them was the caller's to state. The other
+    /// two are read off whatever the operating system answers first, which on
+    /// some of them is a virtual card, and inside a container is the
+    /// container's rather than the machine's.
+    pub mac_address: Option<String>,
+    /// Which address on the local network it names as this machine's. Probed
+    /// when unset, the same way and for the same reason.
+    pub lan_ip: Option<String>,
     /// Which host every farm connection opens on, where the caller names one.
     pub market_data_host: Option<String>,
     /// Which port a farm connection opens on, where the venue's routing names
@@ -211,6 +227,8 @@ impl GatewaySettings {
                 }
             }),
             hardware_id: stated(self.hardware_id.as_ref(), "IBX_HWID"),
+            mac_address: stated(self.mac_address.as_ref(), "IBX_MAC"),
+            lan_ip: stated(self.lan_ip.as_ref(), "IBX_IP"),
             market_data_host: stated(self.market_data_host.as_ref(), "IBX_FARM_HOST"),
             port: self
                 .port
@@ -402,6 +420,8 @@ mod tests {
             version: Some("v".into()),
             encoded: Some("e".into()),
             hardware_id: Some("h".into()),
+            mac_address: Some("AA:BB:CC:DD:EE:FF".into()),
+            lan_ip: Some("10.0.0.9".into()),
             market_data_host: Some("m".into()),
             port: Some(1),
             registration_timeout_ms: Some(2),
@@ -419,6 +439,8 @@ mod tests {
         assert_eq!(resolved.version, "v");
         assert_eq!(resolved.encoded, "e");
         assert_eq!(resolved.hardware_id.as_deref(), Some("h"));
+        assert_eq!(resolved.mac_address.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
+        assert_eq!(resolved.lan_ip.as_deref(), Some("10.0.0.9"));
         assert_eq!(resolved.market_data_host.as_deref(), Some("m"));
         assert_eq!(resolved.port, 1);
         assert_eq!(resolved.registration_timeout, std::time::Duration::from_millis(2));
@@ -439,6 +461,7 @@ mod tests {
         // compiling here until it is resolved above.
         let GatewaySettings {
             timezone: _, locale: _, build: _, version: _, encoded: _, hardware_id: _,
+            mac_address: _, lan_ip: _,
             market_data_host: _, port: _, registration_timeout_ms: _,
             log_level: _, log_dir: _, log_queue: _,
             execution_reports: _, island_for_nasdaq: _, reconnect_on_socket_err: _,

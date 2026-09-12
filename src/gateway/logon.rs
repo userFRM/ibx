@@ -718,7 +718,7 @@ pub fn build_ccp_logon(
     let now = chrono_free_timestamp();
     let tz = settings.timezone.as_str();
     let hb_str = heartbeat.to_string();
-    let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
+    let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip(settings.lan_ip.as_deref()));
     let build = settings.build.clone();
     let version = settings.version.clone();
     fix_build(
@@ -767,7 +767,7 @@ pub fn build_farm_encrypted_logon(
     let ns_range = format!("{NS_VERSION_MIN}..{NS_VERSION}");
     let now = chrono_free_timestamp();
     let hb_str = FARM_HEARTBEAT.to_string();
-    let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip());
+    let hw_field = format!("<{}|{}>", hw_info, session::get_lan_ip(settings.lan_ip.as_deref()));
     let build = settings.build.clone();
     let version = settings.version.clone();
 

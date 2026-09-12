@@ -1864,7 +1864,10 @@ impl Gateway {
 
         let hw_info = match resume {
             Some(r) => r.hw_info.clone(),
-            None => session::get_hw_info(config.settings.hardware_id.as_deref()),
+            None => session::get_hw_info(
+                config.settings.hardware_id.as_deref(),
+                config.settings.mac_address.as_deref(),
+            ),
         };
         // Tag 6266 carries `{jdkVer}/{platform}/{locale}/{dist}`. The locale
         // segment must be a canonical Java `Locale.toString()` value (e.g.

@@ -172,16 +172,47 @@ fn read_or_create_hwid() -> String {
 ///
 /// Live data farms validate the MAC field; an all-zero MAC causes the FIX
 /// 35=A logon to be silently rejected (paper farms don't validate).
-/// `machine_id` is the persistent 8-hex value from `~/hwid`.
-pub fn get_hw_info(stated: Option<&str>) -> String {
+/// `machine_id` is the persistent 8-hex value from `~/hwid`, and
+/// `stated_mac` the card to name where the machine's own is not the one to
+/// name.
+pub fn get_hw_info(stated: Option<&str>, stated_mac: Option<&str>) -> String {
     let machine_id = match stated.map(str::trim).filter(|v| {
         !v.is_empty() && v.chars().all(|c| c.is_ascii_hexdigit())
     }) {
         Some(stated) => format!("{stated:0>8}"),
         None => read_or_create_hwid(),
     };
-    let mac = first_real_mac().unwrap_or_else(|| "00:00:00:00:00:00".to_string());
+    let mac = stated_mac
+        .and_then(stated_card)
+        .or_else(first_real_mac)
+        .unwrap_or_else(|| "00:00:00:00:00:00".to_string());
     format!("{machine_id}|{mac}")
+}
+
+/// A card a caller named, in the shape this identity is written in.
+///
+/// Six bytes of hex, however they were separated — colons, dashes, or nothing
+/// at all — written back out with colons and in upper case, because that is
+/// the shape the machine's own is read in and the two have to be the same
+/// string for the same machine. Anything that is not six bytes names no card
+/// and is refused, which leaves the probe below to answer.
+fn stated_card(stated: &str) -> Option<String> {
+    let digits: Vec<char> = stated
+        .chars()
+        .filter(|c| !matches!(c, ':' | '-' | '.' | ' '))
+        .collect();
+    if digits.len() != 12 || !digits.iter().all(|c| c.is_ascii_hexdigit()) {
+        log::warn!(
+            "the network card stated for this machine is not six bytes of hex; \
+             reading the machine's own instead",
+        );
+        return None;
+    }
+    let pairs: Vec<String> = digits
+        .chunks(2)
+        .map(|pair| pair.iter().collect::<String>().to_ascii_uppercase())
+        .collect();
+    Some(pairs.join(":"))
 }
 
 /// Probe the OS for the first non-zero MAC address. Returns `None` if no NIC
@@ -200,14 +231,29 @@ fn first_real_mac() -> Option<String> {
     None
 }
 
-/// Discover the local LAN IP that would route to the public internet.
-/// Returns "127.0.0.1" if no external route is configured.
+/// Discover the local LAN IP that would route to the public internet, or use
+/// the one the caller stated. Returns "127.0.0.1" if no external route is
+/// configured.
 ///
 /// Uses the standard `UdpSocket::connect` trick: connecting a UDP socket to
 /// a public address doesn't send any packets, but lets the OS pick the
 /// outbound interface, exposed via `local_addr()`.
-pub fn get_lan_ip() -> String {
+///
+/// A stated address is what a session inside a container needs: the address
+/// the probe finds there belongs to the container's own network and not to the
+/// machine the venue holds the session under. It has to be an address — a word
+/// that is not one names no machine, and is refused so the probe still answers.
+pub fn get_lan_ip(stated: Option<&str>) -> String {
     use std::net::UdpSocket;
+    if let Some(stated) = stated.map(str::trim).filter(|v| !v.is_empty()) {
+        match stated.parse::<std::net::IpAddr>() {
+            Ok(address) => return address.to_string(),
+            Err(_) => log::warn!(
+                "the address stated for this machine on its local network is not an \
+                 address; reading the machine's own instead",
+            ),
+        }
+    }
     let sock = match UdpSocket::bind("0.0.0.0:0") {
         Ok(s) => s,
         Err(_) => return "127.0.0.1".into(),
