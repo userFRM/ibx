@@ -3340,6 +3340,12 @@ impl FarmState {
                 619 => self.deliver_mark(instrument, 79, payload, context, shared),
                 233 => self.deliver_running_volume(instrument, 48, payload, shared),
                 375 => self.deliver_running_volume(instrument, 77, payload, shared),
+                // What the venue holds about the issuer rather than about the
+                // quote: the two analyst ratings, and the insider and
+                // institutional interest a float is stated in.
+                434 | 454 | 548 => {
+                    self.deliver_company_data(instrument, tick, payload, context, shared)
+                }
                 other => {
                     if !deliver_series(other, payload, instrument, shared) {
                         log::debug!("Generic tick {other} arrives and nothing here reads it");
@@ -3347,6 +3353,38 @@ impl FarmState {
                 }
             }
         }
+    }
+
+    /// What the venue states about a contract's issuer, as its own text.
+    ///
+    /// Three series carry it and all three state it the same way: lines of
+    /// `KEY=VALUE` pairs, which are held under the contract for a caller to
+    /// read. The insider and institutional record states four bytes of its own
+    /// before the text; the two ratings records are text from the first byte.
+    ///
+    /// Held against the venue's id for the contract rather than against the
+    /// slot it is watched in, because it is a fact about the contract and
+    /// outlives the subscription that fetched it.
+    fn deliver_company_data(
+        &mut self,
+        instrument: InstrumentId,
+        series: u32,
+        payload: &[u8],
+        context: &Context,
+        shared: &SharedState,
+    ) {
+        let Some(con_id) = context.market.con_id(instrument).filter(|id| *id > 0) else {
+            return;
+        };
+        let text = if series == 454 { payload.get(4..).unwrap_or_default() } else { payload };
+        let pairs = crate::control::fundamental::stated_pairs(&String::from_utf8_lossy(text));
+        // A record stating no pair states nothing. Written down anyway, a
+        // caller reading the series could not tell a contract the venue holds
+        // nothing for from one it has not answered yet.
+        if pairs.is_empty() {
+            return;
+        }
+        shared.reference.note_company_data(con_id as u32, series, pairs);
     }
 
     /// The odd lot, off a record of the venue's own fields.

@@ -1470,6 +1470,35 @@ def order_presets()
 
 ---
 
+#### `company_data`
+
+What the venue states about a contract's issuer on one series, as the pairs it wrote.  Ask for the series on the market data request by the venue's own number for it: 434 and 548 are the two analyst ratings, and 454 is the insider and institutional interest, which is where a float and a share count are stated. The keys are the venue's own, unchanged.
+
+```python
+def company_data(con_id, series)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `con_id` | `int` | Contract ID. Unique per instrument. |
+| `series` | `int` |  |
+
+---
+
+#### `company_data_series`
+
+Which of those series have been stated for a contract.
+
+```python
+def company_data_series(con_id)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `con_id` | `int` | Contract ID. Unique per instrument. |
+
+---
+
 #### `calculate_implied_volatility`
 
 What volatility a price implies for an option, under the model the venue publishes for that contract. Answered on `tick_option_computation`.  `implied_vol_options` is taken and not applied. This protocol's request carries no free-form option list, so what a caller puts in one cannot be sent. The reference client's own list is empty on every ordinary call.

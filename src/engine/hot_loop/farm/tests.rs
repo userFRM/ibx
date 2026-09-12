@@ -245,6 +245,61 @@ mod news_tests {
         );
     }
 
+    /// What the venue states about an issuer is held under the contract, as
+    /// the venue's own pairs.
+    ///
+    /// Three series carry it. Two of them are text from the first byte and the
+    /// third states four bytes of its own first, so a reader that treated them
+    /// alike read the length of the insider record as part of its first key.
+    #[test]
+    fn what_the_venue_states_about_an_issuer_is_held_under_the_contract() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let shared = SharedState::new();
+        let instrument = context.market.register(756733);
+
+        let rating = b"RATING=2;ANALYSTS=17";
+        farm.generic_tick_tags.push((31, 434, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(31, 434, rating)]), &mut context, &shared, &None,
+        );
+        assert_eq!(
+            shared.reference.company_data(756733, 434),
+            vec![("RATING".to_string(), "2".to_string()),
+                 ("ANALYSTS".to_string(), "17".to_string())],
+            "the pairs are held as the venue wrote them",
+        );
+
+        // The insider record, whose first four bytes are its own.
+        let mut insider = vec![0u8, 0, 0, 1];
+        insider.extend_from_slice(b"FLOAT=123456789;PCTHELD=61.2");
+        farm.generic_tick_tags.push((32, 454, instrument));
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(32, 454, &insider)]), &mut context, &shared, &None,
+        );
+        assert_eq!(
+            shared.reference.company_data(756733, 454),
+            vec![("FLOAT".to_string(), "123456789".to_string()),
+                 ("PCTHELD".to_string(), "61.2".to_string())],
+            "the four bytes before the text are not read as part of a key",
+        );
+        assert_eq!(
+            shared.reference.company_data_series(756733), vec![434, 454],
+            "both series are named as stated",
+        );
+
+        // Restated, a series replaces what it said rather than adding to it:
+        // one message carries the whole set.
+        farm.handle_generic_tick(
+            &framed_generic_ticks(&[(31, 434, b"RATING=3")]), &mut context, &shared, &None,
+        );
+        assert_eq!(
+            shared.reference.company_data(756733, 434),
+            vec![("RATING".to_string(), "3".to_string())],
+            "the later statement stands alone",
+        );
+    }
+
     /// A series the venue has nothing to say on reaches nobody.
     ///
     /// It says so by stating the largest figure the field holds — the largest

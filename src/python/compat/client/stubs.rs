@@ -51,6 +51,28 @@ impl EClient {
         Ok(self.shared_state().map(|s| s.reference.order_presets()).unwrap_or_default())
     }
 
+    /// What the venue states about a contract's issuer on one series, as the
+    /// pairs it wrote.
+    ///
+    /// Ask for the series on the market data request by the venue's own number
+    /// for it: 434 and 548 are the two analyst ratings, and 454 is the insider
+    /// and institutional interest, which is where a float and a share count
+    /// are stated. The keys are the venue's own, unchanged.
+    fn company_data(&self, con_id: u32, series: u32) -> PyResult<Vec<(String, String)>> {
+        Ok(self
+            .shared_state()
+            .map(|s| s.reference.company_data(con_id, series))
+            .unwrap_or_default())
+    }
+
+    /// Which of those series have been stated for a contract.
+    fn company_data_series(&self, con_id: u32) -> PyResult<Vec<u32>> {
+        Ok(self
+            .shared_state()
+            .map(|s| s.reference.company_data_series(con_id))
+            .unwrap_or_default())
+    }
+
     // ── Option calculations ──
     //
     // A volatility inverted from a price, and a price implied by a volatility.

@@ -19,6 +19,10 @@ type StatedActions = (
     Vec<crate::control::adjustments::Adjustment>,
 );
 
+/// What the venue states about a contract's issuer, by its id for the
+/// contract and the series the statement arrived on.
+type CompanyData = std::collections::HashMap<(u32, u32), Vec<(String, String)>>;
+
 /// Which of the venue's records a number is held for.
 ///
 /// A request number means one thing per kind of request: a caller may hold the
@@ -164,6 +168,15 @@ pub struct ReferenceState {
     /// every option on it is priced against, and the option that needs it next
     /// is not the one whose question fetched it.
     dividend_schedules: Mutex<std::collections::HashMap<u32, crate::control::dividends::Schedule>>,
+    /// What the venue states about the issuer, by its id for the contract and
+    /// the series the statement arrived on.
+    ///
+    /// Kept rather than drained, as the schedules above are: these are facts
+    /// about the contract and the caller that reads one is not the arrival
+    /// that brought it. Each series is replaced whole when it is restated,
+    /// because that is how the venue states it — one message carries the
+    /// series' whole set of pairs.
+    company_data: Mutex<CompanyData>,
 }
 
 impl ReferenceState {
@@ -215,6 +228,7 @@ impl ReferenceState {
             order_presets: Mutex::new(Vec::new()),
             under_con_ids: Mutex::new(std::collections::HashMap::new()),
             dividend_schedules: Mutex::new(std::collections::HashMap::new()),
+            company_data: Mutex::new(CompanyData::new()),
         }
     }
 
@@ -1178,6 +1192,43 @@ impl ReferenceState {
         &self, con_id: u32, schedule: crate::control::dividends::Schedule,
     ) {
         self.dividend_schedules.lock().unwrap().insert(con_id, schedule);
+    }
+
+    /// What the venue states about a contract's issuer on one series, as the
+    /// pairs it wrote.
+    ///
+    /// Three series carry it, each asked for by the venue's own number for it
+    /// on the market data request: 434 and 548 are the two analyst ratings,
+    /// and 454 is the insider and institutional interest, which is where a
+    /// float and a share count are stated. Empty until one of them has been
+    /// asked for and answered, and empty for a contract whose subscriptions do
+    /// not cover it — the venue answers a series the account cannot see with
+    /// silence rather than with a refusal.
+    ///
+    /// The keys are the venue's own, unchanged. They are the venue's to add to
+    /// and to rename, so nothing here reads them or promises a set of them.
+    pub fn company_data(&self, con_id: u32, series: u32) -> Vec<(String, String)> {
+        self.company_data.lock().unwrap().get(&(con_id, series)).cloned().unwrap_or_default()
+    }
+
+    /// Which of those series have been stated for a contract, in order.
+    pub fn company_data_series(&self, con_id: u32) -> Vec<u32> {
+        let mut series: Vec<u32> = self.company_data.lock().unwrap()
+            .keys()
+            .filter(|(held, _)| *held == con_id)
+            .map(|(_, series)| *series)
+            .collect();
+        series.sort_unstable();
+        series
+    }
+
+    #[doc(hidden)] pub fn note_company_data(
+        &self, con_id: u32, series: u32, pairs: Vec<(String, String)>,
+    ) {
+        if con_id == 0 {
+            return;
+        }
+        self.company_data.lock().unwrap().insert((con_id, series), pairs);
     }
 
     #[doc(hidden)] pub fn set_algorithms(&self, algorithms: HashMap<String, Vec<String>>) {

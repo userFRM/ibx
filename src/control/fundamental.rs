@@ -9,6 +9,42 @@ pub const TAG_RAW_DATA_LENGTH: u32 = 95;
 /// FIX tag 96: the raw data.
 pub const TAG_RAW_DATA: u32 = 96;
 
+/// The pairs a company-data series states, as the venue writes them.
+///
+/// Three series carry what the venue holds about the issuer rather than about
+/// the quote — the two analyst ratings and the insider and institutional
+/// interest, which is where a float and a share count are stated. All three
+/// carry text: one line or several, each a run of `KEY=VALUE` joined by
+/// semicolons.
+///
+/// The keys are the venue's own and are handed on unchanged. This reads the
+/// shape and not the vocabulary, so a key the venue adds arrives with the rest
+/// instead of being dropped for not being recognised here, and none of them is
+/// renamed into something this client made up.
+///
+/// A pair with no key, or a key with nothing behind it, states nothing and is
+/// left out. Where a key is stated twice the last statement of it stands.
+pub fn stated_pairs(text: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for part in text.split([';', '\n', '\r']) {
+        let Some((key, value)) = part.split_once('=') else { continue };
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+        // The venue writes a key as a word. Anything else is not a key it
+        // states, and a run of bytes that happens to hold an equals sign is
+        // not a pair.
+        if !key.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        match out.iter_mut().find(|(held, _)| held == key) {
+            Some(held) => held.1 = value.to_string(),
+            None => out.push((key.to_string(), value.to_string())),
+        }
+    }
+    out
+}
+
 /// Report types for fundamental data queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportType {
@@ -143,6 +179,40 @@ mod tests {
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use std::io::Write;
+
+    /// The pairs come back as the venue wrote them, and what is not a pair
+    /// does not.
+    ///
+    /// The keys belong to the venue: it adds to them and renames them, so a
+    /// reader that kept a list of the ones it knew would drop whatever was
+    /// added next. What is refused is only what states nothing — a key with
+    /// nothing behind it, a value with no key, and a run of bytes that
+    /// happens to carry an equals sign.
+    #[test]
+    fn the_pairs_a_series_states_are_read_as_the_venue_wrote_them() {
+        assert_eq!(
+            stated_pairs("RATING=2;ANALYSTS=17"),
+            [("RATING".to_string(), "2".to_string()),
+             ("ANALYSTS".to_string(), "17".to_string())],
+        );
+        // Several lines, and a decimal in a value.
+        assert_eq!(
+            stated_pairs("FLOAT=123456789\nPCTHELD=61.2\r\n"),
+            [("FLOAT".to_string(), "123456789".to_string()),
+             ("PCTHELD".to_string(), "61.2".to_string())],
+        );
+        // Nothing stated: no key, no value, no pair at all.
+        assert!(stated_pairs("=5;KEY=;;plain text;").is_empty());
+        // A key the venue writes as something other than a word is not a key
+        // it states.
+        assert!(stated_pairs("not a key=5").is_empty());
+        // Stated twice, the last statement stands, as it does where this
+        // arrives.
+        assert_eq!(
+            stated_pairs("RATING=2;RATING=3"),
+            [("RATING".to_string(), "3".to_string())],
+        );
+    }
 
     /// The three the venue states, under the words it states them by. Two
     /// others used to be offered under words that appear nowhere in the
