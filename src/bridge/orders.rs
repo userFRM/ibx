@@ -251,7 +251,6 @@ impl OrderState {
         self.what_if_responses.lock().unwrap().drain(..).collect()
     }
 
-    /// Take every completed orders waiting, leaving none.
     /// Say that the venue has finished stating what it has finished.
     ///
     /// A caller asking for those waits on this rather than on a clock: the
@@ -291,6 +290,7 @@ impl OrderState {
         self.completed_orders_asked.load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// Take every completed order waiting, leaving none.
     pub fn drain_completed_orders(&self) -> Vec<CompletedOrder> {
         self.completed_orders.lock().unwrap().drain(..).collect()
     }

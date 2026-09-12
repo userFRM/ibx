@@ -8055,6 +8055,60 @@ fn completed_orders_are_still_there_when_they_are_asked_for_again() {
     );
 }
 
+/// One venue order is archived once, whatever it is named along the way.
+///
+/// The venue names an order permanently at some point in its life, not from
+/// its first report. A caller released before that happened holds a copy under
+/// no permanent name, and the answer that arrives afterwards carries the same
+/// order with one — the later answer supersedes the earlier, it does not join
+/// it.
+#[test]
+fn an_order_named_permanently_after_it_was_answered_replaces_its_earlier_copy() {
+    let (client, _rx, shared) = test_client();
+    let known = |perm_id: i64| crate::bridge::RichOrderInfo {
+        contract: Default::default(),
+        order: crate::types::model::Order { order_id: 31, perm_id, ..Default::default() },
+        order_state: Default::default(),
+        last_exec: Default::default(),
+    };
+    let finished = || crate::types::CompletedOrder {
+        order_id: 31, instrument: 0, status: crate::types::OrderStatus::Filled,
+        filled_qty: 100, timestamp_ns: 0,
+    };
+    // The engine's side of the question: it takes it off the queue, and then
+    // the run of answers ends.
+    let answering = |shared: Arc<SharedState>| {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            shared.orders.note_completed_orders_asked();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            shared.orders.note_completed_orders_end();
+        })
+    };
+    shared.orders.push_order_info(31, known(0));
+    shared.orders.push_completed_order(finished());
+
+    let mut w = RecordingWrapper::default();
+    let engine = answering(shared.clone());
+    client.req_completed_orders(false, &mut w);
+    engine.join().unwrap();
+    assert_eq!(w.events.iter().filter(|e| *e == "completed_order").count(), 1);
+
+    shared.orders.push_order_info(31, known(777));
+    shared.orders.refile_completed_order(finished());
+
+    let mut again = RecordingWrapper::default();
+    let engine = answering(shared.clone());
+    client.req_completed_orders(false, &mut again);
+    engine.join().unwrap();
+    assert_eq!(
+        again.events.iter().filter(|e| *e == "completed_order").count(),
+        1,
+        "the one order read as two once the venue had named it: {:?}",
+        again.events,
+    );
+}
+
 /// And retracted when the venue takes the execution back.
 ///
 /// A trade cancel or trade correction returns a finished order to a working

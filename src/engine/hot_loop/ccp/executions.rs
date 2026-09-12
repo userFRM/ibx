@@ -75,9 +75,17 @@ pub(crate) fn read_stated_attributes(
     if let Some(v) = parsed.get(&126) { order.good_till_date = v.clone(); }
     if let Some(v) = parsed.get(&168) { order.good_after_time = v.clone(); }
     if let Some(v) = parsed.get(&440) { order.clearing_account = v.clone(); }
-    // Written `Y` or `N` and read as a number, which neither of them is.
+    // Written `Y` or `N` and read as a number, which neither of them is. Three
+    // states and not two: manual, automated, and nothing said. Read through
+    // the flag reader, a spelling this does not know turned "nothing said"
+    // into the assertion that a program entered the order, which is a
+    // statement a regulator reads.
     if let Some(v) = parsed.get(&1028) {
-        order.manual_order_indicator = i32::from(flag(v));
+        match v.trim() {
+            named if named.eq_ignore_ascii_case("y") => order.manual_order_indicator = 1,
+            named if named.eq_ignore_ascii_case("n") => order.manual_order_indicator = 0,
+            _ => {}
+        }
     }
     if let Some(v) = parsed.get(&3055) { order.account = v.clone(); }
     if let Some(v) = parsed.get(&6102) { order.sweep_to_fill = flag(v); }
@@ -111,6 +119,9 @@ pub(crate) fn read_stated_attributes(
     if let Some(v) = parsed.get(&6605) { order.post_only = flag(v); }
     if let Some(v) = parsed.get(&6636) { order.professional_customer = flag(v); }
     if let Some(v) = parsed.get(&6670) { order.active_start_time = v.clone(); }
+    // And where the window closes, which this client writes and read from
+    // nowhere: an order handed back without it is one whose watch has no end.
+    if let Some(v) = parsed.get(&6671) { order.active_stop_time = v.clone(); }
     if let Some(v) = parsed.get(&6737) { order.imbalance_only = flag(v); }
     if let Some(v) = parsed.get(&6965) { order.auto_cancel_parent = flag(v); }
     if let Some(v) = parsed.get(&8089) { order.ext_operator = v.clone(); }

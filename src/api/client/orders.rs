@@ -961,8 +961,17 @@ impl EClient {
                 // stated once the memory of it has aged out, and pushed again
                 // the caller was handed the same order twice — and the archive
                 // grew by one row every time it happened.
-                match archive.iter().position(|(_, held, _)| held.perm_id == entry.1.perm_id
-                    && held.order_id == entry.1.order_id)
+                // The caller's own number for it decides, as it does in the
+                // queue this was read off. The venue names an order
+                // permanently at some point in its life and not from the
+                // first report, so an answer released before it had and the
+                // one after carry the same order under a name only the second
+                // one states — matched on both, the second was filed beside
+                // the first instead of over it.
+                match archive.iter().position(|(_, held, _)| held.order_id == entry.1.order_id
+                    && (held.perm_id == entry.1.perm_id
+                        || held.perm_id == 0
+                        || entry.1.perm_id == 0))
                 {
                     Some(at) => archive[at] = entry,
                     None => archive.push(entry),

@@ -1115,7 +1115,10 @@ impl EClient {
                     // the memory of it has aged out, and pushed again the
                     // caller was handed the same order twice.
                     match archive.iter().position(|(_, held, _): &(_, crate::types::model::Order, _)| {
-                        held.perm_id == order.perm_id && held.order_id == order.order_id
+                        held.order_id == order.order_id
+                            && (held.perm_id == order.perm_id
+                                || held.perm_id == 0
+                                || order.perm_id == 0)
                     }) {
                         Some(at) => archive[at] = (contract, order, state),
                         None => archive.push((contract, order, state)),
@@ -1888,6 +1891,65 @@ w = W()",
             assert_eq!(*id, 3);
             assert_eq!(*code, Refusal::VALIDATION as i64);
             assert!(message.contains("combo leg 0 has no conId"), "{message}");
+        });
+    }
+
+    /// One venue order is answered once, whatever it is named along the way.
+    ///
+    /// The venue names an order permanently at some point in its life, not
+    /// from its first report. A caller released before that happened holds a
+    /// copy under no permanent name, and the answer that arrives afterwards
+    /// carries the same order with one — the later answer supersedes the
+    /// earlier, it does not join it.
+    #[test]
+    fn an_order_named_permanently_after_it_was_answered_replaces_its_earlier_copy() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (client, _rx, shared, _wrapper) = wired_client(py);
+            let known = |perm_id: i64| crate::bridge::RichOrderInfo {
+                contract: Default::default(),
+                order: crate::types::model::Order {
+                    order_id: 31, perm_id, ..Default::default()
+                },
+                order_state: Default::default(),
+                last_exec: Default::default(),
+            };
+            let finished = || crate::types::CompletedOrder {
+                order_id: 31, instrument: 0, status: crate::types::OrderStatus::Filled,
+                filled_qty: 100, timestamp_ns: 0,
+            };
+            // The engine's side of the question: it takes it off the queue,
+            // and then the run of answers ends.
+            let answering = |shared: Arc<SharedState>| {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    shared.orders.note_completed_orders_asked();
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    shared.orders.note_completed_orders_end();
+                })
+            };
+            let answers = |client: &EClient| {
+                client.waiting_answers.lock().unwrap()
+                    .iter().filter(|(name, _)| *name == "completed_order").count()
+            };
+
+            shared.orders.push_order_info(31, known(0));
+            shared.orders.push_completed_order(finished());
+            let engine = answering(shared.clone());
+            client.req_completed_orders(py, false).unwrap();
+            engine.join().unwrap();
+            assert_eq!(answers(&client), 1);
+            client.waiting_answers.lock().unwrap().clear();
+
+            shared.orders.push_order_info(31, known(777));
+            shared.orders.refile_completed_order(finished());
+            let engine = answering(shared.clone());
+            client.req_completed_orders(py, false).unwrap();
+            engine.join().unwrap();
+            assert_eq!(
+                answers(&client), 1,
+                "the one order read as two once the venue had named it",
+            );
         });
     }
 }
