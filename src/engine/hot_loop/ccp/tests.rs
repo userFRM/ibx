@@ -3401,6 +3401,39 @@ fn a_drop_mid_answer_releases_the_caller_and_shuts_the_window() {
     );
 }
 
+/// The wait for the replay is taken again on the connection that replays.
+///
+/// The wait belongs to the connection, and a drop with no question outstanding
+/// walked past it: the next connection inherited a wait that had already run
+/// out, and asked what the venue has finished while its own replay was still
+/// arriving — where that replay is read as history and every order working in
+/// it is filed as finished.
+#[test]
+fn the_wait_for_the_replay_is_taken_again_on_the_next_connection() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    let mut hb = HeartbeatState::new();
+    let mut conn = None;
+
+    // A question on this connection: held, then asked once the wait ran out.
+    ccp.send_completed_orders_request(1, &mut conn, &mut hb, &shared);
+    ccp.give_up_waiting_for_the_replay();
+    ccp.sweep_completed_orders_request(&mut conn, &mut hb, &shared);
+    let asked = shared.orders.completed_orders_ended();
+    assert!(asked > 0, "the first question was asked");
+    assert!(!ccp.completed_orders_open, "and nothing is outstanding when the connection goes");
+
+    ccp.handle_disconnect(&mut conn, &mut context, &shared, &None);
+    shared.orders.replay_is_pending();
+
+    // The connection that replaces it replays again, so the question waits.
+    ccp.send_completed_orders_request(2, &mut conn, &mut hb, &shared);
+    assert_eq!(
+        shared.orders.completed_orders_ended(),
+        asked,
+        "the question went out over the replay of the connection that had just come up",
+    );
+}
+
 /// A correction for an order this session placed is never filed as history.
 ///
 /// A fill retires an order from the book, so afterwards the book alone cannot

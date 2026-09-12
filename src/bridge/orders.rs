@@ -545,12 +545,6 @@ impl OrderState {
         self.replay.lock().unwrap().done = true;
     }
 
-    /// A new connection has not named what is already working yet.
-    ///
-    /// Left set across a reconnect, the flag still reports the previous
-    /// connection's replay as finished, and a caller asking what it has on is
-    /// answered from the pre-drop book — every order in it Uncertain — while
-    /// the venue's account is still arriving.
     /// Whether the orders already working have been received.
     pub fn replay_done(&self) -> bool {
         self.replay.lock().unwrap().done

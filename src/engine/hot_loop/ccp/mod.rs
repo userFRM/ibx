@@ -3310,6 +3310,11 @@ impl CcpState {
         self.disconnected = true;
         *ccp_conn = None;
         self.recovery_sweep_at = None;
+        // The wait for the replay belongs to the connection that replays. Left
+        // armed, the next connection inherited a hold that had already expired
+        // and asked what the venue has finished while its own replay was still
+        // arriving, which reads the replay as history.
+        self.replay_hold_until = None;
         // A question about what the venue has finished dies with the
         // connection that carried it. The answer ends with a sentinel and no
         // sentinel is coming, so the caller was left waiting out its whole
@@ -3334,16 +3339,17 @@ impl CcpState {
             // clock for a connection the engine already knew was gone.
             let a_queued_question_dies_here = self.completed_orders_wanted.is_some();
             self.completed_orders_wanted = None;
-            // The next connection replays the account again, so the question
-            // waits for that replay again.
-            self.replay_hold_until = None;
-            // And a question queued behind the window dies with it, on its own
+            // A question queued behind the window dies with it, on its own
             // turn: the caller waiting on it is told the answer is over rather
-            // than waiting for a connection that has gone.
-            if let Some(queued) = self.completed_orders_queued_on.take() {
+            // than waiting for a connection that has gone. Said after the
+            // handover below, not before it — the end is what wakes that
+            // caller, and woken first it drained the answer before the orders
+            // the venue had already stated were in it.
+            let queued_dies_here = self.completed_orders_queued_on.take();
+            self.deliver_finished_orders(shared, Handover::Final);
+            if let Some(queued) = queued_dies_here {
                 shared.orders.note_completed_orders_end_on(queued);
             }
-            self.deliver_finished_orders(shared, Handover::Final);
             if a_queued_question_dies_here || !self.completed_orders_answered {
                 shared.orders.note_completed_orders_end_on(self.completed_orders_asked_on);
             }

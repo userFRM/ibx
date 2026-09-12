@@ -38,32 +38,120 @@ fn nothing_follows_a_chargeable_snapshot() {
     );
 }
 
-/// The venue's one-shot neither follows a stream nor is followed by one, on
-/// the path that records ownership as well as the one that decides it.
+/// A stream is never served off the venue's one-shot, and both are recorded
+/// as watching.
 ///
-/// It is a request of its own on the wire — sent separately, with its own rows
-/// to withdraw. Recorded as following, or as followed, it was ended by the
-/// other request's readings and its own rows were left being served.
+/// The one-shot was sent as a request of its own and is withdrawn the moment
+/// it completes, so a stream served off it heard nothing after that. And what
+/// is recorded as watching is what a reading is delivered to: recorded as
+/// neither holder nor follower, the caller that asked for the one-shot was
+/// sent nothing at all.
 #[test]
-fn the_one_shot_is_neither_a_follower_nor_followed() {
-    let core = ClientCore::new();
+fn a_stream_is_never_served_off_the_one_shot() {
     let instrument = 5u32;
 
-    // A stream holds the slot; the one-shot does not become its follower.
+    // A stream holds the slot and the one-shot watches beside it.
+    let core = ClientCore::new();
     core.instrument_to_req.lock().unwrap().insert(instrument, 30);
     core.chargeable_snapshot_reqs.lock().unwrap().insert(31);
     assert!(
-        !core.take_or_follow(instrument, 31),
-        "the one-shot is its own request beside the stream",
+        core.take_or_follow(instrument, 31),
+        "the one-shot watches the slot the stream holds",
+    );
+    assert!(
+        core.followers_of(instrument).contains(&31),
+        "and is delivered to: {:?}", core.followers_of(instrument),
     );
 
-    // And a stream does not become the one-shot's follower.
+    // The other way round the stream takes the slot, and the one-shot keeps
+    // watching rather than being dropped.
     let other = ClientCore::new();
     other.instrument_to_req.lock().unwrap().insert(instrument, 40);
     other.chargeable_snapshot_reqs.lock().unwrap().insert(40);
     assert!(
         !other.take_or_follow(instrument, 41),
         "the stream is sent rather than served off the one-shot",
+    );
+    assert_eq!(
+        other.instrument_to_req.lock().unwrap().get(&instrument), Some(&41),
+        "the stream holds the slot",
+    );
+    assert!(
+        other.followers_of(instrument).contains(&40),
+        "and the one-shot still hears what the venue says: {:?}",
+        other.followers_of(instrument),
+    );
+}
+
+/// A caller joining a contract is not erased by a withdrawal already under way.
+///
+/// Both decisions are about the same two maps, and a withdrawal that read the
+/// watchers before it took the holder map read them from before the join: it
+/// took the subscription down and answered that nothing was watching, while
+/// the caller that had just joined kept a record of a feed that was gone and
+/// heard nothing for the rest of its life.
+#[test]
+fn a_caller_that_joins_mid_withdrawal_keeps_the_subscription() {
+    use std::sync::Arc;
+    let core = Arc::new(ClientCore::new());
+    let shared = Arc::new(SharedState::new());
+    let iid: InstrumentId = 0;
+
+    // Request 1 holds the contract, as a first subscription leaves it.
+    core.instrument_to_req.lock().unwrap().insert(iid, 1);
+    core.req_to_instrument.lock().unwrap().insert(1, iid);
+
+    // The holder map is what a joiner writes under, so holding it here is
+    // holding the withdrawal at the point the join has to be serialized
+    // against.
+    let holders = core.instrument_to_req.lock().unwrap();
+    let (c, sh) = (Arc::clone(&core), Arc::clone(&shared));
+    let withdrawing = std::thread::spawn(move || c.unregister_mkt_data(&sh, 1));
+
+    // The withdrawal is under way once it has stopped pointing 1 at anything.
+    while core.req_to_instrument.lock().unwrap().contains_key(&1) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // And a second caller joins, the way `follows_existing_subscription`
+    // records one: under the holder map.
+    core.follow_under_holder_lock(iid, 2);
+    core.req_to_instrument.lock().unwrap().insert(2, iid);
+    drop(holders);
+
+    let (taken_down, _news) = withdrawing.join().unwrap();
+    assert_eq!(taken_down, None, "the subscription stays up for the caller that joined");
+    assert_eq!(
+        core.instrument_to_req.lock().unwrap().get(&iid), Some(&2),
+        "and that caller holds it",
+    );
+}
+
+/// A registration the engine never took gives back what it bought.
+///
+/// The mark that says a number bought the venue's one-shot outlives the
+/// request that left it, and a caller told its request did not happen holds
+/// nothing. Left standing, the same number handed out again for an ordinary
+/// stream read as a one-shot: nothing follows it, so the next caller on that
+/// contract was kept out of the watchers and heard no quotes at all.
+#[test]
+fn a_registration_the_engine_never_took_gives_back_what_it_bought() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    // The engine is gone, so the first word of the registration cannot be
+    // said.
+    drop(rx);
+
+    let answer = core.register_mkt_data(
+        &shared, &tx, 77, 265598, "SPY", "SMART", "STK", "USD", &Default::default(),
+        false, true, "", 0,
+    );
+    assert!(answer.is_err(), "the caller is told the request did not happen");
+    assert!(
+        !core.chargeable_snapshot_reqs.lock().unwrap().contains(&77),
+        "and the number it asked under is an ordinary number again",
     );
 }
 

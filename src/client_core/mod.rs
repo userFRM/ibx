@@ -1537,10 +1537,11 @@ impl ClientCore {
             .map_err(Into::into)
     }
 
-    /// The instrument this conId is already known to hold. `0` means the
-    /// contract carries no conId and answers for no one: the engine
-    /// resolves those by descriptor, so only it can say which slot they got.
     /// Which slot this contract holds, as far as this client knows.
+    ///
+    /// `0` means the contract carries no conId and answers for no one: the
+    /// engine resolves those by descriptor, so only it can say which slot
+    /// they got.
     ///
     /// Takes the session's state because it drops what the engine has given
     /// back before it answers. Every reader needs that and one of them will
@@ -1628,18 +1629,24 @@ impl ClientCore {
     /// Answers whether this request ended up a follower.
     pub(crate) fn take_or_follow(&self, instrument: InstrumentId, req_id: i64) -> bool {
         let mut held = self.instrument_to_req.lock().unwrap();
-        // The venue's one-shot is a request of its own on the wire, whichever
-        // side of it holds the slot: it was sent separately and it has its own
-        // rows to withdraw. Recorded as following, or as followed, it was
-        // ended by the other request's readings and its own rows were left
-        // being served — which is what the guard on the path beside this one
-        // is for, and this path went round it.
+        // The venue's one-shot was sent as a request of its own, so it is not
+        // what a stream is served off: where it holds the slot and a stream
+        // arrives, the stream takes the slot and the one-shot watches beside
+        // it. Left holding, the stream was served off a one-shot that is
+        // withdrawn the moment it completes, and heard nothing after that.
+        //
+        // Either way both are recorded as watching, because what is watching
+        // is what a reading is delivered to: recorded as neither, the caller
+        // that asked for the one-shot was sent nothing at all.
         let one_shot = self.chargeable_snapshot_reqs.lock().unwrap();
-        if one_shot.contains(&req_id)
-            || held.get(&instrument).is_some_and(|existing| one_shot.contains(existing))
+        if !one_shot.contains(&req_id)
+            && held.get(&instrument).is_some_and(|existing| one_shot.contains(existing))
         {
+            let displaced = held.insert(instrument, req_id);
             drop(one_shot);
-            held.entry(instrument).or_insert(req_id);
+            if let Some(displaced) = displaced {
+                self.follow_under_holder_lock(instrument, displaced);
+            }
             drop(held);
             self.req_to_instrument.lock().unwrap().insert(req_id, instrument);
             self.stamp_registration(req_id);
@@ -1678,8 +1685,17 @@ impl ClientCore {
                 modes.entry(into).or_insert(mode);
             }
         }
-        let held = self.instrument_to_req.lock().unwrap().remove(&from);
-        let following = self.instrument_followers.lock().unwrap().remove(&from).unwrap_or_default();
+        // Both maps under the holder map, which is what a request joining a
+        // contract writes under: taken one after the other, a joiner that
+        // slipped in between was left following a contract nothing holds any
+        // more.
+        let (held, following) = {
+            let mut holders = self.instrument_to_req.lock().unwrap();
+            let held = holders.remove(&from);
+            let following =
+                self.instrument_followers.lock().unwrap().remove(&from).unwrap_or_default();
+            (held, following)
+        };
         for req_id in held.into_iter().chain(following) {
             if !self.take_or_follow(into, req_id) {
                 self.req_to_instrument.lock().unwrap().insert(req_id, into);
@@ -1752,9 +1768,14 @@ impl ClientCore {
     /// keeps its slot — and forgetting on the refusal would strand it.
     fn forget_watchers_of(&self, instrument: InstrumentId) {
         self.mdt_by_instrument.lock().unwrap().remove(&instrument);
-        let held = self.instrument_to_req.lock().unwrap().remove(&instrument);
-        let following =
-            self.instrument_followers.lock().unwrap().remove(&instrument).unwrap_or_default();
+        // Together, and in the order a joiner takes them. See `move_watchers`.
+        let (held, following) = {
+            let mut holders = self.instrument_to_req.lock().unwrap();
+            let held = holders.remove(&instrument);
+            let following =
+                self.instrument_followers.lock().unwrap().remove(&instrument).unwrap_or_default();
+            (held, following)
+        };
         for req_id in held.into_iter().chain(following) {
             // Only where it still points here. A request that has since been
             // pointed somewhere else is watching that, not this.
@@ -1882,6 +1903,21 @@ impl ClientCore {
     /// than being deduped against a claim the venue already declined.
     pub(crate) fn release_news_askers(&self, con_id: i64) {
         self.news_askers.lock().unwrap().remove(&con_id);
+    }
+
+    /// Give back what a registration took before it was refused.
+    ///
+    /// Everything written down between the first word of a registration and
+    /// the slot it ends with is a lease this number holds, and a caller told
+    /// its request did not happen holds none of them. The marks outlive the
+    /// request that left them: a number recorded as having bought a one-shot
+    /// is never followed, so the same number handed out again for an ordinary
+    /// stream keeps the next caller on that contract out of the followers, and
+    /// a contract recorded as already asked for headlines is deduped against a
+    /// claim nobody holds and never asks again.
+    fn give_back_what_this_request_took(&self, con_id: i64, req_id: i64) {
+        self.release_news_askers(con_id);
+        self.chargeable_snapshot_reqs.lock().unwrap().remove(&req_id);
     }
 
     /// Register a market data subscription mapping.
@@ -2032,8 +2068,7 @@ impl ClientCore {
                 providers,
                 reply_tx: None,
             }) {
-                self.release_news_askers(con_id);
-                self.chargeable_snapshot_reqs.lock().unwrap().remove(&req_id);
+                self.give_back_what_this_request_took(con_id, req_id);
                 return Err(Refusal::not_connected(format!("Engine stopped: {gone}")));
             }
         }
@@ -2074,11 +2109,20 @@ impl ClientCore {
         }
 
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        // Both sends give back what this request took before they report the
+        // engine gone. Returned straight, they left the mark that says this
+        // number bought a one-shot standing against a number nothing is
+        // watching under — so the same number handed out again for an ordinary
+        // stream read as a one-shot, and the next caller on that contract was
+        // kept out of the followers and heard nothing.
         control_tx.send(ControlCommand::RegisterInstrument {
             contract: ContractRef { con_id, symbol: symbol.to_string(), sec_type: sec_type.to_string(), exchange: exchange.to_string(), ..Default::default() },
             identity: String::new(),
             reply_tx: None,
-        }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
+        }).map_err(|e| {
+            self.give_back_what_this_request_took(con_id, req_id);
+            Refusal::not_connected(format!("Engine stopped: {e}"))
+        })?;
         control_tx.send(ControlCommand::Subscribe {
             contract: ContractRef {
                 con_id, symbol: symbol.to_string(), exchange: exchange.to_string(),
@@ -2092,7 +2136,10 @@ impl ClientCore {
             regulatory_snapshot,
             generic_ticks: generic_ticks.clone(),
             reply_tx: Some(reply_tx),
-        }).map_err(|e| Refusal::not_connected(format!("Engine stopped: {e}")))?;
+        }).map_err(|e| {
+            self.give_back_what_this_request_took(con_id, req_id);
+            Refusal::not_connected(format!("Engine stopped: {e}"))
+        })?;
 
         // The engine answers this one. A conId-less contract has no client-side
         // identity, so a duplicate can only be settled against the slot the
@@ -2371,11 +2418,25 @@ impl ClientCore {
         self.snapshot_reqs.lock().unwrap().remove(&req_id);
         self.chargeable_snapshot_reqs.lock().unwrap().remove(&req_id);
         self.registration_epoch.lock().unwrap().remove(&req_id);
-        if let Some(instrument) = self.req_to_instrument.lock().unwrap().remove(&req_id) {
+        // Taken and given back in one statement: an `if let` over the guard
+        // would keep this map locked for the whole withdrawal, and the
+        // registration paths take it after the holder map — which is a wait
+        // each side spends on a lock the other is holding.
+        let watched = self.req_to_instrument.lock().unwrap().remove(&req_id);
+        if let Some(instrument) = watched {
             // A caller that was watching someone else's subscription stops
             // watching it, and the subscription stays up for the rest. A
             // caller that held it hands it to the next one watching rather
             // than taking the quotes away from them.
+            //
+            // Under the holder map, which is taken first and kept for the
+            // whole decision — the order a request joining one takes them in.
+            // Read the other way round, a request that joined between the
+            // followers being read and the holder being removed was written
+            // down as watching a subscription this withdrawal had already
+            // decided nobody was watching: it kept its record of a feed that
+            // went down under it, and heard nothing for the rest of its life.
+            let mut holders = self.instrument_to_req.lock().unwrap();
             {
                 let mut following = self.instrument_followers.lock().unwrap();
                 let watching = following.get_mut(&instrument);
@@ -2389,18 +2450,19 @@ impl ClientCore {
                     if watchers.is_empty() {
                         following.remove(&instrument);
                     }
-                    drop(following);
-                    self.mdt_sent.lock().unwrap().remove(&req_id);
-                    if was_following {
-                        return (None, self.release_news(shared, req_id));
-                    }
-                    if let Some(next) = next {
-                        self.instrument_to_req.lock().unwrap().insert(instrument, next);
+                    if was_following || next.is_some() {
+                        if let Some(next) = next {
+                            holders.insert(instrument, next);
+                        }
+                        drop(following);
+                        drop(holders);
+                        self.mdt_sent.lock().unwrap().remove(&req_id);
                         return (None, self.release_news(shared, req_id));
                     }
                 }
             }
-            self.instrument_to_req.lock().unwrap().remove(&instrument);
+            holders.remove(&instrument);
+            drop(holders);
             self.last_quotes.lock().unwrap().remove(&instrument);
             self.mdt_sent.lock().unwrap().remove(&req_id);
             self.mdt_by_instrument.lock().unwrap().remove(&instrument);
