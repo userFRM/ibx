@@ -54,6 +54,13 @@ pub struct OrderState {
     /// are indistinguishable from outside without this. Only tests keep this
     /// record; ordinary sessions have no reader that needs it.
     orders_sent: Mutex<std::collections::HashSet<u64>>,
+    /// Every finished order the venue stated an API order id for.
+    ///
+    /// The venue numbers an order placed through an API and does not number
+    /// one typed in by hand, so this is what tells the two apart — and it is
+    /// the only thing that does. A caller asking for the API orders alone is
+    /// answered with these.
+    api_numbered: Mutex<std::collections::HashSet<u64>>,
     cancel_rejects: Mutex<Vec<CancelReject>>,
     /// What each fill cost, as the venue states it on a record of its own.
     charges: Mutex<Vec<crate::types::model::CommissionAndFeesReport>>,
@@ -157,6 +164,7 @@ impl OrderState {
         Self {
             fills: Mutex::new(Vec::with_capacity(64)),
             orders_sent: Mutex::new(std::collections::HashSet::new()),
+            api_numbered: Mutex::new(std::collections::HashSet::new()),
             order_updates: Mutex::new(Vec::with_capacity(64)),
             cancel_rejects: Mutex::new(Vec::with_capacity(16)),
             charges: Mutex::new(Vec::with_capacity(16)),
@@ -615,6 +623,29 @@ impl OrderState {
     /// Whether this client put this order's message on the wire.
     pub fn the_order_went_out(&self, order_id: u64) -> bool {
         self.orders_sent.lock().unwrap().contains(&order_id)
+    }
+
+    /// The venue states an API order id for this finished order.
+    #[doc(hidden)] pub fn note_api_numbered(&self, order_id: u64) {
+        self.api_numbered.lock().unwrap().insert(order_id);
+    }
+
+    /// Whether it did, which is what tells an order placed through an API from
+    /// one typed in by hand.
+    fn was_api_numbered(&self, order_id: u64) -> bool {
+        self.api_numbered.lock().unwrap().contains(&order_id)
+    }
+
+    /// Whether a finished order was entered through an API rather than by hand.
+    ///
+    /// Two ways to know, and an order needs only one. This session put it on
+    /// the wire, so it went through this API whatever the venue says about it;
+    /// or the venue states an API order id for it, which it does for an order
+    /// some API placed and does not for one typed in. The first is how the
+    /// reference client knows its own — it holds the source of every order it
+    /// sent — and the second is the only thing the wire says.
+    pub fn was_entered_through_an_api(&self, order_id: u64, perm_id: u64) -> bool {
+        self.the_order_went_out(order_id) || self.was_api_numbered(perm_id)
     }
 
     /// The venue has named this id, whatever became of the order under it.

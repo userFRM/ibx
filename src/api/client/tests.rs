@@ -9824,6 +9824,61 @@ fn withdrawing_a_held_parent_withdraws_the_children_held_under_it() {
     assert!(rx.try_recv().is_err(), "nothing reached the engine");
 }
 
+/// Asked for the API orders alone, a caller is answered with those.
+///
+/// The venue states no origin beside a finished order and it does number the
+/// ones an API placed: an order that went out through one carries the number
+/// that API gave it, and one typed in by hand carries none. Answered with all
+/// of them, a program acting on what it believed were its own orders was
+/// handed somebody's manual entry.
+#[test]
+fn asking_for_the_api_orders_alone_leaves_out_the_ones_typed_in() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.set_replay_done();
+
+    // One the venue numbered, and one it did not.
+    for (order_id, numbered) in [(91u64, true), (92, false)] {
+        shared.orders.push_order_info(order_id, crate::bridge::RichOrderInfo {
+            contract: spy(),
+            order: Order {
+                order_id: order_id as i64, perm_id: order_id as i64,
+                action: "BUY".into(), total_quantity: 1.0, ..Default::default()
+            },
+            order_state: crate::types::model::OrderState {
+                status: "Filled".into(), ..Default::default()
+            },
+            last_exec: Default::default(),
+        });
+        if numbered {
+            shared.orders.note_api_numbered(order_id);
+        }
+        shared.orders.push_completed_order(crate::types::CompletedOrder {
+            order_id, instrument: 0, status: crate::types::OrderStatus::Filled,
+            filled_qty: crate::types::QTY_SCALE, timestamp_ns: 0,
+        });
+    }
+
+    #[derive(Default)]
+    struct Heard(Vec<i64>);
+    impl Wrapper for Heard {
+        fn completed_order(
+            &mut self, _: &Contract, order: &Order, _: &crate::types::model::OrderState,
+        ) {
+            self.0.push(order.order_id);
+        }
+    }
+
+    let mut only_the_api = Heard::default();
+    client.req_completed_orders(true, &mut only_the_api);
+    assert_eq!(only_the_api.0, [91], "the one the venue numbered, and not the other");
+
+    // And the archive is kept whole, so the same session asking for all of
+    // them is answered with all of them.
+    let mut all_of_them = Heard::default();
+    client.req_completed_orders(false, &mut all_of_them);
+    assert_eq!(all_of_them.0, [91, 92], "both");
+}
+
 /// A completed order names the client that placed it, on this surface as on
 /// the other, where the venue names none.
 #[test]

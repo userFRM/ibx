@@ -856,13 +856,12 @@ impl EClient {
     /// Immediately delivers every completed order this session archived, then
     /// calls `completed_orders_end`.
     ///
-    /// `api_only` is taken and not applied. It asks for orders entered through
-    /// an API rather than by hand, and nothing this client holds says which an
-    /// order was: the completed orders are the ones this session saw, and the
-    /// venue states no origin on them. Passing `true` is answered with all of
-    /// them rather than with a guess at which were typed.
+    /// `api_only` asks for the orders entered through an API rather than by
+    /// hand. The venue states no origin beside a finished order, and it does
+    /// number the ones an API placed: an order that went out through one
+    /// carries the number that API gave it, and one typed in carries none. So
+    /// `true` is answered with the orders the venue numbered.
     pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper) {
-        let _ = api_only;
         if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
         // Asked of the venue, not only of this session. What finished while
         // this program was watching is a fraction of what the account has
@@ -954,6 +953,14 @@ impl EClient {
         // again, and the lock is not re-entrant.
         let completed = self.completed.lock().unwrap().clone();
         for (contract, order, state) in &completed {
+            // Kept whole in the archive and filtered on the way out, so the
+            // same session can ask for all of them and for the numbered ones
+            // and be answered correctly either way.
+            if api_only && !self.shared.orders.was_entered_through_an_api(
+                order.order_id.max(0) as u64, order.perm_id.max(0) as u64,
+            ) {
+                continue;
+            }
             wrapper.completed_order(contract, order, state);
         }
         wrapper.completed_orders_end();

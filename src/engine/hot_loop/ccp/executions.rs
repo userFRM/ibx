@@ -649,6 +649,13 @@ impl CcpState {
             right: parsed.get(&201).cloned().unwrap_or_default(),
             ..Default::default()
         };
+        // An order placed through an API carries the number that API gave it,
+        // and one typed in by hand carries none. That is the whole of what
+        // tells them apart — the venue states no origin beside it — so it is
+        // recorded here, where the report that states it is read.
+        if parsed.get(&6121).and_then(|s| s.parse::<i64>().ok()).is_some_and(|id| id != 0) {
+            shared.orders.note_api_numbered(clord_id);
+        }
         let order = api::Order {
             // The venue's own number for the order where it states one, and
             // the number it is known by here either way.

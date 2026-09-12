@@ -982,14 +982,13 @@ impl EClient {
 
     /// Request completed orders.
     ///
-    /// `api_only` is taken and not applied. It asks for orders entered through
-    /// an API rather than by hand, and nothing this client holds says which an
-    /// order was: the completed orders are the ones this session saw, and the
-    /// venue states no origin on them. Passing `true` is answered with all of
-    /// them rather than with a guess at which were typed.
+    /// `api_only` asks for the orders entered through an API rather than by
+    /// hand. The venue states no origin beside a finished order, and it does
+    /// number the ones an API placed: an order that went out through one
+    /// carries the number that API gave it, and one typed in carries none. So
+    /// `true` is answered with the orders the venue numbered.
     #[pyo3(signature = (api_only=false))]
     fn req_completed_orders(&self, py: Python<'_>, api_only: bool) -> PyResult<()> {
-        let _ = api_only;
         let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
         // Asked of the venue, not only of this session. What finished while
         // this program was watching is a fraction of what the account has
@@ -1101,6 +1100,14 @@ impl EClient {
             // these again, and the lock is not re-entrant.
             let completed = self.completed.lock().unwrap().clone();
             for (contract, order, state) in &completed {
+                // Kept whole in the archive and filtered on the way out, so
+                // the same session can ask for all of them and for the
+                // numbered ones and be answered correctly either way.
+                if api_only && !shared.orders.was_entered_through_an_api(
+                    order.order_id.max(0) as u64, order.perm_id.max(0) as u64,
+                ) {
+                    continue;
+                }
                 let c_py = Py::new(py, Contract::from_api(py, contract)?)?.into_any();
                 let o_py = Py::new(py, Order::from_api(py, order)?)?.into_any();
                 let state_py = Py::new(py, OrderState::from_api(state))?.into_any();
