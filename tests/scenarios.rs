@@ -1003,7 +1003,21 @@ fn req_completed_orders_empty_still_fires_end() {
     let (client, _rx, _shared) = test_client();
     let mut w = RecordingWrapper::default();
     client.req_completed_orders(false, &mut w);
-    assert_eq!(w.events, vec!["completed_orders_end"]);
+    // The end always fires, so a caller reading until it is not left waiting.
+    assert!(
+        w.events.iter().any(|e| e == "completed_orders_end"),
+        "the answer ends: {:?}", w.events,
+    );
+    // And with nothing behind it, because nothing answered — said, rather
+    // than handed over as an account that has finished nothing.
+    assert!(
+        !w.events.iter().any(|e| e == "completed_order"),
+        "nothing is reported as finished: {:?}", w.events,
+    );
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error")),
+        "and the caller is told the venue did not finish stating it: {:?}", w.events,
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════

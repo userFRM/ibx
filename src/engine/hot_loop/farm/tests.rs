@@ -1291,6 +1291,68 @@ mod news_tests {
         assert_eq!(generic_tick_length(stated, carried + 2), Some(carried));
     }
 
+    /// A caller joining a contract already being watched has the series it
+    /// named asked for, and the ones already being served are not asked twice.
+    ///
+    /// The list that went to the venue is the first caller's. A joiner naming
+    /// a series nobody had asked for waited on a stream that was never
+    /// requested — the prices arrived, the subscription read as healthy, and
+    /// the series never came.
+    #[test]
+    fn a_joining_caller_has_the_series_it_named_asked_for() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).expect("a connection over the test pair");
+
+        farm.asked_generic_ticks.insert(instrument, vec![233]);
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", instrument, 0,
+            false, &mut conn, &mut hb,
+        );
+        let _ = super::drain_inner(&mut peer);
+
+        // A second caller on the same contract, naming one series already
+        // being served and one that is not.
+        farm.also_ask_for_series(instrument, &[233, 236], &context, &mut conn, &mut hb);
+
+        let stated = |msg: &[u8], tag: u32| -> Vec<String> {
+            let prefix = format!("{tag}=");
+            msg.split(|&b| b == 0x01)
+                .filter_map(|field| {
+                    std::str::from_utf8(field).ok()?.strip_prefix(prefix.as_str()).map(str::to_string)
+                })
+                .collect()
+        };
+        let asked: Vec<String> = super::drain_inner(&mut peer)
+            .into_iter()
+            .filter(|msg| stated(msg, 263).first().map(String::as_str) == Some("1"))
+            .flat_map(|msg| stated(&msg, 264))
+            .collect();
+        assert_eq!(
+            asked, ["236".to_string()],
+            "the series nobody had asked for, and only that one: {asked:?}",
+        );
+        assert_eq!(
+            farm.asked_generic_ticks.get(&instrument).map(Vec::as_slice),
+            Some([233u32, 236].as_slice()),
+            "and both are what the rebuild after a reconnect asks for",
+        );
+        // It is an entry of the subscription, so the withdrawal states it.
+        let record = farm.instrument_md_reqs.iter()
+            .find(|(id, _)| *id == instrument)
+            .map(|(_, record)| record)
+            .expect("the subscription is recorded");
+        assert!(
+            record.entries.iter().any(|e| e.request_type == 236),
+            "the joiner's series is withdrawn with the rest: {:?}",
+            record.entries.iter().map(|e| e.request_type).collect::<Vec<_>>(),
+        );
+    }
+
     /// Every tick that states no length of its own says where it ends, so a
     /// record of one is read and the records behind it in the same message
     /// survive.
@@ -3536,7 +3598,9 @@ mod depth_bit_tests {
         assert_eq!(
             pushed,
             [
-                (2, 2, String::new()),
+                // Named as the row it withdraws was named, so it reaches the
+                // caller on the same callback as every row beside it.
+                (2, 2, "D".to_string()),
                 (0, 0, "E".to_string()),
             ],
             "the level pushed out of the window goes first: {pushed:?}",

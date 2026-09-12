@@ -996,6 +996,20 @@ impl EClient {
     #[pyo3(signature = (api_only=false))]
     fn req_completed_orders(&self, py: Python<'_>, api_only: bool) -> PyResult<()> {
         let Some(tx) = self.tx_or_report(-1)? else { return Ok(()) };
+        // One at a time, as on the other surface: the answer is a run of
+        // ordinary reports and one sentinel, and nothing in the run says which
+        // question it answers, so two callers waiting at once both take the
+        // first answer as their own.
+        let claimed = self.shared.lock().unwrap().clone()
+            .is_some_and(|shared| shared.orders.claim_the_completed_orders_question());
+        if !claimed {
+            self.report_refusal(py, -1, crate::error_codes::Refusal::no_answer(
+                "another request for what the account has finished is already waiting; \
+                 this one was not sent",
+            ))?;
+            self.deliver(py, "completed_orders_end", ())?;
+            return Ok(());
+        }
         // Asked of the venue, not only of this session. What finished while
         // this program was watching is a fraction of what the account has
         // done, and the rest is one request away. The answer is a run of
@@ -1055,10 +1069,16 @@ impl EClient {
                 py.detach(|| std::thread::sleep(std::time::Duration::from_millis(20)));
             };
             if !ended {
+                // Said, not only logged: an empty answer otherwise reads as an
+                // account that has finished nothing.
                 log::warn!(
                     "the venue did not finish stating what it has finished; answering with \
                      what arrived",
                 );
+                self.report_refusal(py, -1, crate::error_codes::Refusal::no_answer(
+                    "the venue did not finish stating what the account has finished; \
+                     what follows is what had arrived",
+                ))?;
             }
         }
         // Bind the clone out of the guard first. A MutexGuard temporary in an
@@ -1170,6 +1190,10 @@ impl EClient {
                 self.deliver(py, "completed_order", (&c_py, &o_py, &state_py))?;
             }
             self.deliver(py, "completed_orders_end", ())?;
+        }
+        // Answered or not, the question is free again.
+        if let Some(shared) = self.shared.lock().unwrap().clone() {
+            shared.orders.the_completed_orders_question_is_over();
         }
         Ok(())
     }

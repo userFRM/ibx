@@ -863,6 +863,21 @@ impl EClient {
     /// `true` is answered with the orders the venue numbered.
     pub fn req_completed_orders(&self, api_only: bool, wrapper: &mut impl Wrapper) {
         if self.session_over() { return wrapper.error(-1, Refusal::NOT_CONNECTED as i64, "Not connected", ""); }
+        // One at a time. The answer is a run of ordinary reports and one
+        // sentinel, and nothing in the run says which question it answers, so
+        // two callers waiting at once both take the first answer as their own.
+        // The client this replaces refuses the second outright; this one says
+        // so and ends, rather than handing over somebody else's answer or
+        // leaving the caller waiting on a sentinel that has already been spent.
+        if !self.shared.orders.claim_the_completed_orders_question() {
+            wrapper.error(
+                -1, Refusal::NO_ANSWER as i64,
+                "another request for what the account has finished is already waiting; \
+                 this one was not sent",
+                "",
+            );
+            return wrapper.completed_orders_end();
+        }
         // Asked of the venue, not only of this session. What finished while
         // this program was watching is a fraction of what the account has
         // done. The answer is a run of ordinary reports ending in a sentinel,
@@ -905,15 +920,27 @@ impl EClient {
                     break;
                 }
                 if std::time::Instant::now() >= until {
+                    // Said, not only logged: what follows is what had arrived,
+                    // which is not the venue's account of what the account has
+                    // finished. Reported as an ordinary answer, an empty one
+                    // reads as an account that has finished nothing.
                     log::warn!(
                         "the venue did not finish stating what it has finished; answering with \
                          what arrived",
+                    );
+                    wrapper.error(
+                        -1, Refusal::NO_ANSWER as i64,
+                        "the venue did not finish stating what the account has finished; \
+                         what follows is what had arrived",
+                        "",
                     );
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
         }
+        // Answered or not, the question is free again.
+        self.shared.orders.the_completed_orders_question_is_over();
         // Drained once and retained. The queue empties on read and the venue does
         // not resend completed orders, so later calls answer from this archive.
         {

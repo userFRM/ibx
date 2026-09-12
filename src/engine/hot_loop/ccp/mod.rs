@@ -903,16 +903,32 @@ impl CcpState {
 
     /// Learn the venue's own name for an order this session numbers itself.
     ///
-    /// A window, oldest out first: one name is learned per order the venue
-    /// replays, and a caller may ask what the account has finished as often as
-    /// it likes.
-    pub(crate) fn remember_the_venues_name_for(&mut self, wire_name: u64, order_id: u64) {
+    /// Held for as long as the order is working, because that is what the name
+    /// is for: every later report about it states only this name, and a
+    /// revision, a fill or a withdrawal that cannot be resolved through it
+    /// reaches the wrong order or none. One name is learned per order the
+    /// venue replays, though, and a caller may ask what the account has
+    /// finished as often as it likes — so the oldest name of an order that is
+    /// no longer working goes when a new one arrives, and a name is dropped
+    /// only when its order is not in the book.
+    pub(crate) fn remember_the_venues_name_for(
+        &mut self, wire_name: u64, order_id: u64, context: &Context,
+    ) {
         if self.wire_name_to_order.insert(wire_name, order_id).is_none() {
             self.wire_names_learned.push_back(wire_name);
-            while self.wire_names_learned.len() > WIRE_NAME_WINDOW {
-                if let Some(oldest) = self.wire_names_learned.pop_front() {
-                    self.wire_name_to_order.remove(&oldest);
-                }
+        }
+        while self.wire_names_learned.len() > WIRE_NAME_WINDOW {
+            let forgettable = self.wire_names_learned.iter().position(|name| {
+                self.wire_name_to_order
+                    .get(name)
+                    .is_none_or(|order| context.order(*order).is_none())
+            });
+            // Every name held belongs to an order still working, so there is
+            // nothing to forget: the window is what bounds the names of
+            // orders that have finished, not what bounds the account.
+            let Some(at) = forgettable else { break };
+            if let Some(oldest) = self.wire_names_learned.remove(at) {
+                self.wire_name_to_order.remove(&oldest);
             }
         }
     }
@@ -927,6 +943,23 @@ impl CcpState {
     #[cfg(test)]
     pub(crate) fn how_many_venue_names_are_held(&self) -> usize {
         self.wire_name_to_order.len()
+    }
+
+    /// Assemble one finished order, as the reports about it would.
+    #[cfg(test)]
+    pub(crate) fn hold_a_finished_order_for_test(
+        &mut self, order_id: u64, status: crate::types::OrderStatus,
+    ) {
+        self.finished_orders.push(FinishedOrder {
+            order_id,
+            contract: Default::default(),
+            order: crate::types::model::Order { order_id: order_id as i64, ..Default::default() },
+            status,
+            filled: 0,
+            state: Default::default(),
+            ord_type: String::new(),
+            exec_inst: String::new(),
+        });
     }
 
     /// Whether the window has already seen this execution, asked without

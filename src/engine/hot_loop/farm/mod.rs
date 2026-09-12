@@ -114,6 +114,44 @@ fn build_conid_subscribe_tags(
     tags
 }
 
+/// A subscription carrying extra series and nothing else.
+///
+/// The same rows the first subscription states for a series, under the same
+/// action, with the count ahead of them: a caller joining a contract already
+/// being watched needs the series it named asked for, and the prices it hears
+/// are the ones already arriving.
+fn build_series_subscribe_tags(
+    con_id: i64,
+    exchange: &str,
+    sec_type: &str,
+    mode_9887: i32,
+    ts: &str,
+    rows: &[(u32, u32)],
+) -> Vec<(u32, String)> {
+    let con_id_str = (con_id as u32).to_string();
+    let (fix_exchange, fix_sec_type) = stated_venue_and_type(sec_type, exchange);
+    let mut tags: Vec<(u32, String)> = vec![
+        (fix::TAG_MSG_TYPE, fix::MSG_MARKET_DATA_REQ.to_string()),
+        (fix::TAG_SENDING_TIME, ts.to_string()),
+        (263, SUBSCRIBE_ACTION.to_string()),
+        (146, rows.len().to_string()),
+    ];
+    for (req_id, tick) in rows {
+        tags.push((262, req_id.to_string()));
+        tags.push((6008, con_id_str.clone()));
+        tags.push((207, fix_exchange.to_string()));
+        tags.push((167, fix_sec_type.to_string()));
+        tags.push((264, tick.to_string()));
+        tags.push((6088, "Socket".to_string()));
+        tags.push((9830, "1".to_string()));
+        tags.push((9839, "1".to_string()));
+        if mode_9887 != 0 {
+            tags.push((9887, mode_9887.to_string()));
+        }
+    }
+    tags
+}
+
 /// A quantity as the running-volume string states it.
 ///
 /// The venue's own decimal, whose text is that of a fixed-point number held to
@@ -2786,12 +2824,6 @@ impl FarmState {
         // Cleared whether or not anything was asked yet: left behind, a book
         // the caller withdrew was asked for again by the next reconnect.
         self.depth_resub_info.retain(|(id, ..)| *id != req_id);
-        // The book itself goes with the stream that was carrying it: kept, it
-        // would answer for the window of whatever stream took the number next.
-        let withdrawn = asked_under.to_vec();
-        self.depth_books.retain(|(tag, _)| {
-            !self.depth_tag_to_req.iter().any(|(held, rid, ..)| held == tag && withdrawn.contains(rid))
-        });
         // And the routing, whether or not anything was asked: a tag record
         // left behind after the venue refused the book mid-stream was
         // inherited by the next contract asked for under this number, which
@@ -2799,7 +2831,23 @@ impl FarmState {
         self.depth_subs.retain(|(id, _)| !asked_under.contains(id));
         self.depth_fanout_map.retain(|(_, user)| *user != req_id);
         self.depth_fanout_exchange.retain(|(sub, _)| !asked_under.contains(sub));
+        // The venue's numbers this caller's book was arriving under, taken
+        // before its records go — the record holds the caller's own number,
+        // not the numbers this client asked under, so the two are not
+        // interchangeable and a book released by comparing them was released
+        // for nobody.
+        let arriving_under: Vec<u32> = self.depth_tag_to_req.iter()
+            .filter(|(_, rid, ..)| *rid == req_id)
+            .map(|(tag, ..)| *tag)
+            .collect();
         self.depth_tag_to_req.retain(|(_, rid, ..)| *rid != req_id);
+        // The book itself goes with the stream that was carrying it, and only
+        // where nobody else is still reading that stream: kept, it would
+        // answer for the window of whatever stream took the number next.
+        self.depth_books.retain(|(tag, _)| {
+            !arriving_under.contains(tag)
+                || self.depth_tag_to_req.iter().any(|(held, ..)| held == tag)
+        });
         self.depth_rows.retain(|(id, _)| *id != req_id);
         if asked_under.is_empty() {
             return;
@@ -2827,6 +2875,82 @@ impl FarmState {
             log::info!(
                 "Sent depth unsubscribe for req_id={req_id}: {} venue(s)",
                 entries.len(),
+            );
+        }
+    }
+
+    /// Ask for series on a contract already being watched.
+    ///
+    /// A joining caller brings its own list, and a series nobody asked for yet
+    /// has to be asked for or it never arrives: the first caller's list is
+    /// what went to the venue. What is already being served is not asked for
+    /// twice — the venue answers a second subscription to the same series
+    /// under the same number, and two records for one number read every frame
+    /// twice.
+    pub(crate) fn also_ask_for_series(
+        &mut self,
+        instrument: InstrumentId,
+        wanted: &[u32],
+        context: &Context,
+        farm_conn: &mut Option<Connection>,
+        hb: &mut HeartbeatState,
+    ) {
+        let already = self.asked_generic_ticks.entry(instrument).or_default();
+        let new_ones: Vec<u32> = wanted.iter()
+            .copied()
+            .filter(|tick| !already.contains(tick))
+            .collect();
+        if new_ones.is_empty() {
+            return;
+        }
+        already.extend(new_ones.iter().copied());
+        let Some((_, symbol, exchange, sec_type, .., mode_9887)) = self
+            .md_resub_info
+            .iter()
+            .find(|(id, ..)| *id == instrument)
+            .cloned()
+        else {
+            // Nothing here says what contract that slot holds, so there is
+            // nothing to ask on. The list is still recorded, so the rebuild
+            // after a reconnect asks for it.
+            return;
+        };
+        let _ = symbol;
+        let Some(con_id) = context.market.con_id(instrument).filter(|id| *id > 0) else { return };
+
+        let mut rows: Vec<(u32, u32)> = Vec::new();
+        for tick in new_ones {
+            let id = self.next_md_req_id;
+            self.next_md_req_id += 1;
+            self.md_req_to_instrument.push((id, instrument));
+            self.generic_tick_reqs.push((id, tick));
+            rows.push((id, tick));
+        }
+        // Each is an entry of the subscription, as the ones asked for at the
+        // start are: the withdrawal is composed from those.
+        let (venue, _) = stated_venue_and_type(&sec_type, &exchange);
+        let venue = venue.to_string();
+        if let Some((_, record)) = self.instrument_md_reqs.iter_mut()
+            .find(|(id, _)| *id == instrument)
+        {
+            for (id, tick) in &rows {
+                record.entries.push(MdReqEntry {
+                    req_id: *id, request_type: *tick, venue: venue.clone(),
+                });
+            }
+        }
+        if let Some(conn) = farm_conn.as_mut() {
+            let ts = chrono_free_timestamp();
+            let tags = build_series_subscribe_tags(
+                con_id, &exchange, &sec_type, mode_9887, &ts, &rows,
+            );
+            let refs: Vec<(u32, &str)> =
+                tags.iter().map(|(tag, val)| (*tag, val.as_str())).collect();
+            let _ = conn.send_fixcomp(&refs);
+            hb.last_farm_sent = Instant::now();
+            log::info!(
+                "Asked for {} more series on slot {instrument}, for a caller that joined",
+                rows.len(),
             );
         }
     }
@@ -3057,9 +3181,23 @@ impl FarmState {
                             && position < rows
                             && was_deep >= rows as usize
                         {
+                            // Named the way the row it withdraws was named: a
+                            // withdrawal carrying no maker is handed to a
+                            // caller on the callback that carries none, so the
+                            // one row this client states itself arrived on a
+                            // different callback from every row beside it.
+                            let pushed_out = self.depth_books.iter()
+                                .find(|(held_tag, _)| *held_tag == tag)
+                                .and_then(|(_, sides)| sides[held].get(rows as usize - 1))
+                                .map(|(maker, ..)| maker.clone())
+                                .unwrap_or_default();
+                            let named = match pushed_out.as_str() {
+                                "" if *is_smart => venue.clone(),
+                                stated => stated.to_string(),
+                            };
                             shared.market.push_depth_update(DepthUpdate {
                                 req_id: *req_id, position: rows - 1,
-                                market_maker: String::new(),
+                                market_maker: named,
                                 operation: 2, side, price: 0.0, size: 0.0,
                                 is_smart_depth: *is_smart,
                             });
@@ -3097,7 +3235,20 @@ impl FarmState {
                     let at = position.max(0) as usize;
                     let rows = &mut book[held];
                     match operation {
-                        0 => rows.insert(at.min(rows.len()), (name.trim().to_string(), price, size)),
+                        // A position past the end of the side is not a place in
+                        // this book, and the reader this follows ignores such an
+                        // insert rather than finding it a place. Put at the end
+                        // instead, the row was somewhere the venue never said,
+                        // and a later withdrawal inside the window pulled it up
+                        // into the caller's book from there.
+                        0 if at <= rows.len() => {
+                            rows.insert(at, (name.trim().to_string(), price, size));
+                        }
+                        0 => log::debug!(
+                            "a book insert names position {at}, past the {} levels this side \
+                             holds; the book is left as it was",
+                            rows.len(),
+                        ),
                         1 => {
                             if let Some(row) = rows.get_mut(at) {
                                 *row = (name.trim().to_string(), price, size);
@@ -3115,7 +3266,7 @@ impl FarmState {
                     // without this the caller's book is a row short from the
                     // first withdrawal near the top and never refills.
                     if operation == 2 || operation == 3 {
-                        for (req_id, is_smart, _) in &subscribers {
+                        for (req_id, is_smart, venue) in &subscribers {
                             let Some(rows_asked) = self.asked_depth(*req_id) else { continue };
                             if position >= rows_asked {
                                 continue;
@@ -3125,9 +3276,15 @@ impl FarmState {
                                 .and_then(|(_, sides)| sides[held].get(rows_asked as usize - 1))
                                 .cloned();
                             if let Some((maker, price, size)) = pulled_up {
+                                // Named as the rows beside it are named, so it
+                                // reaches the caller on the same callback.
+                                let named = match maker.as_str() {
+                                    "" if *is_smart => venue.clone(),
+                                    stated => stated.to_string(),
+                                };
                                 shared.market.push_depth_update(DepthUpdate {
                                     req_id: *req_id, position: rows_asked - 1,
-                                    market_maker: maker,
+                                    market_maker: named,
                                     operation: 0, side, price, size,
                                     is_smart_depth: *is_smart,
                                 });

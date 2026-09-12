@@ -1419,6 +1419,40 @@ fn an_exchange_is_handed_over_under_the_type_its_section_carries() {
     );
 }
 
+/// An order the venue is still stating is not part of an answer about what it
+/// has finished, whichever handover carries that answer.
+///
+/// The answer is assembled report by report, so a record can say the order is
+/// working until a later report says otherwise. Handed over whole because the
+/// window reached its bound or the connection went away, such a record reached
+/// the caller as a completed order the venue never said was complete.
+#[test]
+fn an_order_still_being_stated_is_not_part_of_a_finished_answer() {
+    let (mut ccp, _context, shared) = ord_status_test_state();
+    let mut hb = HeartbeatState::new();
+    let mut conn = None;
+    let mut context = Context::new();
+
+    // A window open, and one finished order assembled beside one the venue is
+    // still stating.
+    ccp.completed_orders_open = true;
+    ccp.hold_a_finished_order_for_test(11, crate::types::OrderStatus::Filled);
+    ccp.hold_a_finished_order_for_test(12, crate::types::OrderStatus::Submitted);
+
+    // The connection goes away, which hands over what is held.
+    ccp.handle_disconnect(&mut conn, &mut context, &shared, &None);
+    let _ = &mut hb;
+
+    let finished: Vec<u64> = shared.orders.drain_completed_orders()
+        .into_iter()
+        .map(|order| order.order_id)
+        .collect();
+    assert_eq!(
+        finished, [11],
+        "only the order the venue said it had finished: {finished:?}",
+    );
+}
+
 /// The venue's own names for recovered orders are held in a window, oldest
 /// out first.
 ///
@@ -1429,16 +1463,36 @@ fn an_exchange_is_handed_over_under_the_type_its_section_carries() {
 #[test]
 fn the_names_learned_at_recovery_are_held_in_a_window() {
     let mut ccp = CcpState::new();
+    let mut context = Context::new();
+    // One of them is an order the session is still working, which is what the
+    // name is for.
+    let instrument = context.register_instrument(756733);
+    context.insert_order(crate::types::Order {
+        order_id: 1,
+        instrument,
+        side: Side::Buy,
+        price: 0,
+        qty: 100 * QTY_SCALE,
+        filled: 0,
+        status: crate::types::OrderStatus::Submitted,
+        ord_type: b'2',
+        tif: b'0',
+        stop_price: 0,
+    });
     for n in 0..(super::WIRE_NAME_WINDOW as u64 + 16) {
-        ccp.remember_the_venues_name_for(1_000_000 + n, n + 1);
+        ccp.remember_the_venues_name_for(1_000_000 + n, n + 1, &context);
     }
     assert_eq!(
         ccp.how_many_venue_names_are_held(), super::WIRE_NAME_WINDOW,
         "the window holds what it says it holds",
     );
+    assert_eq!(
+        ccp.the_order_named(1_000_000), Some(1),
+        "the name of an order still working is not forgotten, however old it is",
+    );
     assert!(
-        ccp.the_order_named(1_000_000).is_none(),
-        "the oldest name went when the newest arrived",
+        ccp.the_order_named(1_000_001).is_none(),
+        "the oldest name of an order that has finished went instead",
     );
     assert_eq!(
         ccp.the_order_named(1_000_000 + super::WIRE_NAME_WINDOW as u64 + 15),
@@ -1533,7 +1587,7 @@ fn the_venue_revising_a_working_order_reaches_the_caller() {
     // which is every order the account already had — or reached whichever
     // unrelated order happened to be numbered the venue's permanent name for
     // this one, and wrote this order's venue and limit onto that one.
-    ccp.remember_the_venues_name_for(90_071_992_547, 55);
+    ccp.remember_the_venues_name_for(90_071_992_547, 55, &context);
     let named_the_venues_way: std::collections::HashMap<u32, String> = [
         (11u32, "90071992547.0".to_string()), (44u32, "102.25".to_string()),
     ].into_iter().collect();

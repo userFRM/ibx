@@ -1459,6 +1459,15 @@ impl HotLoop {
                         }
                     }
                 }
+                ControlCommand::AlsoAskForSeries { instrument, generic_ticks } => {
+                    self.farm.also_ask_for_series(
+                        instrument,
+                        &generic_ticks,
+                        &self.context,
+                        &mut self.farm_conn,
+                        &mut self.hb,
+                    );
+                }
                 ControlCommand::Unsubscribe { instrument } => {
                     self.farm.send_mktdata_unsubscribe(
                         instrument,

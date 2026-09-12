@@ -8055,6 +8055,57 @@ fn completed_orders_are_still_there_when_they_are_asked_for_again() {
     );
 }
 
+/// One question of what the account has finished at a time.
+///
+/// The answer is a run of ordinary reports and one sentinel, and nothing in
+/// the run says which question it answers — so two callers waiting at once
+/// both read the same sentinel and both take the first answer as their own.
+/// The client this replaces refuses the second outright. This one says so and
+/// ends, rather than handing over somebody else's answer.
+#[test]
+fn a_second_question_about_what_the_account_has_finished_is_refused() {
+    let (client, _rx, shared) = test_client();
+    shared.orders.push_completed_order(crate::types::CompletedOrder {
+        order_id: 31, instrument: 0, status: crate::types::OrderStatus::Filled,
+        filled_qty: 100, timestamp_ns: 0,
+    });
+    // A caller already waiting, which is what the claim stands for.
+    assert!(shared.orders.claim_the_completed_orders_question());
+
+    let mut w = RecordingWrapper::default();
+    client.req_completed_orders(false, &mut w);
+    assert!(
+        w.events.iter().any(|e| e.starts_with("error")),
+        "the caller is told why it was not sent: {:?}", w.events,
+    );
+    assert!(
+        w.events.iter().any(|e| e == "completed_orders_end"),
+        "and is ended rather than left waiting: {:?}", w.events,
+    );
+    assert!(
+        !w.events.iter().any(|e| e == "completed_order"),
+        "and is handed nobody else's answer: {:?}", w.events,
+    );
+
+    // Once the first is over, the next one is sent.
+    shared.orders.the_completed_orders_question_is_over();
+    let engine = {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            shared.orders.note_completed_orders_asked();
+            shared.orders.note_completed_orders_end();
+        })
+    };
+    let mut next = RecordingWrapper::default();
+    client.req_completed_orders(false, &mut next);
+    engine.join().unwrap();
+    assert_eq!(
+        next.events.iter().filter(|e| *e == "completed_order").count(), 1,
+        "the question is free again: {:?}", next.events,
+    );
+}
+
 /// A question the engine refuses at once is answered at once.
 ///
 /// The engine counts the question as asked and, where there is no connection

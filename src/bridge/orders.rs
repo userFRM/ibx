@@ -78,6 +78,8 @@ pub struct OrderState {
     /// Whether the venue has said it has stated every finished order it holds.
     completed_orders_ended: std::sync::atomic::AtomicU64,
     completed_orders_asked: std::sync::atomic::AtomicU64,
+    /// Whether a caller is already waiting on that question.
+    completed_orders_in_flight: std::sync::atomic::AtomicBool,
     /// Orders the venue has taken back after reporting them finished.
     ///
     /// The completion queue empties on read, and what is read out of it is
@@ -178,6 +180,7 @@ impl OrderState {
             completed_orders: Mutex::new(Vec::with_capacity(64)),
             completed_orders_ended: std::sync::atomic::AtomicU64::new(0),
             completed_orders_asked: std::sync::atomic::AtomicU64::new(0),
+            completed_orders_in_flight: std::sync::atomic::AtomicBool::new(false),
             order_corrections: Mutex::new(Vec::new()),
             order_cache: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
@@ -253,6 +256,30 @@ impl OrderState {
     /// Take every what if responses waiting, leaving none.
     pub fn drain_what_if_responses(&self) -> Vec<WhatIfResponse> {
         self.what_if_responses.lock().unwrap().drain(..).collect()
+    }
+
+    /// Take the one question of what the account has finished that this
+    /// session may have outstanding, if it is free.
+    ///
+    /// The venue answers this question with a run of ordinary reports and one
+    /// sentinel, and nothing in the run says which question it answers. Two
+    /// callers waiting at once both read the same sentinel and both take the
+    /// first answer as their own; the client this replaces refuses the second
+    /// outright, logging that another request is pending. Refused here too,
+    /// and told so, rather than handed somebody else's answer.
+    #[doc(hidden)] pub fn claim_the_completed_orders_question(&self) -> bool {
+        self.completed_orders_in_flight
+            .compare_exchange(
+                false, true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// And give it back, answered or not.
+    #[doc(hidden)] pub fn the_completed_orders_question_is_over(&self) {
+        self.completed_orders_in_flight.store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Say that the venue has finished stating what it has finished.

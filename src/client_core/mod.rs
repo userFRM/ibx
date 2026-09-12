@@ -2007,6 +2007,17 @@ impl ClientCore {
                 self.snapshot_reqs.lock().unwrap().insert(req_id, (std::time::Instant::now(), 0));
             }
             self.pay_a_joiner(shared, instrument, req_id);
+            // And the series this caller named. The list that went to the
+            // venue is the first caller's, so a joiner naming a series nobody
+            // has asked for waited on a stream that was never requested. What
+            // is already being served is not asked for again — the engine
+            // holds what was asked and sends only the difference.
+            if !generic_ticks.is_empty() {
+                let _ = control_tx.send(ControlCommand::AlsoAskForSeries {
+                    instrument,
+                    generic_ticks: generic_ticks.clone(),
+                });
+            }
             // The news subscription was sent above whether or not the quotes
             // were already up, so it is recorded here as well. Recorded only
             // on the path that also opened the quotes, it was never withdrawn:

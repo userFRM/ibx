@@ -961,7 +961,26 @@ impl CcpState {
         &mut self, shared: &SharedState, handover: super::Handover,
     ) {
         let held_now: Vec<super::FinishedOrder> = match handover {
-            super::Handover::Final => std::mem::take(&mut self.finished_orders),
+            // Everything the venue has finished stating, and nothing else:
+            // being the last handover does not make a record that says the
+            // order is working into one that says it has finished. Taken
+            // whole, a record still being built — which is what a window
+            // handed over at its bound, or on a connection going away, is full
+            // of — reached the caller as a completed order the venue never
+            // said was complete.
+            super::Handover::Final => {
+                let (finished, still_working) = std::mem::take(&mut self.finished_orders)
+                    .into_iter()
+                    .partition::<Vec<_>, _>(|held| held.status.is_terminal());
+                if !still_working.is_empty() {
+                    log::info!(
+                        "{} of the orders assembled for this answer are still being stated, \
+                         so they are not part of it",
+                        still_working.len(),
+                    );
+                }
+                finished
+            }
             // Only the ones the venue has finished stating. A record still
             // being built says the order is working, and a record saying that
             // is one this client reads as an order the venue is holding — so a
@@ -1327,7 +1346,7 @@ impl CcpState {
         if let (Some(origin), Some(wire)) = (recovery_origin_order_id, wire_name)
             && origin != wire
         {
-            self.remember_the_venues_name_for(wire, origin);
+            self.remember_the_venues_name_for(wire, origin, context);
         }
         let clord_id = recovery_origin_order_id.unwrap_or_else(|| {
             parsed.get(&11).and_then(|s| {

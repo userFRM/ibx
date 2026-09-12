@@ -155,6 +155,19 @@ pub enum ControlCommand {
         /// on one.
         reply_tx: Option<std::sync::mpsc::SyncSender<Result<InstrumentId, crate::error_codes::Refusal>>>,
     },
+    /// Ask for extra series on a contract already being watched.
+    ///
+    /// A caller joining a subscription that is already up brings its own list
+    /// of series with it, and a series nobody has asked for yet has to be
+    /// asked for: the venue serves what it was asked, so a joiner naming one
+    /// the first caller did not name waited on a stream that was never
+    /// requested. What is already being served is not asked for twice.
+    AlsoAskForSeries {
+        /// The engine's own slot for the contract.
+        instrument: InstrumentId,
+        /// The series the joining caller named, by the venue's number for each.
+        generic_ticks: Vec<u32>,
+    },
     /// Unsubscribe from market data for an instrument.
     Unsubscribe {
         /// The engine's own slot for the contract.

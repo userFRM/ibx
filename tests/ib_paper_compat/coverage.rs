@@ -55,6 +55,14 @@ const TESTED_CONTROL_COMMANDS: &[&str] = &[
 
 const KNOWN_CONTROL_COMMAND_GAPS: &[(&str, &str)] = &[
     (
+        "AlsoAskForSeries",
+        "Sent where a second caller joins a contract already being watched and \
+         names a series the first did not. A phase here watches each contract \
+         once, so nothing joins: what the command does — asking for the \
+         difference and nothing else, and recording it as an entry of the \
+         subscription — is settled offline against the bytes it writes",
+    ),
+    (
         "CancelCorporateActions",
         "Sent where a caller stops waiting for corporate actions, which is a \
          deadline no phase waits out: the query is answered in well under it, \
