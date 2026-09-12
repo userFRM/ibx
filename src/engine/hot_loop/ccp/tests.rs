@@ -3197,6 +3197,47 @@ fn an_order_the_venue_numbered_is_known_as_an_api_order_on_any_path() {
     );
 }
 
+/// One order's reports are one order, whichever number each of them carries.
+///
+/// The venue states an order under the number an API gave it on some reports
+/// and under its own on others. Keyed by whichever the report carried, an
+/// order's first report and its last were filed as two different orders: the
+/// caller was told about it twice, once with the fields and no outcome and
+/// once with the outcome and no fields.
+#[test]
+fn reports_naming_one_order_two_ways_are_still_one_order() {
+    let (mut ccp, mut context, shared) = ord_status_test_state();
+    ccp.completed_orders_open = true;
+
+    // The first report states the order and carries the number an API gave it.
+    let mut first = exec_report_frame(&[
+        (39, "0"), (150, "0"), (14, "0"), (151, "0"),
+        (54, "2"), (38, "100"), (55, "IBM"), (167, "CS"), (15, "USD"), (6008, "8314"),
+        (40, "2"), (44, "150.00"), (1, "DU111111"), (6121, "4471"),
+    ]);
+    first.insert(11, "9000.0".to_string());
+    ccp.handle_exec_report(&first, b"", &mut context, &shared, &None, "");
+
+    // The last states the outcome and carries only the venue's own number.
+    let mut last = exec_report_frame(&[
+        (39, "2"), (150, "0"), (14, "100"), (151, "0"), (1, "DU111111"),
+    ]);
+    last.insert(11, "9000".to_string());
+    ccp.handle_exec_report(&last, b"", &mut context, &shared, &None, "");
+
+    let mut end = exec_report_frame(&[(39, "2"), (55, "*")]);
+    end.insert(11, "0".to_string());
+    ccp.handle_exec_report(&end, b"", &mut context, &shared, &None, "");
+
+    let finished = shared.orders.drain_completed_orders();
+    assert_eq!(finished.len(), 1, "one order, not one per number: {finished:?}");
+    assert_eq!(finished[0].status, crate::types::OrderStatus::Filled, "with its outcome");
+    let info = shared.orders.get_order_info(9000).expect("and its fields");
+    assert_eq!(info.order.action, "SELL");
+    assert_eq!(info.contract.symbol, "IBM");
+    assert_eq!(info.order.order_id, 4471, "the number an API gave it is kept as its own");
+}
+
 /// The last event of a finished order's life is the one the caller is handed.
 ///
 /// The answer states each order's whole life, one report per event, in the
@@ -3225,10 +3266,18 @@ fn the_last_event_of_a_finished_order_is_the_one_that_stands() {
     last.insert(11, "987654321".to_string());
     ccp.handle_exec_report(&last, b"", &mut context, &shared, &None, "");
 
-    // The later event said nothing about the side, the symbol or the venue.
-    // Rebuilt from nothing, the record kept only what that event repeated —
-    // and a side nobody stated is not a buy.
+    // The venue says it has finished, and the answer is handed over whole.
+    let mut end = exec_report_frame(&[(39, "2"), (55, "*")]);
+    end.insert(11, "0".to_string());
+    ccp.handle_exec_report(&end, b"", &mut context, &shared, &None, "");
+
+    // The later event said nothing about the side, the symbol, the venue, the
+    // quantity or the price. Rebuilt from nothing, the record kept only what
+    // that event repeated — and a side nobody stated is not a buy.
     let info = shared.orders.get_order_info(987_654_321).expect("the order is recorded");
+    assert_eq!(info.order.total_quantity, 100.0, "the quantity the first event stated");
+    assert_eq!(info.order.order_type, "2", "and its type");
+    assert_eq!(info.order.lmt_price, 150.0, "and its price");
     assert_eq!(info.order.action, "SELL", "the side the first event stated");
     assert_eq!(info.contract.symbol, "IBM", "and the symbol");
     assert_eq!(info.contract.exchange, "NYSE", "and where it traded");
@@ -3280,6 +3329,19 @@ fn what_the_venue_has_finished_is_filed_rather_than_worked() {
         context.order(987_654_321).is_none(),
         "and opens no order in the book a withdrawal walks",
     );
+    // Nothing is handed over yet: an order's reports are not always adjacent,
+    // so the answer is assembled and given whole when the venue says it has
+    // finished.
+    assert!(shared.orders.drain_completed_orders().is_empty(), "not until the venue is done");
+    assert!(!shared.orders.take_completed_orders_end(), "not yet");
+
+    // And the sentinel says the venue has said everything.
+    let mut end = exec_report_frame(&[(39, "2"), (55, "*")]);
+    end.insert(11, "0".to_string());
+    ccp.handle_exec_report(&end, b"", &mut context, &shared, &None, "");
+    assert!(!ccp.completed_orders_open, "the window is shut");
+    assert!(shared.orders.take_completed_orders_end(), "and the caller is released");
+
     let finished = shared.orders.drain_completed_orders();
     assert_eq!(finished.len(), 1, "it is filed as finished: {finished:?}");
     assert_eq!(finished[0].order_id, 987_654_321);
@@ -3287,14 +3349,6 @@ fn what_the_venue_has_finished_is_filed_rather_than_worked() {
     assert_eq!(info.contract.symbol, "IBM");
     assert_eq!(info.order.action, "BUY");
     assert_eq!(info.order.total_quantity, 100.0);
-
-    // And the sentinel says the venue has said everything.
-    assert!(!shared.orders.take_completed_orders_end(), "not yet");
-    let mut end = exec_report_frame(&[(39, "2"), (55, "*")]);
-    end.insert(11, "0".to_string());
-    ccp.handle_exec_report(&end, b"", &mut context, &shared, &None, "");
-    assert!(!ccp.completed_orders_open, "the window is shut");
-    assert!(shared.orders.take_completed_orders_end(), "and the caller is released");
 }
 
 /// The report that fills an order states its new status on the same

@@ -1085,7 +1085,16 @@ impl EClient {
                     } else {
                         contract
                     };
-                    archive.push((contract, order, state));
+                    // Replaced where this order is already in the archive, as
+                    // on the other surface: the venue restates an order once
+                    // the memory of it has aged out, and pushed again the
+                    // caller was handed the same order twice.
+                    match archive.iter().position(|(_, held, _): &(_, crate::types::model::Order, _)| {
+                        held.perm_id == order.perm_id && held.order_id == order.order_id
+                    }) {
+                        Some(at) => archive[at] = (contract, order, state),
+                        None => archive.push((contract, order, state)),
+                    }
                     // Bound `order_cache` growth: terminal entries are no
                     // longer needed once what they carried has been read out.
                     // Handed to the side that reads the fills rather than

@@ -623,97 +623,124 @@ impl CcpState {
         parsed: &std::collections::HashMap<u32, String>,
         clord_id: u64,
         status: crate::types::OrderStatus,
-        shared: &SharedState,
     ) {
-        // What the earlier events of this order's life already said. Each
-        // event states what changed and leaves the rest out, so a record
-        // rebuilt from nothing every time keeps only the last event's fields —
-        // and where the last event states no side, that is not a buy.
-        let earlier = shared.orders.get_order_info(clord_id);
-        let con_id: i64 = parsed
-            .get(&6008)
-            .and_then(|s| s.parse().ok())
-            .or_else(|| earlier.as_ref().map(|was| was.contract.con_id))
-            .unwrap_or(0);
-        // Stated, or what an earlier event stated, and a buy only where
-        // something said so. Read as "a sell if it says sell", an event that
-        // said nothing turned a recovered sell into a buy, which moves the
-        // position the wrong way by twice the fill.
-        let side = match parsed.get(&54).map(String::as_str) {
-            Some("1") => "BUY",
-            Some("2") => "SELL",
-            Some("5") => "SSHORT",
-            _ => earlier
-                .as_ref()
-                .map(|was| was.order.action.as_str())
-                .filter(|action| !action.is_empty())
-                .unwrap_or("BUY"),
-        };
-        let qty = parse_qty_tag(parsed.get(&38)).unwrap_or(0);
-        // What it filled, off the cumulative figure the report carries.
-        let filled = parse_qty_tag(parsed.get(&14)).unwrap_or(0);
-        // Each field as this event states it, or as an earlier one did. The
-        // venue states what changed; a record rebuilt from nothing drops
-        // everything the last event happened not to repeat, so an order that
-        // finished on a terse report lost its symbol, its venue and its
-        // expiry.
-        let was = earlier.as_ref().map(|was| &was.contract);
-        let kept = |stated: Option<&String>, before: Option<&String>| -> String {
+        // What the earlier reports about this order already said. Each report
+        // states what changed and leaves the rest out, so a record rebuilt
+        // from nothing every time keeps only the last report's fields.
+        let at = self.finished_orders.iter().position(|held| held.order_id == clord_id);
+        let was = at.map(|at| &self.finished_orders[at]);
+        let kept = |stated: Option<&String>, before: Option<&str>| -> String {
             stated
+                .map(String::as_str)
                 .filter(|v| !v.is_empty())
                 .or(before.filter(|v| !v.is_empty()))
-                .cloned()
                 .unwrap_or_default()
+                .to_string()
         };
         let contract = api::Contract {
-            con_id,
-            symbol: kept(parsed.get(&55), was.map(|c| &c.symbol)),
-            sec_type: kept(parsed.get(&167), was.map(|c| &c.sec_type)),
-            currency: kept(parsed.get(&15), was.map(|c| &c.currency)),
-            exchange: kept(parsed.get(&100), was.map(|c| &c.exchange)),
-            local_symbol: kept(parsed.get(&6035), was.map(|c| &c.local_symbol)),
+            con_id: parsed
+                .get(&6008)
+                .and_then(|s| s.parse().ok())
+                .or_else(|| was.map(|w| w.contract.con_id).filter(|id| *id != 0))
+                .unwrap_or(0),
+            symbol: kept(parsed.get(&55), was.map(|w| w.contract.symbol.as_str())),
+            sec_type: kept(parsed.get(&167), was.map(|w| w.contract.sec_type.as_str())),
+            currency: kept(parsed.get(&15), was.map(|w| w.contract.currency.as_str())),
+            exchange: kept(parsed.get(&100), was.map(|w| w.contract.exchange.as_str())),
+            local_symbol: kept(parsed.get(&6035), was.map(|w| w.contract.local_symbol.as_str())),
             last_trade_date_or_contract_month: kept(
                 parsed.get(&541).or_else(|| parsed.get(&200)),
-                was.map(|c| &c.last_trade_date_or_contract_month),
+                was.map(|w| w.contract.last_trade_date_or_contract_month.as_str()),
             ),
             strike: parsed
                 .get(&202)
                 .and_then(|s| s.parse().ok())
-                .or_else(|| was.map(|c| c.strike).filter(|k| *k != 0.0))
+                .or_else(|| was.map(|w| w.contract.strike).filter(|k| *k != 0.0))
                 .unwrap_or(0.0),
-            right: kept(parsed.get(&201), was.map(|c| &c.right)),
+            right: kept(parsed.get(&201), was.map(|w| w.contract.right.as_str())),
             ..Default::default()
+        };
+        // A buy only where something said so. Read as "a sell if it says
+        // sell", a report that said nothing turned a recovered sell into a
+        // buy, which moves the position the wrong way by twice the fill — and
+        // where nothing has ever said, the side is left unstated rather than
+        // invented.
+        let side = match parsed.get(&54).map(String::as_str) {
+            Some("1") => "BUY".to_string(),
+            Some("2") => "SELL".to_string(),
+            Some("5") => "SSHORT".to_string(),
+            _ => was.map(|w| w.order.action.clone()).unwrap_or_default(),
+        };
+        let number = |tag: u32, before: Option<f64>, unset: f64| -> f64 {
+            parsed
+                .get(&tag)
+                .and_then(|s| s.parse().ok())
+                .or_else(|| before.filter(|v| *v != unset))
+                .unwrap_or(unset)
         };
         let order = api::Order {
             // The venue's own number for the order where it states one, and
             // the number it is known by here either way.
-            order_id: parsed.get(&6121).and_then(|s| s.parse().ok()).unwrap_or(clord_id as i64),
-            client_id: parsed.get(&6119).and_then(|s| s.parse().ok()).unwrap_or(0),
+            order_id: parsed
+                .get(&6121)
+                .and_then(|s| s.parse().ok())
+                .or_else(|| was.map(|w| w.order.order_id).filter(|id| *id != 0))
+                .unwrap_or(clord_id as i64),
+            client_id: parsed
+                .get(&6119)
+                .and_then(|s| s.parse().ok())
+                .or_else(|| was.map(|w| w.order.client_id).filter(|id| *id != 0))
+                .unwrap_or(0),
             perm_id: clord_id as i64,
-            action: side.to_string(),
-            total_quantity: qty_to_f64(qty),
-            filled_quantity: qty_to_f64(filled),
-            order_type: parsed.get(&40).cloned().unwrap_or_default(),
-            lmt_price: parsed.get(&44).and_then(|s| s.parse().ok()).unwrap_or(f64::MAX),
-            aux_price: parsed.get(&99).and_then(|s| s.parse().ok()).unwrap_or(f64::MAX),
-            account: parsed.get(&1).cloned().unwrap_or_default(),
-            model_code: parsed.get(&6700).cloned().unwrap_or_default(),
+            action: side,
+            total_quantity: number(38, was.map(|w| w.order.total_quantity), 0.0),
+            filled_quantity: number(14, was.map(|w| w.order.filled_quantity), 0.0),
+            order_type: kept(parsed.get(&40), was.map(|w| w.order.order_type.as_str())),
+            lmt_price: number(44, was.map(|w| w.order.lmt_price), f64::MAX),
+            aux_price: number(99, was.map(|w| w.order.aux_price), f64::MAX),
+            account: kept(parsed.get(&1), was.map(|w| w.order.account.as_str())),
+            model_code: kept(parsed.get(&6700), was.map(|w| w.order.model_code.as_str())),
             ..Default::default()
         };
-        let order_state = api::OrderState {
-            status: crate::types::order_status::order_status_str(status).to_string(),
-            ..Default::default()
-        };
-        shared.orders.push_order_info(clord_id, crate::bridge::RichOrderInfo {
-            contract, order, order_state, last_exec: Default::default(),
-        });
-        shared.orders.refile_completed_order(crate::types::CompletedOrder {
-            order_id: clord_id,
-            instrument: 0,
-            status,
-            filled_qty: filled,
-            timestamp_ns: 0,
-        });
+        // The latest anyone said, which for these two is the report in hand:
+        // a status is what the order is now and a cumulative figure is what it
+        // has filled altogether.
+        let filled = parse_qty_tag(parsed.get(&14))
+            .or_else(|| was.map(|w| w.filled))
+            .unwrap_or(0);
+        let merged = super::FinishedOrder { order_id: clord_id, contract, order, status, filled };
+        match at {
+            Some(at) => self.finished_orders[at] = merged,
+            None => self.finished_orders.push(merged),
+        }
+    }
+
+    /// Hand over the answer to what the venue has finished, whole.
+    ///
+    /// Built up report by report and given to the caller in one piece, because
+    /// an order's events are not always adjacent and each states only what
+    /// changed. Published one per report instead, a caller had to choose
+    /// between the first report's fields and the last report's status.
+    pub(crate) fn deliver_finished_orders_so_far(&mut self, shared: &SharedState) {
+        for held in self.finished_orders.drain(..) {
+            let order_state = api::OrderState {
+                status: crate::types::order_status::order_status_str(held.status).to_string(),
+                ..Default::default()
+            };
+            shared.orders.push_order_info(held.order_id, crate::bridge::RichOrderInfo {
+                contract: held.contract,
+                order: held.order,
+                order_state,
+                last_exec: Default::default(),
+            });
+            shared.orders.refile_completed_order(crate::types::CompletedOrder {
+                order_id: held.order_id,
+                instrument: 0,
+                status: held.status,
+                filled_qty: held.filled,
+                timestamp_ns: 0,
+            });
+        }
     }
 
     /// Build an order this session never saw from the venue's account of it.
@@ -1077,6 +1104,20 @@ impl CcpState {
         // bust or a correction for it afterwards reads as an order nobody here
         // placed — filed as history, it took back nothing, and the position
         // the correction was undoing stayed where it was.
+        // The id every report about one order names it by. The recovery push
+        // states an order under the number an API gave it, which is right for
+        // an order this session must be able to address — and wrong here,
+        // because only some of an order's reports carry it, so its first
+        // report and its last would be filed as two different orders.
+        let history_id = parsed
+            .get(&11)
+            .and_then(|stated| {
+                let stripped = stated.strip_prefix('C').or_else(|| stated.strip_prefix('L'))
+                    .unwrap_or(stated);
+                let base = stripped.split('.').next().unwrap_or(stripped);
+                stated_order_id(base)
+            })
+            .unwrap_or(clord_id);
         if self.completed_orders_open
             && clord_id != 0
             && context.order(clord_id).is_none()
@@ -1085,7 +1126,7 @@ impl CcpState {
             let finished = status_of(
                 parsed.get(&39).map(String::as_str).unwrap_or(""), clord_id, parsed,
             );
-            self.file_finished_order(parsed, clord_id, finished, shared);
+            self.file_finished_order(parsed, history_id, finished);
             return;
         }
 
@@ -1201,7 +1242,15 @@ impl CcpState {
             if self.completed_orders_open {
                 self.completed_orders_open = false;
                 self.completed_orders_deadline = None;
-                shared.orders.note_completed_orders_end();
+                self.deliver_finished_orders_so_far(shared);
+                // Only where nobody has been told yet. A caller released on
+                // its own wait has had its answer, and a second signal left
+                // standing was read by the next caller as the answer to a
+                // question the venue had not begun.
+                if !self.completed_orders_answered {
+                    shared.orders.note_completed_orders_end();
+                }
+                self.completed_orders_answered = false;
                 log::info!("The venue has stated everything it has finished");
             }
             // Everything already working has now been named. The same record

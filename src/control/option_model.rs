@@ -237,7 +237,12 @@ fn tree_near_the_root(
     let dt = terms.years_to_expiry / STEPS as f64;
     let owed = payouts_by_step(rate, payouts, dt, terms.on_a_future)?;
     let adjusted = spot - owed[0];
-    if adjusted <= 0.0 {
+    // And what is left has to be a number. Both sides of that subtraction are
+    // finite and their difference need not be: a price at the top of what a
+    // double holds, less a payment at the bottom of it, is an infinity the
+    // comparison below lets through — and every pay-off against an infinite
+    // tree is nothing, so the root came back finite for a tree that was not.
+    if !adjusted.is_finite() || adjusted <= 0.0 {
         return None;
     }
     let up = (volatility * dt.sqrt()).exp();
@@ -1025,6 +1030,27 @@ mod tests {
         }, dt, false).expect("a present value places");
         assert_eq!(flat_owed[0], today);
         assert!(flat_owed[1..].iter().all(|owed| *owed == 0.0));
+    }
+
+    /// An underlying that overflows what is left of it is refused too.
+    ///
+    /// Both sides of the subtraction are finite and their difference need not
+    /// be: a price at the top of what a double holds, less a payment at the
+    /// bottom of it, is an infinity that "greater than nought" lets through.
+    /// Every pay-off against an infinite tree is nothing, so the root came
+    /// back finite for a tree that was not.
+    #[test]
+    fn an_underlying_that_overflows_what_is_left_of_it_is_refused() {
+        let terms = OptionTerms {
+            strike: 100.0, years_to_expiry: 1.0, is_call: false, on_a_future: false,
+        };
+        assert_eq!(
+            price(terms, f64::MAX, 0.2, 0.05, Payouts {
+                present_value: -f64::MAX, ..Default::default()
+            }),
+            None,
+            "an underlying of infinity answered as a price",
+        );
     }
 
     /// A rate that overflows the discount is refused, not answered.

@@ -19,6 +19,24 @@ const MATCHING_SYMBOLS_TIMEOUT: Duration =
 const OPTION_CHAIN_TIMEOUT: Duration =
     Duration::from_secs(crate::config::ANSWER_TIMEOUT_SECS - 3);
 
+/// One order the venue has finished, as the reports about it are merged.
+///
+/// Its status and what it filled are the latest any report stated; every other
+/// field is the last report that stated it, because a report states what
+/// changed and says nothing about the rest.
+pub(crate) struct FinishedOrder {
+    /// The id every report about this order names it by.
+    pub(crate) order_id: u64,
+    /// The contract, as far as the reports have stated it.
+    pub(crate) contract: crate::types::model::Contract,
+    /// The order itself, the same way.
+    pub(crate) order: crate::types::model::Order,
+    /// What became of it, from the latest report that said.
+    pub(crate) status: crate::types::OrderStatus,
+    /// And how much of it filled.
+    pub(crate) filled: i64,
+}
+
 /// How many given-up-on dividend queries are remembered, so a late answer can
 /// still be attributed. A second chance for the few most recent, not a record.
 const GIVEN_UP_ON_DIVIDEND_QUERIES: usize = 64;
@@ -514,6 +532,27 @@ pub(crate) struct CcpState {
     /// live path never sees them, because through it a report that states a
     /// fill is a fill and a fill moves a position.
     pub(crate) completed_orders_open: bool,
+    /// The answer being assembled, one entry per order the venue has finished.
+    ///
+    /// Each order's life arrives as several reports, each stating what changed
+    /// and leaving the rest out, and they are not always adjacent. So the
+    /// answer is built here and handed over whole when the venue says it has
+    /// finished — rather than one record per report, which made a caller
+    /// choose between the first report's fields and the last report's status
+    /// and could not give them both.
+    ///
+    /// In the order the venue stated them, so that is the order a caller hears
+    /// about them in.
+    finished_orders: Vec<FinishedOrder>,
+    /// Whether the caller waiting on this window has already been told the
+    /// answer is complete.
+    ///
+    /// The window outlives that: it is shut by the wire, and the caller is
+    /// released when it has waited long enough. Told twice — once on the wait
+    /// and once on the sentinel — the second signal was left standing for the
+    /// next caller, who read it as the answer to a question the venue had not
+    /// begun to answer.
+    completed_orders_answered: bool,
     /// A caller asked what the venue has finished before the session's own
     /// replay was over, so the question is held until it is.
     ///
@@ -702,6 +741,8 @@ impl CcpState {
             pending_secdef: Vec::new(),
             pending_matching_symbols: Vec::new(),
             completed_orders_open: false,
+            finished_orders: Vec::new(),
+            completed_orders_answered: false,
             completed_orders_wanted: None,
             completed_orders_deadline: None,
             pending_option_params: Vec::new(),
@@ -2708,6 +2749,14 @@ impl CcpState {
             {
                 Some(at) => {
                     let (_, con_id) = self.dividends_given_up_on.remove(at).expect("just found");
+                    // Unless a later question about the same contract has
+                    // already been answered. This one was asked first and
+                    // arrived last, so filing it would put the older schedule
+                    // over the newer one.
+                    if self.dividends_answered.contains(&con_id) {
+                        log::debug!("a later answer for {con_id} already stands");
+                        return;
+                    }
                     log::debug!("what {con_id} pays out arrived after the wait ran out");
                     con_id
                 }
@@ -3061,7 +3110,11 @@ impl CcpState {
             self.completed_orders_open = false;
             self.completed_orders_deadline = None;
             self.completed_orders_wanted = None;
-            shared.orders.note_completed_orders_end();
+            self.deliver_finished_orders_so_far(shared);
+            if !self.completed_orders_answered {
+                shared.orders.note_completed_orders_end();
+            }
+            self.completed_orders_answered = false;
         }
         // The engine stops believing these statuses here, and said so to
         // nobody — so the API layer went on reporting the pre-disconnect
@@ -3222,7 +3275,11 @@ impl CcpState {
             && self.completed_orders_deadline.is_some_and(|at| Instant::now() >= at)
         {
             self.completed_orders_deadline = None;
+            self.deliver_finished_orders_so_far(shared);
             shared.orders.note_completed_orders_end();
+            // Said, so the sentinel does not say it again to nobody and leave
+            // the next caller reading it as its own answer.
+            self.completed_orders_answered = true;
             log::warn!(
                 "the venue has not said it has finished; the caller is answered with what \
                  arrived and the rest is still read as history",

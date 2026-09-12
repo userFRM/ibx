@@ -936,7 +936,17 @@ impl EClient {
                         },
                     )
                 };
-                archive.push(entry);
+                // Replaced where this order is already in the archive, not
+                // added beside it. The venue restates an order it has already
+                // stated once the memory of it has aged out, and pushed again
+                // the caller was handed the same order twice — and the archive
+                // grew by one row every time it happened.
+                match archive.iter().position(|(_, held, _)| held.perm_id == entry.1.perm_id
+                    && held.order_id == entry.1.order_id)
+                {
+                    Some(at) => archive[at] = entry,
+                    None => archive.push(entry),
+                }
                 // Bound `order_cache` growth: terminal entries are no longer
                 // needed once what they carried has been read out of them.
                 // Handed to the side that reads the fills rather than freed
