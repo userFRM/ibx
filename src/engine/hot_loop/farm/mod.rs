@@ -674,6 +674,18 @@ pub(crate) struct FarmState {
     /// caller that asked for five and was handed ten was handed a book it did
     /// not ask for.
     depth_rows: Vec<(u32, i32)>,
+    /// The book each stream is holding, by the venue's number for it: the bid
+    /// side and the ask side, deepest last, as maker, price and size.
+    ///
+    /// Kept because a caller asking for five levels is answered with five, and
+    /// the venue answers with all of them: when a level inside those five goes
+    /// away, the level that moves up into the fifth place arrives from the
+    /// venue in sixth place and is dropped as too deep. Without a book of its
+    /// own this client had nothing to put in the place that emptied, so the
+    /// caller's book lost a row on every withdrawal near the top and never
+    /// refilled — which is what the client this replaces keeps a book to
+    /// prevent.
+    depth_books: Vec<(u32, BookSides)>,
     /// Which exchange each fanned-out depth subscription is for, so a level
     /// says where it stands. Without it every level of a smart book arrived
     /// unattributed, and a caller was handed one book with no way to tell
@@ -1000,6 +1012,9 @@ fn generic_tick_length(stated_bits: u16, arrived: usize) -> Option<usize> {
     Some(bits / 8)
 }
 
+/// A stream's two sides, deepest last, as maker, price and size.
+type BookSides = [Vec<(String, f64, f64)>; 2];
+
 /// One generic tick record: the venue's number for the subscription, and the
 /// payload under it.
 ///
@@ -1288,6 +1303,7 @@ impl FarmState {
             quotes_for_no_one: std::collections::HashSet::new(),
             depth_subs: Vec::new(),
             depth_rows: Vec::new(),
+            depth_books: Vec::new(),
             depth_tag_to_req: Vec::new(),
             depth_fanout_map: Vec::new(),
             depth_fanout_exchange: Vec::new(),
@@ -2770,6 +2786,12 @@ impl FarmState {
         // Cleared whether or not anything was asked yet: left behind, a book
         // the caller withdrew was asked for again by the next reconnect.
         self.depth_resub_info.retain(|(id, ..)| *id != req_id);
+        // The book itself goes with the stream that was carrying it: kept, it
+        // would answer for the window of whatever stream took the number next.
+        let withdrawn = asked_under.to_vec();
+        self.depth_books.retain(|(tag, _)| {
+            !self.depth_tag_to_req.iter().any(|(held, rid, ..)| held == tag && withdrawn.contains(rid))
+        });
         // And the routing, whether or not anything was asked: a tag record
         // left behind after the venue refused the book mid-stream was
         // inherited by the next contract asked for under this number, which
@@ -2860,6 +2882,14 @@ impl FarmState {
         }
     }
 
+    /// How many levels a caller asked for, where it named a number.
+    fn asked_depth(&self, req_id: u32) -> Option<i32> {
+        self.depth_rows.iter()
+            .find(|(id, _)| *id == req_id)
+            .map(|(_, rows)| *rows)
+            .filter(|rows| *rows > 0)
+    }
+
     /// A book frame's payload, read a bit at a time, most significant first.
     ///
     /// The frame states how many bits follow its two-byte count, and the
@@ -2912,7 +2942,7 @@ impl FarmState {
     /// flag that says more fields follow was read as a snapshot flag and
     /// turned into the insert/update distinction; and an entry whose position
     /// byte was zero read as a section switch.
-    fn handle_depth_35y(&self, msg: &[u8], shared: &SharedState) {
+    fn handle_depth_35y(&mut self, msg: &[u8], shared: &SharedState) {
         use crate::types::DepthUpdate;
         self.note_depth_wire("depth-35y", msg, shared);
         let Some(body) = find_body_after_tag(msg, b"35=Y\x01") else { return };
@@ -3009,7 +3039,31 @@ impl FarmState {
                     },
                 };
                 if let Some((operation, side, price, size)) = level {
+                    // How deep the book is on this side before the entry is
+                    // applied, which is what says whether a level was pushed
+                    // out of the window by an insert.
+                    let held = side.clamp(0, 1) as usize;
+                    let was_deep = self.depth_books.iter()
+                        .find(|(held_tag, _)| *held_tag == tag)
+                        .map_or(0, |(_, sides)| sides[held].len());
                     for (req_id, is_smart, venue) in &subscribers {
+                        // A level pushed out of the window by an insert goes
+                        // away for the caller, and the venue says nothing
+                        // about it: it is still in the book, one place deeper.
+                        // Said nothing here either, the caller's book kept a
+                        // row the venue has moved below what was asked for.
+                        if let Some(rows) = self.asked_depth(*req_id)
+                            && operation == 0
+                            && position < rows
+                            && was_deep >= rows as usize
+                        {
+                            shared.market.push_depth_update(DepthUpdate {
+                                req_id: *req_id, position: rows - 1,
+                                market_maker: String::new(),
+                                operation: 2, side, price: 0.0, size: 0.0,
+                                is_smart_depth: *is_smart,
+                            });
+                        }
                         if !self.within_asked_depth(*req_id, position) { continue; }
                         // The venue's name for the maker, as it states it.
                         // Where it states none and the book is the aggregated
@@ -3027,6 +3081,58 @@ impl FarmState {
                             req_id: *req_id, position, market_maker: named,
                             operation, side, price, size, is_smart_depth: *is_smart,
                         });
+                    }
+                    // The book this client keeps, so it can answer for the
+                    // place a withdrawal empties.
+                    let book = match self.depth_books.iter_mut()
+                        .find(|(held_tag, _)| *held_tag == tag)
+                    {
+                        Some((_, sides)) => sides,
+                        None => {
+                            self.depth_books.push((tag, [Vec::new(), Vec::new()]));
+                            let (_, sides) = self.depth_books.last_mut().expect("just pushed");
+                            sides
+                        }
+                    };
+                    let at = position.max(0) as usize;
+                    let rows = &mut book[held];
+                    match operation {
+                        0 => rows.insert(at.min(rows.len()), (name.trim().to_string(), price, size)),
+                        1 => {
+                            if let Some(row) = rows.get_mut(at) {
+                                *row = (name.trim().to_string(), price, size);
+                            }
+                        }
+                        _ => {
+                            if at < rows.len() {
+                                rows.remove(at);
+                            }
+                        }
+                    }
+                    // And the level that moved up into the place a withdrawal
+                    // emptied. It arrives from the venue one place below what
+                    // the caller asked for and is dropped as too deep, so
+                    // without this the caller's book is a row short from the
+                    // first withdrawal near the top and never refills.
+                    if operation == 2 || operation == 3 {
+                        for (req_id, is_smart, _) in &subscribers {
+                            let Some(rows_asked) = self.asked_depth(*req_id) else { continue };
+                            if position >= rows_asked {
+                                continue;
+                            }
+                            let pulled_up = self.depth_books.iter()
+                                .find(|(held_tag, _)| *held_tag == tag)
+                                .and_then(|(_, sides)| sides[held].get(rows_asked as usize - 1))
+                                .cloned();
+                            if let Some((maker, price, size)) = pulled_up {
+                                shared.market.push_depth_update(DepthUpdate {
+                                    req_id: *req_id, position: rows_asked - 1,
+                                    market_maker: maker,
+                                    operation: 0, side, price, size,
+                                    is_smart_depth: *is_smart,
+                                });
+                            }
+                        }
                     }
                 }
                 if more_entries == 0 { break; }
@@ -3096,6 +3202,10 @@ impl FarmState {
         self.depth_subs.clear();
         self.depth_tag_to_req.clear();
         self.depth_fanout_map.clear();
+        // And the books held against those numbers. The next connection
+        // states every book again from the top, so a book kept here would be
+        // answered for out of levels the venue has stopped standing behind.
+        self.depth_books.clear();
         // The venue's numbers do not survive the connection that issued them,
         // and one left behind would read the next subscription's frames as the
         // tick the last one asked for. What the caller asked for is not one of

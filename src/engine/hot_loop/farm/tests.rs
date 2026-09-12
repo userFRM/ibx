@@ -3361,7 +3361,7 @@ mod depth_bit_tests {
     /// where the aggregating reader puts it.
     #[test]
     fn a_level_carries_its_operation_its_side_and_its_maker() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
             level(0, "NSDQ", 0, BID_PX, 10050, BID_SZ, 500),
             level(1, "", 1, ASK_PX, 10075, ASK_SZ, 300),
@@ -3393,7 +3393,7 @@ mod depth_bit_tests {
     /// was skipped, so a book here could never shrink.
     #[test]
     fn a_delete_is_delivered_as_one_and_carries_no_level() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
             Entry { op: 2, name: "", position: 3, fields: vec![] },
             Entry { op: 3, name: "NSDQ", position: 0, fields: vec![] },
@@ -3414,7 +3414,7 @@ mod depth_bit_tests {
     /// in the frame were lost.
     #[test]
     fn an_unnamed_entry_at_the_top_of_the_book_is_an_entry() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
             level(0, "", 0, BID_PX, 10000, BID_SZ, 100),
             level(0, "", 0, ASK_PX, 10001, ASK_SZ, 200),
@@ -3431,7 +3431,7 @@ mod depth_bit_tests {
     /// hold is delivered.
     #[test]
     fn a_section_for_a_stream_this_session_does_not_hold_delivers_nothing() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         farm.handle_depth_35y(&framed_35y(&[
             (0x1122, vec![level(0, "TEST", 0, BID_PX, 100, BID_SZ, 5)]),
             (0x0005, vec![level(0, "", 0, BID_PX, 100, BID_SZ, 10)]),
@@ -3449,7 +3449,7 @@ mod depth_bit_tests {
     /// and a value's sign is its own bit.
     #[test]
     fn a_field_not_read_is_stepped_over_and_a_sign_is_honoured() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![Entry { op: 0, name: "", position: 2, fields: vec![
             Field { id: 100, len: 3, value: -5 },
             Field { id: 8, len: 1, value: 3 },
@@ -3466,7 +3466,7 @@ mod depth_bit_tests {
     /// after it in the frame was lost, silently from the caller's side.
     #[test]
     fn a_field_wider_than_a_number_is_stepped_over() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
             Entry { op: 0, name: "", position: 2, fields: vec![
                 Field { id: 100, len: 12, value: 5 },
@@ -3480,6 +3480,69 @@ mod depth_bit_tests {
         assert_eq!(got, [(2, 100.50, 7.0), (3, 100.75, 9.0)], "{got:?}");
     }
 
+    /// A caller asking for five levels keeps five: the place a withdrawal
+    /// empties is filled from the level that moved up into it.
+    ///
+    /// The venue sends the whole book and says nothing about the level that
+    /// moves up when one near the top goes away: it arrives one place below
+    /// what the caller asked for and is dropped as too deep. With no book of
+    /// its own this client had nothing to put in the place that emptied, so
+    /// the caller's book lost a row on every withdrawal near the top and never
+    /// refilled — and the row at the bottom of the window was stale from then
+    /// on. Both compensations are the ones the client this replaces makes.
+    #[test]
+    fn the_place_a_withdrawal_empties_is_filled_from_the_book() {
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
+        farm.depth_rows.push((7, 3));
+
+        // Four levels on the bid: three inside the window, one below it.
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            level(0, "A", 0, BID_PX, 10050, BID_SZ, 100),
+            level(0, "B", 1, BID_PX, 10040, BID_SZ, 200),
+            level(0, "C", 2, BID_PX, 10030, BID_SZ, 300),
+            level(0, "D", 3, BID_PX, 10020, BID_SZ, 400),
+        ])]), &shared);
+        let inside: Vec<i32> = shared.market.drain_depth_updates()
+            .into_iter().map(|u| u.position).collect();
+        assert_eq!(inside, [0, 1, 2], "the window the caller asked for: {inside:?}");
+
+        // The top of the book goes away. The level that was below the window
+        // moves into its last place, and that is what the caller is owed.
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            Entry { op: 2, name: "", position: 0, fields: vec![] },
+        ])]), &shared);
+        let after: Vec<(i32, i32, String, f64)> = shared.market.drain_depth_updates()
+            .into_iter()
+            .map(|u| (u.operation, u.position, u.market_maker, u.price))
+            .collect();
+        assert_eq!(
+            after,
+            [
+                (2, 0, String::new(), 0.0),
+                (0, 2, "D".to_string(), 100.20),
+            ],
+            "the withdrawal, then the level that moved up into the place it left: {after:?}",
+        );
+
+        // And a level arriving inside the window pushes one out of it, which
+        // the venue also says nothing about.
+        farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
+            level(0, "E", 0, BID_PX, 10060, BID_SZ, 500),
+        ])]), &shared);
+        let pushed: Vec<(i32, i32, String)> = shared.market.drain_depth_updates()
+            .into_iter()
+            .map(|u| (u.operation, u.position, u.market_maker))
+            .collect();
+        assert_eq!(
+            pushed,
+            [
+                (2, 2, String::new()),
+                (0, 0, "E".to_string()),
+            ],
+            "the level pushed out of the window goes first: {pushed:?}",
+        );
+    }
+
     /// A book past the wrap of its own bit count is read whole.
     ///
     /// Two bytes state the count, so it repeats every sixty-five thousand five
@@ -3489,7 +3552,7 @@ mod depth_bit_tests {
     /// away.
     #[test]
     fn a_book_past_the_wrap_of_its_own_bit_count_is_read_whole() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         // A withdrawal carries no fields and no name, so each is sixteen
         // bits; four thousand and ninety four of them behind a thirty-two bit
         // section header is the cycle exactly.
@@ -3523,7 +3586,7 @@ mod depth_bit_tests {
     /// the caller as a priced, sized level.
     #[test]
     fn a_field_stating_no_width_still_costs_its_sign_bit() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
             Entry { op: 0, name: "", position: 4, fields: vec![
                 // The extended form, stating a width of nothing: read at all,
@@ -3544,7 +3607,7 @@ mod depth_bit_tests {
     /// The frame ends where its bit count says, not where the bytes do.
     #[test]
     fn the_frame_ends_at_its_stated_bit_count() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         let mut msg = framed_35y(&[(0x1122, vec![level(0, "", 0, BID_PX, 100, BID_SZ, 5)])]);
         // Another whole level's worth of bytes after the count: not read.
         let trailing = framed_35y(&[(0x1122, vec![level(0, "", 1, BID_PX, 300, BID_SZ, 9)])]);
@@ -3558,7 +3621,7 @@ mod depth_bit_tests {
     /// the entries after it are read as before.
     #[test]
     fn a_half_stated_level_is_not_a_level() {
-        let (farm, shared) = farm_holding(0x1122, 7, "IEX");
+        let (mut farm, shared) = farm_holding(0x1122, 7, "IEX");
         farm.handle_depth_35y(&framed_35y(&[(0x1122, vec![
             Entry { op: 0, name: "", position: 0, fields: vec![Field { id: BID_PX, len: 2, value: 10000 }] },
             Entry { op: 1, name: "", position: 1, fields: vec![Field { id: ASK_SZ, len: 1, value: 9 }] },
