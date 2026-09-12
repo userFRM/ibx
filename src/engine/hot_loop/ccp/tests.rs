@@ -1419,6 +1419,70 @@ fn an_exchange_is_handed_over_under_the_type_its_section_carries() {
     );
 }
 
+/// The venue's own names for recovered orders are held in a window, oldest
+/// out first.
+///
+/// One is learned per order the venue replays, and a caller may ask what the
+/// account has finished as often as it likes, so unbounded the map grew for as
+/// long as the connection lasted. Every other window this state keeps is
+/// bounded on purpose.
+#[test]
+fn the_names_learned_at_recovery_are_held_in_a_window() {
+    let mut ccp = CcpState::new();
+    for n in 0..(super::WIRE_NAME_WINDOW as u64 + 16) {
+        ccp.remember_the_venues_name_for(1_000_000 + n, n + 1);
+    }
+    assert_eq!(
+        ccp.how_many_venue_names_are_held(), super::WIRE_NAME_WINDOW,
+        "the window holds what it says it holds",
+    );
+    assert!(
+        ccp.the_order_named(1_000_000).is_none(),
+        "the oldest name went when the newest arrived",
+    );
+    assert_eq!(
+        ccp.the_order_named(1_000_000 + super::WIRE_NAME_WINDOW as u64 + 15),
+        Some(super::WIRE_NAME_WINDOW as u64 + 16),
+        "and the newest is held",
+    );
+}
+
+/// An exchange the venue names nothing for is not published, and the marker
+/// behind it is still read.
+///
+/// The name follows the code, and only a field carrying it is the name. Taken
+/// as whatever followed, such an exchange went out under an empty name and the
+/// field behind it was swallowed — so where that field opened the futures
+/// section, every futures venue after it was labelled shares. The venue also
+/// states no aggregation group here, and nought is a group of its own: a
+/// caller read these venues as grouped together.
+#[test]
+fn an_exchange_with_no_name_is_left_out_and_the_marker_behind_it_still_read() {
+    let (ccp, _context, shared) = ord_status_test_state();
+    let msg: Vec<u8> = [
+        "35=U", "6040=102",
+        "100=NYSE", "6813=New York",
+        // Named nothing, and the futures marker directly behind it.
+        "100=PHLX",
+        "8129=1", "100=CME", "6813=Chicago Mercantile",
+    ].join("\u{1}").into_bytes();
+
+    ccp.handle_exchange_list(&msg, &shared);
+    shared.reference.notify_depth_exchanges();
+    let said: Vec<(String, String, i32)> = shared.reference.drain_depth_exchanges()
+        .into_iter()
+        .map(|d| (d.exchange, d.sec_type, d.agg_group))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("NYSE".to_string(), "STK".to_string(), i32::MAX),
+            ("CME".to_string(), "FUT".to_string(), i32::MAX),
+        ],
+        "the unnamed one is left out and the futures marker was read: {said:?}",
+    );
+}
+
 /// The venue moving a working order reaches the caller.
 ///
 /// It states only what it changed — where the order is working, what its limit
@@ -1469,7 +1533,7 @@ fn the_venue_revising_a_working_order_reaches_the_caller() {
     // which is every order the account already had — or reached whichever
     // unrelated order happened to be numbered the venue's permanent name for
     // this one, and wrote this order's venue and limit onto that one.
-    ccp.wire_name_to_order.insert(90_071_992_547, 55);
+    ccp.remember_the_venues_name_for(90_071_992_547, 55);
     let named_the_venues_way: std::collections::HashMap<u32, String> = [
         (11u32, "90071992547.0".to_string()), (44u32, "102.25".to_string()),
     ].into_iter().collect();

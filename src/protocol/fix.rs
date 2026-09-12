@@ -463,16 +463,15 @@ pub fn fix_sign(msg: &[u8], mac_key: &[u8], iv: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut new_msg = Vec::with_capacity(hdr_end + 8 + signed_body_len + 8);
     new_msg.extend_from_slice(header);
     new_msg.extend_from_slice(b"9=");
-    // Each header writes its length the way it was built: `fix_build` pads a
-    // FIX.4.1 body length to four digits, `fixcomp_build` writes a compressed
-    // one plain. Rebuilding both plain here re-wrote every short signed FIX
-    // frame's `9=0052` as `9=52`, so the bytes leaving this client stopped
-    // matching the ones it sends unsigned.
-    if is_fix41 {
-        push_u32_padded::<4>(&mut new_msg, signed_body_len as u32);
-    } else {
-        push_u32(&mut new_msg, signed_body_len as u32);
-    }
+    // Written plain, whichever header this is. An unsigned frame pads its
+    // FIX.4.1 length to four digits, because it reserves those four bytes
+    // before it knows the length and back-fills them; a signed one is built
+    // again from the length it now knows, and the signer this follows writes
+    // that plain and pads nothing. Padded here for consistency with the
+    // unsigned build, every signed frame went out two bytes longer than the
+    // venue is sent by the client this replaces, with a different checksum
+    // behind it.
+    push_u32(&mut new_msg, signed_body_len as u32);
     new_msg.push(SOH);
     new_msg.extend_from_slice(body);
     new_msg.extend_from_slice(b"8349=");
@@ -809,23 +808,37 @@ mod tests {
         assert_eq!(fix_read_deadline(&mut reader, &mut carry, deadline).unwrap(), plain);
     }
 
-    /// Signing rebuilds the header, and the length it writes there has to be
-    /// the one the unsigned build wrote: four digits for FIX.4.1, plain for the
-    /// compressed header that was never padded.
+    /// Signing rebuilds the header, and writes the length it now knows plain
+    /// — whichever header it is.
+    ///
+    /// Only the unsigned build pads: it reserves four bytes before it knows
+    /// the length and back-fills them. A signed frame is composed again from
+    /// the length in hand, and the signer this follows pads nothing. Padded
+    /// here for consistency with the unsigned build, every signed frame left
+    /// two bytes longer than the venue is sent elsewhere, with a different
+    /// checksum behind it.
     #[test]
-    fn signing_writes_the_body_length_the_way_the_header_was_built() {
+    fn signing_writes_the_body_length_plain() {
         let iv = [7u8; 16];
-        let (signed, _) = fix_sign(&fix_build(&[(35, "0")], 1), b"key0000000000000", &iv);
-        let at = signed.windows(2).position(|w| w == b"9=").expect("a tag 9") + 2;
-        let end = at + signed[at..].iter().position(|&b| b == SOH).expect("its delimiter");
-        assert_eq!(end - at, 4, "FIX.4.1 states its body length in four digits");
-
-        let comp = crate::protocol::fixcomp::fixcomp_build(&fix_build(&[(35, "0")], 1));
-        let (signed, _) = fix_sign(&comp, b"key0000000000000", &iv);
-        let at = signed.windows(2).position(|w| w == b"9=").expect("a tag 9") + 2;
-        let end = at + signed[at..].iter().position(|&b| b == SOH).expect("its delimiter");
-        assert_ne!(signed[at], b'0', "a compressed length is written plain");
-        assert!(end > at);
+        for frame in [
+            fix_build(&[(35, "0")], 1),
+            crate::protocol::fixcomp::fixcomp_build(&fix_build(&[(35, "0")], 1)),
+        ] {
+            let (signed, _) = fix_sign(&frame, b"key0000000000000", &iv);
+            let at = signed.windows(2).position(|w| w == b"9=").expect("a tag 9") + 2;
+            let end = at + signed[at..].iter().position(|&b| b == SOH).expect("its delimiter");
+            assert_ne!(signed[at], b'0', "a length written plain has no leading nought");
+            assert!(end > at);
+            // And the length is the body that follows it.
+            let stated: usize = std::str::from_utf8(&signed[at..end]).unwrap().parse().unwrap();
+            let body = &signed[end + 1..];
+            let body_end = match signed.starts_with(b"8=FIX.4.1") {
+                // The checksum field is not part of the body the length names.
+                true => body.len() - 7,
+                false => body.len(),
+            };
+            assert_eq!(stated, body_end, "the length names the body behind it");
+        }
     }
 
     /// A body longer than the padding keeps its high digits. Dropped, the field

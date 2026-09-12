@@ -1327,7 +1327,7 @@ impl CcpState {
         if let (Some(origin), Some(wire)) = (recovery_origin_order_id, wire_name)
             && origin != wire
         {
-            self.wire_name_to_order.insert(wire, origin);
+            self.remember_the_venues_name_for(wire, origin);
         }
         let clord_id = recovery_origin_order_id.unwrap_or_else(|| {
             parsed.get(&11).and_then(|s| {

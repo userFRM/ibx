@@ -170,6 +170,15 @@ fn unanswered_after(req_id: u32) -> std::time::Duration {
 /// after a reconnect burst still hits the window.
 const EXEC_ID_WINDOW: usize = 1024;
 
+/// How many of the venue's own names for recovered orders are held at once.
+///
+/// One is learned per order the venue replays, and a caller may ask for what
+/// the account has finished as often as it likes, so this is a window rather
+/// than a record of everything: the oldest goes when a new one arrives. The
+/// names serve a withdrawal or a replacement of an order that is still
+/// working, and an order that finished long ago needs none.
+const WIRE_NAME_WINDOW: usize = 4_096;
+
 /// Convert a FIX OrderID hex string (e.g. "00cf16ed.000225ed.69ca0941.0001") to a
 /// stable i64 permId.
 /// Uses FNV-1a hash of the first 3 dot-segments (the stable prefix) so that permId
@@ -273,7 +282,7 @@ fn handle_order_revision(
     // number is the order that number means.
     let order_id = match context.order(named) {
         Some(_) => named,
-        None => self.wire_name_to_order.get(&named).copied().unwrap_or(named),
+        None => self.the_order_named(named).unwrap_or(named),
     };
     let Some(mut held) = shared.orders.get_order_info(order_id) else {
         // An order this session holds no account of. The venue states the
@@ -625,7 +634,14 @@ pub(crate) struct CcpState {
     /// the first. Looked up under that, the order this session is tracking was
     /// not found: a fill on it was booked against nothing, and while a
     /// finished-orders window was open it was filed as history instead.
+    ///
+    /// A rolling window, oldest out first, the way the execution ids beside it
+    /// are held: a caller asking repeatedly for what the account has finished
+    /// teaches this session a name per replayed order, and unbounded it grew
+    /// for as long as the connection lasted.
     wire_name_to_order: std::collections::HashMap<u64, u64>,
+    /// The order those names were learned in, so the oldest can go first.
+    wire_names_learned: VecDeque<u64>,
     /// Whether the caller waiting on this window has already been told the
     /// answer is complete.
     ///
@@ -832,6 +848,7 @@ impl CcpState {
             completed_orders_open: false,
             finished_orders: Vec::new(),
             wire_name_to_order: std::collections::HashMap::new(),
+            wire_names_learned: VecDeque::new(),
             completed_orders_answered: false,
             completed_orders_wanted: None,
             replay_hold_until: None,
@@ -882,6 +899,34 @@ impl CcpState {
             }
         }
         true
+    }
+
+    /// Learn the venue's own name for an order this session numbers itself.
+    ///
+    /// A window, oldest out first: one name is learned per order the venue
+    /// replays, and a caller may ask what the account has finished as often as
+    /// it likes.
+    pub(crate) fn remember_the_venues_name_for(&mut self, wire_name: u64, order_id: u64) {
+        if self.wire_name_to_order.insert(wire_name, order_id).is_none() {
+            self.wire_names_learned.push_back(wire_name);
+            while self.wire_names_learned.len() > WIRE_NAME_WINDOW {
+                if let Some(oldest) = self.wire_names_learned.pop_front() {
+                    self.wire_name_to_order.remove(&oldest);
+                }
+            }
+        }
+    }
+
+    /// Which order the venue means by one of its own names, where this session
+    /// has been told.
+    pub(crate) fn the_order_named(&self, wire_name: u64) -> Option<u64> {
+        self.wire_name_to_order.get(&wire_name).copied()
+    }
+
+    /// How many of those names are held.
+    #[cfg(test)]
+    pub(crate) fn how_many_venue_names_are_held(&self) -> usize {
+        self.wire_name_to_order.len()
     }
 
     /// Whether the window has already seen this execution, asked without
@@ -3153,21 +3198,29 @@ impl CcpState {
             } else if f.starts_with("8129=") {
                 current_sec_type = "FUT".to_string();
             } else if let Some(exch) = f.strip_prefix("100=") {
-                // Next field should be 6813=name
-                let name = if i + 1 < fields.len() {
-                    fields[i + 1].strip_prefix("6813=").unwrap_or("")
-                } else {
-                    ""
-                };
-                descs.push(DepthMktDataDescription {
-                    exchange: exch.to_string(),
-                    sec_type: current_sec_type.clone(),
-                    listing_exch: name.to_string(),
-                    // Neither is stated by the venue here.
-                    service_data_type: String::new(),
-                    agg_group: 0,
-                });
-                i += 1; // skip the 6813= field
+                // The name follows the code, and only a field that carries it
+                // is the name. Taken as whatever followed, an exchange the
+                // venue named nothing for was published under an empty name
+                // and the field behind it was swallowed — and where that field
+                // was the next exchange, or the marker opening the futures
+                // section, what it said was lost with it.
+                let named = fields.get(i + 1).and_then(|f| f.strip_prefix("6813="));
+                if let Some(name) = named {
+                    descs.push(DepthMktDataDescription {
+                        exchange: exch.to_string(),
+                        sec_type: current_sec_type.clone(),
+                        listing_exch: name.to_string(),
+                        // Not stated by the venue here.
+                        service_data_type: String::new(),
+                        // Nor is the aggregation group. Nought is a group of
+                        // its own, so a caller read these venues as grouped
+                        // together; the largest an integer carries is what a
+                        // program written against the reference client reads
+                        // as a group nobody stated.
+                        agg_group: i32::MAX,
+                    });
+                    i += 1; // the name is this entry's, so step over it
+                }
             }
             i += 1;
         }
@@ -3211,6 +3264,7 @@ impl CcpState {
         // afresh. Kept, they grew for the life of the engine and went on
         // redirecting reports to orders long finished.
         self.wire_name_to_order.clear();
+        self.wire_names_learned.clear();
         if self.completed_orders_open || self.completed_orders_wanted.is_some() {
             self.completed_orders_open = false;
             self.completed_orders_deadline = None;
