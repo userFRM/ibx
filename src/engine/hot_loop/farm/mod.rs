@@ -775,6 +775,15 @@ pub(crate) struct FarmState {
     /// the life of the subscription, reaching callers that never named it, and
     /// asked for again by every rebuild after a reconnect.
     series_asked_on: std::collections::HashMap<(InstrumentId, u32), u64>,
+    /// Where a slot's callers were sent when the contract turned out to live in
+    /// another slot.
+    ///
+    /// What those callers asked for beyond the quote went with them, so a
+    /// withdrawal naming the slot they left has to be read against the slot
+    /// they were sent to: applied to the slot they left, it found nothing there
+    /// and the series it was giving up went on being served where they had been
+    /// moved to.
+    moved_to: std::collections::HashMap<InstrumentId, InstrumentId>,
     /// What the running-volume series last stated for a contract: the
     /// cumulative value, share count and trade count, in that order.
     ///
@@ -1369,6 +1378,7 @@ impl FarmState {
             asked_generic_ticks: std::collections::HashMap::new(),
             subscription_asked_on: std::collections::HashMap::new(),
             series_asked_on: std::collections::HashMap::new(),
+            moved_to: std::collections::HashMap::new(),
             rt_volume_totals: std::collections::HashMap::new(),
             news_subscriptions: Vec::new(),
             generic_tick_tags: Vec::new(),
@@ -2561,6 +2571,16 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
+        // A slot whose callers were sent elsewhere holds nothing, and what they
+        // asked for beyond the quote went with them: the withdrawal of those
+        // series belongs to the slot they were sent to. Applied here, it found
+        // nothing and the venue went on serving them there with nobody asking.
+        if !self.instrument_md_reqs.iter().any(|(id, _)| *id == instrument)
+            && let Some(&into) = self.moved_to.get(&instrument)
+        {
+            self.stop_asking_for_series(into, series, issued, farm_conn, hb);
+            return;
+        }
         // Nor while a caller is on its way onto this slot and has not read it
         // yet. It asked for the contract and is not yet recorded as watching
         // it, so the decision to withdraw could not see it: the subscription
@@ -3095,6 +3115,24 @@ impl FarmState {
         *held = (*held).max(issued);
     }
 
+    /// Forget when a slot's subscription and its series were asked for.
+    ///
+    /// The slot is going back to the table, so the numbers belong to a contract
+    /// that has gone: read against a withdrawal of the contract that takes the
+    /// slot next, they leave that subscription standing for ever.
+    pub(crate) fn forget_what_was_asked_on(&mut self, instrument: InstrumentId) {
+        self.subscription_asked_on.remove(&instrument);
+        self.series_asked_on.retain(|(watched, _), _| *watched != instrument);
+        self.moved_to.remove(&instrument);
+        self.moved_to.retain(|_, into| *into != instrument);
+    }
+
+    /// Say that a slot's callers, and what they asked for, were sent to another
+    /// slot.
+    pub(crate) fn note_moved(&mut self, from: InstrumentId, into: InstrumentId) {
+        self.moved_to.insert(from, into);
+    }
+
     /// The same for each series a request named on a slot.
     pub(crate) fn note_series_asked_on(
         &mut self, instrument: InstrumentId, ticks: &[u32], issued: u64,
@@ -3174,6 +3212,13 @@ impl FarmState {
                 self.asked_generic_ticks.remove(&instrument);
             }
         }
+        // And when they were asked for, here rather than once the wire state
+        // below has been found: a withdrawal while the connection is down has
+        // no wire state to take and left the number behind, so a contract
+        // joined and given up often enough grew the record for ever.
+        for tick in &unwanted {
+            self.series_asked_on.remove(&(instrument, *tick));
+        }
         let Some((_, record)) = self.instrument_md_reqs.iter_mut()
             .find(|(id, _)| *id == instrument)
         else {
@@ -3212,9 +3257,6 @@ impl FarmState {
             if unwanted.contains(&tick) {
                 self.rt_volume_totals.remove(&(instrument, counted));
             }
-        }
-        for tick in &unwanted {
-            self.series_asked_on.remove(&(instrument, *tick));
         }
         let Some(conn) = farm_conn.as_mut() else { return };
         let mode_str = mode_9887.to_string();

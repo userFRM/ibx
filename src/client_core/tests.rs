@@ -55,7 +55,7 @@ fn a_stream_is_never_served_off_the_one_shot() {
     core.instrument_to_req.lock().unwrap().insert(instrument, 30);
     core.chargeable_snapshot_reqs.lock().unwrap().insert(31);
     assert!(
-        core.take_or_follow(instrument, 31, &[]),
+        core.take_or_follow(instrument, 31, &[], 0),
         "the one-shot watches the slot the stream holds",
     );
     assert!(
@@ -69,7 +69,7 @@ fn a_stream_is_never_served_off_the_one_shot() {
     other.instrument_to_req.lock().unwrap().insert(instrument, 40);
     other.chargeable_snapshot_reqs.lock().unwrap().insert(40);
     assert!(
-        !other.take_or_follow(instrument, 41, &[]),
+        !other.take_or_follow(instrument, 41, &[], 0),
         "the stream is sent rather than served off the one-shot",
     );
     assert_eq!(
@@ -222,7 +222,7 @@ fn a_request_watches_the_slot_it_took_from_the_moment_it_takes_it() {
     let core = ClientCore::new();
     let iid: InstrumentId = 4;
 
-    assert!(!core.take_or_follow(iid, 9, &[]), "nobody held it, so this one does");
+    assert!(!core.take_or_follow(iid, 9, &[], 0), "nobody held it, so this one does");
     assert_eq!(
         core.watching(9), Some(iid),
         "and it is watching it without anything else being said",
@@ -304,22 +304,71 @@ fn a_slot_given_again_is_not_forgotten_by_the_release_that_freed_it() {
     let shared = SharedState::new();
     let iid: InstrumentId = 1;
 
-    // This client has asked for something already, and then takes the slot.
-    let _ = core.in_order();
-    assert!(!core.take_or_follow(iid, 77, &[]), "the contract now on it holds it");
+    // The request that takes the slot asked for it under a number of its own.
+    assert!(!core.take_or_follow(iid, 77, &[], 7), "the contract now on it holds it");
 
     // A release decided before that is not about this occupancy.
-    shared.market.note_released_slot(iid, 0);
+    shared.market.note_released_slot(iid, 6);
     core.forget_released_slots(&shared);
     assert_eq!(
         core.watching(77), Some(iid),
         "the record of the contract now on the slot stands",
     );
 
-    // And one decided after it is.
-    shared.market.note_released_slot(iid, u64::MAX);
+    // And one of this very occupancy is: the engine gave the slot back under
+    // the number the request asked for it with, which is the same number the
+    // record here was written under.
+    shared.market.note_released_slot(iid, 7);
     core.forget_released_slots(&shared);
     assert_eq!(core.watching(77), None, "the slot it named has gone back");
+}
+
+/// A move says when it has been installed, and what is watching the slot it
+/// moved onto.
+///
+/// The subscription on the slot a caller is moving onto is held up until the
+/// move is read, because until then nothing here is recorded as watching it. So
+/// the move has to say when it has been read — and where the caller it was for
+/// withdrew in the meantime, that nobody is watching what was held up for it:
+/// left, the subscription ran for the rest of the session against an allowance
+/// that is counted, with no request able to withdraw it.
+#[test]
+fn a_move_says_whether_anything_is_watching_what_it_moved_onto() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let (from, into): (InstrumentId, InstrumentId) = (1, 2);
+
+    // One caller on the slot that is moving, and nothing on the slot it moves
+    // onto.
+    core.instrument_to_req.lock().unwrap().insert(from, 5);
+    core.req_to_instrument.lock().unwrap().insert(5, from);
+    assert!(
+        core.move_watchers(&shared, from, into),
+        "the caller that moved is watching the slot it moved onto",
+    );
+    assert_eq!(core.watching(5), Some(into), "and is recorded there");
+
+    // And a move whose caller has gone leaves nothing watching.
+    core.instrument_to_req.lock().unwrap().insert(3, 9);
+    assert!(
+        !core.move_watchers(&shared, 3, 4),
+        "nobody arrived, so nothing is watching what was held up for them",
+    );
+
+    // The move is on its way from the moment it is stated until it is
+    // installed, not until it is taken off the queue: read off the queue, the
+    // answer turned false in exactly the window it is there for.
+    shared.market.push_subscription_move(from, into);
+    let _ = shared.market.drain_subscription_moves();
+    assert!(
+        shared.market.a_move_is_on_its_way_into(into),
+        "still on its way once the queue is empty",
+    );
+    shared.market.note_a_move_is_read(into);
+    assert!(
+        !shared.market.a_move_is_on_its_way_into(into),
+        "and arrived once it is installed",
+    );
 }
 
 /// A registration the engine never took gives back what it bought.
@@ -3642,14 +3691,14 @@ fn moved_watchers_report_the_destination_subscriptions_type() {
 fn a_refused_subscription_does_not_go_on_holding_the_slot_it_was_given() {
     let core = ClientCore::new();
     let shared = SharedState::new();
-    assert!(!core.take_or_follow(7, 100, &[]), "the first request held the slot");
+    assert!(!core.take_or_follow(7, 100, &[], 0), "the first request held the slot");
 
     shared.market.note_released_slot(7, u64::MAX);
     core.forget_released_slots(&shared);
 
     assert_eq!(core.watching(100), None, "it is not watching anything now");
     assert!(
-        !core.take_or_follow(7, 200, &[]),
+        !core.take_or_follow(7, 200, &[], 0),
         "the contract that took the slot next holds it outright, rather than following a \
          request the venue already refused",
     );

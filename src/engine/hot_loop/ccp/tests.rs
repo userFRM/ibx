@@ -3537,16 +3537,16 @@ fn the_bound_is_on_the_answer_not_on_what_waits_to_be_handed_over() {
     );
 }
 
-/// What one answer leaves behind counts against the next one's bound.
+/// A new answer starts with nothing the answer before it left behind.
 ///
 /// An answer keeps the records the venue never finished stating, because every
-/// later report about such an order is read against what is held. They are
-/// part of the next answer too — it will hand them over — so they count
-/// against its bound: forgotten, an answer took its whole bound again on top
-/// of what it had carried, and every answer that ended without the venue
-/// saying it was done added another set of records nothing was finishing.
+/// later report in that answer is read against what is held. The next question
+/// is answered from the start — the venue states every event in each order's
+/// life again — so those records are nothing this answer needs, and kept they
+/// are counted against its bound: an account with enough of them could not take
+/// a single order the venue stated.
 #[test]
-fn what_an_answer_carries_over_counts_against_the_next_one() {
+fn a_new_answer_starts_with_nothing_the_one_before_it_left() {
     let (mut ccp, _context, shared) = ord_status_test_state();
     let mut hb = HeartbeatState::new();
     let (conn, _peer) = Connection::for_test();
@@ -3559,9 +3559,13 @@ fn what_an_answer_carries_over_counts_against_the_next_one() {
 
     ccp.send_completed_orders_request(1, &mut conn, &mut hb, &shared);
 
-    assert_eq!(
-        ccp.orders_in_this_answer.len(), super::FINISHED_ORDERS_HELD,
-        "the records carried over are orders this answer holds",
+    assert!(
+        ccp.finished_orders.is_empty(),
+        "the half-built records of the answer before it are gone",
+    );
+    assert!(
+        ccp.orders_in_this_answer.is_empty(),
+        "so this answer can take every order the venue states, up to its own bound",
     );
 }
 

@@ -587,7 +587,23 @@ impl EClient {
         // the second slot read the first — otherwise their quotes arrive on a
         // slot nothing is watching.
         for (from, into) in shared.market.drain_subscription_moves() {
-            self.core.move_watchers(shared, from, into);
+            let watched = self.core.move_watchers(shared, from, into);
+            // Said once the move is installed, because the subscription on the
+            // slot moved onto is held up until then.
+            shared.market.note_a_move_is_read(into);
+            // And where nobody arrived — the caller this move was for withdrew
+            // before it read the move — the subscription it was held up for is
+            // nobody's. Left, it ran for the rest of the session against an
+            // allowance that is counted, with no request able to withdraw it.
+            if !watched
+                && let Some(tx) = self.control_tx.lock().unwrap().clone()
+            {
+                let _ = tx.try_send(ControlCommand::Unsubscribe {
+                    instrument: into,
+                    series: Vec::new(),
+                    issued: self.core.in_order(),
+                });
+            }
         }
         // Everyone watching the contract, not only whoever asked first. A
         // refusal is a fact about the contract, and a caller sharing somebody

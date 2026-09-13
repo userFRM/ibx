@@ -1499,6 +1499,85 @@ mod news_tests {
         );
     }
 
+    /// Giving up a series while the connection is down forgets when it was
+    /// asked for.
+    ///
+    /// There is no wire state to take while the farm is down, so the withdrawal
+    /// stops at the list the rebuild reads. The number beside each series is
+    /// part of that list: left behind, a contract joined and given up often
+    /// enough grew the record for the life of the session.
+    #[test]
+    fn giving_up_a_series_while_the_wire_is_down_forgets_when_it_was_asked_for() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let instrument = context.market.register(756733);
+        let mut conn = None;
+
+        // A subscription the reconnect will bring back, and a series named on
+        // it while the connection is down.
+        farm.md_resub_info.push((
+            instrument, "SPY".into(), "SMART".into(), "STK".into(), String::new(),
+            0.0, String::new(), String::new(), 0,
+        ));
+        farm.also_ask_for_series(instrument, 756733, &[236], &context, &mut conn, &mut hb);
+        farm.note_series_asked_on(instrument, &[236], 4);
+
+        farm.stop_asking_for_series(instrument, &[236], 5, &mut conn, &mut hb);
+
+        assert!(
+            !farm.asked_generic_ticks.get(&instrument).is_some_and(|a| a.contains(&236)),
+            "the rebuild does not ask for it",
+        );
+        assert!(
+            !farm.series_asked_on.contains_key(&(instrument, 236)),
+            "and nothing is left behind saying when it was asked for",
+        );
+    }
+
+    /// A withdrawal naming the slot a caller was moved off reaches what that
+    /// caller asked for.
+    ///
+    /// A caller whose contract turns out to live in another slot is sent there,
+    /// and what it asked for beyond the quote goes with it. Its withdrawal
+    /// still names the slot it was given: applied there, it found nothing, and
+    /// the venue went on serving that series where the caller had been moved to
+    /// with nobody asking for it.
+    #[test]
+    fn a_withdrawal_naming_the_slot_a_caller_left_reaches_what_it_asked_for() {
+        let mut farm = FarmState::new();
+        let mut context = Context::new();
+        let mut hb = HeartbeatState::new();
+        let into = context.market.register(756733);
+        let from: InstrumentId = into + 1;
+        let (conn, peer) = Connection::for_test();
+        let mut conn = Some(conn);
+        let mut peer = Connection::new_raw(peer).expect("a connection over the test pair");
+
+        // The subscription the caller was sent to, with the series it brought.
+        farm.send_mktdata_subscribe(
+            756733, "SPY", "SMART", "STK", "", 0.0, "", "", into, 0,
+            false, &mut conn, &mut hb,
+        );
+        farm.also_ask_for_series(into, 756733, &[236], &context, &mut conn, &mut hb);
+        farm.note_series_asked_on(into, &[236], 4);
+        farm.note_moved(from, into);
+        let _ = super::drain_inner(&mut peer);
+
+        // Its withdrawal names the slot it was given, not the one it was sent
+        // to.
+        farm.send_mktdata_unsubscribe(from, &[236], 5, false, &mut conn, &mut hb);
+
+        assert!(
+            !farm.asked_generic_ticks.get(&into).is_some_and(|a| a.contains(&236)),
+            "the series it asked for is given up where it was being served",
+        );
+        assert!(
+            farm.instrument_md_reqs.iter().any(|(id, _)| *id == into),
+            "and the subscription the other callers are on stands",
+        );
+    }
+
     /// The total a running series was read against goes with the series.
     ///
     /// A running series states a cumulative total and what is published is the

@@ -846,6 +846,9 @@ struct Ownership<'a> {
     /// When each slot was taken, in the order of what this client has asked
     /// for.
     taken_on: std::sync::MutexGuard<'a, HashMap<InstrumentId, u64>>,
+    /// Which subscription each request is holding, as a figure that changes
+    /// every time it takes a new one.
+    epoch: std::sync::MutexGuard<'a, HashMap<i64, u64>>,
 }
 
 impl Ownership<'_> {
@@ -1773,6 +1776,7 @@ impl ClientCore {
             one_shot: self.chargeable_snapshot_reqs.lock().unwrap(),
             series: self.series_by_req.lock().unwrap(),
             taken_on: self.slot_taken_on.lock().unwrap(),
+            epoch: self.registration_epoch.lock().unwrap(),
         }
     }
 
@@ -1786,10 +1790,9 @@ impl ClientCore {
     ///
     /// Answers whether this request ended up a follower.
     pub(crate) fn take_or_follow(
-        &self, instrument: InstrumentId, req_id: i64, series: &[u32],
+        &self, instrument: InstrumentId, req_id: i64, series: &[u32], asked_on: u64,
     ) -> bool {
-        let taken_on = self.in_order();
-        let joined = self.ownership().take_or_follow(instrument, req_id, series, taken_on);
+        let joined = self.ownership().take_or_follow(instrument, req_id, series, asked_on);
         // The request that takes a slot nobody held is written down by whoever
         // asked for it, once the venue has answered; the other two are already
         // watching something and are stamped here.
@@ -1805,9 +1808,14 @@ impl ClientCore {
     /// holds: only one subscription per contract exists on the wire, so the
     /// callers given the second slot have to read the first, or their quotes
     /// arrive on a slot nothing is watching.
+    ///
+    /// Answers whether anything is watching the destination once the move is
+    /// read. Nothing may be: the subscription there is held up while a caller
+    /// is on its way onto it, and that caller can withdraw before it arrives —
+    /// so the answer is what says the subscription is nobody's now.
     pub(crate) fn move_watchers(
         &self, shared: &SharedState, from: InstrumentId, into: InstrumentId,
-    ) {
+    ) -> bool {
         {
             let mut modes = self.mdt_by_instrument.lock().unwrap();
             if let Some(mode) = modes.remove(&from) {
@@ -1825,6 +1833,7 @@ impl ClientCore {
         {
             let mut own = self.ownership();
             let held = own.holders.remove(&from);
+            own.taken_on.remove(&from);
             let watchers = own.following.remove(&from).unwrap_or_default();
             for req_id in held.into_iter().chain(watchers) {
                 // Only the ones still watching the slot that is moving. One
@@ -1834,11 +1843,23 @@ impl ClientCore {
                 }
                 own.take_or_follow(into, req_id, &[], taken_on);
                 own.by_req.insert(req_id, into);
+                // Under the same acquisition that moves it: a number stamped
+                // after the maps were released was stamped for a request that
+                // had since been withdrawn.
+                own.epoch.insert(req_id, self.epochs.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
                 moved.push(req_id);
             }
         }
         for req_id in moved {
-            self.stamp_registration(req_id);
+            // Only where it is still watching what it was moved onto. A
+            // withdrawal running since the move was recorded leaves a number
+            // watching nothing, and what is owed a joiner was queued under
+            // that number anyway: the caller was answered after it had given
+            // the number up, and where the number had been handed out again it
+            // was answered about a contract it never asked for.
+            if self.watching(req_id) != Some(into) {
+                continue;
+            }
             // Moved onto somebody else's subscription is joining one, and what
             // a joiner is owed is owed here too. Only the slot they left was
             // cleared, so they arrived on a contract whose baseline already
@@ -1849,6 +1870,10 @@ impl ClientCore {
             self.pay_a_joiner(shared, into, req_id);
         }
         self.last_quotes.lock().unwrap().remove(&from);
+        // Whether anything is being served off the destination now. Nothing
+        // may be: the request this move was for can withdraw before the move
+        // is read, and the subscription was kept up for it.
+        !self.watchers_of(into).is_empty()
     }
 
     /// What a request that joins a subscription somebody else opened is owed.
@@ -2293,6 +2318,13 @@ impl ClientCore {
             return self.settle_registration(shared, control_tx, &claim, req_id, instrument);
         }
 
+        // The number this registration asks under, kept: the slot it is given
+        // is recorded under the same number. Recorded under a fresh one taken
+        // when the engine answers, a registration the engine then gave up on
+        // was read as a later occupancy than the release that freed it — so
+        // nothing was forgotten, and the next contract to take that slot was
+        // reachable under the failed request's records.
+        let asked_on = self.in_order();
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         // Both sends give back what this request took before they report the
         // engine gone. Returned straight, they left the mark that says this
@@ -2321,7 +2353,7 @@ impl ClientCore {
             regulatory_snapshot,
             generic_ticks: generic_ticks.clone(),
             reply_tx: Some(reply_tx),
-            issued: self.in_order(),
+            issued: asked_on,
         }).map_err(|e| {
             self.give_back_what_this_request_took(con_id, req_id);
             Refusal::not_connected(format!("Engine stopped: {e}"))
@@ -2400,7 +2432,7 @@ impl ClientCore {
         // registered, in which case this one watches theirs. Either way the
         // record of what it is watching is written there, under the maps that
         // decide it.
-        let _ = self.take_or_follow(instrument_id, req_id, &generic_ticks);
+        let _ = self.take_or_follow(instrument_id, req_id, &generic_ticks, asked_on);
         self.stamp_registration(req_id);
         // A concurrent registration may already hold the subscription. Its
         // mode still describes the feed everyone on this instrument receives.
@@ -2600,7 +2632,7 @@ impl ClientCore {
     /// command that acts on it. The engine keeps the number a subscription
     /// began under and reads it again on a withdrawal: a withdrawal decided
     /// before that subscription began is not about it.
-    fn in_order(&self) -> u64 {
+    pub(crate) fn in_order(&self) -> u64 {
         self.epochs.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 

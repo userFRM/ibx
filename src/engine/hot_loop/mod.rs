@@ -600,6 +600,9 @@ impl HotLoop {
                                 .asked_generic_ticks
                                 .remove(&p.instrument)
                                 .unwrap_or_default();
+                            // Where they went, so a withdrawal naming the slot
+                            // they left reaches what they asked for.
+                            self.farm.note_moved(p.instrument, owner);
                             // And the slot this request took is owed back. It
                             // holds nothing now — its watchers follow the move
                             // to the slot the contract lives in, and nothing
@@ -895,6 +898,10 @@ impl HotLoop {
             // behind, the next contract to take this slot was asked for the
             // previous contract's series, which nobody watching it named.
             self.farm.asked_generic_ticks.remove(&instrument);
+            // And when each of them was asked for. Left behind, the numbers
+            // belong to the contract that has gone and are read against
+            // withdrawals of the one that takes the slot next.
+            self.farm.forget_what_was_asked_on(instrument);
             log::info!("Reclaimed instrument slot {instrument}");
         }
     }
@@ -1420,6 +1427,21 @@ impl HotLoop {
                         // so a subscribe pointed at one was never sent and the
                         // withdrawal took the record out from under it.
                         Some(id) if self.farm.holds_a_stream(id) && !regulatory_snapshot => {
+                            // The answer first, because nothing is done for a
+                            // caller that has stopped waiting: its wait is
+                            // bounded and this loop is not, and it reports a
+                            // refusal and keeps no record of the slot. Asked
+                            // for anyway, the series it named were served for
+                            // the life of a subscription the caller has no
+                            // part in, with nothing able to withdraw them.
+                            if let Some(tx) = &reply_tx
+                                && matches!(
+                                    tx.try_send(Ok(id)),
+                                    Err(std::sync::mpsc::TrySendError::Disconnected(_)),
+                                )
+                            {
+                                continue;
+                            }
                             // This caller is asking for the contract too, so
                             // the subscription it is served off is the one it
                             // asked for: a withdrawal decided before it asked
@@ -1439,9 +1461,6 @@ impl HotLoop {
                                     &mut self.farm_conn,
                                     &mut self.hb,
                                 );
-                            }
-                            if let Some(tx) = &reply_tx {
-                                let _ = tx.try_send(Ok(id));
                             }
                         }
                         Some(id) => {
@@ -8358,6 +8377,63 @@ mod tests {
                 "{series} is an entry of the subscription: {asked:?}",
             );
         }
+    }
+
+    /// Nothing is asked for on behalf of a caller that has stopped waiting.
+    ///
+    /// A caller's wait is bounded and this loop is not, so a request can arrive
+    /// here after the caller has been told the venue did not answer — and it
+    /// keeps no record of the slot. The series such a request named were asked
+    /// for anyway: served for the life of a subscription that caller has no
+    /// part in, with nothing able to withdraw them.
+    #[test]
+    fn nothing_is_asked_for_a_caller_that_has_stopped_waiting() {
+        let mut hl = HotLoop::new(Arc::new(SharedState::new()), None, None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        hl.set_control_rx(rx);
+        let contract = || ContractRef {
+            con_id: 756733,
+            symbol: "SPY".into(),
+            exchange: "SMART".into(),
+            sec_type: "STK".into(),
+            currency: "USD".into(),
+            ..Default::default()
+        };
+        // One caller streams the contract.
+        tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
+            contract: contract(),
+            mode_9887: 0,
+            regulatory_snapshot: false,
+            reply_tx: None,
+            generic_ticks: Vec::new(),
+            issued: 1,
+        })
+        .expect("the engine is holding the other end");
+        hl.poll_control_commands();
+        let instrument = hl.context.market.instrument_by_con_id(756733)
+            .expect("the contract holds a slot");
+
+        // And a second asks for a series of its own, then stops waiting: its
+        // end of the answer is gone before the request is read here.
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        drop(reply_rx);
+        tx.send(ControlCommand::Subscribe {
+            filters: Default::default(),
+            contract: contract(),
+            mode_9887: 0,
+            regulatory_snapshot: false,
+            reply_tx: Some(reply_tx),
+            generic_ticks: vec![236],
+            issued: 2,
+        })
+        .expect("the engine is holding the other end");
+        hl.poll_control_commands();
+
+        assert!(
+            !hl.farm.asked_generic_ticks.get(&instrument).is_some_and(|a| a.contains(&236)),
+            "nothing was asked for the caller that is no longer listening",
+        );
     }
 }
 

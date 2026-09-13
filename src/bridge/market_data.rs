@@ -69,6 +69,13 @@ pub struct MarketDataState {
     /// that forgot the records of a contract that had just been given it —
     /// live on the wire, and reachable from nothing here.
     released_slots: Mutex<Vec<(crate::types::InstrumentId, u64)>>,
+    /// How many callers are on their way onto each slot and have not arrived.
+    ///
+    /// A caller whose contract turns out to live in another slot is moved onto
+    /// it, and is recorded as watching it only once the surface installs the
+    /// move. A withdrawal decided in between cannot see it, so the
+    /// subscription is held up while this says somebody is coming.
+    moves_unread: Mutex<std::collections::HashMap<crate::types::InstrumentId, u32>>,
     tbt_trades: Mutex<Vec<TbtTrade>>,
     tbt_quotes: Mutex<Vec<TbtQuote>>,
     /// The point between the two, each time it moved.
@@ -159,6 +166,7 @@ impl MarketDataState {
             quotes: (0..MAX_INSTRUMENTS).map(|_| SeqQuote::new()).collect(),
             instrument_count: AtomicU64::new(0),
             released_slots: Mutex::new(Vec::new()),
+            moves_unread: Mutex::new(std::collections::HashMap::new()),
             tbt_trades: Mutex::new(Vec::with_capacity(256)),
             tbt_quotes: Mutex::new(Vec::with_capacity(256)),
             tbt_mids: Mutex::new(Vec::with_capacity(256)),
@@ -224,8 +232,20 @@ impl MarketDataState {
         // takes its own slot out of the polling. A reader stalled in a
         // callback is all it takes for the release to land in between.
         self.tick_req_params.lock().unwrap().retain(|(at, _)| *at != instrument);
-        self.subscription_moves.lock().unwrap()
-            .retain(|(from, to)| *from != instrument && *to != instrument);
+        let mut moves = self.subscription_moves.lock().unwrap();
+        let dropped: Vec<crate::types::InstrumentId> = moves
+            .iter()
+            .filter(|(from, to)| *from == instrument || *to == instrument)
+            .map(|(_, to)| *to)
+            .collect();
+        moves.retain(|(from, to)| *from != instrument && *to != instrument);
+        drop(moves);
+        // A move nobody will read is no longer on its way: counted still, it
+        // held the subscription on the slot it named up for the rest of the
+        // session.
+        for into in dropped {
+            self.note_a_move_is_read(into);
+        }
         // And the two streams that carry a slot of their own. A headline is
         // about the contract that was named when it arrived, and a model was
         // solved against that contract's volatility and price: delivered after
@@ -513,18 +533,35 @@ impl MarketDataState {
         into: crate::types::InstrumentId,
     ) {
         self.subscription_moves.lock().unwrap().push((from, into));
+        *self.moves_unread.lock().unwrap().entry(into).or_insert(0) += 1;
     }
 
-    /// Whether a caller is on its way onto this slot and has not read it yet.
+    /// Whether a caller is on its way onto this slot and has not arrived yet.
     ///
     /// Such a caller has asked for the contract and is not yet recorded as
     /// watching the slot it holds, so a withdrawal decided in the meantime
     /// cannot see it: the subscription went, and the caller arrived on a slot
     /// with nothing on the wire.
+    ///
+    /// Counted rather than read off the queue, because the queue is emptied
+    /// before the move is installed: read there, the answer turned false in
+    /// exactly the window this is for.
     #[doc(hidden)] pub fn a_move_is_on_its_way_into(
         &self, instrument: crate::types::InstrumentId,
     ) -> bool {
-        self.subscription_moves.lock().unwrap().iter().any(|(_, into)| *into == instrument)
+        self.moves_unread.lock().unwrap().get(&instrument).is_some_and(|waiting| *waiting > 0)
+    }
+
+    /// Say that a move has been installed, whatever became of the requests it
+    /// named.
+    #[doc(hidden)] pub fn note_a_move_is_read(&self, into: crate::types::InstrumentId) {
+        let mut waiting = self.moves_unread.lock().unwrap();
+        if let Some(left) = waiting.get_mut(&into) {
+            *left = left.saturating_sub(1);
+            if *left == 0 {
+                waiting.remove(&into);
+            }
+        }
     }
 
     // ── Hot-loop-side writers ──
