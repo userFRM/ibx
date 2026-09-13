@@ -61,7 +61,14 @@ pub struct MarketDataState {
     /// the venue has not named yet holds a slot under no id at all — and a
     /// release that could only say "contract nought" named nothing a surface
     /// could act on, for exactly the contracts a caller states by description.
-    released_slots: Mutex<Vec<crate::types::InstrumentId>>,
+    /// Each with the point in the order of what the client has asked for at
+    /// which it was given back.
+    ///
+    /// A slot number alone says nothing about which occupancy ended: the slot
+    /// goes to the next contract that needs one, and a release drained after
+    /// that forgot the records of a contract that had just been given it —
+    /// live on the wire, and reachable from nothing here.
+    released_slots: Mutex<Vec<(crate::types::InstrumentId, u64)>>,
     tbt_trades: Mutex<Vec<TbtTrade>>,
     tbt_quotes: Mutex<Vec<TbtQuote>>,
     /// The point between the two, each time it moved.
@@ -201,9 +208,12 @@ impl MarketDataState {
         }
     }
 
-    /// Say that a slot has been given back.
-    #[doc(hidden)] pub fn note_released_slot(&self, instrument: crate::types::InstrumentId) {
-        self.released_slots.lock().unwrap().push(instrument);
+    /// Say that a slot has been given back, and what the client had asked for
+    /// up to then.
+    #[doc(hidden)] pub fn note_released_slot(
+        &self, instrument: crate::types::InstrumentId, released_at: u64,
+    ) {
+        self.released_slots.lock().unwrap().push((instrument, released_at));
         self.last_min_tick.lock().unwrap().remove(&instrument);
         self.last_subscription_failure.lock().unwrap().remove(&instrument);
         // And what is still queued under it, not only what is cached. Both of
@@ -237,7 +247,7 @@ impl MarketDataState {
     }
 
     /// The slots given back since this was last asked.
-    pub fn take_released_slots(&self) -> Vec<crate::types::InstrumentId> {
+    pub fn take_released_slots(&self) -> Vec<(crate::types::InstrumentId, u64)> {
         std::mem::take(&mut *self.released_slots.lock().unwrap())
     }
 
@@ -503,6 +513,18 @@ impl MarketDataState {
         into: crate::types::InstrumentId,
     ) {
         self.subscription_moves.lock().unwrap().push((from, into));
+    }
+
+    /// Whether a caller is on its way onto this slot and has not read it yet.
+    ///
+    /// Such a caller has asked for the contract and is not yet recorded as
+    /// watching the slot it holds, so a withdrawal decided in the meantime
+    /// cannot see it: the subscription went, and the caller arrived on a slot
+    /// with nothing on the wire.
+    #[doc(hidden)] pub fn a_move_is_on_its_way_into(
+        &self, instrument: crate::types::InstrumentId,
+    ) -> bool {
+        self.subscription_moves.lock().unwrap().iter().any(|(_, into)| *into == instrument)
     }
 
     // ── Hot-loop-side writers ──
@@ -894,7 +916,7 @@ mod follower_tick_req_params_tests {
         assert_eq!(m.drain_tick_req_params_direct(), vec![(2, 0.01)]);
         assert!(m.drain_tick_req_params_direct().is_empty(), "taken once");
 
-        m.note_released_slot(instrument);
+        m.note_released_slot(instrument, u64::MAX);
         assert_eq!(m.min_tick_for_follower(instrument), None, "cleared when the slot is given back");
     }
 

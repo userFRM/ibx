@@ -81,6 +81,13 @@ pub struct HotLoop {
     /// Whether a recoverable loss was announced to the client. Gates the
     /// restore notice so a reconnect that nobody was told about stays quiet.
     loss_announced: bool,
+    /// How far into what the client has asked for this engine has read.
+    ///
+    /// Said back with a slot the engine gives up, because a slot number alone
+    /// says nothing about which occupancy ended: the slot goes to the next
+    /// contract that needs one, and a release read after that forgot the
+    /// records of a contract that had just been given it.
+    heard_up_to: u64,
     /// Set when a reconnect failed for a reason repeating cannot fix. The
     /// scheduler stops rather than climbing a ladder forever against a server
     /// that has already given its answer.
@@ -444,6 +451,7 @@ impl HotLoop {
             ccp_next_attempt_at: None,
             farm_next_attempt_at: None,
             loss_announced: false,
+            heard_up_to: 0,
             reconnect_halted: None,
             reconnect_cfg: Default::default(),
             budget: Default::default(),
@@ -623,6 +631,15 @@ impl HotLoop {
                 // The subscription that answers this request, whichever slot
                 // it turns out to live in.
                 self.farm.note_subscription_asked_on(instrument, p.issued);
+                // What this request named, on whichever slot it lands on: the
+                // list it carried off the slot it was given, or the one
+                // recorded against the slot it keeps.
+                let named: Vec<u32> = if carried.is_empty() {
+                    self.farm.asked_generic_ticks.get(&instrument).cloned().unwrap_or_default()
+                } else {
+                    carried.clone()
+                };
+                self.farm.note_series_asked_on(instrument, &named, p.issued);
                 // Carried onto the slot the contract lives in: asked for now
                 // where a stream is already up there, and added to what that
                 // slot asks for where the subscription below is the one that
@@ -850,7 +867,7 @@ impl HotLoop {
             // goes to the next contract that needs one: an order placed on the
             // cached number was recorded against the new occupant, and its
             // fill moved that contract's position.
-            self.shared.market.note_released_slot(instrument);
+            self.shared.market.note_released_slot(instrument, self.heard_up_to);
             // Zero the shared-side quote so a reused slot cannot serve the
             // previous contract's prices before its first tick.
             self.shared.market.push_quote(instrument, &crate::types::Quote::default());
@@ -1315,6 +1332,7 @@ impl HotLoop {
             }
             match cmd {
                 ControlCommand::Subscribe { contract, filters, mode_9887, regulatory_snapshot, generic_ticks, reply_tx, issued, } => {
+                    self.heard_up_to = self.heard_up_to.max(issued);
                     let ContractRef { con_id, symbol, exchange, sec_type, currency, last_trade_date, strike, right, multiplier } = contract;
                     // What tells two conId-less contracts on one underlying apart.
                     // Built by the same function an order uses, or the two
@@ -1407,6 +1425,7 @@ impl HotLoop {
                             // asked for: a withdrawal decided before it asked
                             // is not about that subscription.
                             self.farm.note_subscription_asked_on(id, issued);
+                            self.farm.note_series_asked_on(id, &generic_ticks, issued);
                             // The joiner's own series, where the stream it is
                             // joining was not asked for them. Nothing else
                             // sends them: the subscription is already up, so
@@ -1427,6 +1446,7 @@ impl HotLoop {
                         }
                         Some(id) => {
                             self.farm.note_subscription_asked_on(id, issued);
+                            self.farm.note_series_asked_on(id, &generic_ticks, issued);
                             // The venue states it on the logon. Count streams
                             // waiting on a definition or a reconnect too: they
                             // were admitted already and still need their line.
@@ -1544,10 +1564,12 @@ impl HotLoop {
                     }
                 }
                 ControlCommand::AlsoAskForSeries { instrument, con_id, generic_ticks, issued, } => {
+                    self.heard_up_to = self.heard_up_to.max(issued);
                     // A caller asking for more on a contract is asking for
                     // that contract, so the subscription it is served off is
                     // one it asked for.
                     self.farm.note_subscription_asked_on(instrument, issued);
+                    self.farm.note_series_asked_on(instrument, &generic_ticks, issued);
                     self.farm.also_ask_for_series(
                         instrument,
                         con_id,
@@ -1558,6 +1580,7 @@ impl HotLoop {
                     );
                 }
                 ControlCommand::StopAskingForSeries { instrument, generic_ticks, issued, } => {
+                    self.heard_up_to = self.heard_up_to.max(issued);
                     self.farm.stop_asking_for_series(
                         instrument,
                         &generic_ticks,
@@ -1566,10 +1589,14 @@ impl HotLoop {
                         &mut self.hb,
                     );
                 }
-                ControlCommand::Unsubscribe { instrument, issued, } => {
+                ControlCommand::Unsubscribe { instrument, series, issued, } => {
+                    self.heard_up_to = self.heard_up_to.max(issued);
+                    let moving_in = self.shared.market.a_move_is_on_its_way_into(instrument);
                     self.farm.send_mktdata_unsubscribe(
                         instrument,
+                        &series,
                         issued,
+                        moving_in,
                         &mut self.farm_conn,
                         &mut self.hb,
                     );
@@ -2296,7 +2323,9 @@ impl HotLoop {
                         // whatever it was asked for under.
                         self.farm.send_mktdata_unsubscribe(
                             instrument,
+                            &[],
                             u64::MAX,
+                            false,
                             &mut self.farm_conn,
                             &mut self.hb,
                         );
@@ -4632,7 +4661,7 @@ mod tests {
             assert!(hl.is_running(), "existing subscriptions keep running");
 
             if !sec_type.is_empty() {
-                tx.send(ControlCommand::Unsubscribe { instrument: first, issued: 0, }).unwrap();
+                tx.send(ControlCommand::Unsubscribe { instrument: first, series: Vec::new(), issued: 0 }).unwrap();
                 hl.poll_once();
                 subscribe(&mut hl, past).expect("a withdrawn subscription gives its line back");
             }
@@ -7822,7 +7851,7 @@ mod tests {
             running: Default::default(),
         });
 
-        tx.send(ControlCommand::Unsubscribe { instrument: id, issued: 0, }).unwrap();
+        tx.send(ControlCommand::Unsubscribe { instrument: id, series: Vec::new(), issued: 0 }).unwrap();
         hl.poll_once();
 
         assert_eq!(
@@ -7854,7 +7883,7 @@ mod tests {
         }));
         hl.farm.news_subscriptions.push((id, 55, "BRFG".to_string(), 756733, "STK".to_string()));
 
-        tx.send(ControlCommand::Unsubscribe { instrument: id, issued: 0, }).unwrap();
+        tx.send(ControlCommand::Unsubscribe { instrument: id, series: Vec::new(), issued: 0 }).unwrap();
         hl.poll_once();
 
         assert_eq!(
@@ -8525,7 +8554,7 @@ mod slot_reclamation_tests {
             "and the next contract that needs one is given it",
         );
         assert_eq!(
-            hl.shared.market.take_released_slots(), vec![instrument],
+            hl.shared.market.take_released_slots(), vec![(instrument, 0)],
             "the surfaces are told, so they stop naming the slot it no longer holds",
         );
         assert_eq!(

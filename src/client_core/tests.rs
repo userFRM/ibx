@@ -197,12 +197,17 @@ fn a_caller_takes_the_series_it_brought_with_it() {
         "and only the series nobody else named goes with the caller that named it",
     );
 
-    // The last caller takes the subscription itself, which carries its series
-    // with it: there is nothing left for them to be entries of.
+    // The last caller takes the subscription itself, and what it asked for
+    // rides with the withdrawal: the subscription the engine finds may be one
+    // this caller knows nothing about, and then these are the only part of the
+    // withdrawal still about what it asked for.
     let withdrawn = core.unregister_mkt_data(&shared, 1);
     let (down, series_gone) = (withdrawn.subscription, withdrawn.series);
     assert_eq!(down, Some(iid), "the subscription goes");
-    assert_eq!(series_gone, None, "whole, with its entries");
+    assert_eq!(
+        series_gone, Some((iid, vec![233])),
+        "and its own series go with it",
+    );
 }
 
 /// A request is watching the slot it took from the moment it takes it.
@@ -267,7 +272,7 @@ fn a_reclaimed_slot_takes_the_marks_of_what_was_watching_it() {
     core.series_by_req.lock().unwrap().insert(5, vec![236]);
     core.snapshot_reqs.lock().unwrap().insert(5, (std::time::Instant::now(), 0));
 
-    shared.market.note_released_slot(iid);
+    shared.market.note_released_slot(iid, u64::MAX);
     core.forget_released_slots(&shared);
 
     assert_eq!(core.watching(5), None, "the request is watching nothing");
@@ -283,6 +288,38 @@ fn a_reclaimed_slot_takes_the_marks_of_what_was_watching_it() {
         !core.snapshot_reqs.lock().unwrap().contains_key(&5),
         "and is waiting on no snapshot to finish",
     );
+}
+
+/// A slot given back and then given again is not forgotten by the release that
+/// freed it.
+///
+/// A release names a slot and nothing else, and the slot goes to the next
+/// contract that needs one. Read afterwards, such a release forgot every
+/// record of the contract that had just been given it: the venue went on
+/// streaming it, no request could be found to deliver it to, and withdrawing
+/// it answered that no contract was being watched under that number.
+#[test]
+fn a_slot_given_again_is_not_forgotten_by_the_release_that_freed_it() {
+    let core = ClientCore::new();
+    let shared = SharedState::new();
+    let iid: InstrumentId = 1;
+
+    // This client has asked for something already, and then takes the slot.
+    let _ = core.in_order();
+    assert!(!core.take_or_follow(iid, 77, &[]), "the contract now on it holds it");
+
+    // A release decided before that is not about this occupancy.
+    shared.market.note_released_slot(iid, 0);
+    core.forget_released_slots(&shared);
+    assert_eq!(
+        core.watching(77), Some(iid),
+        "the record of the contract now on the slot stands",
+    );
+
+    // And one decided after it is.
+    shared.market.note_released_slot(iid, u64::MAX);
+    core.forget_released_slots(&shared);
+    assert_eq!(core.watching(77), None, "the slot it named has gone back");
 }
 
 /// A registration the engine never took gives back what it bought.
@@ -2385,7 +2422,7 @@ fn a_slot_the_engine_gave_back_is_not_answered_from_the_cache() {
     core.cache_instrument(756733, 4);
     core.cache_instrument(265598, 5);
 
-    shared.market.note_released_slot(4);
+    shared.market.note_released_slot(4, u64::MAX);
     core.forget_released_slots(&shared);
 
     assert_eq!(core.cached_instrument(&shared, 756733), None, "the freed slot is not answered");
@@ -2493,7 +2530,7 @@ fn the_slot_cache_cannot_be_read_before_it_is_emptied() {
     let core = ClientCore::new();
     let shared = SharedState::new();
     core.cache_instrument(756733, 4);
-    shared.market.note_released_slot(4);
+    shared.market.note_released_slot(4, u64::MAX);
 
     assert_eq!(
         core.cached_instrument(&shared, 756733), None,
@@ -2975,7 +3012,7 @@ fn a_request_joining_a_refused_subscription_is_told_the_same_reason() {
     assert_eq!(direct[0].0, 2, "under its own number");
     assert_eq!(direct[0].1, "no entitlement");
 
-    shared.market.note_released_slot(iid);
+    shared.market.note_released_slot(iid, u64::MAX);
     assert!(
         shared.market.failure_for_follower(iid).is_none(),
         "and the slot's next contract does not inherit it",
@@ -3039,7 +3076,7 @@ fn a_released_slot_leaves_nothing_queued_under_it() {
         instrument: slot,
         ..Default::default()
     });
-    shared.market.note_released_slot(slot);
+    shared.market.note_released_slot(slot, u64::MAX);
 
     assert!(
         shared.market.drain_tick_req_params().iter().all(|(at, _)| *at != slot),
@@ -3491,7 +3528,7 @@ fn an_answer_this_side_worked_out_is_not_dropped_with_a_slot() {
         ..crate::types::OptionComputation::solved(77)
     });
 
-    shared.market.note_released_slot(slot);
+    shared.market.note_released_slot(slot, u64::MAX);
 
     let left = shared.market.drain_option_computations();
     assert!(
@@ -3607,7 +3644,7 @@ fn a_refused_subscription_does_not_go_on_holding_the_slot_it_was_given() {
     let shared = SharedState::new();
     assert!(!core.take_or_follow(7, 100, &[]), "the first request held the slot");
 
-    shared.market.note_released_slot(7);
+    shared.market.note_released_slot(7, u64::MAX);
     core.forget_released_slots(&shared);
 
     assert_eq!(core.watching(100), None, "it is not watching anything now");
@@ -3674,7 +3711,7 @@ fn an_option_solve_forgets_a_released_contracts_slot() {
     publish();
     assert!(core.solve_option(&shared, &option, None, solve).unwrap().is_finite());
 
-    shared.market.note_released_slot(3);
+    shared.market.note_released_slot(3, u64::MAX);
     core.cache_instrument(202, 3);
     publish();
     let why = core.solve_option(&shared, &option, None, solve)

@@ -568,18 +568,25 @@ impl EClient {
         if let Some(subject) = withdrawn.headlines {
             let _ = Self::send_control(py, tx, ControlCommand::UnsubscribeNews { subject });
         }
-        if let Some(instrument) = withdrawn.subscription
-            && let Err(why) = Self::send_control(
-                py, tx,
-                ControlCommand::Unsubscribe { instrument, issued: withdrawn.decided_at },
-            )
-        {
-            return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
-        }
         // And the series this caller brought to a subscription that stays up
         // for somebody else. Left behind, the venue serves them for the life
-        // of that subscription with nobody reading them.
-        if let Some((instrument, generic_ticks)) = withdrawn.series
+        // of that subscription with nobody reading them. They ride with the
+        // withdrawal of the whole subscription too, for the case where that
+        // subscription has already been replaced by one this caller knows
+        // nothing about.
+        let series = withdrawn.series;
+        if let Some(instrument) = withdrawn.subscription {
+            if let Err(why) = Self::send_control(
+                py, tx,
+                ControlCommand::Unsubscribe {
+                    instrument,
+                    series: series.map(|(_, ticks)| ticks).unwrap_or_default(),
+                    issued: withdrawn.decided_at,
+                },
+            ) {
+                return self.report_refusal(py, req_id, Refusal::not_connected(why.to_string()));
+            }
+        } else if let Some((instrument, generic_ticks)) = series
             && let Err(why) = Self::send_control(
                 py, tx,
                 ControlCommand::StopAskingForSeries {

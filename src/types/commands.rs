@@ -227,6 +227,15 @@ pub enum ControlCommand {
     Unsubscribe {
         /// The engine's own slot for the contract.
         instrument: InstrumentId,
+        /// The series this caller asked for and nobody else watching the
+        /// contract did.
+        ///
+        /// They ride with the withdrawal because the subscription the engine
+        /// finds may not be the one this was decided against: another caller
+        /// asked for the contract in between and is being served off it. The
+        /// subscription then stands, and these are the only part of the
+        /// withdrawal still about what this caller asked for.
+        series: Vec<u32>,
         /// Where this falls in the order of everything the client has asked
         /// for.
         ///

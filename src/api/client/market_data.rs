@@ -170,16 +170,20 @@ impl EClient {
         if let Some(subject) = withdrawn.headlines {
             let _ = self.send(ControlCommand::UnsubscribeNews { subject });
         }
+        // And the series this caller brought to a subscription that stays up
+        // for somebody else. Left behind, the venue serves them for the life
+        // of that subscription with nobody reading them. They ride with the
+        // withdrawal of the whole subscription too, for the case where that
+        // subscription has already been replaced by one this caller knows
+        // nothing about.
+        let series = withdrawn.series;
         if let Some(instrument) = withdrawn.subscription {
             self.send(ControlCommand::Unsubscribe {
                 instrument,
+                series: series.map(|(_, ticks)| ticks).unwrap_or_default(),
                 issued: withdrawn.decided_at,
             })?;
-        }
-        // And the series this caller brought to a subscription that stays up
-        // for somebody else. Left behind, the venue serves them for the life
-        // of that subscription with nobody reading them.
-        if let Some((instrument, generic_ticks)) = withdrawn.series {
+        } else if let Some((instrument, generic_ticks)) = series {
             self.send(ControlCommand::StopAskingForSeries {
                 instrument,
                 generic_ticks,

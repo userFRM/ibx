@@ -3537,6 +3537,34 @@ fn the_bound_is_on_the_answer_not_on_what_waits_to_be_handed_over() {
     );
 }
 
+/// What one answer leaves behind counts against the next one's bound.
+///
+/// An answer keeps the records the venue never finished stating, because every
+/// later report about such an order is read against what is held. They are
+/// part of the next answer too — it will hand them over — so they count
+/// against its bound: forgotten, an answer took its whole bound again on top
+/// of what it had carried, and every answer that ended without the venue
+/// saying it was done added another set of records nothing was finishing.
+#[test]
+fn what_an_answer_carries_over_counts_against_the_next_one() {
+    let (mut ccp, _context, shared) = ord_status_test_state();
+    let mut hb = HeartbeatState::new();
+    let (conn, _peer) = Connection::for_test();
+    let mut conn = Some(conn);
+    // The replay is over, so the question is not held.
+    shared.orders.set_replay_done();
+    for order_id in 0..super::FINISHED_ORDERS_HELD as u64 {
+        ccp.hold_a_finished_order_for_test(order_id, crate::types::OrderStatus::Submitted);
+    }
+
+    ccp.send_completed_orders_request(1, &mut conn, &mut hb, &shared);
+
+    assert_eq!(
+        ccp.orders_in_this_answer.len(), super::FINISHED_ORDERS_HELD,
+        "the records carried over are orders this answer holds",
+    );
+}
+
 /// An order the venue numbered is an API order whichever path its report took.
 ///
 /// The number is what tells an order placed through an API from one typed in

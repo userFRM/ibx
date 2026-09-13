@@ -767,6 +767,14 @@ pub(crate) struct FarmState {
     /// else's withdrawal, was published as watching the contract, and heard
     /// nothing for the rest of the session.
     subscription_asked_on: std::collections::HashMap<InstrumentId, u64>,
+    /// And the same for each series on a slot.
+    ///
+    /// One number for the whole slot answers for the subscription and not for
+    /// its series: a caller asking for one series raised it for all of them,
+    /// and the series another caller had just given up was kept — served for
+    /// the life of the subscription, reaching callers that never named it, and
+    /// asked for again by every rebuild after a reconnect.
+    series_asked_on: std::collections::HashMap<(InstrumentId, u32), u64>,
     /// What the running-volume series last stated for a contract: the
     /// cumulative value, share count and trade count, in that order.
     ///
@@ -1360,6 +1368,7 @@ impl FarmState {
             generic_tick_reqs: Vec::new(),
             asked_generic_ticks: std::collections::HashMap::new(),
             subscription_asked_on: std::collections::HashMap::new(),
+            series_asked_on: std::collections::HashMap::new(),
             rt_volume_totals: std::collections::HashMap::new(),
             news_subscriptions: Vec::new(),
             generic_tick_tags: Vec::new(),
@@ -2546,10 +2555,24 @@ impl FarmState {
     pub(crate) fn send_mktdata_unsubscribe(
         &mut self,
         instrument: InstrumentId,
+        series: &[u32],
         issued: u64,
+        moving_in: bool,
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
+        // Nor while a caller is on its way onto this slot and has not read it
+        // yet. It asked for the contract and is not yet recorded as watching
+        // it, so the decision to withdraw could not see it: the subscription
+        // went, and that caller arrived on a slot with nothing on the wire.
+        if moving_in {
+            log::debug!(
+                "a withdrawal of slot {instrument} was decided while a caller was on its \
+                 way onto it; the subscription stands",
+            );
+            self.stop_asking_for_series(instrument, series, issued, farm_conn, hb);
+            return;
+        }
         // Not a subscription this withdrawal is about. The client decides to
         // withdraw and says so a moment later, and a caller asking for the
         // same contract in between is answered off the subscription that is
@@ -2561,9 +2584,14 @@ impl FarmState {
                 "a withdrawal of slot {instrument} was decided before the subscription \
                  now on it began; the subscription stands",
             );
+            // What that caller asked for beyond the quote is still its own to
+            // give up, and each series answers for itself: one another caller
+            // has since asked for stays, and one nobody else named goes.
+            self.stop_asking_for_series(instrument, series, issued, farm_conn, hb);
             return;
         }
         self.subscription_asked_on.remove(&instrument);
+        self.series_asked_on.retain(|(watched, _), _| *watched != instrument);
         // Drop the resubscribe record first. The lookup below early-returns
         // when the instrument has no active requests, which is always the case
         // while the farm is down — `handle_disconnect` cleared that list — so
@@ -3067,6 +3095,16 @@ impl FarmState {
         *held = (*held).max(issued);
     }
 
+    /// The same for each series a request named on a slot.
+    pub(crate) fn note_series_asked_on(
+        &mut self, instrument: InstrumentId, ticks: &[u32], issued: u64,
+    ) {
+        for tick in ticks {
+            let held = self.series_asked_on.entry((instrument, *tick)).or_insert(issued);
+            *held = (*held).max(issued);
+        }
+    }
+
     /// Whether the subscription on a slot was asked for after a decision was
     /// taken.
     fn began_after(&self, instrument: InstrumentId, issued: u64) -> bool {
@@ -3094,10 +3132,6 @@ impl FarmState {
         farm_conn: &mut Option<Connection>,
         hb: &mut HeartbeatState,
     ) {
-        // Not this subscription's series. See `send_mktdata_unsubscribe`.
-        if self.began_after(instrument, issued) {
-            return;
-        }
         // The headlines are asked for under a request of their own and
         // withdrawn under it, so they are not this withdrawal's to take. Nor
         // are the entries every subscription opens for itself — the trading
@@ -3117,6 +3151,15 @@ impl FarmState {
                     GREEKS_REQUEST_TYPE,
                 ]
                 .contains(tick)
+            })
+            // And nothing another caller has asked for since this was decided.
+            // Answered for the slot as a whole, a caller asking for one series
+            // kept every series on it, and the one this caller had given up
+            // went on being served with nobody reading it.
+            .filter(|tick| {
+                !self.series_asked_on
+                    .get(&(instrument, *tick))
+                    .is_some_and(|asked| *asked > issued)
             })
             .collect();
         if unwanted.is_empty() {
@@ -3169,6 +3212,9 @@ impl FarmState {
             if unwanted.contains(&tick) {
                 self.rt_volume_totals.remove(&(instrument, counted));
             }
+        }
+        for tick in &unwanted {
+            self.series_asked_on.remove(&(instrument, *tick));
         }
         let Some(conn) = farm_conn.as_mut() else { return };
         let mode_str = mode_9887.to_string();

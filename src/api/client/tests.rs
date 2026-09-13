@@ -48,7 +48,7 @@ fn a_slot_the_engine_took_back_is_not_named_by_the_getter() {
         cache.insert(265598, 5);
     }
 
-    shared.market.note_released_slot(4);
+    shared.market.note_released_slot(4, u64::MAX);
 
     assert_eq!(client.instrument_of(756733), None, "the freed slot is not named");
     assert_eq!(client.instrument_of(265598), Some(5), "the others stand");

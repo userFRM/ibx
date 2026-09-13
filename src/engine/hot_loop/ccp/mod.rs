@@ -3233,9 +3233,15 @@ impl CcpState {
         match sent {
             Ok(()) => {
                 hb.last_ccp_sent = Instant::now();
-                // A new question, so a new answer: what the one before it took
-                // is not counted against this one's bound.
-                self.orders_in_this_answer.clear();
+                // A new question, so a new answer — except for the records the
+                // answer before it left behind. Those are orders this answer
+                // holds and will hand over, so they count against its bound:
+                // cleared outright, an answer took its whole bound again on
+                // top of what it had carried, and every answer that ended
+                // without a sentinel added another set of records that nothing
+                // was finishing.
+                self.orders_in_this_answer =
+                    self.finished_orders.iter().map(|held| held.order_id).collect();
                 self.the_answer_is_full = false;
                 self.completed_orders_open = true;
                 self.completed_orders_deadline = Some(Instant::now() + COMPLETED_ORDERS_TIMEOUT);
